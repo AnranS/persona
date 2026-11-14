@@ -33,6 +33,9 @@ func newUUID() string {
 // newID is the id a new session gets (startAsync picked it already); empty: a fresh one.
 // agentType is the agent the user picked for the launcher (claude, codex, traex, omp); empty: what the launcher runs.
 func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspaceID, mode, effort, tabName, newID, agentType string, options ...modelExecution) (_ *proto.Session, startErr error) {
+	if proto.IsExternalLauncher(launcher) {
+		return nil, externalRefusal(ctx, "adapter_purpose_unsupported")
+	}
 	execution := executionOption(options)
 	// The effort is checked against the agent this start actually dispatches: an explicit agentType wins over the
 	// launcher's name, so a Claude start refuses ultra even on a launcher named codex.
@@ -344,6 +347,9 @@ func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created
 // checkStart validates a start's arguments and returns the directory (~ expanded, home when empty) and launcher.
 // agentType is the agent the start dispatches (start's kind: an explicit agent_type wins); empty: the launcher's own.
 func (n *Node) checkStart(cwd, launcher, resume, mode, effort, agentType string) (string, string, error) {
+	if proto.IsExternalLauncher(launcher) {
+		return "", "", externalRefusal(context.Background(), "adapter_purpose_unsupported")
+	}
 	if launcher == "" {
 		launcher = "claude"
 	}

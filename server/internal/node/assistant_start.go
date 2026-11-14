@@ -56,6 +56,12 @@ func (p *assistantProc) awaitStart(d time.Duration) error {
 	case <-p.ready:
 		return nil
 	case <-t.C:
+		if proto.IsExternalLauncher(p.launcher) {
+			if p.cmd != nil && p.cmd.Process != nil {
+				_ = osproc.StopGroup(p.cmd.Process.Pid, true)
+			}
+			return externalRefusal(context.Background(), "adapter_timeout")
+		}
 		return nil
 	case <-p.exited:
 	}
@@ -83,7 +89,18 @@ func (p *assistantProc) startFailure() error {
 	}
 	p.mu.Lock()
 	tail := strings.Join(p.stderrTail, " | ")
+	lines := slices.Clone(p.stderrTail)
 	p.mu.Unlock()
+	if proto.IsExternalLauncher(p.launcher) {
+		code := "adapter_unavailable"
+		if len(lines) > 0 {
+			code = externalStderrCode(lines[len(lines)-1])
+		}
+		if code == "" {
+			code = "adapter_unavailable"
+		}
+		return externalRefusal(context.Background(), code)
+	}
 	if tail == "" {
 		tail = "没有输出"
 	}
@@ -237,6 +254,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if err := execution.check(launcher); err != nil {
 		return nil, err
 	}
+	if err := n.checkExternalAssistant(context.Background(), id, launcher, execution, spare); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(cwd, 0o700); err != nil {
 		return nil, err
 	}
@@ -320,10 +340,12 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		gateEnv, releaseGates = nil, func() {} // no commands to gate: it has no Bash
 	}
 	cleanupMCP := func() {}
+	cleanupAdapter := func() {}
 	started := false
 	defer func() {
 		if !started {
 			cleanupMCP()
+			cleanupAdapter()
 			releaseGates()
 		}
 	}()
@@ -389,6 +411,17 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 				return nil, err
 			}
 		}
+	} else if proto.IsExternalLauncher(launcher) {
+		var err error
+		args, cleanupMCP, err = assistantCLIMCPFlags(args)
+		if err != nil {
+			return nil, fmt.Errorf("prepare assistant MCP config: %w", err)
+		}
+		cmd, cleanupAdapter, err = n.externalCLICommand(id, launcher, cwd, execution, args, env)
+		if err != nil {
+			cleanupAdapter = func() {}
+			return nil, err
+		}
 	} else {
 		shell, err := interactiveShell()
 		if err != nil {
@@ -446,6 +479,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	go func() {
 		_ = cmd.Wait()
 		cleanupMCP()
+		cleanupAdapter()
 		releaseGates()
 		liveAssistants.Delete(p)
 		close(p.exited)
@@ -474,6 +508,18 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		n.emitDelta(id, "")
 		n.notifySessions()
 	}()
+	if proto.IsExternalLauncher(launcher) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := p.control(ctx, map[string]any{"subtype": "initialize"})
+		cancel()
+		if err != nil {
+			_ = osproc.StopGroup(cmd.Process.Pid, true)
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, externalRefusal(context.Background(), "adapter_timeout")
+			}
+			return nil, p.startFailure()
+		}
+	}
 	return p, nil
 }
 
@@ -507,6 +553,12 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 	sc := bufio.NewScanner(stderr)
 	for sc.Scan() {
 		l := sc.Text()
+		if proto.IsExternalLauncher(launcher) {
+			l = externalStderrCode(l)
+			if l == "" {
+				continue
+			}
+		}
 		if strings.Contains(l, "rror") || strings.Contains(l, "agent-sdk bridge: guest tools:") {
 			logger.Printf("assistant %s: %s", id[:8], l)
 		}

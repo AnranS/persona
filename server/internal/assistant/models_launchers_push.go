@@ -224,8 +224,12 @@ func (s *Service) refreshZshrcLaunchers(ctx context.Context) {
 		defer cancel()
 		defer func() {
 			st.zshrcMu.Lock()
-			st.zshrcRefreshing = false
+			again := st.zshrcRefreshAgain
+			st.zshrcRefreshing, st.zshrcRefreshAgain = false, false
 			st.zshrcMu.Unlock()
+			if again {
+				s.refreshZshrcLaunchers(ctx)
+			}
 		}()
 		s.zshrcLaunchers(ctx, true)
 	}()

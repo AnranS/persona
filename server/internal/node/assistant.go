@@ -347,6 +347,16 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
 	rl := launcherOr(launcher, st.Launcher)
+	if proto.IsExternalLauncher(rl) {
+		execution.IsMain = isMain && guest == nil
+		bindingID := id
+		if bindingID == "" {
+			bindingID = newIDFrom(ctx)
+		}
+		if err := n.checkExternalAssistant(ctx, bindingID, rl, execution, false); err != nil {
+			return "", err
+		}
+	}
 	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
@@ -392,10 +402,17 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
 		return "", err
 	}
-	if recovery == nil && id != "" {
+	if recovery == nil && id != "" && !proto.IsExternalLauncher(launcher) {
 		execution = n.heldFallback(id, launcher, execution) // the fallback that answered, for a while (#3788)
 	}
-	if execution.Model != "" {
+	var existing *assistantProc
+	if proto.IsExternalLauncher(launcher) {
+		n.mu.Lock()
+		existing = n.procs[id]
+		n.mu.Unlock()
+		execution = pinExternalExecution(existing, launcher, execution)
+	}
+	if execution.Model != "" && !sameExternalProcessModel(existing, launcher, execution.Model) {
 		if _, err := n.launcherModelCheck(ctx, launcher, execution.Model); err != nil {
 			return "", err
 		}
@@ -485,6 +502,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		active := p.busy || len(p.tasks) > 0
 		p.mu.Unlock()
 		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
+			if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
+				return "", externalRefusal(ctx, "adapter_busy")
+			}
 			// Answering, or running background tasks a new process would kill: the message goes to this process on
 			// what it runs, and the switch waits for the first message after it is idle. Refusing it left the user
 			// unable to send while the conversation kept starting tasks (#1554).

@@ -14,6 +14,10 @@ import (
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
 func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+	if event == "launchers.changed" {
+		s.launchersChanged(machine)
+		return false
+	}
 	if !s.fleetOn() {
 		return true
 	}

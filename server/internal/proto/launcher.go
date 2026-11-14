@@ -24,6 +24,8 @@ type Launcher struct {
 	RunHere bool `json:"run_here,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// External is a sanitized, machine-local adapter advertisement. It grants no execution authority.
+	External *ExternalLauncher `json:"external,omitempty"`
 }
 
 // LauncherDetail is what a ~/.zshrc launcher really sets (the node runs it with the agent stubbed out,

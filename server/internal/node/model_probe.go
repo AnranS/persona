@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 var modelProbeCache = struct {
@@ -24,6 +26,19 @@ type modelProbeResult struct {
 func (n *Node) launcherModelCheck(ctx context.Context, name, model string) (string, error) {
 	if err := (modelExecution{Model: model}).check(name); err != nil {
 		return "", err
+	}
+	if proto.IsExternalLauncher(name) {
+		if n.external != nil {
+			if target, ok := n.external.lookup(name); ok {
+				for _, candidate := range target.Models {
+					if candidate.ID == model {
+						return "claude", nil
+					}
+				}
+				return "", externalRefusal(ctx, "adapter_model_not_found")
+			}
+		}
+		return "", externalRefusal(ctx, "adapter_target_not_found")
 	}
 	if m, managed := n.managedLauncher(name); managed {
 		return m.AgentType(), nil

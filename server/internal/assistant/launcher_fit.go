@@ -48,6 +48,9 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any) (star
 // same list, so a caller changing permissions by agent does not have to ask for it again.
 func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (note, agent string, err error) {
 	name, _ := params["launcher"].(string)
+	if proto.IsExternalLauncher(name) {
+		return "", "", i18n.Err("external-adapter.purpose_unsupported")
+	}
 	if s.launcherEverywhere(ctx, name) {
 		if name == "" || name == "claude" {
 			return "", "claude", nil
@@ -150,7 +153,8 @@ func (s *Service) launchersHere(ctx context.Context, machine string) (list []pro
 		return nil, false
 	}
 	for _, c := range s.hello(ctx).Models.Launchers[machine] {
-		if c.Name != "" && !slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == c.Name }) {
+		if c.Name != "" && !proto.IsExternalLauncher(c.Name) && c.Source != proto.ExternalLauncherSource &&
+			!slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == c.Name }) {
 			list = append(list, c.Launcher)
 		}
 	}
@@ -160,7 +164,7 @@ func (s *Service) launchersHere(ctx context.Context, machine string) (list []pro
 // launcherEverywhere: every machine has name (plain claude; a managed launcher, which the node runs through personad
 // launch), so its list need not be asked.
 func (s *Service) launcherEverywhere(ctx context.Context, name string) bool {
-	return name == "" || name == "claude" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == name })
+	return !proto.IsExternalLauncher(name) && (name == "" || name == "claude" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == name }))
 }
 
 // launcherInstead is the launcher a default m does not have gives way to: plain claude when m has Claude Code (its
@@ -178,7 +182,8 @@ func launcherInstead(m Device, list []proto.Launcher) string {
 
 // startableLauncher: l starts an agent with a prompt: one of the machine's own, or a managed one (healthLaunchers).
 func startableLauncher(l proto.Launcher) bool {
-	return l.Name != "" && (l.Source == "" || machineSource(l.Source) || compat.Source(l.Source) == "persona")
+	return l.Name != "" && !proto.IsExternalLauncher(l.Name) && l.Source != proto.ExternalLauncherSource &&
+		(l.Source == "" || machineSource(l.Source) || compat.Source(l.Source) == "persona")
 }
 
 // launcherNamesOn are the names a refusal lists: plain claude first when m has Claude Code, then its list's.

@@ -148,6 +148,14 @@ func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p
 		b.write.Unlock()
 		return nil
 	}
+	if p != nil && proto.IsExternalLauncher(p.Launcher) {
+		resolved, err := s.resolveExternalPick(ctx, sid, *p)
+		if err != nil {
+			b.write.Unlock()
+			return refusePick(http.StatusBadRequest, err)
+		}
+		p = &resolved
+	}
 	next := maps.Clone(cur)
 	if p == nil {
 		delete(next, sid)
@@ -193,6 +201,12 @@ func (s *Service) evictModelPicks(ctx context.Context, picks map[string]modelPic
 // configuration › Main chat's model when the launcher is the one configured there (applyModel, later changes there
 // too), else the launcher's own default.
 func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPick) error {
+	if proto.IsExternalLauncher(pick.Launcher) {
+		scope, ok := ctx.Value(externalPickKey{}).(externalPickScope)
+		if !ok || scope.pick != pick {
+			return i18n.Err("external-adapter.scope_required")
+		}
+	}
 	p["launcher"] = pick.Launcher
 	if e, _ := p["effort"].(string); e == "" && pick.Effort != "" {
 		p["effort"] = pick.Effort
@@ -299,14 +313,21 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 	if cfg := s.settings(ctx); cfg.Main == "" || cfg.Main != sid || cfg.mainRouteMachine() != machine {
 		return modelPick{}, refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_main_only"))
 	}
-	if err := s.modelPickRefusal(ctx, machine, in.Launcher, lang, false); err != nil {
+	external := proto.IsExternalLauncher(in.Launcher)
+	if external {
+		pick, err := s.resolveExternalPick(ctx, sid, modelPick{MachineID: machine, Launcher: in.Launcher, Model: in.Model})
+		if err != nil {
+			return modelPick{}, refusePick(http.StatusBadRequest, err)
+		}
+		in.Model = pick.Model
+	} else if err := s.modelPickRefusal(ctx, machine, in.Launcher, lang, false); err != nil {
 		return modelPick{}, err
 	}
 	var other *launcherOtherKind
 	if err := s.otherKindPick(ctx, machine, sid, in.Launcher); errors.As(err, &other) {
 		return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
 	}
-	if in.Model != "" {
+	if in.Model != "" && !external {
 		if err := s.pickedModelRefusal(ctx, machine, in.Launcher, in.Model); err != nil {
 			return modelPick{}, refusePick(http.StatusBadRequest, err)
 		}
@@ -324,6 +345,13 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 // message that would have run on it (the words say the message was not sent). As mainChatFit, a list that can't be
 // read refuses nothing.
 func (s *Service) modelPickRefusal(ctx context.Context, machine, name string, lang i18n.Lang, sending bool) error {
+	if proto.IsExternalLauncher(name) {
+		_, err := s.externalTarget(ctx, machine, name)
+		if err != nil && !sending {
+			return refusePick(http.StatusBadRequest, err)
+		}
+		return err
+	}
 	fit, refusal := s.mainChatFit(ctx, machine, name)
 	switch fit {
 	case mainChatFits:
@@ -353,6 +381,14 @@ func (s *Service) modelPickRefusal(ctx context.Context, machine, name string, la
 // agent (it sets its own --model, or its agent takes no model). A model its list lacks is a typed one and is kept, as a
 // message's pick (#1644); a list that can't be read refuses nothing.
 func (s *Service) pickedModelRefusal(ctx context.Context, machine, launcher, model string) error {
+	if proto.IsExternalLauncher(launcher) {
+		e, err := s.externalTarget(ctx, machine, launcher)
+		if err != nil {
+			return err
+		}
+		_, err = externalModel(e, model)
+		return err
+	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	res, err := s.askLauncherModels(cctx, machine, launcher, false) // the node keeps its list a while

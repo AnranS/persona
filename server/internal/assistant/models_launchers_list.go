@@ -54,6 +54,9 @@ func launcherSyncState(ctx context.Context, err error) (state, reason string) {
 // not list, the agent the user said it runs. The node runs a launcher it does not list only when it is vouched for
 // like this (configured, node runnableLauncher).
 func (s *Service) configuredLauncher(ctx context.Context, machine, name string) (ConfiguredLauncher, bool) {
+	if proto.IsExternalLauncher(name) {
+		return ConfiguredLauncher{}, false
+	}
 	for _, l := range s.hello(ctx).Models.Launchers[machine] {
 		if l.Name == name {
 			return l, true
@@ -82,7 +85,8 @@ func machineSource(source string) bool { return source == "zshrc" || source == "
 // listedRCLauncher: Settings › Model providers lists l from a computer's list. A runtime's launcher without model
 // configuration (DSH, node/runtimes.go) is not.
 func listedRCLauncher(l proto.Launcher) bool {
-	return l.Source == "" || machineSource(l.Source) || l.Agent == "agy" || l.Agent == "omp"
+	return !proto.IsExternalLauncher(l.Name) && l.Source != proto.ExternalLauncherSource &&
+		(l.Source == "" || machineSource(l.Source) || l.Agent == "agy" || l.Agent == "omp")
 }
 
 // launcherViews is the whole list: managed first (newest last), then ~/.zshrc ones by name; hidden ones flagged.
@@ -183,7 +187,9 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 	hidden := s.hiddenLaunchers(ctx)
 	// Only the providers in this computer's scope: one out of it is not named to the node, whose own launcher by
 	// that name (if any) is what runs there.
-	managed := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(m storedLauncher) bool { return !s.usableOn(ctx, m, machine) })
+	managed := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(m storedLauncher) bool {
+		return proto.IsExternalLauncher(m.Name) || !s.usableOn(ctx, m, machine)
+	})
 	out := make([]proto.Launcher, 0, len(res.Launchers)+len(managed))
 	for _, envelope := range res.Launchers {
 		l := proto.Launcher(envelope)
@@ -263,6 +269,9 @@ func (s *Service) assistantProviders(ctx context.Context, machine string, picker
 	allowed := map[string]bool{}
 	for _, l := range current {
 		if l.Name == "" || slices.Contains(hidden, l.Name) && compat.Source(l.Source) != "persona" {
+			continue
+		}
+		if proto.IsExternalLauncher(l.Name) && s.externalRuntime(ctx) != nil {
 			continue
 		}
 		if s.modelLauncherCompatible(p, l, stored) {

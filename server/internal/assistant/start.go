@@ -245,6 +245,9 @@ func (s *Service) refreshInstructions(ctx context.Context) {
 // startOn starts a new conversation on machine: the directory prepared, the model configuration of p.Purpose ("" is
 // the main chat's) applied, then the node's assistant.send (headless: no herdr tab, streamed tokens, any launcher per message).
 func (s *Service) startOn(ctx context.Context, machine string, p StartParams, main bool) (proto.Session, error) {
+	if proto.IsExternalLauncher(p.Launcher) {
+		return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
+	}
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
@@ -510,6 +513,9 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		p.ServiceTier = ""
 	}
 	if carried != nil {
+		if proto.IsExternalLauncher(carried.Launcher) {
+			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
+		}
 		// Held to what a message on it is held to: one that can't run here any more refuses this start, saying why
 		// with the same codes, and is dropped, so the next start runs on the default. Never a silent fallback.
 		if err := s.modelPickRefusal(ctx, s.settings(ctx).MachineID, carried.Launcher, s.requestCtxLang(ctx), true); err != nil {
@@ -1044,6 +1050,10 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if params == nil {
 		params = map[string]any{}
 	}
+	delete(params, "external")
+	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
+		return nil, false, badRequest(i18n.Err("external-adapter.scope_required"), s.appLang(ctx, p.Lang))
+	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
@@ -1104,6 +1114,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 // …/conversations/{id}/model, model_pick.go), its effort under the message's own: that is the user's choice for the
 // conversation, so it is never replaced; a pick that can't run here refuses the message, saying why in lang.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
+	delete(p, "external")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
@@ -1123,15 +1134,36 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["model"], picked = m, true
 	}
 	l, _ := p["launcher"].(string)
+	if proto.IsExternalLauncher(l) {
+		return i18n.Err("external-adapter.scope_required") // only the kept pick, never a message's launcher
+	}
 	asked := l != "" // picked in the chat's menu for this message
 	if asked {
 		if err := s.otherKindPick(ctx, machine, sid, l); err != nil {
 			return err // another agent kind can't resume this conversation: refused, not swapped on the node
 		}
 	}
-	if !asked && !picked {
+	if !asked {
 		if pick, ok := s.modelPickOf(ctx, machine, sid); ok {
-			return s.sendOnPick(ctx, machine, sid, p, pick, lang)
+			if proto.IsExternalLauncher(pick.Launcher) {
+				if model, _ := p["model"].(string); picked && model != pick.Model {
+					return i18n.Err("external-adapter.scope_required") // change the persisted pick, not a message's model
+				}
+				return s.sendOnPick(ctx, machine, sid, p, pick, lang)
+			}
+			if !picked {
+				return s.sendOnPick(ctx, machine, sid, p, pick, lang)
+			}
+		}
+		// An unreadable pick book is not permission to switch a conversation that
+		// already runs externally back to the global default.
+		s.modelPicks.mu.Lock()
+		known := s.modelPicks.loaded
+		s.modelPicks.mu.Unlock()
+		if !known {
+			if c, ok := s.session(ctx, machine, sid); ok && proto.IsExternalLauncher(c.Launcher) {
+				return i18n.Err("assistant-model_pick.err_unreadable")
+			}
 		}
 	}
 	if l == "" && !followsSetting {
@@ -1145,6 +1177,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 				p["model"] = c.Model
 			}
 		}
+	}
+	if proto.IsExternalLauncher(l) {
+		return i18n.Err("external-adapter.scope_required") // a side conversation cannot inherit an old external launcher
 	}
 	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped), or a launcher that
 	// can't run the assistant (a Paseo provider, a managed Codex one: launcher_mainchat.go) fails every turn: fall back
@@ -1181,7 +1216,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 // message wins), checked and fingerprinted like a message's pick. One that can't run on machine, or runs the other
 // agent kind (launcher_kind.go), refuses the message.
 func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[string]any, pick modelPick, lang i18n.Lang) error {
-	if err := s.modelPickRefusal(ctx, machine, pick.Launcher, lang, true); err != nil {
+	if proto.IsExternalLauncher(pick.Launcher) {
+		var err error
+		ctx, err = s.externalPickContext(ctx, machine, sid, pick)
+		if err != nil {
+			return err
+		}
+	} else if err := s.modelPickRefusal(ctx, machine, pick.Launcher, lang, true); err != nil {
 		return err
 	}
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {

@@ -45,6 +45,9 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 
 // assistantWarm makes sure a fresh spare process is waiting for the next new conversation.
 func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) error {
+	if proto.IsExternalLauncher(launcher) {
+		return externalRefusal(context.Background(), "adapter_purpose_unsupported")
+	}
 	if n.assistantRuntime(launcher) != nil { // a runtime is running already: nothing to start ahead
 		if executionOption(options).ConfigDir != "" {
 			return fmt.Errorf("config_dir is only supported for Claude assistant conversations")

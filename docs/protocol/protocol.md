@@ -3297,7 +3297,8 @@ hub → node requests:
 | `launchers.catalog` | `{launchers: [ManagedLauncher]}` → `{ok}`: the Persona-managed providers in this computer's device scope (`docs/integrations/launchers.md` "Device scope and on-demand delivery"), on every connection and after every change. An entry with `withheld: true` has no `api_key`, `headers` or `env`; the node asks `launchers.pull` for them when it needs them, and right away for one with `delivery: push`. `rev` changes on every save: what was pulled at another rev is dropped. Old nodes return `unknown method`, and the manager sends `launchers.managed` with this computer's providers instead |
 | `launchers.managed` | `{launchers: [ManagedLauncher]}` → `{ok}`: the same with every secret, for nodes from before `launchers.catalog` (and from managers from before it) |
 | `launchers.own_service` | `{agent}` → `{agent, known, own, via?}`: whether the harness (`claude`, `codex`) already has a usable service of its own on this computer (`via`: `login`, `api_key`, `launcher`); others are `known: false`. Cached ten minutes; old nodes return `unknown method`, read as not known |
-| `launchers.models` | `{name, agent_type?, refresh?}` → `{agent, models, locked?}`: same as REST `…/launchers/{name}/models`; `agent_type` is this launcher's type in the hub config (if omitted, whatever the node detects itself) |
+| `launchers.models` | `{name, agent_type?, refresh?}` → `{agent, models, locked?}`: same as REST `…/launchers/{name}/models`; `agent_type` is this launcher's type in the hub config (if omitted, whatever the node detects itself). A locally registered external adapter returns its bounded inventory models without running a shell probe; `refresh:true` joins a fresh inventory read. |
+| event `launchers.changed` | node → manager `{}`: an opted-in local adapter's sanitized inventory or stale status changed. The manager invalidates that machine's model cache and refreshes its existing launcher snapshot in the background; this event grants no execution authority and does not restart conversations. |
 | `session.skills` | Manager-owned `{session_id,skill_owner}` → the versioned ordinary Agent catalog above. Derives live Claude terminal launcher/cwd/profile, or the uniquely owning Codex app-server and its actual home/cwd/connection. Reads do not join or resume threads. `session.send` validates explicit leading skill contexts before delivery; Claude receives exact-file instructions, Codex native typed skill input. Plain text requires no catalog. Unsupported nodes must not receive selected references as literal text. |
 | `skills.list` | `{cwd?}` → `{skills: [{name, description, source}]}`: the legacy prepared inventory, unchanged. Optional manager-owned catalog mode `{catalog:true,skill_owner,machine_id,cwd,session_id?,launcher?,runtime?,config_dir?}` → `{catalog_version:1,skills:[{id,name,description?,source}],complete}` resolves the actual supported execution environment; paths stay on the node. The new manager requires `catalog_version:1` so an old node's legacy inventory is not mistaken for a complete runtime catalog. See `docs/assistant/assistant.md` ("Explicit skill mentions"). |
 | `skills.import` | Manager-only `{dir,scope,op,archive?:base64,reference?}` → skill import result (REST above). `dir` is the server-derived assistant state directory; `scope` binds assistant and machine. Strict fields and directory/scope agreement are required. The node resolves the existing user skills directory, validates/stages in isolation and atomically adds a new safe name; preview/cancel/install/unchanged-new-only Undo use bounded ten-minute in-memory receipts. No arbitrary-path management, script execution or runtime/model call. |
@@ -3394,6 +3395,28 @@ without a valid `oid` and show an update notice; push/list remain available. The
 
 Streams (`internal/streams`, both directions): `stream.data {id, data}` (data is base64, at most 32 KB at a time), `stream.ack {id, n}` (n bytes were written out;
 at most 512 KB unacknowledged per direction, and the sender stops and waits when it reaches that), `stream.close {id, error?}` (this end's connection dropped; the other side finishes writing what it received, then closes). The hub registers the stream before sending `port.dial`, and the node replies only after it has connected and registered, so bytes never arrive before the stream does. A `stream.close` can still arrive before the stream does (the hub gave up on a slow `port.dial` or `preview.open`): each side remembers for 2 minutes (at most 1024) the ids it heard closed without holding them, and refuses to register such an id, so the node answers that call with an error and closes its connection. The first `stream.data` for an id a side does not hold (it ended there, or that side restarted since) gets `stream.close {id, error}` back. Stream ids are therefore never reused between the same two ends: the hub's carry a token of its process, since a node's streams outlive a hub restart.
+
+### External adapter advertisements and execution (#7940)
+
+`launchers.list` may contain `source:"external"` and an optional `external` object:
+`{adapter_id,id,name,engine,revision,capabilities:{contexts,runtimes,platforms},credential_state,models,unavailable_code?,stale?}`.
+`id` is the target's stable ID, distinct from the shell-safe `persona_ext_` launcher identity; models use the existing
+`AgentModel` shape. Advertisements are per machine, not credentials or executable recipes. No URL, environment,
+command, local path or secret belongs in this object. Unconfigured nodes omit the field and keep the original wire.
+The local program protocol and bounded JSON contract are in `docs/integrations/launchers.md` ("External model adapters").
+
+Only the manager's resolved parameters for the actual main chat's saved explicit model pick may carry
+`external:{scope:"main-chat-pick",session_id,adapter_id,target_id,revision}` on `assistant.send` or headless
+`session.send`; `assistant.model` returns the same binding for a legitimate resume. Client-supplied bindings are
+removed before resolution. `session_id` is the real main conversation, not a caller's self-declared purpose.
+The node requires its own registered target, an exact model ID, CLI runtime, POSIX and no required agent sandbox.
+Missing scope on an older manager is a refusal, never permission to treat a reserved name as a shell command.
+
+External targets are excluded from coding/terminal starts, purpose defaults, profiles/tiers, background tasks,
+prewarming and automatic fallback. A directory update alone does not restart an active process or change its
+confirmed model: the process binding keeps its revision until a genuinely new start. Configuration mismatch or an
+unsupported combination returns a stable `adapter_*` error with `delivered:"none"` before user input is handed over;
+there is no silent provider/runtime substitution or automatic message replay.
 
 hub → node events (handled in the order sent): `terminal.input {session_id, text}`, `terminal.resize {session_id, cols, rows}`, `terminal.scroll {session_id, lines, up, column?, row?}` (scroll wheel: herdr hands it to programs that take the mouse, such as Claude Code's full-screen rendering and Codex; otherwise it scrolls herdr's own history.
 The node splits it into `lines` one-line events, landing on the `column` / `row` cell, or the center of the screen if not given; `docs/integrations/terminal.md` section 16), `terminal.click {session_id, column, row}` (left button down + up), `terminal.keepalive {session_ids}` (every 20 s, for terminals under takeover; the node lets go after hearing nothing for 75 s).

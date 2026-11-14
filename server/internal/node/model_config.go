@@ -34,6 +34,8 @@ type modelExecution struct {
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`
+	// External is a manager-resolved, explicit main-chat pick. Nil preserves older fingerprints.
+	External *proto.ExternalExecution `json:",omitempty"`
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
@@ -74,15 +76,16 @@ func executionOption(options []modelExecution) modelExecution {
 // older hub): the conversation's own then.
 func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExecution) {
 	var res struct {
-		Launcher         string `json:"launcher"`
-		Model            string `json:"model"`
-		Effort           string `json:"effort"`
-		ModelFingerprint string `json:"model_fingerprint"`
-		Runtime          string `json:"runtime"`
-		IsMain           bool   `json:"is_main"`
+		Launcher         string                   `json:"launcher"`
+		Model            string                   `json:"model"`
+		Effort           string                   `json:"effort"`
+		ModelFingerprint string                   `json:"model_fingerprint"`
+		Runtime          string                   `json:"runtime"`
+		IsMain           bool                     `json:"is_main"`
+		External         *proto.ExternalExecution `json:"external"`
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain}
+	return res.Launcher, modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: res.Runtime, IsMain: res.IsMain, External: res.External}
 }

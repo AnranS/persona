@@ -2,6 +2,22 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+## Local adapter metadata is not execution authority (#7940)
+
+A runtime's model-list hooks belong to its session driver; they are not a configuration-only plugin. Reuse the
+native CLI lifecycle for a local connection adapter instead of creating a second session owner. Only trusted
+node-local configuration may name the executable: an inventory, a hub-supplied launcher name or a client scope
+field must never become a shell command. Keep the latest directory revision separate from the actual process
+binding so a refresh cannot interrupt a turn or silently change a model. Materialize an external default selection
+into its exact model ID when it is saved; otherwise a remote default change becomes an unintended conversation edit.
+
+Pin connection environment in one final settings file while preserving Persona's hooks, MCP and permission fields;
+process environment alone does not establish the intended precedence, and appending a second `--settings` can drop
+the first. Let the node own the private output directory so group termination still removes credential files when
+the adapter's cleanup cannot run. A required or unknown agent sandbox is unsupported until the bootstrap has a
+verified sandbox boundary, not a reason to execute without it. Test initialization and control acknowledgments before
+user input, not just that a wrapper process exists.
+
 ## A saved task name can disappear without another model failure (#7337)
 
 Automatic naming had already succeeded for several instruction-titled sessions, but a terminal spinner's
