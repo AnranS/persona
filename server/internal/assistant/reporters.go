@@ -371,10 +371,15 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 			}
 		}
 		if i == 0 && r.draining[conversation] {
-			// The send owns this head's text until it finishes. Keep the message, but mark replayed signals as detached
-			// so a later restore cannot mistake the old queue for main's durable-delivery acknowledgment. Other tasks
-			// in a mixed structured digest stay with this delivery only; a pre-structured head uses the text fallback.
-			if target {
+			// The send owns this head's text until it finishes. An exact retraction additionally withdraws the head so a
+			// failed try or restart cannot send that old text again; its other signals are regathered for their own digest.
+			if exact != nil && target {
+				m.Withdrawn = true
+				detached := []superviseSignal{}
+				m.Signals = &detached
+				regather = append(regather, remaining...)
+				changed = true
+			} else if target {
 				// An empty, non-nil list is the durable detached marker: it prevents the next restart from
 				// treating the retained text as an unreconciled legacy message and replaying it again.
 				detached := []superviseSignal{}

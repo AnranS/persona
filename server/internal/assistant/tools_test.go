@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,6 +127,31 @@ func requireStartUnknownState(t *testing.T, s *Service, todoID string, want bool
 	if ledger != nil && ledger.Kind == sigUnjudged && ledger.Key == key && ledger.Told == nil {
 		t.Fatalf("start-unknown can still replay from the turn ledger: %+v", ledger)
 	}
+}
+
+// stalledAssistantSendHub blocks a relay send without fakeHub's mutex held, so the test can link the confirmed session
+// while that send is genuinely in flight.
+type stalledAssistantSendHub struct {
+	*fakeHub
+	started  chan struct{}
+	release  chan struct{}
+	attempts chan string
+	calls    atomic.Int32
+}
+
+func (h *stalledAssistantSendHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method != DeviceAssistantSend {
+		return h.fakeHub.DeviceCall(ctx, p)
+	}
+	var params map[string]any
+	_ = json.Unmarshal(p.Params, &params)
+	text, _ := params["text"].(string)
+	h.attempts <- text
+	if h.calls.Add(1) == 1 {
+		close(h.started)
+		<-h.release
+	}
+	return nil, errors.New("send failed")
 }
 
 // An unknown start result can be confirmed from either the node's creation identity or its bounded session adoption.
@@ -300,6 +326,55 @@ func TestAgentStartConfirmationRetractsQueuedStartUnknown(t *testing.T) {
 	}
 	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
 	s.drainRelays("server", []proto.Session{idle})
+}
+
+// A send already in flight owns its original text. Once that try fails, however, the confirmed start must not be sent
+// again from the retained queue head, including after a restart (#5732).
+func TestAgentStartConfirmationWithdrawsDrainingStartUnknown(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	todo, err := s.createTodo(context.Background(), "Confirm during a send", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(context.Background(), todo.ID, "conv1", nil, 0)
+	todo = todoNow(s, todo.ID)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start"}
+	other := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "later-real-stop", Detail: "a later genuine stop"}
+	signals := []superviseSignal{g, other}
+	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: "stale unknown start", At: time.Now()}, signals, time.Now(), time.Time{}) {
+		t.Fatal("the unknown start was not admitted to the durable relay queue")
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	hub := &stalledAssistantSendHub{fakeHub: f, started: started, release: release, attempts: make(chan string, 4)}
+	setHub(s, hub)
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	s.drainRelays("server", []proto.Session{idle})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("the queue head did not enter its first send")
+	}
+	if text := <-hub.attempts; !strings.Contains(text, "stale unknown start") {
+		t.Fatalf("the first send fixture = %q", text)
+	}
+	if _, err := s.linkStartedAgentTask(context.Background(), todo, Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	waitFor(t, "the failed first send to settle", func() bool { return !drainingNow(s, "conv1") })
+	simulateSupervisionRestart(t, s)
+	s.drainRelays("server", []proto.Session{idle})
+	select {
+	case text := <-hub.attempts:
+		if strings.Contains(text, "stale unknown start") {
+			t.Fatalf("the failed queue head replayed the confirmed start-unknown: %q", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the other queued signal was not regathered after withdrawing the old head")
+	}
 }
 
 // Definite failures stay errors: a request the node refused before running anything, and an unreachable machine

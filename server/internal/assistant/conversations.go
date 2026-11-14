@@ -198,6 +198,9 @@ type relayMsg struct {
 	// Signals is the structured content of a queued supervision message. It lets /stop remove one task and regather
 	// the others even after a restart lost supervise.queued; older messages without it use their embedded task ids.
 	Signals *[]superviseSignal `json:"signals,omitempty"`
+	// Withdrawn marks a supervision message whose remaining text must not be sent or retried. A send already in flight
+	// still finishes, but its failed queue head and every later restart drain drop it instead (#5732).
+	Withdrawn bool `json:"withdrawn,omitempty"`
 	// State is a task notice's state (quiet.go: done | needs | interrupted | failed); "" for other relays.
 	State string `json:"state,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
@@ -605,8 +608,8 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			// A needs notice may have been answered on the phone after it queued while the agent's node still
 			// reported blocked (#4332): ask the task once more right before it would interrupt. A node that cannot
 			// be reached is not an answer, so its notice stays queued for a later drain.
-			stale, keep := false, false
-			if msg.Tool == noticeTool && msg.State == "needs" {
+			stale, keep := msg.Withdrawn, false
+			if !stale && msg.Tool == noticeTool && msg.State == "needs" {
 				// The loading read covers a hub restart whose first drain runs before the todos were read in:
 				// an unreadable todo is unknown, so the notice is delivered as without the recheck.
 				if t, ok, _ := s.todo(ctx, msg.From); ok && t.Quiet {

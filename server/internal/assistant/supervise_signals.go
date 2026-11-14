@@ -281,6 +281,10 @@ func (s *Service) ackSupervisePending(list []superviseSignal) {
 func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
 	g := superviseSignal{Todo: todoID, Kind: sigUnjudged, Key: "start-unknown@" + todoID}
 	b := &s.supervise
+	// sendDigest holds dedupMu through queueDigest. Confirmation therefore either precedes a new digest's snapshot or
+	// waits for its queue admission and retracts that message too; a post-confirmation queue cannot slip between them.
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
 	b.mu.Lock()
 	b.init()
 	ackSupervisePendingLocked(b.pending, []superviseSignal{g})
