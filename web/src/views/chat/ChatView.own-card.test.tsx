@@ -48,6 +48,7 @@ const resolves = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith
 beforeEach(() => {
   localStorage.clear();
   transcript.items = [];
+  transcript.streaming = "";
   upsertSession({ machine_id: "hub", session_id: "c1", title: "Persona", status: "working", state: "needs_you", assistant: true, agent: "claude" } as Session);
   Object.assign(getState(), { interactions: [bash], answered: {} });
   fetcher = vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -104,6 +105,26 @@ describe("a Persona conversation's own approval card (#4883)", () => {
     expect(button(t("chat-interactions.allow"))).toBeUndefined();
     expect(host.textContent).not.toContain(t("chat-interactions.permission_kicker"));
     expect(host.querySelector("textarea")).not.toBeNull();
+  });
+
+  it("offers the next chat inside the action row after this card, then folds that link while the answer streams (#7770)", async () => {
+    const other = { id: "ix_other", machine_id: "hub", session_id: "other", session_title: "Another conversation", kind: "question", questions: [{ question: "Pick one", options: [] }], created_at: bash.created_at } as Interaction;
+    Object.assign(getState(), { interactions: [bash, other] });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant inPage onToggleSidebar={() => {}} />));
+    await flush();
+    act(() => button(t("chat-interactions.allow"))!.click());
+    await flush();
+    const next = host.querySelector<HTMLElement>("[data-assistant-actionbar] [data-chat-next-waiting]");
+    expect(next).not.toBeNull();
+    expect(next!.textContent).toContain("Another conversation");
+    expect(next!.getAttribute("data-compact")).toBe("true");
+    act(() => {
+      transcript.streaming = "A partial answer that needs the room";
+      root.render(<ChatView mid="hub" sid="c1" assistant inPage onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(host.querySelector("[data-chat-next-waiting]")).toBeNull();
+    expect(host.querySelector<HTMLElement>("[data-assistant-actionbar]")!.hidden).toBe(true);
   });
 
   it("says it waits for the user's approval, in every language", () => {

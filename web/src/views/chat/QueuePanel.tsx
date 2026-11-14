@@ -1,15 +1,10 @@
 // The queued messages (Session.queued) at the top of the composer's card, as cindy's pending queue (#5327; the owner
-// asked this part of the chat to follow cindy): rows in send order, the top one next, no numbers (the labels carry
-// them). A row is one line, the marks of what it carries before its words; on hover or focus it shows a drag handle
-// and round buttons: Send now (where the agent takes queued messages now; it hands over the whole queue at one press,
-// its tooltip saying so and what happens), Edit (pulled back into the box below) and Delete. Dragging the handle, or
-// ↑ ↓ Home End on it, re-queues them all in the new order. Four rows or fewer show in full; five or more show three
-// and "N more".
-// Messages from other conversations come last and are only shown; since #6394 they collapse into one line
-// ("N messages from other conversations are waiting"), opened on demand, so a backlog no longer spreads over the
-// composer. Every change goes through the hub (POST …/queue {keep}, …/queue/send-now) and the rows follow its next
-// push; a reorder keeps its new order on screen until then. Its own chunk: drawn only while something is queued
-// (QueueStrip.tsx loads it).
+// asked this part of the chat to follow cindy). One collapsed summary counts everything and never grows with the count;
+// an explicit tap opens the owner's rows in send order. A row is one line, with Send now, Edit and Delete where available.
+// Dragging a handle, or ↑ ↓ Home End on it, re-queues the owner's messages; past four rows the opened list folds to three.
+// Messages from other conversations are included in the summary count only (#7770): their contents never expand above
+// the owner's composer. Every change still goes through the hub (POST …/queue {keep}, …/queue/send-now), and a reorder
+// keeps its new order until the next push. Its own chunk loads only while something is queued (QueueStrip.tsx loads it).
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errorText, sessionPath } from "../../lib/api";
 import { agentLabel } from "../../lib/mentions";
@@ -78,9 +73,7 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
   const [busy, setBusy] = useState<string | null>(null);
   const inFlight = useRef(false);
   const [expanded, setExpanded] = useState(false);
-  // relayed messages from other conversations are one collapsed line until the owner asks to inspect them (#6394)
-  const [relayedOpen, setRelayedOpen] = useState(false);
-  // compact: the rows under its one line, opened
+  // Every presentation starts as one summary line. Opening it is explicit and survives count-only updates.
   const [open, setOpen] = useState(false);
   const [drag, setDrag] = useState<Drag | null>(null);
   // the drag as the window's pointer listeners see it, and how to stop them (the row moves in the page as it is
@@ -105,9 +98,8 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
 
   const identity = Array.from({ length: own }, (_, i) => i);
   const order = drag ? (movedTo(own, drag.from, drag.to) ?? identity) : (holdOrder ?? identity);
-  // Only the owner's own rows reorder and fold; the relayed ones live behind their own collapsed line (#6394).
+  // Only the owner's rows reorder, open and fold; relayed messages contribute to queued.length alone (#7770).
   const ownRows = rows.filter((r) => r.own);
-  const relayedRows = rows.filter((r) => !r.own);
   const shown = order.map((i) => ownRows[i]).filter(Boolean);
   const folds = shown.length > FOLD_OVER;
   const visible = folds && !expanded ? shown.slice(0, FOLDED_ROWS) : shown;
@@ -125,6 +117,9 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
     dragging.current?.stop();
   }, [queueKey]);
   useEffect(() => () => dragging.current?.stop(), []);
+  useEffect(() => {
+    if (own === 0) setOpen(false);
+  }, [own]);
 
   const run = async (id: string, work: () => Promise<void>): Promise<boolean> => {
     if (inFlight.current) return false;
@@ -256,27 +251,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       onDelete={() => act(row, true)}
     />
   );
-  // The messages other conversations sent in: one line while collapsed, their read-only rows when opened (#6394).
-  const relayedLine = relayedRows.length > 0 && (
-    <div className="border-t border-line">
-      <button
-        type="button"
-        aria-expanded={relayedOpen}
-        data-queue-relayed-summary
-        onClick={() => setRelayedOpen((o) => !o)}
-        className="touch-hit flex h-8 w-full items-center gap-1.5 px-2 text-label leading-none whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink"
-      >
-        <Icon name="send" size={13} stroke={2} className="shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-left">{t("chat-queuepanel.relayed_summary", { count: relayedRows.length })}</span>
-        <Icon name="chevron" size={13} className={cx("shrink-0 transition-transform duration-200", relayedOpen && "rotate-180")} />
-      </button>
-      {relayedOpen && (
-        <div role="list" data-queue-relayed-list>
-          {relayedRows.map((row, pos) => rowFor(row, own + pos))}
-        </div>
-      )}
-    </div>
-  );
   const rowsAndFold = (
     <>
       <div ref={list} id={listId} role="list" className="flex max-h-[196px] flex-col overflow-y-auto overscroll-contain px-1 pt-1.5 pb-0.5">
@@ -297,7 +271,6 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
           </button>
         </div>
       )}
-      {relayedLine}
     </>
   );
   return (
@@ -310,25 +283,28 @@ export function QueuePanel({ session, draftKey, canEdit, persona, onWithdrawn, p
       className={cx("w-full", compact ? "rounded-[12px] bg-surface p-1 shadow-card" : "border-b border-line")}
       style={{ animation: "fade-in 160ms ease-out both" }}
     >
-      {compact ? (
-        <>
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-controls={listId}
-            onClick={() => setOpen((o) => !o)}
-            className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-[8px] px-1.5 text-left text-[11.5px] font-medium text-ink-3 transition-colors hover:bg-hover"
-          >
-            <Icon name="inbox" size={13} />
-            <span className="min-w-0 flex-1 truncate">{t("chat-queuepanel.summary", { count: queued.length })}</span>
-            {busy !== null && <Spinner />}
-            <Icon name="chevron" size={12} stroke={2.2} className={cx("shrink-0 transition-transform duration-200", open && "rotate-180")} />
-          </button>
-          <Collapse open={open}>{rowsAndFold}</Collapse>
-        </>
+      {ownRows.length > 0 ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={listId}
+          data-queue-summary
+          data-queue-toggle
+          onClick={() => setOpen((o) => !o)}
+          className="touch-hit flex h-7 w-full min-w-0 items-center gap-1.5 rounded-[8px] px-1.5 text-left text-[11.5px] font-medium text-ink-3 transition-colors hover:bg-hover"
+        >
+          <Icon name="inbox" size={13} />
+          <span className="min-w-0 flex-1 truncate">{t("chat-queuepanel.summary", { count: queued.length })}</span>
+          {busy !== null && <Spinner />}
+          <Icon name="chevron" size={12} stroke={2.2} className={cx("shrink-0 transition-transform duration-200", open && "rotate-180")} />
+        </button>
       ) : (
-        rowsAndFold
+        <div data-queue-summary className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-[8px] px-1.5 text-left text-[11.5px] font-medium text-ink-3">
+          <Icon name="inbox" size={13} />
+          <span className="min-w-0 flex-1 truncate">{t("chat-queuepanel.summary", { count: queued.length })}</span>
+        </div>
       )}
+      <Collapse open={open && ownRows.length > 0} className="queue-collapse">{rowsAndFold}</Collapse>
       {takesNow && (
         <span id={explainId} hidden data-queue-explain>
           {explain}

@@ -351,6 +351,9 @@ struct AssistantActionBar: View {
     var key: SessionKey? = nil
     /// The conversation's model operating a Mac (#1343): its pill after the entries.
     var computer: ComputerActivity? = nil
+    /// Another conversation to open after this one's last card was answered (#4348), in the same row (#7770).
+    var nextTitle: String? = nil
+    var openNext: (() -> Void)? = nil
     @State private var open: ActionTray?
     /// The open tray's rows, measured: the tray is as tall as they are, up to its cap.
     @State private var listHeight: CGFloat = 0
@@ -377,6 +380,9 @@ struct AssistantActionBar: View {
             }
             row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
+                if let nextTitle, let openNext {
+                    NextNeedsYouCapsule(title: nextTitle, open: openNext)
+                }
                 if ComputerActivityPill.shows(computer) {
                     ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
                 }
