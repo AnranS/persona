@@ -177,6 +177,16 @@ describe("To-dos grouped by 常驻", () => {
     expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
   });
 
+  it("shows a status-only Shelved section instead of the empty state", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    const daysAgo = new Date(Date.now() - 48 * 3_600_000).toISOString();
+    seed({ todos: [todo("t-quiet", "Quiet", { origin: "conv", created_at: daysAgo, updated_at: daysAgo })] });
+    await render();
+    expect(host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=shelved]")?.getAttribute("data-todos")).toBe("1");
+    expect(host.textContent).not.toContain(t("todos.empty_title"));
+    expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
+  });
+
   it("puts closed work immediately in Done and an inactive one in its status section, counted as the header says", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
