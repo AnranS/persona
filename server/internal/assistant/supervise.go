@@ -260,6 +260,12 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 // updateSupervisionGuarded is updateSupervision with a current-todo guard evaluated in the same write boundary. A close
 // or other conflicting write that landed while this call waited for writeMu therefore cannot be overwritten (#5732).
 func (s *Service) updateSupervisionGuarded(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
+	if guard != nil {
+		// Match editTodo's write boundary. The guard, stored receipt and in-memory mirror are one admission relative
+		// to a user close; taking writeMu first would invert the todos.writing → writeMu order used by other writers.
+		s.todos.writing.Lock()
+		defer s.todos.writing.Unlock()
+	}
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()

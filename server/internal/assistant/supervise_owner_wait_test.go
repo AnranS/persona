@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +198,28 @@ type stalledOwnerPushHub struct {
 	release chan struct{}
 }
 
+// gatedSupervisionStore pauses the receipt after its current-todo guard. It uses the same isolated Postgres as the
+// other todo tests, so the close below exercises the real row write rather than a memory-only approximation.
+type gatedSupervisionStore struct {
+	*db.DB
+	arm     chan struct{}
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedSupervisionStore) PutTodoSupervision(ctx context.Context, row db.TodoSupervisionRow) error {
+	select {
+	case <-s.arm:
+		select {
+		case s.entered <- struct{}{}:
+		default:
+		}
+		<-s.release
+	default:
+	}
+	return s.DB.PutTodoSupervision(ctx, row)
+}
+
 func (h *stalledOwnerPushHub) NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error) {
 	h.entered <- p.Notification.ID
 	<-h.release // like rpc.Peer.writeContext's ongoing Write, this cannot be interrupted by ctx
@@ -313,43 +334,63 @@ func TestOwnerPushStopsWhenTaskCloses(t *testing.T) {
 		}
 	})
 
-	t.Run("while the receipt waits for the ledger", func(t *testing.T) {
-		s, f := newQuietService(t)
-		work := time.Now().UTC()
-		todo := Todo{ID: "closed-during-owner-receipt", Title: "回执途中关闭", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1",
-			State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "obsolete", PushPending: true}}}
-		putTodo(s, todo)
-		s.supervise.writeMu.Lock()
-		locked := true
-		defer func() {
-			if locked {
-				s.supervise.writeMu.Unlock()
-			}
-		}()
-		finished := make(chan struct{})
-		go func() {
-			s.deliverOwnerWait(context.Background(), todo, work, "obsolete")
-			close(finished)
-		}()
-		waitFor(t, "the push before the close-during-receipt fixture", func() bool { return len(f.pushed()) == 1 })
-		waitFor(t, "the receipt to wait for the supervision write lock", func() bool {
-			buf := make([]byte, 1<<20)
-			stack := string(buf[:runtime.Stack(buf, true)])
-			return strings.Contains(stack, "assistant.(*Service).deliverOwnerWait") && strings.Contains(stack, "assistant.(*Service).updateSupervision")
-		})
-		done := true
-		if _, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &done}); err != nil {
+	t.Run("after the guard but before the stored receipt", func(t *testing.T) {
+		st := &gatedSupervisionStore{DB: todoTestDB(t), arm: make(chan struct{}), entered: make(chan struct{}, 1), release: make(chan struct{})}
+		s, _ := newQuietServiceOn(t, st)
+		todo, err := s.createTodo(context.Background(), "Close during the stored receipt", "", "conv1", "")
+		if err != nil {
 			t.Fatal(err)
 		}
-		s.supervise.writeMu.Unlock()
-		locked = false
+		s.superviseTodo(context.Background(), todo.ID, "conv1", nil, 0)
+		work := time.Now().UTC()
+		if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
+			v.State = reviewNeedsUser
+			v.Waits = &OwnerWait{Work: work, At: work, Reason: "obsolete", PushPending: true}
+			return true
+		}); err != nil {
+			t.Fatal(err)
+		}
+		close(st.arm)
+		finished := make(chan struct{})
+		go func() {
+			s.deliverOwnerWait(context.Background(), todoNow(s, todo.ID), work, "obsolete")
+			close(finished)
+		}()
+		select {
+		case <-st.entered:
+		case <-time.After(time.Second):
+			t.Fatal("the receipt did not reach the gated supervision write")
+		}
+		closed := make(chan error, 1)
+		go func() {
+			done := true
+			_, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &done})
+			closed <- err
+		}()
+		released := false
+		defer func() {
+			if !released {
+				close(st.release)
+			}
+		}()
+		select {
+		case err := <-closed:
+			t.Fatalf("the close completed while the guarded receipt was still stored: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(st.release)
+		released = true
 		select {
 		case <-finished:
 		case <-time.After(time.Second):
-			t.Fatal("the receipt did not finish after the ledger was released")
+			t.Fatal("the receipt did not finish after its store was released")
 		}
-		if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || w.NotifiedAt != nil || !w.PushPending {
-			t.Fatalf("a close while the receipt waited for the ledger was overwritten: %+v", w)
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+		cur := todoNow(s, todo.ID)
+		if cur.DoneAt == nil || cur.Supervision.Waits.NotifiedAt == nil || cur.Supervision.Waits.NotifiedAt.After(*cur.DoneAt) {
+			t.Fatalf("close and receipt committed out of order: done=%v wait=%+v", cur.DoneAt, cur.Supervision.Waits)
 		}
 	})
 }
