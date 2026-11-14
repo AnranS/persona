@@ -192,6 +192,17 @@ final class PersonaQueueUITests: XCTestCase {
         XCTAssertEqual((main?["queued"] as? [String])?.count, 1)
         XCTAssertTrue((main?["queued"] as? [String])?.first?.contains("来自「早报") == true)
         try shot(app, "relayed-only")
+
+        // A new owner message later must not reopen the panel left by the old expanded state (#7770).
+        let collapsedHeight = strip.frame.height
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        field.tap()
+        field.typeText("后来新增的主人消息")
+        app.buttons["发送"].tap()
+        XCTAssertTrue(strip.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "排队中 2 条")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(items.count, 0, "the new owner message stays collapsed until the user taps again")
+        XCTAssertEqual(app.buttons.matching(identifier: "queue-sending-item").count, 0, "a pending send stays collapsed too")
+        XCTAssertEqual(strip.frame.height, collapsedHeight, accuracy: 0.5, "the count alone must not change the collapsed height")
     }
 
     @MainActor func testPhotoMarkForMessageSentFromThisDevice() throws {
