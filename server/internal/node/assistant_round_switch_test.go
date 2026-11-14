@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A round's process (#7315, assistant_round.go) has the round's tools only and is never compacted when idle. Every
@@ -275,8 +276,8 @@ func holdBoth(t *testing.T, n *Node, p *assistantProc, argv, input string, start
 // Turning the switch on while a round's process works: the first supervision message after it, and the owner's, are
 // held at the node, outside Claude Code's queue, while the process answers, runs a background task (and the turn
 // Claude Code starts on its own to take its notification up), or compacts as the user asked. None of that work is cut;
-// once it is done the first held message replaces the process with a plain resume with every tool, out of round state
-// and compacted when idle, and the other follows, each read once.
+// once it is done, and the process stayed idle for assistantHeldSettle, the first held message replaces it with a plain
+// resume with every tool, out of round state and compacted when idle, and the other follows, each read once.
 func TestRoundProcessHoldsMessagesUntilIdle(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -320,8 +321,14 @@ func TestRoundProcessHoldsMessagesUntilIdle(t *testing.T) {
 			round := roundProc(n)
 			c.work(t, n, round)
 			holdBoth(t, n, round, argv, input, 1)
+			before := time.Now()
 			c.done(t, n, round)
 			heldGoIn(t, n, round, argv, input, 2, "once-held", "the owner's question")
+			// Not before the process stayed idle a while, well past the 26 ms Claude Code took at most to show a turn
+			// of its own (its init).
+			if np := roundProc(n); np.born.Sub(before) < 100*time.Millisecond {
+				t.Fatalf("replaced %s after its work ended", np.born.Sub(before))
+			}
 			if got := strings.Count(logs.String(), "the message waits until it is idle"); got != 1 {
 				t.Fatalf("the hold logged %d times:\n%s", got, logs.String())
 			}
