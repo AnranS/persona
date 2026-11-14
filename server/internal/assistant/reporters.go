@@ -375,9 +375,9 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 			// failed try or restart cannot send that old text again; its other signals are regathered for their own digest.
 			if exact != nil && target {
 				m.Withdrawn = true
-				detached := []superviseSignal{}
-				m.Signals = &detached
-				regather = append(regather, remaining...)
+				// Keep only the other signals with the withdrawn head. They are regathered by a later drain only when
+				// this in-flight text did not succeed; regathering them now would race a successful original send (#5732).
+				m.Signals = &remaining
 				changed = true
 			} else if target {
 				// An empty, non-nil list is the durable detached marker: it prevents the next restart from

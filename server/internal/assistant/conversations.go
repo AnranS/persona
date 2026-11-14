@@ -641,7 +641,23 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			// Delivered, answered just in time, or the conversation is gone for good: off the queue. An unreachable
 			// node or another delivery failure keeps it.
 			taken := false
+			var replay []superviseSignal
 			if stale || !keep && (err == nil || strings.Contains(err.Error(), "is gone")) {
+				if msg.Withdrawn && msg.Signals != nil {
+					// A withdrawn head never delivered this copy. Restore only its remaining signals, atomically with
+					// removing the head; a newer durable stretch of the same id still wins (#5732).
+					if b.st.SupervisePending == nil {
+						b.st.SupervisePending = map[string]superviseSignal{}
+					}
+					for _, g := range *msg.Signals {
+						cur, exists := b.st.SupervisePending[g.id()]
+						if !exists {
+							cur = g
+							b.st.SupervisePending[g.id()] = cur
+						}
+						replay = append(replay, cur)
+					}
+				}
 				if q := b.st.Queue[id]; len(q) > 0 && (!stale || q[0] == msg) {
 					b.st.Queue[id] = q[1:]
 				}
@@ -654,6 +670,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				b.stuck[id] = msg // the next drain takes another one first (pickLocked)
 			}
 			b.mu.Unlock()
+			if len(replay) > 0 {
+				s.restoreDigest(replay, time.Time{}, time.Time{})
+			}
 			if taken && !stale && err == nil {
 				s.availQueueDelivered(machine, id, msg, time.Now())
 			}

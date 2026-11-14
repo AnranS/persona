@@ -149,6 +149,7 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 func (s *Service) restoreDigest(signals []superviseSignal, at, prev time.Time) {
 	b := &s.supervise
 	b.mu.Lock()
+	b.init()
 	defer b.mu.Unlock()
 	if b.last.Equal(at) {
 		b.last = prev
