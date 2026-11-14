@@ -37,10 +37,19 @@ final class CalmComposerUITests: XCTestCase {
         return out
     }
 
-    @MainActor private func waitUntil(_ timeout: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
+    @MainActor private func readingID(_ app: XCUIApplication) -> String? {
+        let probe = app.staticTexts.matching(identifier: "chat.scrollState")
+            .matching(NSPredicate(format: "label ENDSWITH %@", "key=" + main)).firstMatch
+        guard probe.exists else { return nil }
+        return probe.label.split(separator: " ").first(where: { $0.hasPrefix("reading=") }).map { String($0.dropFirst("reading=".count)) }
+    }
+
+    @MainActor private func waitUntil(_ timeout: TimeInterval = 10, samples: Int = 1, _ condition: () -> Bool) -> Bool {
         let end = Date().addingTimeInterval(timeout)
+        var matched = 0
         while Date() < end {
-            if condition() { return true }
+            matched = condition() ? matched + 1 : 0
+            if matched >= samples { return true }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
         return false
@@ -119,8 +128,12 @@ final class CalmComposerUITests: XCTestCase {
         }
         XCTAssertTrue(waitUntil { self.state(app)["bottom"] == 0 && self.state(app)["follows"] == 0 && self.state(app)["arrow"] == 1 },
                       "did not enter manual reading: \(self.state(app))")
-        let offset = try XCTUnwrap(state(app)["offset"], "the scroll probe has no reading offset")
-        let stable = { abs((self.state(app)["offset"] ?? offset + 1000) - offset) <= 2 }
+        let rowY = try XCTUnwrap(state(app)["readingY"], "the scroll probe has no historical row position")
+        XCTAssertNotEqual(rowY, -1, "the historical row has no measured screen position")
+        let rowID = try XCTUnwrap(readingID(app), "the scroll probe has no historical row id")
+        let stable = {
+            abs((self.state(app)["readingY"] ?? rowY + 1000) - rowY) <= 2 && self.readingID(app) == rowID
+        }
 
         if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
         XCTAssertTrue(app.buttons.matching(identifier: "queue-item").firstMatch.waitForExistence(timeout: 5), app.debugDescription)
@@ -128,18 +141,18 @@ final class CalmComposerUITests: XCTestCase {
         XCTAssertFalse(app.buttons["queue-relayed-summary"].exists)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "来自「早报")).firstMatch.exists)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "对话空闲后送达")).firstMatch.exists)
-        XCTAssertTrue(waitUntil(5, stable), "opening the queue moved the historical row: before \(offset), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 3, stable), "opening the queue moved the historical row: before \(rowY), now \(self.state(app))")
 
         if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
         XCTAssertTrue(waitUntil { app.buttons.matching(identifier: "queue-item").count == 0 }, "the queue did not collapse")
-        XCTAssertTrue(waitUntil(5, stable), "closing the queue moved the historical row: before \(offset), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 3, stable), "closing the queue moved the historical row: before \(rowY), now \(self.state(app))")
 
         stream(upto: 175)
         let bar = app.descendants(matching: .any)["action-bar"].firstMatch
         XCTAssertTrue(waitUntil { !bar.exists }, "streaming did not collapse the action row")
-        XCTAssertTrue(waitUntil(5, stable), "starting the stream moved the historical row: before \(offset), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 3, stable), "starting the stream moved the historical row: before \(rowY), now \(self.state(app))")
         stream()
         XCTAssertTrue(waitUntil { bar.exists }, "the action row did not return")
-        XCTAssertTrue(waitUntil(5, stable), "ending the stream moved the historical row: before \(offset), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 3, stable), "ending the stream moved the historical row: before \(rowY), now \(self.state(app))")
     }
 }

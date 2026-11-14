@@ -76,7 +76,7 @@ entry joins the same capsule row instead of adding a standalone strip. Its long 
 While reply text is actively streaming, the entire action row is hidden with `hidden` rather than unmounted: the chat
 gets the room, automatic tray-opening events and taps cannot cover it, and the open tray and any edited answer return
 intact when streaming ends. The conversation's own pending cards remain visible and answerable, and the existing dock
-`ResizeObserver` keeps newest-end following or the user's manual reading position stable.
+`ResizeObserver` keeps newest-end following or the user's manual reading position stable. `node web/e2e/calm-composer.mjs <preview URL> <output directory> [--chromium <executable>]` verifies those geometries, the collapsed queue and the combined row against synthetic data at 390 and 1280 px in light and dark.
 
 The feed's additive `task_cards` upserts retain a stable plan/index identity before and after to-do binding, without
 replacing or deleting audit events. Old/null/empty projections keep cached or legacy data. Current to-dos/sessions update

@@ -1948,6 +1948,19 @@ struct ChatView: View {
         }
     }
 
+    /// A footer disclosure or streaming transition: hold the visible row with the same ChatPin/ChatFollow path as a chat
+    /// disclosure, before SwiftUI lays the new footer out. Never replace an app-owned jump or fight the user's finger.
+    private func holdFooter() {
+        #if os(iOS) || os(visionOS)
+        if jumpRun.running { return }
+        #endif
+        guard !KeyboardState.shared.isUp, !scratch.userDragging, !pin.holding,
+              Date.now.timeIntervalSince(scratch.lastActivity) >= ChatPin.glideTime,
+              let line = currentLines().last(where: { scratch.visibleLines.contains($0.id) }) else { return }
+        pin.hold(line.id, from: line.id, slow: true)
+        holdFollow()
+    }
+
     /// Streamed words are drawn after the lines (`ChatLiveText`'s rule: not once the message is in the rows).
     private var liveShown: Bool { ChatLiveText.shows(store) }
     /// A reply is actively streaming, not merely a tool or the composer working: auxiliary task chrome yields to it (#7770).
@@ -2525,7 +2538,9 @@ struct ChatView: View {
             let newest = lines.last?.id ?? ""
             let shown = Set(scratch.visibleLines)
             let lastShown = lines.lastIndex { shown.contains($0.id) }.map { lines.count - 1 - $0 } ?? -1
-            Text("bottom=\(follow.near ? 1 : 0) follows=\(follow.follows ? 1 : 0) mode=\(follow.mode) frozen=\(frozen == nil ? 0 : 1) arrow=\(arrowShows ? 1 : 0) newestShown=\(shown.contains(newest) ? 1 : 0) behind=\(lastShown) items=\(store.items.count) withheld=\(store.items.count - (frozen.map { f in Self.prefixCount(store.items) { ($0.seq, $0.part) <= (f.seq, f.part) } } ?? store.items.count)) offset=\(Int(scratch.scrollY.rounded())) key=\(key.machineID)/\(key.sessionID)")
+            let reading = lines.first { shown.contains($0.id) }
+            let readingY = reading.flatMap { scratch.workHeadY[$0.id] ?? scratch.lineY[$0.id] } ?? -1
+            Text("bottom=\(follow.near ? 1 : 0) follows=\(follow.follows ? 1 : 0) mode=\(follow.mode) frozen=\(frozen == nil ? 0 : 1) arrow=\(arrowShows ? 1 : 0) newestShown=\(shown.contains(newest) ? 1 : 0) behind=\(lastShown) items=\(store.items.count) withheld=\(store.items.count - (frozen.map { f in Self.prefixCount(store.items) { ($0.seq, $0.part) <= (f.seq, f.part) } } ?? store.items.count)) reading=\(reading?.id ?? "none") readingY=\(Int(readingY.rounded())) key=\(key.machineID)/\(key.sessionID)")
                 .font(Theme.Font.label).opacity(Self.scrollProbeVisible ? 1 : 0.01).allowsHitTesting(false)
                 .accessibilityIdentifier("chat.scrollState")
         }
@@ -2590,7 +2605,8 @@ struct ChatView: View {
             let next = nextNeedsYouSession
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity,
                                nextTitle: next.map { $0.assistant ? ($0.title.isEmpty ? model.assistantShownName : $0.title) : $0.displayTitle },
-                               openNext: next.map { item in { openNext(item) } })
+                               openNext: next.map { item in { openNext(item) } },
+                               onDisclose: holdFooter)
                 .opacity(streamingReply ? 0 : 1)
                 .frame(height: streamingReply ? 0 : nil)
                 .clipped()
@@ -2666,7 +2682,8 @@ struct ChatView: View {
                     QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
                                photoMarks: model.chat(key).queuePhotoMarks,
                                steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.assistantShownName : nil)
+                               persona: session?.assistant == true ? model.assistantShownName : nil,
+                               onDisclose: holdFooter)
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -2733,6 +2750,8 @@ struct ChatView: View {
             .padding(.bottom, Theme.Space.s)
             .animation(Theme.Motion.standard, value: status)
             .animation(Theme.Motion.standard, value: model.interactions(for: key).map(\.id))
+            .onChange(of: streamingReply) { _, _ in if style == .assistant { holdFooter() } }
+            .onChange(of: nextNeedsYouSession?.key) { _, _ in if style == .assistant { holdFooter() } }
             // The last card answered: offer the next conversation that needs you; a new card takes the entry back (#4348).
             // Key and ids are one observed value: on an in-place chat switch the ids flip for a different conversation,
             // and SwiftUI does not order this against onChange(of: key), so a cross-key change is ignored here on purpose.
@@ -2982,21 +3001,7 @@ struct ChatView: View {
             // 60 pt down, #3005). The pin puts a held row back. Only that edge: its top edge moving moves nothing on
             // it, and going by the list's height the pin moved a work line's header 40 pt by itself (`UnfoldTests`).
             // Not for the keyboard: the newest stays above it, as it always has.
-            if old.height > 0, !KeyboardState.shared.isUp {
-                let delta = rect.maxY - old.maxY
-                guard abs(delta) >= 0.5 else { return }
-                if pin.holding {
-                    pin.resized(by: delta)
-                } else if !scratch.userDragging {
-                    if follow.follows {
-                        // The queue/action footer changed the viewport, not the user's intent: stay at the newest end.
-                        position.scrollTo(edge: .top)
-                    } else if follow.holdsBack {
-                        // Reading further back: cancel the bottom-edge movement so the same historical row stays put.
-                        scrollList(to: chrome.offset - delta)
-                    }
-                }
-            }
+            if old.height > 0, !KeyboardState.shared.isUp { pin.resized(by: rect.maxY - old.maxY) }
         }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { menu.dismiss(); Keyboard.dismiss() })
@@ -6342,6 +6347,8 @@ struct QueueStrip: View {
     var steers = false
     /// A Persona chat names the persona; an Agent chat keeps Claude's wording.
     var persona: String? = nil
+    /// Called before an explicit disclosure changes the footer's height (#7770).
+    var onDisclose: () -> Void = {}
     private var agent: String { persona ?? "Claude" }
     @State private var busy = false
     @State private var expanded = false
@@ -6351,7 +6358,7 @@ struct QueueStrip: View {
     private static let visibleRows: CGFloat = 3
 
     var body: some View {
-        DisclosureGroup(isExpanded: Binding(get: { expanded && drawnCount > 0 }, set: { expanded = drawnCount > 0 && $0 })) {
+        DisclosureGroup(isExpanded: Binding(get: { expanded && drawnCount > 0 }, set: { onDisclose(); expanded = drawnCount > 0 && $0 })) {
             ScrollView {
                 rows
             }
@@ -6387,6 +6394,7 @@ struct QueueStrip: View {
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.opacity)
         .accessibilityIdentifier("queue-strip")
+        .onChange(of: drawnCount) { _, new in if new == 0 { expanded = false } }
     }
 
     private var tray: some View { ThemedIcon("tray.and.arrow.down").accessibilityHidden(true) }

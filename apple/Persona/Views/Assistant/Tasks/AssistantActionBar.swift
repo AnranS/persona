@@ -354,6 +354,8 @@ struct AssistantActionBar: View {
     /// Another conversation to open after this one's last card was answered (#4348), in the same row (#7770).
     var nextTitle: String? = nil
     var openNext: (() -> Void)? = nil
+    /// Called before a tray disclosure changes the footer's height (#7770).
+    var onDisclose: () -> Void = {}
     @State private var open: ActionTray?
     /// The open tray's rows, measured: the tray is as tall as they are, up to its cap.
     @State private var listHeight: CGFloat = 0
@@ -395,7 +397,10 @@ struct AssistantActionBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
-        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } }
+        .onChange(of: open) { _, new in
+            onDisclose()
+            if new == nil { expanded = []; drawn = []; planChoices = [:] }
+        }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
