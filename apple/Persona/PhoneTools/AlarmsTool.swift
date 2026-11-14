@@ -381,11 +381,6 @@ enum AlarmsTool {
 }
 
 #if os(iOS) && canImport(AlarmKit)
-/// What Persona keeps with an alarm it sets (AlarmKit's metadata).
-nonisolated struct PersonaAlarmData: AlarmMetadata {
-    var label: String?
-}
-
 /// AlarmKit's permission (`NSAlarmKitUsageDescription`).
 enum AlarmsAccess {
     static func status() -> PhoneAuthStatus {

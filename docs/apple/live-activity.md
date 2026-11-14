@@ -365,3 +365,20 @@ A second, independent activity while the phone records (docs/apple/recording.md,
 - `sips -c <height> <width> --cropOffset 0 0` is treated as a centered crop (offset 0 means omitted); to crop from the top use something like `--cropOffset 1 0`.
 - After a UI test locks the simulator, unlock it, or the next `xcodebuild test` reports "test runner hung before establishing connection".
 - The first shots after switching the interface language (`PERSONA_UI_LANGUAGE`) can show every text of the activity truncated ("3件作…", "169/1…") with room to spare; the next run draws it right (#3437, iOS 27.0 simulator). Shoot again before treating it as a layout bug.
+
+## Alarms and timers (AlarmKit)
+
+The alarms and timers the assistant sets on the iPhone (`phone_alarm_create`, `phone_timer_start`; `docs/apple/phone-tools.md`, #2278) are
+AlarmKit's: AlarmKit starts, updates and ends their Live Activity itself, and Persona's widget extension only draws it
+(`apple/PersonaWidgets/AlarmLiveActivity.swift`, an `ActivityConfiguration` for `AlarmAttributes<PersonaAlarmData>`). Without it a timer still
+rang but its countdown was not shown anywhere.
+
+- **Lock Screen**: the mark (timer, paused or alarm), the label the alarm was set with (`PersonaAlarmData.label`, else the alert's title), what it
+  is doing (Timer / Paused / Alarm) and the time: a running timer counts down by itself (`Text(timerInterval:)`, no updates), a paused one shows the
+  time left (`AlarmActivityTime.paused`), a ringing alarm the time it rings at. Under them Pause or Resume (a timer) and Stop.
+- **Dynamic Island**: compact, the mark and the time; expanded, the label and the same buttons; minimal, the mark. The watch's Smart Stack gets the
+  glance (mark, label, time).
+- **Buttons** are `LiveActivityIntent`s in `apple/LiveActivity/AlarmActivity.swift` (`PauseAlarmIntent`, `ResumeAlarmIntent`, `StopAlarmIntent`),
+  allowed without unlocking, that call `AlarmManager` in the app with the alarm's id; they only reach Persona's own alarms.
+- The tint is the one the app gave the alarm (`AlarmAttributes.tintColor`, the app's accent); nothing is read from the App Group or the keychain.
+- The activities live in their own `LiveActivityBundle` inside `PersonaWidgetsBundle` (a widget bundle's builder takes ten at most).

@@ -297,6 +297,18 @@ struct PhoneSystemToolsTests {
         #expect(AlarmsTool.timerSummary(seconds: 1500, label: "Focus").contains("Focus"))
     }
 
+    @Test func aPausedTimerShowsTheTimeLeftAsTheClockAppDoes() {
+        #expect(AlarmActivityTime.paused(total: 1500, elapsed: 1.2) == "24:59")
+        #expect(AlarmActivityTime.paused(total: 3 * 3600, elapsed: 3600) == "2:00:00")
+        #expect(AlarmActivityTime.paused(total: 60, elapsed: 90) == "0:00")
+    }
+
+    @Test func theCountdownNeverStartsAfterItRings() {
+        let fire = Date(timeIntervalSince1970: 1_000)
+        #expect(AlarmActivityTime.countdown(start: Date(timeIntervalSince1970: 400), fire: fire).lowerBound == Date(timeIntervalSince1970: 400))
+        #expect(AlarmActivityTime.countdown(start: Date(timeIntervalSince1970: 2_000), fire: fire) == fire...fire)
+    }
+
     // MARK: - Home (#2285)
 
     @Test func homeCommandsBecomeHomeKitValues() throws {
