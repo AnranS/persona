@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // A round's process (#7315, assistant_round.go) has the round's tools only and is never compacted when idle. Every
 // message that is no round from the first turn needs every tool: the background supervisor's once
 // assistant.background_supervisor_keeps_context is on (no supervise_round), the owner's own, and any of a manager from
-// before #7315. The idle round's process is replaced by a plain resume with every tool, compacted when idle again; a
-// busy one takes the message and is replaced at the first message after it is idle.
+// before #7315. The idle round's process is replaced by a plain resume with every tool, compacted when idle again. While
+// it works, the node holds such a message, and once it is idle the first held message replaces it and the others
+// follow, in order.
 
 // roundThenIdle runs a round from the first turn and ends its turn: the conversation's process is the round's.
 func roundThenIdle(t *testing.T, n *Node) *assistantProc {
@@ -147,58 +148,6 @@ func TestOwnerMessageToARoundProcessGetsEveryTool(t *testing.T) {
 	compactsWhenIdle(t, n, idleRound(n), input)
 }
 
-// A round's process that is answering, or runs background tasks, takes a message that needs every tool as it is
-// (stopping it would lose its work) and says so in the log; the first message after it is idle replaces it.
-func TestBusyRoundProcessSwitchesToEveryToolOnceIdle(t *testing.T) {
-	n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
-	var logs syncBuffer
-	n.logger = log.New(&logs, "", 0)
-	if out := sendRound(t, n, "once-round"); out["context"] != roundFresh {
-		t.Fatalf("the round: %v", out)
-	}
-	n.mu.Lock()
-	round := n.procs[roundConversation]
-	n.mu.Unlock()
-	// Its turn has not ended: busy.
-	sendAs(t, n, supervisionWithoutRound("once-busy"))
-	if got := len(roundStarts(t, argv)); got != 1 {
-		t.Fatalf("restarted mid-turn (%d starts)", got)
-	}
-	if !strings.Contains(logs.String(), "working with a supervision round's tools") {
-		t.Fatalf("the log does not say the switch waits:\n%s", logs.String())
-	}
-	// Idle, with a background task running.
-	idleRound(n)
-	round.mu.Lock()
-	round.tasks = []string{"a background command"}
-	round.mu.Unlock()
-	sendAs(t, n, supervisionWithoutRound("once-tasks"))
-	if got := len(roundStarts(t, argv)); got != 1 || !round.alive() {
-		t.Fatalf("restarted with a background task (%d starts, alive %v)", got, round.alive())
-	}
-	n.mu.Lock()
-	same := n.procs[roundConversation] == round
-	n.mu.Unlock()
-	// The send returns once the message is written to the process; the fake claude appends it to its file after that.
-	waitFor(t, "the third message", func() bool { return len(roundInputs(t, input)) == 3 })
-	if msgs := roundInputs(t, input); !same || len(msgs) != 3 || !round.round {
-		t.Fatalf("the messages did not go to the round's process: same %v, round %v, %q", same, round.round, msgs)
-	}
-	// Idle, nothing running: the next message replaces it.
-	idleRound(n)
-	round.mu.Lock()
-	round.tasks = nil
-	round.mu.Unlock()
-	sendAs(t, n, supervisionWithoutRound("once-idle"))
-	all := roundStarts(t, argv)
-	if len(all) != 2 {
-		t.Fatalf("%d starts: %q", len(all), all)
-	}
-	everyToolStart(t, all[1])
-	waitFor(t, "the round's process to end", func() bool { return !round.alive() })
-	compactsWhenIdle(t, n, idleRound(n), input)
-}
-
 // roundProc is the conversation's process.
 func roundProc(n *Node) *assistantProc {
 	n.mu.Lock()
@@ -211,13 +160,18 @@ func feedAssistant(n *Node, p *assistantProc, lines ...string) {
 	n.readAssistant(p, strings.NewReader(strings.Join(lines, "\n")+"\n"))
 }
 
-// What Claude Code prints at a turn's end, when a compaction is done, and when its background tasks change.
+// What Claude Code 2.1.322 prints at a turn's end, when a compaction is done, when its background tasks change, when
+// one of them ended (before it takes its notification up in a turn of its own), and as every turn after its first
+// starts.
 const (
-	turnResult     = `{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"好"}`
-	compactedLine  = `{"type":"system","subtype":"compact_boundary","compact_metadata":{"post_tokens":1000}}`
-	oneTaskLine    = `{"type":"system","subtype":"background_tasks_changed","tasks":[{"description":"a background command"}]}`
-	noTaskLine     = `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`
-	lifecycleShape = `{"type":"command_lifecycle","command_uuid":%q,"state":%q}`
+	turnResult       = `{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"好"}`
+	compactedLine    = `{"type":"system","subtype":"compact_boundary","compact_metadata":{"post_tokens":1000}}`
+	oneTaskLine      = `{"type":"system","subtype":"background_tasks_changed","tasks":[{"description":"a background command"}]}`
+	noTaskLine       = `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`
+	taskEndedLine    = `{"type":"system","subtype":"task_notification","task_id":"b1","status":"completed","summary":"Background command \"a background command\" completed (exit code 0)"}`
+	turnInitLine     = `{"type":"system","subtype":"init","claude_code_version":"2.1.322","tools":["Bash"]}`
+	lifecycleShape   = `{"type":"command_lifecycle","command_uuid":%q,"state":%q}`
+	messageStartLine = `{"type":"stream_event","event":{"type":"message_start","message":{"model":"m","usage":{"input_tokens":10}}}}`
 )
 
 // ownerSends is the owner writing text to the conversation, as the app does (session.send).
@@ -229,177 +183,319 @@ func ownerSends(t *testing.T, n *Node, text string) {
 	}
 }
 
-// joinedState is p's state as the reaper reads it once p's turns ended: idle, reapable a while later, and whether it is
-// compacted before it is let go with a long context.
-func joinedState(p *assistantProc) (idle, reapable, compactable bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.context = assistantIdleCompact * 2
-	return !p.workingLocked(), p.reapable(time.Now().Add(assistantIdleTimeout + time.Minute)), p.idleCompactable()
+// relay is the manager's supervision message once with the switch on, its words naming once so the test can find it.
+func relay(once string) map[string]any {
+	params := supervisionWithoutRound(once)
+	params["text"] = "supervision message " + once
+	return params
 }
 
-// A message that needs every tool and joins a round's process still working ends its exemption from idle compaction
-// there and then: once its turns end, with no other message, the reaper compacts it before letting it go as any other
-// process, also when what kept it working was a background task that ends later. The tools switch with the next
-// message, which is the first thing that starts a turn in it again. A round kept as busy is the round's own: it keeps
-// the exemption, and the next round starts from the first turn.
-func TestJoinedRoundProcessIsCompactedWhenIdle(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		tasks  bool // a background task, not the round's turn, keeps the process working
-		join   func(t *testing.T, n *Node)
-		joined bool
-	}{
-		{"a supervision message with the switch on", false, func(t *testing.T, n *Node) { sendAs(t, n, supervisionWithoutRound("once-join")) }, true},
-		{"the owner's message", false, func(t *testing.T, n *Node) { ownerSends(t, n, "the owner's question") }, true},
-		{"the owner's message beside a background task", true, func(t *testing.T, n *Node) { ownerSends(t, n, "the owner's question") }, true},
-		{"a round kept as busy", false, func(t *testing.T, n *Node) {
-			if out := sendRound(t, n, "once-kept"); out["context"] != roundKept || out["why"] != roundWhyBusy {
-				t.Fatalf("the round kept: %v", out)
-			}
-		}, false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
-			if out := sendRound(t, n, "once-round"); out["context"] != roundFresh {
-				t.Fatalf("the round: %v", out)
-			}
-			round := roundProc(n)
-			if c.tasks {
-				feedAssistant(n, round, oneTaskLine, turnResult) // the round's turn ended, its background command runs on
-			}
-			c.join(t, n)
-			waitFor(t, "the joining message", func() bool { return len(roundInputs(t, input)) == 2 })
-			feedAssistant(n, round, turnResult) // its turn ends
-			if c.tasks {
-				if idle, reapable, _ := joinedState(round); idle || reapable {
-					t.Fatalf("with its background command: idle %v, reapable %v", idle, reapable)
-				}
-				feedAssistant(n, round, noTaskLine)
-			}
-			if got := len(roundStarts(t, argv)); got != 1 || !round.alive() || roundProc(n) != round {
-				t.Fatalf("replaced while working (%d starts, alive %v)", got, round.alive())
-			}
-			idle, reapable, compactable := joinedState(round)
-			if !idle || !reapable || compactable != c.joined {
-				t.Fatalf("idle %v, reapable %v, compactable %v (want %v)", idle, reapable, compactable, c.joined)
-			}
-			if !c.joined {
-				// The next round starts from the first turn, its exemption intact.
-				if out := sendRound(t, n, "once-next"); out["context"] != roundFresh {
-					t.Fatalf("the next round: %v", out)
-				}
-				return
-			}
-			n.compactIdle(round)
-			waitFor(t, "the idle compaction", func() bool {
-				msgs := roundInputs(t, input)
-				return strings.Contains(msgs[len(msgs)-1], `"/compact"`)
-			})
-			// A message while it compacts goes to it (a new process would lose the compaction); once it is done, the next
-			// message gets every tool.
-			sendAs(t, n, supervisionWithoutRound("once-compacting"))
-			if got := len(roundStarts(t, argv)); got != 1 || !round.alive() {
-				t.Fatalf("replaced while compacting (%d starts, alive %v)", got, round.alive())
-			}
-			feedAssistant(n, round, compactedLine, turnResult, turnResult)
-			sendAs(t, n, supervisionWithoutRound("once-after"))
-			all := roundStarts(t, argv)
-			if len(all) != 2 {
-				t.Fatalf("%d starts: %q", len(all), all)
-			}
-			everyToolStart(t, all[1])
-			waitFor(t, "the round's process to end", func() bool { return !round.alive() })
-		})
+// workingNow is whether stopping p now would lose something (workingLocked), and its row's status.
+func workingNow(n *Node, p *assistantProc) (bool, string) {
+	p.mu.Lock()
+	working := p.workingLocked()
+	p.mu.Unlock()
+	for _, s := range n.assistantSessions() {
+		if s.SessionID == p.id {
+			return working, s.Status
+		}
+	}
+	return working, ""
+}
+
+// stillHeld fails t unless p is still the conversation's process, starts processes were started in all, and none of
+// words reached any of them.
+func stillHeld(t *testing.T, n *Node, p *assistantProc, argv, input string, starts int, words ...string) {
+	t.Helper()
+	if got := len(roundStarts(t, argv)); got != starts || !p.alive() || roundProc(n) != p {
+		t.Fatalf("replaced (%d starts, alive %v)", got, p.alive())
+	}
+	read := strings.Join(roundInputs(t, input), "\n")
+	for _, w := range words {
+		if strings.Contains(read, w) {
+			t.Fatalf("%q went in while the process worked", w)
+		}
 	}
 }
 
-// The user compacting the background supervisor while a round's process is up sets no busy flag (assistantCompact):
-// a message that needs every tool goes into that process, as a round does (kept as busy), and the switch waits for the
-// compaction to end. Replacing the process then would end the compaction unfinished.
-func TestRoundProcessIsNotReplacedWhileTheUserCompacts(t *testing.T) {
+// settled waits until no delivery of p's held messages is under way: one that started when p looked idle has looked
+// again after assistantHeldSettle (deliverHeld).
+func settled(t *testing.T, p *assistantProc) {
+	t.Helper()
+	waitFor(t, "the held messages' second look", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return !p.delivering
+	})
+}
+
+// heldGoIn fails t unless the round's process p is replaced by a plain resume with every tool (the starts-th start),
+// which reads words once each, in that order, and is out of round state and compacted when idle.
+func heldGoIn(t *testing.T, n *Node, p *assistantProc, argv, input string, starts int, words ...string) {
+	t.Helper()
+	waitFor(t, "a process with every tool", func() bool { return len(roundStarts(t, argv)) == starts })
+	all := roundStarts(t, argv)
+	everyToolStart(t, all[starts-1])
+	waitFor(t, "the round's process to end", func() bool { return !p.alive() })
+	waitFor(t, "the held messages in the new process", func() bool {
+		return strings.Contains(strings.Join(roundInputs(t, input), "\n"), words[len(words)-1])
+	})
+	msgs, at := roundInputs(t, input), -1
+	for _, w := range words {
+		i := slices.IndexFunc(msgs, func(m string) bool { return strings.Contains(m, w) })
+		if i <= at || slices.IndexFunc(msgs[i+1:], func(m string) bool { return strings.Contains(m, w) }) >= 0 {
+			t.Fatalf("%q not read once, in its order: %q", w, msgs)
+		}
+		at = i
+	}
+	np := idleRound(n)
+	if np == nil || np == p {
+		t.Fatal("the held messages went to the round's process")
+	}
+	compactsWhenIdle(t, n, np, input)
+}
+
+// holdBoth sends the first message after the switch (a supervision message without supervise_round) and the owner's,
+// both needing every tool, to the round's process p at work: neither goes in, and the relay's send is answered as sent.
+func holdBoth(t *testing.T, n *Node, p *assistantProc, argv, input string, starts int) {
+	t.Helper()
+	if out := sendAs(t, n, relay("once-held")); out["session_id"] != roundConversation || out["context"] != nil {
+		t.Fatalf("the relay's answer: %v", out)
+	}
+	ownerSends(t, n, "the owner's question")
+	stillHeld(t, n, p, argv, input, starts, "once-held", "the owner's question")
+	p.mu.Lock()
+	held := len(p.held)
+	p.mu.Unlock()
+	if held != 2 {
+		t.Fatalf("%d messages held", held)
+	}
+}
+
+// Turning the switch on while a round's process works: the first supervision message after it, and the owner's, are
+// held at the node, outside Claude Code's queue, while the process answers, runs a background task (and the turn
+// Claude Code starts on its own to take its notification up), or compacts as the user asked. None of that work is cut;
+// once it is done the first held message replaces the process with a plain resume with every tool, out of round state
+// and compacted when idle, and the other follows, each read once.
+func TestRoundProcessHoldsMessagesUntilIdle(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		send func(t *testing.T, n *Node)
+		work func(t *testing.T, n *Node, round *assistantProc) // makes the round's process work, before both are sent
+		done func(t *testing.T, n *Node, round *assistantProc) // ends that work
 	}{
-		{"a supervision message with the switch on", func(t *testing.T, n *Node) { sendAs(t, n, supervisionWithoutRound("once-during")) }},
-		{"the owner's message", func(t *testing.T, n *Node) { ownerSends(t, n, "the owner's question") }},
-		{"a round", func(t *testing.T, n *Node) {
-			if out := sendRound(t, n, "once-during"); out["context"] != roundKept || out["why"] != roundWhyBusy {
-				t.Fatalf("the round during the compaction: %v", out)
-			}
+		{"answering", func(*testing.T, *Node, *assistantProc) {}, func(t *testing.T, n *Node, round *assistantProc) {
+			feedAssistant(n, round, turnResult)
 		}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
-			round := roundThenIdle(t, n)
+		{"a background task, then the turn Claude Code starts for it", func(t *testing.T, n *Node, round *assistantProc) {
+			feedAssistant(n, round, oneTaskLine, turnResult) // the round's turn ended, its background command runs on
+		}, func(t *testing.T, n *Node, round *assistantProc) {
+			// The command ends: Claude Code empties its list, which looks idle, and 26 ms later starts a turn to take
+			// its notification up; its init is all that shows it until the model's first token (measured on 2.1.322).
+			feedAssistant(n, round, taskEndedLine, noTaskLine, turnInitLine)
+			settled(t, round)
+			if working, status := workingNow(n, round); !working || status != "working" {
+				t.Fatalf("the turn Claude Code started: working %v, status %q", working, status)
+			}
+			if !round.alive() || roundProc(n) != round {
+				t.Fatal("the turn Claude Code started was cut off")
+			}
+			feedAssistant(n, round, messageStartLine, turnResult)
+		}},
+		{"the user's compaction", func(t *testing.T, n *Node, round *assistantProc) {
+			feedAssistant(n, round, turnResult)
 			if err := n.assistantCompact(context.Background(), roundConversation); err != nil {
 				t.Fatal(err)
 			}
-			c.send(t, n)
-			if got := len(roundStarts(t, argv)); got != 1 || !round.alive() || roundProc(n) != round {
-				t.Fatalf("replaced while the user compacts (%d starts, alive %v)", got, round.alive())
-			}
-			waitFor(t, "the message after the compaction's", func() bool { return len(roundInputs(t, input)) == 3 })
-			// The compaction ends, and the message's turn: the next message gets every tool.
-			feedAssistant(n, round, compactedLine, turnResult, turnResult)
-			sendAs(t, n, supervisionWithoutRound("once-after"))
-			all := roundStarts(t, argv)
-			if len(all) != 2 {
-				t.Fatalf("%d starts: %q", len(all), all)
-			}
-			everyToolStart(t, all[1])
-		})
-	}
-}
-
-// A message Claude Code queued behind the round's turn has not started when that turn's result clears busy: a new
-// process would never get it. Until it starts, a message that needs every tool goes into the round's process and a round
-// is kept as busy; once it started and every turn ended, the next message gets every tool.
-func TestRoundProcessKeepsAMessageClaudeQueued(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		send func(t *testing.T, n *Node)
-	}{
-		{"a supervision message with the switch on", func(t *testing.T, n *Node) { sendAs(t, n, supervisionWithoutRound("once-gap")) }},
-		{"the owner's message", func(t *testing.T, n *Node) { ownerSends(t, n, "and one more") }},
-		{"a round", func(t *testing.T, n *Node) {
-			if out := sendRound(t, n, "once-gap"); out["context"] != roundKept || out["why"] != roundWhyBusy {
-				t.Fatalf("the round in the gap: %v", out)
-			}
+		}, func(t *testing.T, n *Node, round *assistantProc) {
+			feedAssistant(n, round, turnInitLine, compactedLine, turnResult) // a compaction prints its init at its end
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
+			var logs syncBuffer
+			n.logger = log.New(&logs, "", 0)
 			if out := sendRound(t, n, "once-round"); out["context"] != roundFresh {
 				t.Fatalf("the round: %v", out)
 			}
 			round := roundProc(n)
-			ownerSends(t, n, "the owner's question") // the round's turn has not ended: busy
-			round.mu.Lock()
-			owner := round.written[len(round.written)-1].id
-			round.mu.Unlock()
-			// Claude Code queues it, then the round's turn ends.
-			feedAssistant(n, round, fmt.Sprintf(lifecycleShape, owner, "queued"), turnResult)
-			round.mu.Lock()
-			busy, queued := round.busy, len(round.queuedLocked())
-			round.mu.Unlock()
-			if busy || queued != 1 {
-				t.Fatalf("busy %v, %d queued", busy, queued)
+			c.work(t, n, round)
+			holdBoth(t, n, round, argv, input, 1)
+			c.done(t, n, round)
+			heldGoIn(t, n, round, argv, input, 2, "once-held", "the owner's question")
+			if got := strings.Count(logs.String(), "the message waits until it is idle"); got != 1 {
+				t.Fatalf("the hold logged %d times:\n%s", got, logs.String())
 			}
-			c.send(t, n)
-			if got := len(roundStarts(t, argv)); got != 1 || !round.alive() || roundProc(n) != round {
-				t.Fatalf("replaced with a queued message (%d starts, alive %v)", got, round.alive())
-			}
-			waitFor(t, "the message in the gap", func() bool { return len(roundInputs(t, input)) == 3 })
-			// The queued message starts, and every turn ends.
-			feedAssistant(n, round, fmt.Sprintf(lifecycleShape, owner, "started"), turnResult, turnResult)
-			sendAs(t, n, supervisionWithoutRound("once-after"))
-			all := roundStarts(t, argv)
-			if len(all) != 2 {
-				t.Fatalf("%d starts: %q", len(all), all)
-			}
-			everyToolStart(t, all[1])
 		})
+	}
+}
+
+// A turn Claude Code has started (command_lifecycle started) is under way though the model has not answered yet
+// (measured on 2.1.322: started 3 ms after the turn before it ended, the first token seconds later): nothing replaces
+// the process under it, and nothing it was given is lost.
+func TestAStartedTurnIsNotCut(t *testing.T) {
+	// startedIn writes text into p as a message Claude Code queues behind the turn running, ends that turn and starts
+	// the message's turn, which stops before the model's first token.
+	startedIn := func(t *testing.T, n *Node, p *assistantProc, send func()) {
+		t.Helper()
+		send()
+		p.mu.Lock()
+		id := p.written[len(p.written)-1].id
+		p.mu.Unlock()
+		feedAssistant(n, p, fmt.Sprintf(lifecycleShape, id, "queued"), turnResult, fmt.Sprintf(lifecycleShape, id, "started"))
+		if working, status := workingNow(n, p); !working || status != "working" {
+			t.Fatalf("the started turn: working %v, status %q", working, status)
+		}
+	}
+	t.Run("a round's, then the switch", func(t *testing.T) {
+		n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
+		if out := sendRound(t, n, "once-round"); out["context"] != roundFresh {
+			t.Fatalf("the round: %v", out)
+		}
+		round := roundProc(n)
+		startedIn(t, n, round, func() { // a round while the round answers goes in as before, the round's own
+			if out := sendRound(t, n, "once-kept"); out["context"] != roundKept || out["why"] != roundWhyBusy {
+				t.Fatalf("the round kept: %v", out)
+			}
+		})
+		holdBoth(t, n, round, argv, input, 1)
+		settled(t, round)
+		stillHeld(t, n, round, argv, input, 1, "once-held", "the owner's question")
+		feedAssistant(n, round, turnInitLine, messageStartLine, turnResult)
+		heldGoIn(t, n, round, argv, input, 2, "once-held", "the owner's question")
+		if msgs := roundInputs(t, input); strings.Count(strings.Join(msgs, "\n"), "一个任务要你处理") != 2 {
+			t.Fatalf("the two rounds were not read once each: %q", msgs)
+		}
+	})
+	t.Run("a round's, taken into the turn running", func(t *testing.T) {
+		// Claude Code takes a message queued mid-turn into that turn at its next step: started while busy, and the
+		// turn's one result ends both. Nothing of it is left to keep the process working afterwards.
+		n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
+		if out := sendRound(t, n, "once-round"); out["context"] != roundFresh {
+			t.Fatalf("the round: %v", out)
+		}
+		round := roundProc(n)
+		if out := sendRound(t, n, "once-kept"); out["context"] != roundKept || out["why"] != roundWhyBusy {
+			t.Fatalf("the round kept: %v", out)
+		}
+		round.mu.Lock()
+		id := round.written[len(round.written)-1].id
+		round.mu.Unlock()
+		feedAssistant(n, round, fmt.Sprintf(lifecycleShape, id, "queued"), fmt.Sprintf(lifecycleShape, id, "started"))
+		holdBoth(t, n, round, argv, input, 1)
+		feedAssistant(n, round, turnResult, fmt.Sprintf(lifecycleShape, id, "completed"))
+		heldGoIn(t, n, round, argv, input, 2, "once-held", "the owner's question")
+	})
+	t.Run("the owner's, then a round", func(t *testing.T) {
+		n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
+		if _, err := n.assistantSend(context.Background(), roundConversation, "", "", "the owner's first", nil, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		p := roundProc(n)
+		startedIn(t, n, p, func() { ownerSends(t, n, "the owner's second") })
+		// A round now would resume at the first turn and leave the owner's second message off the chain it goes on.
+		if out := sendRound(t, n, "once-gap"); out["context"] != roundKept || out["why"] != roundWhyBusy {
+			t.Fatalf("the round in the gap: %v", out)
+		}
+		stillHeld(t, n, p, argv, input, 1)
+		waitFor(t, "the round in the process", func() bool { return len(roundInputs(t, input)) == 3 })
+		feedAssistant(n, p, turnInitLine, messageStartLine, turnResult, turnInitLine, messageStartLine, turnResult)
+		if out := sendRound(t, n, "once-next"); out["context"] != roundFresh {
+			t.Fatalf("the round once idle: %v", out)
+		}
+		if msgs := roundInputs(t, input); len(msgs) != 4 || !strings.Contains(msgs[0], "the owner's first") || !strings.Contains(msgs[1], "the owner's second") {
+			t.Fatalf("messages %q", msgs)
+		}
+	})
+}
+
+// The user compacting the background supervisor while a round's process is up sets no busy flag (assistantCompact): a
+// round goes into that process (kept as busy), since replacing it would end the compaction unfinished; the next
+// message after both gets every tool.
+func TestRoundProcessIsNotReplacedWhileTheUserCompacts(t *testing.T) {
+	n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
+	round := roundThenIdle(t, n)
+	if err := n.assistantCompact(context.Background(), roundConversation); err != nil {
+		t.Fatal(err)
+	}
+	if out := sendRound(t, n, "once-during"); out["context"] != roundKept || out["why"] != roundWhyBusy {
+		t.Fatalf("the round during the compaction: %v", out)
+	}
+	stillHeld(t, n, round, argv, input, 1)
+	waitFor(t, "the round after the compaction's /compact", func() bool { return len(roundInputs(t, input)) == 3 })
+	feedAssistant(n, round, turnInitLine, compactedLine, turnResult, turnInitLine, turnResult)
+	sendAs(t, n, relay("once-after"))
+	heldGoIn(t, n, round, argv, input, 2, "once-after")
+}
+
+// A round's process that ends while it holds messages (it crashed, or was stopped) hands them to the next process,
+// with every tool.
+func TestHeldMessagesGoInWhenTheRoundProcessEnds(t *testing.T) {
+	n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
+	if out := sendRound(t, n, "once-round"); out["context"] != roundFresh {
+		t.Fatalf("the round: %v", out)
+	}
+	round := roundProc(n)
+	holdBoth(t, n, round, argv, input, 1)
+	round.stop()
+	heldGoIn(t, n, round, argv, input, 2, "once-held", "the owner's question")
+}
+
+// A resident node asked to restart waits while a conversation holds messages, as it does while one answers: they live
+// with its process, which the restart would end.
+func TestHeldMessagesKeepTheNodeFromRestarting(t *testing.T) {
+	p := &assistantProc{exited: make(chan struct{}), held: []heldSend{{text: "held"}}}
+	liveAssistants.Store(p, struct{}{})
+	defer liveAssistants.Delete(p)
+	if !AssistantsBusy() {
+		t.Fatal("a held message does not keep the node from restarting")
+	}
+}
+
+// Claude Code prints an init as every turn starts, the first one in the turn of the message that started the process.
+// A later one is a turn the node may not have asked for (a background task's notification): busy from then, the row
+// says working, and a round goes in as before rather than stop the process under it. A compaction's init, which comes
+// right before its end, is not a turn.
+func TestLaterInitIsATurn(t *testing.T) {
+	n, argv, _ := roundTestNode(t, roundStarted("2.1.322", 1), false)
+	if _, err := n.assistantSend(context.Background(), roundConversation, "", "", "the owner's message", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	p := roundProc(n)
+	waitFor(t, "the first init", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.initSeen
+	})
+	feedAssistant(n, p, turnResult)
+	if working, status := workingNow(n, p); working || status == "working" {
+		t.Fatalf("after its turn: working %v, status %q", working, status)
+	}
+	feedAssistant(n, p, taskEndedLine, turnInitLine)
+	if working, status := workingNow(n, p); !working || status != "working" {
+		t.Fatalf("a turn of its own: working %v, status %q", working, status)
+	}
+	if out := sendRound(t, n, "once-own-turn"); out["context"] != roundKept || out["why"] != roundWhyBusy {
+		t.Fatalf("a round during that turn: %v", out)
+	}
+	if got := len(roundStarts(t, argv)); got != 1 || !p.alive() {
+		t.Fatalf("stopped under its own turn (%d starts, alive %v)", got, p.alive())
+	}
+	feedAssistant(n, p, messageStartLine, turnResult, turnInitLine, turnResult)
+	if working, status := workingNow(n, p); working || status == "working" {
+		t.Fatalf("after that turn: working %v, status %q", working, status)
+	}
+	p.mu.Lock()
+	p.compacting = true
+	p.mu.Unlock()
+	feedAssistant(n, p, turnInitLine)
+	p.mu.Lock()
+	busy := p.busy
+	p.mu.Unlock()
+	if busy {
+		t.Fatal("a compaction's init made it busy")
+	}
+	feedAssistant(n, p, compactedLine, turnResult)
+	if working, _ := workingNow(n, p); working {
+		t.Fatal("working after the compaction")
 	}
 }

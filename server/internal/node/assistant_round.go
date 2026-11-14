@@ -11,6 +11,9 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The background supervisor's rounds (#7315, docs/assistant/unified-entry.md "Each round starts clean"). The manager
@@ -26,11 +29,15 @@ import (
 // Every assistant.send says which tool set it needs: supervise_round asks for the round's, and its absence (the owner's
 // message, a supervision message once assistant.background_supervisor_keeps_context is on, a manager from before
 // #7315) for every tool. A round's process that is idle when a message needing every tool comes is replaced by a plain
-// --resume with every tool and no round state, so it is compacted when idle again. One still working (a turn,
-// background tasks, a compaction, a message Claude Code queued: workingLocked) takes the message, since replacing it
-// would lose that work; from then on it is compacted when idle as any other process (assistantProc.joined), and the
-// first message after it is idle replaces it (assistantSend). Until then it runs only its own turns and background
-// tasks: once none is left, nothing but a message starts a turn in it, so the tools need not switch any sooner.
+// --resume with every tool and no round state, so it is compacted when idle again. Replacing one still working (a turn,
+// one Claude Code started, background tasks, a compaction, a message it queued: workingLocked) would lose that work,
+// and writing the message into it would run it on the round's tools, so the node holds the message
+// (assistantProc.held) outside Claude Code's queue, answering its send as delivered. Once the process is idle (and
+// stayed so for assistantHeldSettle), the first held message replaces it with every tool and the others follow into
+// the new process, in order (deliverHeld). Held messages are kept as Claude Code's own queue is: with the process, which
+// a resident node keeps across its connections and does not restart under (AssistantsBusy); a process that exits
+// meanwhile hands them to the next one. A round (supervise_round) is not held: it goes into the working process as
+// before (superviseRound, roundWhyBusy), as does a recovery's retry of the round's turn.
 //
 // --resume-session-at is a print-mode flag Claude Code does not document. It is used only where it was measured: Claude
 // Code on the CLI (not Codex, the Agent SDK runtime, another runtime or a guest), roundMinClaude or later, an idle
@@ -43,7 +50,7 @@ import (
 const (
 	roundFresh          = "fresh"
 	roundKept           = "kept"
-	roundWhyBusy        = "busy"         // the process answers or runs background tasks: the message joins it
+	roundWhyBusy        = "busy"         // the process works or holds messages (workingLocked, hold): the round joins it
 	roundWhyUnsupported = "unsupported"  // not Claude Code on the CLI, or one older than roundMinClaude
 	roundWhyNoAnchor    = "no_anchor"    // no first turn on the latest chain (a compaction cut it off, or none ended)
 	roundWhyStartFailed = "start_failed" // the round's process did not start: resumed as before
@@ -143,7 +150,7 @@ func (n *Node) superviseRound(ctx context.Context, r *roundResult, id string, p 
 	version := ""
 	if p != nil && p.alive() {
 		p.mu.Lock()
-		busy := p.workingLocked()
+		busy := p.workingLocked() || len(p.held) > 0 // messages it holds go in first (deliverHeld)
 		other := p.agent != "claude" || p.runtime != ""
 		version = p.claudeVersion
 		p.mu.Unlock()
@@ -180,10 +187,114 @@ func (n *Node) superviseRound(ctx context.Context, r *roundResult, id string, p 
 // workingLocked: stopping the process now would lose something it runs or holds (p.mu held): a turn, a background
 // task, a compaction (an idle one, or the user's, which sets no busy flag, assistant_compact.go), or a message Claude
 // Code queued and has not started. A turn's result clears busy before the queued message's turn starts
-// (assistant_queue.go), and a new process would never get that message. A round goes in as before then (superviseRound),
-// and a round's process is not replaced for its tools (assistantSend).
+// (assistant_queue.go), and a new process would never get that message; once Claude Code says it started, the turn is
+// busy (commandLifecycle), as is a turn Claude Code starts on its own from its init (readAssistant). A round goes in as
+// before then (superviseRound), and a message that needs every tool waits (hold).
 func (p *assistantProc) workingLocked() bool {
 	return p.busy || len(p.tasks) > 0 || p.compacting || p.manual || slices.ContainsFunc(p.written, func(w assistantInput) bool { return w.queued })
+}
+
+// heldSend is a message that needs every tool, held while a round's process works: what its send was asked, to send
+// it again once the process is idle (deliverHeld).
+type heldSend struct {
+	ctx                 context.Context // its send's values, not its deadline
+	cwd, launcher, text string
+	images              []proto.Image
+	mode, effort        string
+	options             []modelExecution
+}
+
+// assistantHeldSettle is how long a round's process holding messages stays idle before they go in. Claude Code starts
+// a turn of its own for a background task's notification right after a turn's result or its task list emptying
+// (measured on 2.1.322: its init 7 ms after the result, 26 ms after the list emptied), and nothing says so before that
+// init: replacing the process in between would cut that turn off.
+var assistantHeldSettle = time.Second
+
+// assistantHeldSendWait bounds the send of one held message (deliverHeld).
+const assistantHeldSendWait = 2 * time.Minute
+
+type heldKey struct{}
+
+// heldDelivery says ctx's send delivers a held message (deliverHeld), which holds the conversation's typing lock.
+func heldDelivery(ctx context.Context) bool {
+	v, _ := ctx.Value(heldKey{}).(bool)
+	return v
+}
+
+// errHeldAgain: the process a held message was being delivered to works again; the message is held once more.
+var errHeldAgain = errors.New("the round's process works again: the message waits")
+
+// hold keeps h until p is idle, behind the messages held before it (first: at their front, a delivery put back).
+func (n *Node) hold(p *assistantProc, h heldSend, first bool) {
+	h.ctx = context.WithoutCancel(h.ctx)
+	p.mu.Lock()
+	if first {
+		p.held = append([]heldSend{h}, p.held...)
+	} else {
+		p.held = append(p.held, h)
+	}
+	one := len(p.held) == 1
+	p.mu.Unlock()
+	if one && !first {
+		n.logf("assistant %s: a supervision round's process is still working: the message waits until it is idle, then goes in with every tool", short(p.id))
+	}
+	n.deliverHeldWhenIdle(p) // idle already, the messages before it still on their way
+}
+
+// deliverHeldWhenIdle starts delivering p's held messages (deliverHeld) when it has some, none is on its way, and p is
+// idle or has exited.
+func (n *Node) deliverHeldWhenIdle(p *assistantProc) {
+	p.mu.Lock()
+	start := len(p.held) > 0 && !p.delivering && (!p.alive() || !p.workingLocked())
+	if start {
+		p.delivering = true
+	}
+	p.mu.Unlock()
+	if start {
+		go n.deliverHeld(p)
+	}
+}
+
+// deliverHeld sends p's held messages in order once p has stayed idle for assistantHeldSettle, or exited: the first
+// replaces p with a plain --resume with every tool (assistantSend), the others go into that process. A turn that started
+// meanwhile keeps them held until it ends. Under the conversation's typing lock, so a message sent meanwhile goes in
+// after them. A Node whose connection ended leaves them to the one that takes p over (resumeAssistants).
+func (n *Node) deliverHeld(p *assistantProc) {
+	select {
+	case <-time.After(assistantHeldSettle):
+	case <-p.exited:
+	}
+	n = p.ownerOr(n)
+	n.mu.Lock()
+	closed := n.recoveryClosed
+	n.mu.Unlock()
+	if !closed {
+		defer n.typing.lock(p.id)()
+	}
+	for {
+		p.mu.Lock()
+		if closed || len(p.held) == 0 || p.alive() && p.workingLocked() {
+			p.delivering = false
+			p.mu.Unlock()
+			return
+		}
+		h := p.held[0]
+		p.held = p.held[1:]
+		p.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.WithValue(h.ctx, heldKey{}, true), assistantHeldSendWait)
+		_, err := n.assistantSend(ctx, p.id, h.cwd, h.launcher, h.text, h.images, h.mode, h.effort, h.options...)
+		cancel()
+		if errors.Is(err, errHeldAgain) {
+			p.mu.Lock()
+			p.delivering = false
+			p.mu.Unlock()
+			n.deliverHeldWhenIdle(p) // its work may have ended meanwhile
+			return
+		}
+		if err != nil {
+			n.logf("assistant %s: a message held for a supervision round's process did not go in: %v", short(p.id), err)
+		}
+	}
 }
 
 // roundTranscript is what roundAnchor read in a transcript: the anchor ("" for none), the Claude Code version that wrote

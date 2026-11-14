@@ -57,7 +57,7 @@ func (p *assistantProc) writeInput(in assistantInput) error {
 }
 
 // commandLifecycle applies a command_lifecycle line: queued marks the message as waiting, any later state forgets
-// it. True when the queue changed.
+// it, and started makes the process busy. True when the queue or busy changed.
 func (p *assistantProc) commandLifecycle(id, state string) bool {
 	if id == "" {
 		return false
@@ -75,6 +75,13 @@ func (p *assistantProc) commandLifecycle(id, state string) bool {
 	}
 	was := p.written[i].queued
 	p.written = slices.Delete(p.written, i, i+1)
+	if state == "started" && !p.busy {
+		// A message queued behind a turn starts its own once that turn's result cleared busy (measured on 2.1.322:
+		// started 3 ms after the result, the model's first token seconds later). Its turn is under way from here: the
+		// next result ends it, and one taken into a turn still running finds busy set already.
+		p.busy, p.lastActive = true, time.Now()
+		return true
+	}
 	return was
 }
 

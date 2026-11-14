@@ -67,12 +67,21 @@ func (n *Node) takeAssistant(id string) *assistantProc {
 // process leads its own group, so nothing else takes them down with the node: a node the manager killed left them
 // running beside the processes the next node started for the same conversations, the old ones refused the
 // assistant's tools by that node (mcpSession) and their background tasks reported lost while still running (#4259).
-// What they were running is still remembered (rememberTasks), so the next node tells each conversation.
+// What they were running is still remembered (rememberTasks), so the next node tells each conversation. Messages held
+// for a round's process (assistant_round.go) end with it, as Claude Code's own queue does: delivered on its exit, they
+// would start a process beside the next node's.
 func (n *Node) stopAtConnectionEnd(ids []string, spare *assistantProc) {
 	var procs []*assistantProc
 	for _, id := range ids {
 		n.cancelAssistantRecovery(id)
 		if p := n.takeAssistant(id); p != nil {
+			p.mu.Lock()
+			dropped := len(p.held)
+			p.held = nil
+			p.mu.Unlock()
+			if dropped > 0 {
+				n.logger.Printf("assistant %s: the connection ended: %d messages held for its supervision round's process end with it", short(id), dropped)
+			}
 			procs = append(procs, p)
 		}
 	}
@@ -119,14 +128,13 @@ func (p *assistantProc) reapable(now time.Time) bool {
 }
 
 // idleCompactable: about to be let go with a context worth compacting first (assistantIdleCompact); p.mu is held. A
-// supervision round's process never is (assistantProc.round): its next round starts from the first turn anyway. Unless
-// a message that needs every tool joined it (assistantProc.joined): its chain is no longer the round's alone.
+// supervision round's process never is (assistantProc.round): its next round starts from the first turn anyway.
 func (p *assistantProc) idleCompactable() bool {
 	threshold := p.compactIdleAt
 	if threshold == 0 {
 		threshold = assistantIdleCompact
 	}
-	return p.agent == "claude" && (!p.round || p.joined) && !p.compacting && !p.compacted && p.context >= threshold
+	return p.agent == "claude" && !p.round && !p.compacting && !p.compacted && p.context >= threshold
 }
 
 // compactIdle sends /compact to an idle process. It is not a turn: the conversation stays as it was in the app (the

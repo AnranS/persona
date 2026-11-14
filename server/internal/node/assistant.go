@@ -150,10 +150,14 @@ type assistantProc struct {
 	// toolSet: the tool set it was started with, "" every tool of the assistant's, roundToolSet a round's
 	// (assistant_round.go). A message that needs another set restarts it once it is idle (assistantSend).
 	toolSet string
-	// joined: a message that needs every tool went into this round's process while it was working (assistantSend). Its
-	// chain is no longer the round's alone, so it is compacted when idle as any other process (idleCompactable); the
-	// next message still replaces it with the tool set that message needs.
-	joined bool
+	// held: messages that need every tool, waiting for this round's process to be idle, in order; delivering: their
+	// delivery is on its way (assistant_round.go hold, deliverHeld).
+	held       []heldSend
+	delivering bool
+	// initSeen: it printed its system/init. Claude Code prints one as each turn starts (measured on 2.1.322): the first
+	// starts the turn of the message that started the process, already busy, and every later one starts a turn the
+	// node may not have asked for (readAssistant).
+	initSeen bool
 }
 
 func (p *assistantProc) write(line []byte) error {
@@ -270,10 +274,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
-	if id != "" {
+	if id != "" && !heldDelivery(ctx) { // a held message's delivery holds it (deliverHeld)
 		defer n.typing.lock(id)()
 	}
 	timing.mark("typing_locked", true)
+	held := heldSend{ctx: ctx, cwd: cwd, launcher: launcher, text: text, images: images, mode: mode, effort: effort, options: options}
 	recovery, restart := assistantRecoveryOf(ctx)
 	if recovery != nil {
 		n.mu.Lock()
@@ -526,30 +531,33 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// assistant.background_supervisor_keeps_context is on, any message of a manager that asks for no round, and a round
 	// that goes in as before. A process a round started has fewer tools and is never idle-compacted, so once nothing in
 	// it would be lost it is replaced by a plain --resume with every tool, compacted when idle as any other process
-	// (assistant_round.go). One still working takes the message and stops being exempt from idle compaction (joined).
+	// (assistant_round.go). While it works, or holds messages before this one, the message waits (hold).
 	otherTools := p != nil && p.toolSet != round.toolSet
 	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		if otherTools {
 			// A round's process is not replaced for its tools while anything in it would be lost (workingLocked): also
-			// a compaction, the user's included, which sets no busy flag, and a message Claude Code queued and has not
-			// started yet. It is what superviseRound calls busy, so a round it keeps as busy joins this process.
-			active = p.workingLocked()
+			// a compaction, the user's included, which sets no busy flag, and a message Claude Code queued or started.
+			// It is what superviseRound calls busy, so a round it keeps as busy joins this process. Messages it holds
+			// go in before this one, but for the one being delivered.
+			active = p.workingLocked() || len(p.held) > 0 && !heldDelivery(ctx)
 		}
 		p.mu.Unlock()
 		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
+			if otherTools && superviseRoundFrom(ctx) == nil && recovery == nil {
+				// A message that needs every tool, for a round's process at work: held until it is idle, then the
+				// process is replaced with every tool (assistant_round.go). A round kept as busy and a recovery's retry
+				// of the round's turn are the round's own, and go in below.
+				n.hold(p, held, heldDelivery(ctx))
+				if heldDelivery(ctx) {
+					return "", errHeldAgain
+				}
+				return id, nil
+			}
 			// Answering, or running background tasks a new process would kill: the message goes to this process on
 			// what it runs, and the switch waits for the first message after it is idle. Refusing it left the user
 			// unable to send while the conversation kept starting tasks (#1554).
-			if otherTools && superviseRoundFrom(ctx) == nil && recovery == nil {
-				// A message that needs every tool, in a round's process: no longer the round's alone, so compacted when
-				// idle (joined). A round kept as busy and a recovery's retry of the round's turn are the round's own.
-				p.mu.Lock()
-				p.joined = true
-				p.mu.Unlock()
-				n.logf("assistant %s: working with a supervision round's tools: this message goes to it; from now on it is compacted when idle, and the first message after it is idle gets a process with the tools that message needs", short(id))
-			}
 			p.mu.Lock()
 			launcher, execution = p.launcher, p.model
 			if p.needsRestartForLocked(mode) {
@@ -836,13 +844,28 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		switch ev.Type {
 		case "system":
 			if ev.Subtype == "init" {
-				p.started() // a round's process's start; any other's started with its first line
+				// Claude Code prints its init as each turn starts (measured on 2.1.322), before the model is asked: the
+				// first one in the turn of the message that started the process, which made it busy already. A later one
+				// starts a turn the node may not have asked for: the one it takes a finished background task's
+				// notification up in, right after it emptied its task list. Busy from here, not from the model's first
+				// token seconds later: in between nothing would show it working, and a restart then (a round, a new tool
+				// set, assistant_round.go) would kill the turn. Not for a compaction's init, which comes right before its
+				// end (the compaction is work of its own: workingLocked).
+				p.mu.Lock()
 				if ev.Version != "" {
-					p.mu.Lock()
 					p.claudeVersion = ev.Version
-					p.mu.Unlock()
 				}
+				resumed := p.initSeen && !p.busy && !p.compacting
+				p.initSeen = true
+				if resumed {
+					p.busy, p.lastActive = true, time.Now()
+				}
+				p.mu.Unlock()
+				p.started() // a round's process's start; any other's started with its first line
 				n.toolsAtStart(p.id, ev.Tools)
+				if resumed {
+					n.notifySessionsSoon()
+				}
 				continue
 			}
 			if ev.Subtype == "compact_boundary" {
@@ -866,6 +889,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				continue
 			}
 			n.rememberTasks(p.id, tasks)
+			n.deliverHeldWhenIdle(p) // its last task ended (assistant_round.go)
 		case "control_response":
 			p.controlResponse(ev.Response)
 		case "command_lifecycle":
@@ -886,7 +910,8 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			case "message_start":
 				// A turn can start without a message from us: claude takes up a finished background task's
 				// notification on its own, and a message sent meanwhile waits behind it. The result of that turn
-				// cleared busy while claude went on working, so the phone showed the chat as finished.
+				// cleared busy while claude went on working, so the phone showed the chat as finished. Its init (above)
+				// or the queued message's started (commandLifecycle) set busy already; this is the last word.
 				// A new message: the last one's text is in the transcript by now. Clear the app's live text, or a
 				// message that went on to call tools stays on screen twice (its item, and the live copy) meanwhile.
 				u := ev.Event.Message.Usage
@@ -982,6 +1007,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.notifySessionsSoon() // not here on the reader: a long build held up the control answers a send waits on
 				go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
 			}
+			n.deliverHeldWhenIdle(p) // what waited for this turn to end (assistant_round.go)
 		}
 	}
 	stopUnreadAssistant(p.ownerOr(started).logger, p, short(p.id), sc.Err())
