@@ -6374,8 +6374,9 @@ struct QueueStrip: View {
                 .scrollBounceBehavior(.basedOnSize)
                 .fixedSize(horizontal: false, vertical: rowHeight == 0)
                 .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(drawnCount), Self.visibleRows) : nil)
+                .padding(.horizontal, Theme.Space.m)
                 .padding(.bottom, Theme.Space.sm)
-                .background(Theme.pageBackground, in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
+                .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
                 .alignmentGuide(.top) { $0[.bottom] }
                 .transition(.opacity)
             }
