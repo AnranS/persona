@@ -274,7 +274,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
-	if id != "" && !heldDelivery(ctx) { // a held message's delivery holds it (deliverHeld)
+	if id != "" && heldFrom(ctx) == nil { // a held message's delivery holds it (deliverHeld)
 		defer n.typing.lock(id)()
 	}
 	timing.mark("typing_locked", true)
@@ -540,8 +540,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			// A round's process is not replaced for its tools while anything in it would be lost (workingLocked): also
 			// a compaction, the user's included, which sets no busy flag, and a message Claude Code queued or started.
 			// It is what superviseRound calls busy, so a round it keeps as busy joins this process. Messages it holds
-			// go in before this one, but for the one being delivered.
-			active = p.workingLocked() || len(p.held) > 0 && !heldDelivery(ctx)
+			// go in before this one, unless this one is theirs being delivered.
+			active = p.workingLocked() || len(p.held) > 0 && heldFrom(ctx) != p
 		}
 		p.mu.Unlock()
 		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
@@ -549,10 +549,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 				// A message that needs every tool, for a round's process at work: held until it is idle, then the
 				// process is replaced with every tool (assistant_round.go). A round kept as busy and a recovery's retry
 				// of the round's turn are the round's own, and go in below.
-				n.hold(p, held, heldDelivery(ctx))
-				if heldDelivery(ctx) {
+				if from := heldFrom(ctx); from != nil {
+					n.holdAgain(from, p, held)
 					return "", errHeldAgain
 				}
+				n.hold(p, held)
 				return id, nil
 			}
 			// Answering, or running background tasks a new process would kill: the message goes to this process on

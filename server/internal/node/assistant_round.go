@@ -215,30 +215,42 @@ const assistantHeldSendWait = 2 * time.Minute
 
 type heldKey struct{}
 
-// heldDelivery says ctx's send delivers a held message (deliverHeld), which holds the conversation's typing lock.
-func heldDelivery(ctx context.Context) bool {
-	v, _ := ctx.Value(heldKey{}).(bool)
-	return v
+// heldFrom is the process whose held message ctx's send delivers (deliverHeld, which holds the conversation's typing
+// lock), nil for any other send.
+func heldFrom(ctx context.Context) *assistantProc {
+	p, _ := ctx.Value(heldKey{}).(*assistantProc)
+	return p
 }
 
 // errHeldAgain: the process a held message was being delivered to works again; the message is held once more.
 var errHeldAgain = errors.New("the round's process works again: the message waits")
 
-// hold keeps h until p is idle, behind the messages held before it (first: at their front, a delivery put back).
-func (n *Node) hold(p *assistantProc, h heldSend, first bool) {
+// hold keeps h until p is idle, behind the messages held before it.
+func (n *Node) hold(p *assistantProc, h heldSend) {
 	h.ctx = context.WithoutCancel(h.ctx)
 	p.mu.Lock()
-	if first {
-		p.held = append([]heldSend{h}, p.held...)
-	} else {
-		p.held = append(p.held, h)
-	}
+	p.held = append(p.held, h)
 	one := len(p.held) == 1
 	p.mu.Unlock()
-	if one && !first {
+	if one {
 		n.logf("assistant %s: a supervision round's process is still working: the message waits until it is idle, then goes in with every tool", short(p.id))
 	}
 	n.deliverHeldWhenIdle(p) // idle already, the messages before it still on their way
+}
+
+// holdAgain puts h, held by from, back in front once its delivery found the conversation's process p (from, or one
+// that replaced it meanwhile) at work again, with what from still holds behind it: all of them wait for p, in order.
+func (n *Node) holdAgain(from, p *assistantProc, h heldSend) {
+	h.ctx = context.WithoutCancel(h.ctx)
+	var rest []heldSend
+	if from != p {
+		from.mu.Lock()
+		rest, from.held = from.held, nil
+		from.mu.Unlock()
+	}
+	p.mu.Lock()
+	p.held = append(append([]heldSend{h}, rest...), p.held...)
+	p.mu.Unlock()
 }
 
 // deliverHeldWhenIdle starts delivering p's held messages (deliverHeld) when it has some, none is on its way, and p is
@@ -281,14 +293,19 @@ func (n *Node) deliverHeld(p *assistantProc) {
 		h := p.held[0]
 		p.held = p.held[1:]
 		p.mu.Unlock()
-		ctx, cancel := context.WithTimeout(context.WithValue(h.ctx, heldKey{}, true), assistantHeldSendWait)
+		ctx, cancel := context.WithTimeout(context.WithValue(h.ctx, heldKey{}, p), assistantHeldSendWait)
 		_, err := n.assistantSend(ctx, p.id, h.cwd, h.launcher, h.text, h.images, h.mode, h.effort, h.options...)
 		cancel()
-		if errors.Is(err, errHeldAgain) {
+		if errors.Is(err, errHeldAgain) { // held again, with the rest, by the conversation's process (holdAgain)
 			p.mu.Lock()
 			p.delivering = false
 			p.mu.Unlock()
-			n.deliverHeldWhenIdle(p) // its work may have ended meanwhile
+			n.mu.Lock()
+			cur := n.procs[p.id]
+			n.mu.Unlock()
+			if cur != nil {
+				n.deliverHeldWhenIdle(cur) // its work may have ended meanwhile
+			}
 			return
 		}
 		if err != nil {

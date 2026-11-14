@@ -440,6 +440,30 @@ func TestHeldMessagesGoInWhenTheRoundProcessEnds(t *testing.T) {
 	heldGoIn(t, n, round, argv, input, 2, "once-held", "the owner's question")
 }
 
+// A held message whose delivery finds the conversation's process at work again waits once more, first: on the process
+// it was held by, or, when that one was replaced meanwhile (it ended, and a round started anew), on the new one, with
+// everything the old one still held behind it and what the new one holds after them.
+func TestHeldMessagesStayInOrder(t *testing.T) {
+	texts := func(p *assistantProc) string {
+		var out []string
+		for _, h := range p.held {
+			out = append(out, h.text)
+		}
+		return strings.Join(out, " ")
+	}
+	n := &Node{}
+	old := &assistantProc{held: []heldSend{{text: "b"}, {text: "c"}}}
+	cur := &assistantProc{held: []heldSend{{text: "d"}}}
+	n.holdAgain(old, cur, heldSend{ctx: context.Background(), text: "a"})
+	if got := texts(cur); got != "a b c d" || len(old.held) != 0 {
+		t.Fatalf("moved: %q, %d left behind", got, len(old.held))
+	}
+	n.holdAgain(cur, cur, heldSend{ctx: context.Background(), text: "z"})
+	if got := texts(cur); got != "z a b c d" {
+		t.Fatalf("held again: %q", got)
+	}
+}
+
 // A resident node asked to restart waits while a conversation holds messages, as it does while one answers: they live
 // with its process, which the restart would end.
 func TestHeldMessagesKeepTheNodeFromRestarting(t *testing.T) {
