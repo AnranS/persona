@@ -452,6 +452,9 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 	hasEffortArg := false
 	cleanRespArgs := slices.Clone(respArgs)
 	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
 		if arg == "--effort" || strings.HasPrefix(arg, "--effort=") {
 			hasEffortArg = true
 		}
@@ -464,6 +467,9 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 		}
 	}
 	for _, arg := range cleanRespArgs {
+		if arg == "--" {
+			break
+		}
 		if arg == "--effort" || strings.HasPrefix(arg, "--effort=") {
 			hasEffortArg = true
 		}
@@ -480,9 +486,9 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 			launchArgs = append(launchArgs, "--effort", respEffort)
 		}
 	} else if agent == "codex" {
-		launchArgs = append(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv)...)
+		launchArgs = insertBeforeDashDash(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv))
 		if respModel != "" && !hasModelArg {
-			launchArgs = append(launchArgs, "-m", respModel)
+			launchArgs = insertBeforeDashDash(launchArgs, []string{"-m", respModel})
 		}
 	} else if agent == "agy" {
 		if respModel != "" && !hasModelArg {
