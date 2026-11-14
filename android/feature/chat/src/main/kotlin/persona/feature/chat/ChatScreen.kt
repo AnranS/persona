@@ -225,6 +225,8 @@ private fun ChatPage(
     var notice by remember { mutableStateOf<String?>(null) }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
+    // `/permissions` in the "/" list asked for the permission mode menu (#6513): Glass's mode button, the others' "Mode" sheet
+    var openPermissions by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
     var hostRetried by rememberSaveable(key.path) { mutableStateOf<String?>(null) }
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
@@ -1067,12 +1069,13 @@ private fun ChatPage(
                                         // Glass: the permission mode in the composer (Q11, iOS and the web): its symbol in its tone and
                                         // its menu; the model and the effort are the pill's.
                                         glass -> if (session != null && SessionModes.showsInComposer(session)) ({
-                                            HeaderModeButton(session, controls, connection == null || connection == ConnectionState.Online) { modeOverlay = it }
+                                            HeaderModeButton(session, controls, connection == null || connection == ConnectionState.Online,
+                                                openRequested = openPermissions, onOpenHandled = { openPermissions = false }) { modeOverlay = it }
                                         }) else null
                                         session?.canChangeModes == true || session?.canChangeEffortOnly == true -> ({
                                             ChatModeBar(session, controls, connection == null || connection == ConnectionState.Online,
                                                 onOverlay = { modeOverlay = it }, onPickModel = { model -> send("/model $model") },
-                                                openRequested = openModes, onOpenHandled = { openModes = false })
+                                                openRequested = openModes || openPermissions, onOpenHandled = { openModes = false; openPermissions = false })
                                         })
                                         else -> null
                                     },
@@ -1111,6 +1114,9 @@ private fun ChatPage(
                                     onMentionTask = { id -> tasks?.setRoute(key.sessionId, id) },
                                     // /model opens the "Mode" sheet's model choices; both need Claude in a pane (as the sheet does).
                                     onModel = if (claudeCommands && session?.canChangeModes == true) ({ openModes = true }) else null,
+                                    // /permissions where the composer has the mode picker (Glass's button, the others' "Mode" sheet), the
+                                    // web's `canPickPermissions`: Claude's sessions and Persona's while they can change it (#6513)
+                                    onPermissions = if (session?.canChangeModes == true) ({ openPermissions = true }) else null,
                                     // (on Glass /model opens the pill's panel, where the model is picked)
                                     loop = claudeCommands)
                             }

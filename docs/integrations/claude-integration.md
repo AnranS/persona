@@ -995,6 +995,11 @@ Claude Code has Allow All (`bypassPermissions`) in its Shift+Tab cycle only when
   stopped (`switch_failed_stopped`).
 - **What the apps see**: `bypass_pending: true` on the row while the restart waits, with `permission_mode` still the mode
   it runs in. Picking any other mode first drops the restart, and so does a pick older than a day.
+- **Clients**: the web (#6476), iOS and Android (#6513) offer the pick wherever their mode menu is, with the note
+  "Restarts the session to apply it once this turn ends" under it and in its confirmation, and `/permissions` in the
+  composer's "/" list opening that menu with all five modes. While `bypass_pending` is set, their mode buttons keep the mode
+  the agent runs in and say the session restarts when the turn ends (iOS: `SessionModes.bypassRestarts` / `bypassNote`,
+  `docs/apple/ios.md` "Effort and permission modes"; Android: `docs/android/android.md`).
 - **Where**: only a Claude Code Agent in a pane of a terminal host that can say what runs there and start an agent in it
   (herdr), on a launcher Persona can tell, in a folder it can tell. Runtimes, Antigravity, Codex and sessions outside
   Persona's terminals keep the refusal. The restart is kept in the node's memory (shared by a resident node's Nodes), so

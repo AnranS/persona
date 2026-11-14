@@ -100,4 +100,98 @@ struct HeaderModeTests {
         #expect(try session(#","bypass_available":"yes""#).bypassAvailable == false)
         #expect(try session(#","bypass_available":true"#).bypassAvailable)
     }
+
+    // MARK: Allow Everything by a restart (#6513, the web's #6476)
+
+    /// A terminal Claude Code started without a bypass flag takes Allow Everything by a restart once its turn ends: the
+    /// row is enabled and says so, and nothing says it is unavailable.
+    @Test func aPaneClaudeWithoutTheFlagRestartsIntoAllowEverything() throws {
+        let s = try session(#","agent":"claude","permission_mode":"default""#)
+        #expect(SessionModes.bypassRestarts(s))
+        let row = try #require(SessionModes.switchableModes(s).first { $0.id == "bypassPermissions" })
+        #expect(row.detail == String(localized: "Restarts the session to apply it once this turn ends; the conversation carries on"))
+        #expect(SessionModes.bypassUnavailable(s) == nil)
+        let rows = SessionModes.commandRows(s)
+        #expect(rows.allSatisfy { $0.enabled })
+        // It still asks first, and the question carries the note.
+        #expect(SessionModes.confirmation(s, to: "bypassPermissions") == .allowEverything)
+        #expect(SessionModes.bypassNote(s) == row.detail)
+    }
+
+    /// No restart where the agent takes the mode at once or can't be restarted from here: the old rules hold.
+    @Test func noRestartWhereItIsNotNeededOrNotPossible() throws {
+        // started with the flag: switches at once, no note
+        let able = try session(#","agent":"claude","permission_mode":"default","bypass_available":true"#)
+        #expect(!SessionModes.bypassRestarts(able))
+        #expect(SessionModes.bypassNote(able) == nil)
+        #expect(SessionModes.switchableModes(able).first { $0.id == "bypassPermissions" }?.detail == SessionModes.assistantModes.last?.detail)
+        // in it already
+        #expect(!SessionModes.bypassRestarts(try session(#","agent":"claude","permission_mode":"bypassPermissions""#)))
+        // not in a pane, a source's thread, Codex, Antigravity, the assistant, a terminal the node won't drive, offline
+        let cannot = [
+            try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"box","session_id":"s1","status":"idle","state":"idle","agent":"claude","permission_mode":"default"}"#.utf8)),
+            try session(#","agent":"claude","source_kind":"claude_app","permission_mode":"default""#),
+            try session(#","agent":"codex""#),
+            try session(#","agent":"agy","permission_mode":"default","capabilities":{"send":true,"interrupt":true,"approve":true,"terminal":true,"modes":true}"#),
+            try session(#","assistant":true,"permission_mode":"default""#),
+            try session(#","agent":"claude","permission_mode":"default","capabilities":{"send":true,"interrupt":true,"approve":true,"terminal":false}"#),
+            try session(#","agent":"claude","permission_mode":"default""#, status: "offline"),
+        ]
+        for s in cannot { #expect(!SessionModes.bypassRestarts(s), "\(s.agent ?? "-") \(s.status)") }
+        // where it can't, a running Claude Code still shows Allow Everything disabled with its reason
+        let notPane = cannot[0]
+        #expect(!SessionModes.switchableModes(notPane).contains { $0.id == "bypassPermissions" })
+        #expect(SessionModes.bypassUnavailable(notPane)?.id == "bypassPermissions")
+        #expect(SessionModes.commandRows(notPane).last.map { !$0.enabled && $0.option.id == "bypassPermissions" } == true)
+    }
+
+    /// While the restart waits for the turn to end the mode stays the one it runs in, and every mode button says it.
+    @Test func aWaitingRestartKeepsTheModeAndSaysSo() throws {
+        let s = try session(#","agent":"claude","permission_mode":"acceptEdits","bypass_pending":true"#, status: "working")
+        #expect(s.bypassPending)
+        #expect(s.permissionMode == "acceptEdits")
+        #expect(SessionModes.headerLook(s.permissionMode).tone == .acts) // not drawn as Allow Everything
+        #expect(SessionModes.pending(s) == SessionModes.pendingNote)
+        #expect(SessionModes.bypassNote(s) == SessionModes.pendingNote)
+        #expect(SessionModes.switchableModes(s).first { $0.id == "bypassPermissions" }?.detail == SessionModes.pendingNote)
+        #expect(SessionModes.pending(try session(#","agent":"claude","permission_mode":"acceptEdits""#)) == nil)
+    }
+
+    /// An assistant conversation's Allow Everything takes effect with its next message, as on the web.
+    @Test func theAssistantsAllowEverythingStartsWithTheNextMessage() throws {
+        let s = try session(#","assistant":true,"permission_mode":"default""#)
+        #expect(SessionModes.switchableModes(s).first { $0.id == "bypassPermissions" }?.detail == String(localized: "Takes effect from the next message"))
+        let inIt = try session(#","assistant":true,"permission_mode":"bypassPermissions""#)
+        #expect(SessionModes.bypassNote(inIt) == nil)
+    }
+
+    /// An odd `bypass_pending` never drops the session; omitted (an older hub) is false.
+    @Test func bypassPendingDecodesLeniently() throws {
+        #expect(try session().bypassPending == false)
+        #expect(try session(#","bypass_pending":"yes""#).bypassPending == false)
+        #expect(try session(#","bypass_pending":true"#).bypassPending)
+    }
+
+    // MARK: /permissions (#6513)
+
+    /// Offered where an agent's mode can be switched from here, with every mode (Plan Only too); never for the
+    /// assistant (its page has no "/" list), Codex, or an agent that isn't running.
+    @Test func permissionsIsOfferedWhereTheModeCanBeSwitched() throws {
+        let s = try session(#","agent":"claude","permission_mode":"default""#)
+        #expect(SessionModes.offersPermissionsCommand(s))
+        #expect(Set(SessionModes.commandRows(s).map(\.option.id)) == ["default", "acceptEdits", "plan", "auto", "bypassPermissions"])
+        #expect(!SessionModes.offersPermissionsCommand(try session(#","agent":"codex""#)))
+        #expect(!SessionModes.offersPermissionsCommand(try session(#","agent":"claude""#, status: "offline")))
+        #expect(!SessionModes.offersPermissionsCommand(try session(#","assistant":true,"permission_mode":"default""#)))
+        #expect(!SessionModes.offersPermissionsCommand(nil))
+        #expect(SessionModes.isPermissionsCommand(" /Permissions\n"))
+        #expect(!SessionModes.isPermissionsCommand("/permissions please"))
+    }
+
+    /// The "/" list's row (the composer's, main-actor bound).
+    @MainActor @Test func theSlashListCarriesPermissionsWhereOffered() {
+        #expect(SlashMenuRow.rows(model: false, permissions: true, clear: false).contains(.permissions))
+        #expect(!SlashMenuRow.rows(model: false, clear: false).contains(.permissions))
+        #expect(SlashMenuRow.matching("/perm", in: SlashMenuRow.rows(model: true, permissions: true, clear: true)) == [.permissions])
+    }
 }

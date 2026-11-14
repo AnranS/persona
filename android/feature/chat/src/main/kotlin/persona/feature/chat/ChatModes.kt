@@ -20,6 +20,8 @@ import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
+import persona.core.domain.sort.canSend
+import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.canTypeClaudeCommands
 import persona.core.domain.sort.hasSource
 
@@ -73,17 +75,45 @@ internal object SessionModes {
         Option("haiku", 0, R.string.chat_modes_model_haiku_detail, raw = "Haiku"),
     )
 
-    /** Allow Everything where the agent can take it while it runs: it says what it does, not "only when starting". */
-    private val bypassRunning = Option(BYPASS, R.string.chat_modes_bypass, R.string.chat_modes_bypass_detail_running)
+    /**
+     * Allow Everything for a terminal Claude Code that cannot reach it with shift+tab (started without a bypass flag): the
+     * node restarts the session in it once its turn is over, resuming the same conversation (node/mode_restart.go, #6476;
+     * the web's `bypassRestarts`). Claude Code in a pane of a terminal engine only, not Antigravity, a read-only source or
+     * a Persona conversation.
+     */
+    fun bypassRestarts(session: Session): Boolean = !session.assistant && session.agent != "agy" && session.isClaude &&
+        !session.hasSource && !session.paneId.isNullOrBlank() && session.canSend && session.canTerminal &&
+        // a node's own word wins (the web's `sessionCan(s, "send")` / `"terminal"`), an older one's absence keeps the pane rule
+        session.capabilities.let { it == null || (it.send && it.terminal && it.modes != false) } &&
+        !session.bypassAvailable && session.permissionMode != BYPASS
+
+    /**
+     * What the Allow Everything row says under its name where picking it does not take effect at once (the web's
+     * `bypassNote`), null where it does: the restart it waits for ([Session.bypassPending]), the one it will make
+     * ([bypassRestarts]), or a Persona conversation's next message.
+     */
+    @StringRes fun bypassNote(session: Session): Int? = when {
+        session.bypassPending -> R.string.chat_modes_bypass_pending
+        bypassRestarts(session) -> R.string.chat_modes_bypass_restart
+        session.assistant && session.permissionMode != BYPASS -> R.string.chat_modes_bypass_next_message
+        else -> null
+    }
+
+    /** The pending restart's words for the mode button's description and the menu ([Session.bypassPending]), null without one. */
+    fun pendingNote(session: Session, resources: Resources): String? =
+        if (session.bypassPending) resources.getString(R.string.chat_modes_bypass_pending) else null
 
     /**
      * What a running session can switch to (iOS `switchableModes` / `listed`): every mode for an assistant conversation
-     * (the node restarts its Claude in Allow Everything) and for an agent whose process can take it ([Session.bypassAvailable]),
-     * the rest without Allow Everything; plus the current mode when it is none of these (Allow Everything, or a newer
-     * Claude Code's mode, shown by its raw name), so it still shows as picked.
+     * (the node restarts its Claude in Allow Everything), for an agent whose process can take it ([Session.bypassAvailable])
+     * and for one the node restarts into it ([bypassRestarts], its row saying so), the rest without Allow Everything; plus
+     * the current mode when it is none of these (Allow Everything, or a newer Claude Code's mode, shown by its raw name),
+     * so it still shows as picked.
      */
     fun switchable(session: Session): List<Option> {
-        val list = if (session.assistant || session.bypassAvailable) permissionModes.map { if (it.id == BYPASS) bypassRunning else it }
+        // where it can take it while it runs it says what it does, not "only when starting"; else when it takes effect
+        val bypass = Option(BYPASS, R.string.chat_modes_bypass, bypassNote(session) ?: R.string.chat_modes_bypass_detail_running)
+        val list = if (session.assistant || session.bypassAvailable || bypassRestarts(session)) permissionModes.map { if (it.id == BYPASS) bypass else it }
             else permissionModes.filter { it.id != BYPASS }
         val current = session.permissionMode
         if (current.isNullOrEmpty() || list.any { it.id == current }) return list
@@ -93,7 +123,8 @@ internal object SessionModes {
     /** Allow Everything shown but not offered, saying why, where the agent cannot take it while it runs (iOS `bypassUnavailable`). */
     fun bypassUnavailable(session: Session): Option? =
         permissionModes.first { it.id == BYPASS }.takeIf {
-            !session.assistant && session.canChangeModes && !session.bypassAvailable && session.permissionMode != BYPASS
+            !session.assistant && session.canChangeModes && !session.bypassAvailable && session.permissionMode != BYPASS &&
+                !bypassRestarts(session)
         }
 
     /** What switching to a mode asks first (#3719): going into Allow Everything, and leaving it when the agent can't come back to it from here. */
@@ -248,6 +279,8 @@ internal fun chatModeHint(session: Session?, resources: Resources, includeModes:
         resources.getString(R.string.chat_modes_effort_hint, SessionModes.effortLabel(it, resources))
     },
     session?.takeIf { includeModes && Ultracode.on(it) }?.let { Ultracode.NAME },
+    // a restart into Allow Everything waits for the turn: said here, the mode above stays the one it runs in (#6513)
+    session?.takeIf { includeModes }?.let { SessionModes.pendingNote(it, resources) },
     // Only GPT ids get a model hint: other models keep the composer's existing presentation.
     session?.model?.let { id -> modelName(id).takeUnless { it == id } },
 ).takeIf { it.isNotEmpty() }?.joinToString(resources.getString(R.string.chat_modes_hint_separator))
@@ -291,7 +324,7 @@ internal fun ChatModeBar(
         tint = if (bypass) PersonaTheme.palette.danger.text else null)
     var asked by remember(session?.key) { mutableStateOf<Pair<SessionModes.Confirmation, String>?>(null) }
     asked?.let { (kind, mode) ->
-        if (session != null) ModeConfirmDialog(kind, mode, onDismiss = { asked = null }) {
+        if (session != null) ModeConfirmDialog(kind, mode, onDismiss = { asked = null }, note = SessionModes.bypassNote(session)?.let { stringResource(it) }) {
             asked = null
             state.run(session, ChatAction.Modes(permissionMode = mode))
         }
@@ -303,6 +336,7 @@ internal fun ChatModeBar(
             if (session != null) {
                 if (!effortOnly) {
                     JSectionHeader(stringResource(R.string.chat_modes_section_permissions))
+                    SessionModes.pendingNote(session, resources)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
                     SessionModes.switchable(session).forEach { option ->
                         val current = option.id == session.permissionMode
                         DecisionOption(option.title(resources), {
@@ -355,11 +389,12 @@ internal fun ChatModeBar(
 
 /** The question before a mode change that needs one ([SessionModes.confirmation]), on the header and in the composer's sheet alike. */
 @Composable
-internal fun ModeConfirmDialog(kind: SessionModes.Confirmation, mode: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+internal fun ModeConfirmDialog(kind: SessionModes.Confirmation, mode: String, onDismiss: () -> Unit, note: String? = null, onConfirm: () -> Unit) {
     val resources = LocalResources.current
     when (kind) {
         SessionModes.Confirmation.AllowEverything -> JDialog(onDismiss = onDismiss, title = stringResource(R.string.chat_modes_confirm_bypass_title),
-            text = stringResource(R.string.chat_modes_bypass_detail_running),
+            // where it does not take effect at once (a restart once the turn ends), the note says so here too (#6513)
+            text = stringResource(R.string.chat_modes_bypass_detail_running) + (note?.let { "\n$it" } ?: ""),
             confirm = stringResource(R.string.chat_modes_bypass) to onConfirm, destructive = true)
         SessionModes.Confirmation.LeaveAllowEverything -> JDialog(onDismiss = onDismiss, title = stringResource(R.string.chat_modes_confirm_leave_title),
             text = stringResource(R.string.chat_modes_confirm_leave_text),
@@ -374,22 +409,31 @@ internal fun ModeConfirmDialog(kind: SessionModes.Confirmation, mode: String, on
  * [onOverlay] says while the menu or a question is up.
  */
 @Composable
-internal fun HeaderModeButton(session: Session, state: ChatChromeState, online: Boolean, onOverlay: (Boolean) -> Unit) {
+internal fun HeaderModeButton(
+    session: Session, state: ChatChromeState, online: Boolean,
+    /** `/permissions` in the "/" list asked for the menu (#6513): opened, then [onOpenHandled] clears the request. */
+    openRequested: Boolean = false, onOpenHandled: () -> Unit = {},
+    onOverlay: (Boolean) -> Unit,
+) {
     val resources = LocalResources.current
     var open by remember { mutableStateOf(false) }
+    LaunchedEffect(openRequested) { if (openRequested) { open = true; onOpenHandled() } }
     var asked by remember(session.key) { mutableStateOf<Pair<SessionModes.Confirmation, String>?>(null) }
     var changing by remember(session.key) { mutableStateOf(false) }
     LaunchedEffect(open, asked) { onOverlay(open || asked != null) }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     val mode = session.permissionMode
     val words = stringResource(R.string.chat_modes_header, SessionModes.modeLabel(mode, resources) ?: stringResource(R.string.chat_modes_unknown))
+    // A restart into Allow Everything that waits for the turn (#6513): the button keeps the mode the agent runs in and says it.
+    val pending = SessionModes.pendingNote(session, resources)
     val editable = state.available && online && session.canChangeModes
     fun change(to: String) {
         changing = true
         state.run(session, ChatAction.Modes(permissionMode = to)) { changing = false }
     }
     Box {
-        JModeButton(SessionModes.headerIcon(mode), SessionModes.headerTone(mode), words, { open = true }, Modifier.testTag("chat-mode"), changing = changing)
+        JModeButton(SessionModes.headerIcon(mode), SessionModes.headerTone(mode), pending?.let { words + resources.getString(R.string.chat_modes_hint_separator) + it } ?: words, { open = true },
+            Modifier.testTag("chat-mode"), changing = changing)
         val options = SessionModes.switchable(session)
         val actions = options.mapIndexed { i, option ->
             JAction(option.title(resources), checked = option.id == mode, enabled = editable, subtitle = option.detail(resources).ifEmpty { null },
@@ -399,12 +443,14 @@ internal fun HeaderModeButton(session: Session, state: ChatChromeState, online: 
         } + listOfNotNull(SessionModes.bypassUnavailable(session)?.let { option ->
             JAction(option.title(resources), enabled = false, subtitle = option.detail(resources)) {}
         })
-        // Why nothing can be picked: not running (or a runtime that can't), or the hub out of reach.
-        JMenu(open, { open = false }, actions, content = if (editable) null else ({
-            Text(stringResource(if (!session.canChangeModes) R.string.chat_modes_locked else R.string.chat_modes_offline),
-                style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
+        // Why nothing can be picked: not running (or a runtime that can't), or the hub out of reach; else a restart that waits.
+        val note = if (!editable) stringResource(if (!session.canChangeModes) R.string.chat_modes_locked else R.string.chat_modes_offline) else pending
+        JMenu(open, { open = false }, actions, content = if (note == null) null else ({
+            Text(note, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
                 modifier = Modifier.padding(horizontal = MenuTokens.itemPadding, vertical = MenuTokens.sectionPadding))
         }))
     }
-    asked?.let { (kind, to) -> ModeConfirmDialog(kind, to, onDismiss = { asked = null }) { asked = null; change(to) } }
+    asked?.let { (kind, to) ->
+        ModeConfirmDialog(kind, to, onDismiss = { asked = null }, note = SessionModes.bypassNote(session)?.let { stringResource(it) }) { asked = null; change(to) }
+    }
 }

@@ -52,10 +52,65 @@ nonisolated enum SessionModes {
         o.id == "bypassPermissions" ? Option(id: o.id, title: o.title, detail: String(localized: "Edits files and runs commands without asking"), symbol: o.symbol) : o
     }
 
-    /// The modes a running session can switch to: every one for an assistant conversation and for an agent that can take
-    /// Allow Everything while it runs (`bypass_available`, as the web offers it, #1379), `switchableModes` otherwise.
+    /// The modes a running session can switch to: every one for an assistant conversation, for an agent that can take
+    /// Allow Everything while it runs (`bypass_available`, as the web offers it, #1379) and for one the node restarts in it
+    /// (`bypassRestarts`, #6513), `switchableModes` otherwise. Allow Everything says under its name when it does not take
+    /// effect at once (`bypassNote`).
     static func switchableModes(_ session: Session?) -> [Option] {
-        session?.assistant == true || session?.bypassAvailable == true ? assistantModes : switchableModes
+        guard let s = session, s.assistant || s.bypassAvailable || bypassRestarts(s) else { return switchableModes }
+        guard let note = bypassNote(s) else { return assistantModes }
+        return assistantModes.map { o in o.id == ModeID.bypass ? Option(id: o.id, title: o.title, detail: note, symbol: o.symbol) : o }
+    }
+
+    // MARK: Allow Everything by a restart (#6476 on the web, #6513 here)
+
+    /// Claude Code in a terminal pane the phone types into (the web's `paneClaude`): not the assistant, not a source's
+    /// thread, a pane, and the node lets it send and drive the terminal.
+    static func paneClaude(_ s: Session) -> Bool {
+        !s.assistant && !s.hasSource && s.paneID != nil && s.isClaude && s.canSend && s.canTerminal
+    }
+
+    /// Allow Everything for a terminal Claude Code that cannot reach it with shift+tab (started without a bypass flag):
+    /// the node restarts the session in it once its turn is over, resuming the same conversation (node/mode_restart.go;
+    /// the web's `bypassRestarts`).
+    static func bypassRestarts(_ s: Session) -> Bool {
+        !s.assistant && s.agent != "agy" && s.canChangeModes && paneClaude(s)
+            && !s.bypassAvailable && s.permissionMode != ModeID.bypass
+    }
+
+    /// What Allow Everything says under its name where picking it does not take effect at once, nil where it does: the
+    /// restart it waits for, or the one it will make; an assistant conversation's next message (the web's `bypassNote`).
+    static func bypassNote(_ s: Session) -> String? {
+        if s.bypassPending { return pendingNote }
+        if bypassRestarts(s) { return String(localized: "Restarts the session to apply it once this turn ends; the conversation carries on") }
+        if s.assistant, s.permissionMode != ModeID.bypass { return String(localized: "Takes effect from the next message") }
+        return nil
+    }
+
+    /// A restart into Allow Everything waits for the turn to end (`bypass_pending`): the mode buttons keep the mode the
+    /// agent still runs in and say this beside it.
+    static var pendingNote: String { String(localized: "The session restarts in Allow Everything once this turn ends") }
+    static func pending(_ s: Session?) -> String? { s?.bypassPending == true ? pendingNote : nil }
+
+    /// `/permissions` in the composer's "/" list (the web's, #6476): where an agent's mode can be switched from here. It
+    /// opens the mode list with every mode, Plan Only included; nothing is sent to the agent.
+    static let permissionsCommand = "/permissions"
+    static func offersPermissionsCommand(_ s: Session?) -> Bool {
+        guard let s else { return false }
+        return !s.assistant && s.canChangeModes && !s.setsEffortOnly
+    }
+
+    /// `/permissions` alone in the box, as the list fills it in or as typed.
+    static func isPermissionsCommand(_ draft: String) -> Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == permissionsCommand
+    }
+
+    /// The mode list `/permissions` opens: every mode the session can switch to, the current one too when it is not
+    /// among them, then Allow Everything disabled with its reason where the agent cannot take it while it runs.
+    static func commandRows(_ s: Session) -> [(option: Option, enabled: Bool)] {
+        var rows = listed(switchableModes(s), current: s.permissionMode).map { (option: $0, enabled: true) }
+        if let o = bypassUnavailable(s) { rows.append((option: o, enabled: false)) }
+        return rows
     }
 
     /// The switchable options plus the current one when it is not among them (bypassPermissions, an unknown mode).
@@ -109,7 +164,7 @@ nonisolated enum SessionModes {
 
     /// Allow Everything as a disabled row of the header's menu, saying why, where the agent cannot take it while it runs.
     static func bypassUnavailable(_ s: Session) -> Option? {
-        guard !s.assistant, s.canChangeModes, !s.bypassAvailable, s.permissionMode != ModeID.bypass else { return nil }
+        guard !s.assistant, s.canChangeModes, !s.bypassAvailable, s.permissionMode != ModeID.bypass, !bypassRestarts(s) else { return nil }
         return mode(ModeID.bypass)
     }
 
@@ -263,6 +318,9 @@ struct SessionModeBar: View {
         HStack(spacing: Theme.Space.s) {
             if session?.setsEffortOnly != true {
                 Menu {
+                    // A restart into Allow Everything waits for the turn to end (#6513): said over the modes, the chip keeps
+                    // the mode it runs in.
+                    if let pending = SessionModes.pending(session) { Text(pending) }
                     Picker("Permission Mode", selection: Binding(get: { mode ?? "" }, set: { new in change(mode: new) })) {
                         ForEach(SessionModes.listed(SessionModes.switchableModes(session), current: mode)) { o in
                             Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
@@ -447,6 +505,9 @@ struct SessionModesMenu: View {
             if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
         }
         if setsModes {
+            // A restart into Allow Everything waits for the turn to end (#6513): said by the mode's row, which keeps the
+            // mode it runs in.
+            if let pending = SessionModes.pending(session) { Text(pending) }
             Picker(selection: Binding(get: { mode ?? "" }, set: { new in change(mode: new) })) {
                 let list = SessionModes.switchableModes(session)
                 ForEach(list + (mode.flatMap { m in list.contains { $0.id == m } ? nil : SessionModes.mode(m) }.map { [$0] } ?? [])) { o in
@@ -533,6 +594,8 @@ struct HeaderModeButton: View, Equatable {
         a.changing == b.changing && a.session.permissionMode == b.session.permissionMode
             && a.session.canChangeModes == b.session.canChangeModes && a.session.bypassAvailable == b.session.bypassAvailable
             && a.session.assistant == b.session.assistant && a.session.status.isLive == b.session.status.isLive
+            && a.session.bypassPending == b.session.bypassPending
+            && SessionModes.bypassRestarts(a.session) == SessionModes.bypassRestarts(b.session)
     }
 
     /// The capsule is as tall as the row's tabs; its 44 pt target overhangs the row by this much above and below.
@@ -544,6 +607,9 @@ struct HeaderModeButton: View, Equatable {
         #endif
         let mode = session.permissionMode
         let words = SessionModes.modeHeading(mode)
+        // A restart into Allow Everything waits for the turn to end (#6513): the capsule keeps the mode it runs in, and
+        // the menu's title, VoiceOver and the pointer's tooltip say the restart is coming.
+        let pending = SessionModes.pending(session)
         Menu {
             // "Permission Mode: …" heads the list, as on the web and Android. The modes are switches, the current one on:
             // an iOS menu draws no section header over an inline picker's options, whether the section is around the
@@ -562,7 +628,7 @@ struct HeaderModeButton: View, Equatable {
                 }
             } header: {
                 // Why nothing can be picked goes under the title: words, not a grayed item.
-                Text(!session.canChangeModes && !session.status.isLive ? words + "\n" + StateName.notRunning.text : words)
+                Text([words, !session.canChangeModes && !session.status.isLive ? StateName.notRunning.text : nil, pending].compactMap { $0 }.joined(separator: "\n"))
             }
         } label: {
             HeaderModeCapsule(look: SessionModes.headerLook(mode), changing: changing)
@@ -570,8 +636,9 @@ struct HeaderModeButton: View, Equatable {
         .labelOnlyMenu()
         .disabled(changing)
         .accessibilityLabel(words)
+        .accessibilityHint(pending ?? "")
         .accessibilityIdentifier("chat.permissionMode")
-        .help(words)
+        .help(pending.map { words + "\n" + $0 } ?? words)
         .padding(.vertical, -Self.overhang)
     }
 }
@@ -668,5 +735,86 @@ struct NewSessionModePicker: View {
             }
             .labelOnlyMenu()
         }
+    }
+}
+
+/// The mode list `/permissions` opens from the composer (#6513, the web's #6476): a menu can't be opened from code, so the
+/// same choices as the header's mode menu (`SessionModes.commandRows`), Plan Only included, in a short sheet. The current
+/// mode is checked; Allow Everything says under its name when it takes effect later (a restart once the turn ends) or
+/// why it can't be picked; a restart that waits is said at the bottom. A pick closes the sheet and goes through the page
+/// (`pick`, which asks first where `SessionModes.confirmation` says so). Nothing is sent to the agent.
+struct PermissionModeSheet: View {
+    var session: Session
+    var pick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let mode = session.permissionMode
+        NavigationStack {
+            Form {
+                Section {
+                    ForEach(SessionModes.commandRows(session), id: \.option.id) { row in
+                        Button {
+                            if row.option.id != mode { pick(row.option.id) }
+                            dismiss()
+                        } label: {
+                            PermissionModeRow(option: row.option, checked: row.option.id == mode)
+                        }
+                        .disabled(!row.enabled)
+                        .accessibilityIdentifier("permissions.\(row.option.id)")
+                        .accessibilityAddTraits(row.option.id == mode ? .isSelected : [])
+                    }
+                } footer: {
+                    if let pending = SessionModes.pending(session) { Text(pending) }
+                }
+            }
+            .navigationTitle(SessionModes.modeHeading(mode))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Text("Cancel").lineLimit(1) }
+                }
+            }
+        }
+        #if os(macOS)
+        .macSheet()
+        #else
+        .presentationDetents([.medium, .large])
+        #endif
+        .accessibilityIdentifier("permissions.sheet")
+    }
+}
+
+/// One mode in `PermissionModeSheet`: its symbol, name and what it does, a check on the current one; Allow Everything in
+/// the warning red.
+private struct PermissionModeRow: View {
+    var option: SessionModes.Option
+    var checked: Bool
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        let danger = option.id == SessionModes.ModeID.bypass
+        HStack(spacing: Theme.Space.m) {
+            ThemedIcon(option.symbol).font(Theme.Font.bodyStrong)
+                .foregroundStyle(danger && enabled ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
+                .scaledFrame(width: Theme.Size.icon)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(option.title).font(Theme.Font.body)
+                    .foregroundStyle(!enabled ? AnyShapeStyle(.tertiary) : danger ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.primary))
+                    .lineLimit(1)
+                if !option.detail.isEmpty {
+                    Text(option.detail).font(Theme.Font.secondary)
+                        .foregroundStyle(enabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: Theme.Space.s)
+            if checked {
+                ThemedIcon(Theme.Icon.done).font(Theme.Font.bodyStrong).foregroundStyle(.tint)
+            }
+        }
+        .contentShape(.rect)
     }
 }

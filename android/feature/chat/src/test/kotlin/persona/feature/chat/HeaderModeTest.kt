@@ -82,4 +82,67 @@ class HeaderModeTest {
         assertTrue(JsonCodec.decodeFromString<Session>(json).bypassAvailable)
         assertFalse(JsonCodec.decodeFromString<Session>("""{"machine_id":"m","session_id":"s"}""").bypassAvailable)
     }
+
+    /** Full access by a restart (#6513, the web's `bypassRestarts` from #6476): Claude Code in a pane without a bypass flag. */
+    private fun paned(mode: String? = "default", bypass: Boolean = false) = claude(mode, bypass).copy(paneId = "w1:p1")
+
+    @Test fun allowEverythingIsOfferedByARestartForClaudeInAPane() {
+        val s = paned()
+        assertTrue(SessionModes.bypassRestarts(s))
+        val row = SessionModes.switchable(s).single { it.id == SessionModes.BYPASS }
+        assertEquals(R.string.chat_modes_bypass_restart, row.detailRes)
+        assertNull(SessionModes.bypassUnavailable(s))
+        // all five modes, Plan included
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto", SessionModes.BYPASS), SessionModes.switchable(s).map { it.id })
+        // it still asks first, the dialog carrying the note
+        assertEquals(SessionModes.Confirmation.AllowEverything, SessionModes.confirmation(s, SessionModes.BYPASS))
+        assertEquals(R.string.chat_modes_bypass_restart, SessionModes.bypassNote(s))
+    }
+
+    @Test fun noRestartWhereItIsNotNeededOrTheNodeCannot() {
+        // the process can take it: at once, no note
+        assertFalse(SessionModes.bypassRestarts(paned(bypass = true)))
+        assertNull(SessionModes.bypassNote(paned(bypass = true)))
+        // already in it
+        assertFalse(SessionModes.bypassRestarts(paned("bypassPermissions")))
+        // no pane (a headless agent), a source, Codex, Antigravity, a Persona conversation
+        assertFalse(SessionModes.bypassRestarts(claude("default")))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(sourceKind = "codex_app")))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(agent = "codex")))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(agent = "agy")))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(assistant = true)))
+        // a node that says no terminal, or no modes
+        assertFalse(SessionModes.bypassRestarts(paned().copy(capabilities = persona.core.contracts.SessionCapabilities(send = true, terminal = false))))
+        assertFalse(SessionModes.bypassRestarts(paned().copy(capabilities = persona.core.contracts.SessionCapabilities(send = true, terminal = true, modes = false))))
+        // disabled with its reason where it can't
+        assertEquals(SessionModes.BYPASS, SessionModes.bypassUnavailable(claude("default"))?.id)
+    }
+
+    @Test fun aPendingRestartKeepsTheModeItRunsIn() {
+        val s = paned("acceptEdits").copy(bypassPending = true)
+        // the header and the chip draw the mode it runs in until the restart
+        assertEquals(ModeTone.Acts, SessionModes.headerTone(s.permissionMode))
+        assertEquals(R.string.chat_modes_bypass_pending, SessionModes.bypassNote(s))
+        val row = SessionModes.switchable(s).single { it.id == SessionModes.BYPASS }
+        assertEquals(R.string.chat_modes_bypass_pending, row.detailRes)
+        val res = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().resources
+        assertEquals(res.getString(R.string.chat_modes_bypass_pending), SessionModes.pendingNote(s, res))
+        assertNull(SessionModes.pendingNote(paned("acceptEdits"), res))
+        // the hint above the composer says it, after the mode
+        assertTrue(chatModeHint(s, res)!!.endsWith(res.getString(R.string.chat_modes_bypass_pending)))
+    }
+
+    @Test fun aPersonaConversationTakesItFromTheNextMessage() {
+        val s = claude("default").copy(assistant = true)
+        assertEquals(R.string.chat_modes_bypass_next_message, SessionModes.bypassNote(s))
+        assertEquals(R.string.chat_modes_bypass_next_message, SessionModes.switchable(s).single { it.id == SessionModes.BYPASS }.detailRes)
+        assertNull(SessionModes.bypassNote(claude("bypassPermissions").copy(assistant = true)))
+    }
+
+    @Test fun bypassPendingIsReadOffTheSession() {
+        val json = """{"machine_id":"m","session_id":"s","permission_mode":"auto","bypass_pending":true}"""
+        assertTrue(JsonCodec.decodeFromString<Session>(json).bypassPending)
+        assertFalse(JsonCodec.decodeFromString<Session>("""{"machine_id":"m","session_id":"s"}""").bypassPending)
+        assertFalse(JsonCodec.decodeFromString<Session>("""{"machine_id":"m","session_id":"s","bypass_pending":null}""").bypassPending)
+    }
 }

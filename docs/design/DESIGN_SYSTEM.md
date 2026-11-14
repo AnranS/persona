@@ -923,6 +923,17 @@ The web's header has no mode button (#5421, cindy's top bar): the mode is the co
 cindy's symbols: a raised hand, code, a list, sparkles, a warning triangle; `pickerIcon`) and Session info; iOS and
 Android keep their header buttons until they follow (#5432).
 
+Full access by a restart and `/permissions` on iOS and Android (#6513, the web's #6476): where the node restarts a terminal
+Claude Code into Allow Everything / Full access, the mode menus enable that row with the restart note under it (the
+confirmation repeats it). While the restart waits (`bypass_pending`), the mode buttons keep the mode the agent runs in, so
+nothing is drawn before it happens, and say the session restarts when the turn ends: on iOS in the header menu's title,
+VoiceOver's hint, the pointer's tooltip and a line over the composer menus' modes. `/permissions` in the composer's "/"
+list opens the mode list with all five modes, nothing sent. iOS can't open a `Menu` from code, so there it is
+`PermissionModeSheet` (`apple/Persona/Views/Chat/SessionModes.swift`): a medium-detent grouped form of the same rows
+(symbol, name, what it does, a check on the current one, Allow Everything in `Theme.danger`, a row that can't be picked
+disabled with its reason), Cancel in the toolbar, the waiting restart in the section's footer; a pick closes it and goes
+through the page's confirmation. No new token or style.
+
 Conversations an extension opened (#3758, `origin` `lark_agent` or `extension`) carry a source mark beside their title wherever they are a row, in the slot and size of the channel mark (iOS `ConversationSourceMark` / `ExternalSourceMark` in `ConversationChannelMark`'s place, web `OriginMark` in `ChannelMark`'s; Android has not caught up yet, #4203): Lark's `BrandMark` for Lark /agent, the extensions symbol in the secondary color for any other extension. A row has one source mark: the origin's replaces the channel's. No text tag: the row's accessible name carries "From Lark /agent" / "From an extension" instead. The message that opened the conversation gets the "From …" line channel messages already have (iOS `ExternalSourceLine` beside `ChannelSourceLine`, web the channel line in `SegmentView`), on that first message only and only once the page has loaded back to it; the chat's header stays as it is. Why not a new badge or a pinned line: the owner chose the existing channel patterns so the same place says the same thing for a channel's message and an extension's conversation.
 
 The web main conversation has one compact header line on the welcome page and in the open main chat (#4572).

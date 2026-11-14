@@ -45,4 +45,15 @@ class SlashCommandsTest {
         assertEquals(listOf("/compact", "/context"), SlashCommand.suggestions("/co", clear = true, res).map { it.word })
         assertEquals(SlashCommand.matching("/", true, res), SlashCommand.suggestions("/", true, res))
     }
+
+    /** /permissions (#6513): only where the chat has the mode picker; picking it is never "already typed out". */
+    @Test fun permissionsWhereThePickerIs() {
+        assertEquals(emptyList<String>(), SlashCommand.matching("/p", true, res).map { it.word })
+        assertEquals(listOf("/permissions"), SlashCommand.matching("/p", true, res, permissions = true).map { it.word })
+        assertTrue(SlashCommand.matching("/", true, res, permissions = true).any { it.permissions })
+        // the exact word keeps its row: picking it opens the menu
+        assertEquals(listOf("/permissions"), SlashCommand.suggestions("/permissions", true, res, permissions = true).map { it.word })
+        assertTrue(SlashCommand.isPermissions(" /Permissions "))
+        assertTrue(!SlashCommand.isPermissions("/permissions please"))
+    }
 }

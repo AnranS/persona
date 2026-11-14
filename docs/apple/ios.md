@@ -989,6 +989,16 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   unless their claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, which puts it in the cycle:
   the node reads the arguments of the claude its hooks run under, once per process (`claudeCanBypass`, kern.procargs2 / `/proc/<pid>/cmdline`, no exec), and lists the session with
   `bypass_available` (#1379). The web and the app then offer it, red and asked again (`SessionModes.switchableModes`, `confirmation`); without it the app's header menu lists it disabled, with why.
+- Allow Everything by a restart (#6513, the web's #6476; `docs/integrations/claude-integration.md` "Full access by a restart"): without `bypass_available`, a Claude Code in a pane
+  Persona can type into (`SessionModes.paneClaude`, `bypassRestarts`) is offered it anyway, with "Restarts the session to apply it once this turn ends; the conversation carries on" under it
+  and in the confirmation (`bypassNote`); the node restarts it once its turn is over. While the row has `bypass_pending`, every mode button keeps the mode the agent still runs in
+  (the header capsule's look does not change) and says "The session restarts in Allow Everything once this turn ends": the header menu's title, VoiceOver's hint and the
+  pointer's tooltip, a line over the composer menus' modes, and Allow Everything's own row. An assistant conversation's Allow Everything says "Takes effect from the next message".
+- `/permissions` (#6513): in an agent's "/" list (`SlashMenuRow.permissions`; the BeautifulUI prompt bar's commands too) wherever its mode can be switched from here
+  (`SessionModes.offersPermissionsCommand`). Picked, or typed and sent, it opens `PermissionModeSheet`: the header menu's choices with Plan Only (`SessionModes.commandRows`), the current
+  one checked, Allow Everything disabled with its reason where it can't be taken; a menu can't be opened from code, so it is a short sheet. A pick closes it and goes through
+  `ChatView.requestMode` (its confirmation); nothing is sent to the agent. The assistant's page has no "/" list, so it has no `/permissions`. `-openPermissionModes YES` opens the sheet
+  and `-openSlashMenu /per` types that draft, for screenshots (with `MOCK_BYPASS_PENDING=1` for the waiting state).
 - Agents header (#3719): the agent's mode at the end of the open header's second row, icon and color only (`HeaderModeButton`,
   `SessionModes.headerLook`, `Theme.ModeTone`): Ask First a quiet gray hand, Plan Only a teal clipboard, Auto-Edit a purple pencil, Auto a purple
   wand, Allow Everything a red shield; not reported yet the plain permissions shield (never a guessed Ask First). A tap opens the mode menu; going into
