@@ -442,7 +442,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		s.ackSupervisePending(list)
 		return false
 	}
-	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept)
+	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), list, kept)
 	if err != nil {
 		s.logf("supervise: %d signal(s) for task leader %s: %v; trying again", len(entries), short(lead.SessionID), err)
 		rollback()
@@ -473,8 +473,9 @@ func (e leaderUnreachable) Unwrap() error { return e.err }
 // sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. Its bool is true
 // when a closed agent's resume went to the background instead: that is not delivery yet. A failed resume escalates and
 // retries (escalateLeaderMessage). A session its computer does not list, or a failed online send, is a leaderUnreachable
-// for the caller, which puts the signals back for the next digest.
-func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) (bool, error) {
+// for the caller, which puts the signals back for the next digest. After real delivery, all acknowledges the original
+// batch too: its filtered members no longer hold and must not return after a restart (#5732).
+func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, kept []superviseSignal) (bool, error) {
 	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !ok {
 		return false, leaderUnreachable{errors.New("the leader's session is not listed")}
@@ -483,11 +484,11 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 		go func() {
 			if err := s.sendToLeaderNow(context.Background(), lead, text); err != nil {
 				s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
-				s.escalateLeaderMessage(lead, kept, text)
+				s.escalateLeaderMessage(lead, all, kept, text)
 				return
 			}
 			// A resumed leader is acknowledged only after the real send, never when the goroutine was merely started.
-			s.ackSupervisePending(kept)
+			s.ackSupervisePending(all)
 			s.parkedDueTold(context.Background(), kept)
 			s.turnsTold(context.Background(), kept)
 		}()
@@ -515,7 +516,7 @@ func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text stri
 // case, with or without a conversation above, the message is tried again on the leader itself with a growing wait, until
 // it is taken or the leader's task is closed (its workers are then rehomed). The retry runs on its own context: it must
 // outlive the call that started it.
-func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, text string) {
+func (s *Service) escalateLeaderMessage(lead TodoAgent, all, kept []superviseSignal, text string) {
 	ctx := context.Background()
 	for _, g := range kept {
 		if w, ok := s.todoNow(g.Todo); ok {
@@ -535,7 +536,7 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, 
 			}
 			s.logf("task leader %s: trying the undelivered supervision message again", short(lead.SessionID))
 			if err := s.sendToLeaderNow(ctx, lead, text); err == nil {
-				s.ackSupervisePending(kept)
+				s.ackSupervisePending(all)
 				s.parkedDueTold(ctx, kept)
 				s.turnsTold(ctx, kept)
 				return

@@ -174,6 +174,55 @@ func TestOfflineTaskLeaderAcknowledgesOnlyAfterSend(t *testing.T) {
 	requireLeaderTurnToldAfterRestart(t, s, g)
 }
 
+// A mixed batch can contain a signal whose task closed before delivery. Once another member's real send succeeds, the
+// filtered member is obsolete too and must not be restored by the next restart, on either asynchronous success path.
+func TestOfflineLeaderSuccessAcknowledgesFilteredBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		failResume bool
+	}{
+		{name: "resume"},
+		{name: "retry", failResume: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+			s, f, todo := newSupervisedServiceOn(t, st)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			closedAt := time.Now().UTC()
+			closed := Todo{ID: "closed-before-leader-delivery", Title: "已关闭", Origin: "conv1", DoneAt: &closedAt,
+				Supervision: &Supervision{Supervisor: "box/s1", State: reviewPending}}
+			putTodo(s, closed)
+			stale := superviseSignal{Todo: closed.ID, Kind: sigReview, Key: "closed-before-delivery", At: time.Now()}
+			live := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "live-offline-batch", At: time.Now()}
+			s.signal(stale)
+			s.signal(live)
+			f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusOffline})
+			calls := 0
+			f.answerNode(DeviceSessionSend, func(_ string, _ json.RawMessage) (any, error) {
+				calls++
+				if tc.failResume && calls == 1 {
+					return nil, errors.New("resume failed")
+				}
+				return map[string]any{"ok": true}, nil
+			})
+			if tc.failResume {
+				s.leaderResume = time.Millisecond
+			}
+			lead := TodoAgent{MachineID: "box", SessionID: "s1"}
+			list := []superviseSignal{stale, live}
+			if !s.deliverToLeaderAgent(context.Background(), lead, list, testWeb, time.Now(), time.Time{}) {
+				t.Fatal("the offline leader delivery was not started")
+			}
+			waitFor(t, "the live member's real-send acknowledgment", func() bool {
+				return storedSupervisePending(t, s)[live.id()].Key == ""
+			})
+			if got := storedSupervisePending(t, s); len(got) != 0 {
+				t.Fatalf("a successful real send left filtered members in the durable outbox: %+v", got)
+			}
+		})
+	}
+}
+
 // An unreachable leader's signal is delivered as a decision above it; the original worker signal must not replay too.
 func TestUnreachableLeaderEscalationReplacesPending(t *testing.T) {
 	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
@@ -220,7 +269,7 @@ func TestLeaderRetrySuccessAcknowledgesPending(t *testing.T) {
 	})
 	s.leaderResume = time.Millisecond
 	lead := TodoAgent{MachineID: "box", SessionID: "s1"}
-	s.escalateLeaderMessage(lead, []superviseSignal{g}, "worker supervision")
+	s.escalateLeaderMessage(lead, []superviseSignal{g}, []superviseSignal{g}, "worker supervision")
 	waitFor(t, "the successful leader retry's acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
 	requireLeaderTurnToldAfterRestart(t, s, g)
 }
