@@ -46,12 +46,10 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, map[string]any{"tmux": "orc:@11.%11"})
 
 	var s proto.Session
-	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+	waitFor(t, "the row names the dialog", func() bool {
 		s = byID(listSessions(t, n))[sidA]
-		if s.AttentionReason == want {
-			break
-		}
-	}
+		return s.AttentionReason == want
+	})
 	if s.PaneID != "tmux:%11" || s.Capabilities == nil || !s.Capabilities.Terminal {
 		t.Fatalf("not driven through its pane: %+v", s)
 	}
@@ -65,11 +63,10 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	wait := func(ok func(proto.Session) bool) proto.Session {
 		t.Helper()
 		var row proto.Session
-		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
-			if row = byID(listSessions(t, n))[sidA]; ok(row) {
-				break
-			}
-		}
+		waitFor(t, "the row's attention", func() bool {
+			row = byID(listSessions(t, n))[sidA]
+			return ok(row)
+		})
 		return row
 	}
 	if s = wait(func(s proto.Session) bool { return s.AttentionReason == want }); s.Status != proto.StatusBlocked || s.AttentionReason != want {
@@ -84,10 +81,24 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 
 	// A dialog the pane does not show (not read yet, or one the reader does not recognize) leaves the sentence the row
 	// had: never an empty reason on a blocked row.
+	// Each list must say so, before and after a screen read started since the status changed has finished (the reads
+	// run in the background, dialogstatus.go): waiting on that read, not on a fixed time.
 	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, map[string]any{"tmux": "orc:@11.%11"})
-	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+	changed := time.Now()
+	check := func() {
+		t.Helper()
 		if s = byID(listSessions(t, n))[sidA]; s.Status != proto.StatusBlocked || s.AttentionReason != proto.AttentionClaudeComputer {
 			t.Fatalf("no dialog on the pane: attention %q (status %s)", s.AttentionReason, s.Status)
 		}
 	}
+	check()
+	pane := s.PaneID
+	waitFor(t, "a screen read since the status changed", func() bool {
+		n.dialogs.mu.Lock()
+		p := n.dialogs.m[pane]
+		read := p != nil && !p.reading && p.at.After(changed)
+		n.dialogs.mu.Unlock()
+		check() // a list starts the next read: looked at after the state above
+		return read
+	})
 }
