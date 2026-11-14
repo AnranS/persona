@@ -687,7 +687,9 @@ func (s *Service) doneCheckRoute() {
 			}
 		}
 		c, err := s.judgeTaskDone(ctx, t)
-		if err != nil {
+		if err != nil && c.Verdict != verdictNeedsUser {
+			// An explicit owner action is deterministic and must still be applied; every other model error leaves the
+			// judgment indeterminate (#5732).
 			apierr.Write(w, http.StatusBadGateway, err)
 			return
 		}

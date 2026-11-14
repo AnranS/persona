@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -90,5 +91,77 @@ func TestDoneCheckApplySupervisedWaitsForReview(t *testing.T) {
 	waitFor(t, "waiting for review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	if now := todoNow(s, todo.ID); now.DoneAt != nil {
 		t.Fatalf("a supervised task closed by Re-check: %+v", now)
+	}
+}
+
+// Re-check keeps an explicit owner action even when the rest of the judgment failed. The visible wait and its one push
+// do not depend on the judge being configured or available (#5732).
+func TestDoneCheckApplyKeepsOwnerActionWhenJudgeFails(t *testing.T) {
+	t.Run("model failure", func(t *testing.T) {
+		s, f, todo := newSupervisedService(t)
+		f.judge = ""
+		agentStopped(f, "Spec 已完成，下一步由你发起实现。")
+		w := serveAs(s, "full", "POST", "/api/v1/todos/"+todo.ID+"/done-check", `{"apply":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("a deterministic owner action was discarded with the judge error: %d %s", w.Code, w.Body.String())
+		}
+		var out doneCheckAnswer
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Verdict != verdictNeedsUser || out.Applied == nil || !*out.Applied {
+			t.Fatalf("applied owner action = %+v, %v", out, err)
+		}
+		waitFor(t, "the owner-action push after a judge failure", func() bool { return len(f.pushed()) == 1 })
+		if cur := todoNow(s, todo.ID); cur.Supervision.State != reviewNeedsUser || cur.Supervision.Waits == nil {
+			t.Fatalf("the judge failure discarded the owner wait: %+v", cur.Supervision)
+		}
+		waitFor(t, "the owner-action receipt", func() bool { return todoNow(s, todo.ID).Supervision.Waits.NotifiedAt != nil })
+		doneCheck(t, s, todo.ID, `{"apply":true}`)
+		if got := len(f.pushed()); got != 1 {
+			t.Fatalf("the same deterministic owner action pushed %d times", got)
+		}
+	})
+
+	t.Run("model not configured", func(t *testing.T) {
+		s, f, _ := modelService(t)
+		setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+		f.known["conv1"] = true
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		ctx := context.Background()
+		todo, err := s.createTodo(ctx, "Prepare the release", "", "conv1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+		if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", todo.Title, "/code/app", ""); err != nil {
+			t.Fatal(err)
+		}
+		agentStopped(f, "Spec 已完成，下一步由你发起实现。")
+		w := serveAs(s, "full", "POST", "/api/v1/todos/"+todo.ID+"/done-check", `{"apply":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("an unconfigured judge discarded the deterministic owner action: %d %s", w.Code, w.Body.String())
+		}
+		waitFor(t, "the owner-action push without a configured judge", func() bool { return len(f.pushed()) == 1 })
+		if cur := todoNow(s, todo.ID); cur.Supervision.State != reviewNeedsUser || cur.Supervision.Waits == nil {
+			t.Fatalf("an unconfigured judge discarded the owner wait: %+v", cur.Supervision)
+		}
+		waitFor(t, "the owner-action receipt without a configured judge", func() bool {
+			return todoNow(s, todo.ID).Supervision.Waits.NotifiedAt != nil
+		})
+		doneCheck(t, s, todo.ID, `{"apply":true}`)
+		if got := len(f.pushed()); got != 1 {
+			t.Fatalf("the same owner action without a configured judge pushed %d times", got)
+		}
+	})
+}
+
+func TestDoneCheckApplyIndeterminateJudgeFailureStaysBadGateway(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	f.judge = ""
+	agentStopped(f, "The implementation is finished.")
+	w := serveAs(s, "full", "POST", "/api/v1/todos/"+todo.ID+"/done-check", `{"apply":true}`)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("an indeterminate judge failure = %d %s, want 502", w.Code, w.Body.String())
+	}
+	if cur := todoNow(s, todo.ID); cur.Supervision.State == reviewNeedsUser || cur.Supervision.Waits != nil || len(f.pushed()) != 0 {
+		t.Fatalf("an indeterminate failure invented an owner action: %+v, pushes=%+v", cur.Supervision, f.pushed())
 	}
 }
