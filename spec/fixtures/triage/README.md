@@ -6,12 +6,14 @@ stuck. These cases hold the copies to one definition. All four implementations r
 (`web/src/lib/todo-triage-fixture.test.ts`), Apple (`apple/PersonaTests/TodoTriageFixtureTests.swift`), Android
 (`android/core/domain/src/test/kotlin/persona/core/domain/tasks/TodoTriageFixtureTest.kt`), and the hub
 (`TestTriageFollowsTheSharedCases`, `TestTriageTodosFollowsTheSharedCases`,
-`TestTriageRelatedKeysFollowTheSharedCases` in `server/internal/assistant/todo_triage_test.go`).
+`TestTriageRelatedKeysFollowTheSharedCases` in `server/internal/assistant/todo_triage_test.go`). The hub and web replay
+every case. Until their native concern follow-up, Apple and Android replay every non-concern case; the concern cases are
+explicitly scoped to the hub and web rather than silently changing native behavior.
 
 | File | Rule | Cases |
 | --- | --- | --- |
-| `triage.json` | The decision table, first rule that holds wins; the last activity | every case of `triage` in `web/src/lib/todo-triage.test.ts`, one assertion a case; `derived` ones cover the agent states that table reads (failed start, interrupted, usage limit, waiting in the background, released, a session without `state`, a session not listed) |
-| `groups.json` | Related to-dos share a row led by the most urgent; open, completed and cancelled never share one; the header's counts; quiet tasks for the badge; a failed start whose row's work finished (rule 1a, #3713) | `triageTodos` in the same test file |
+| `triage.json` | The decision table, first rule that holds wins; the last activity; open concerns stay Working / Other open except for the rules that still apply, and close only by their report | every case of `triage` in `web/src/lib/todo-triage.test.ts`, one assertion a case; `derived` ones cover the agent states that table reads (failed start, interrupted, usage limit, waiting in the background, released, a session without `state`, a session not listed); `concern_*` covers each concern exception, a same-age ordinary-task shelving control, and a fresh / old reported close |
+| `groups.json` | Related to-dos share a row led by the most urgent; open, completed and cancelled never share one; an open concern always has its own row while a closed concern groups normally; the header's counts; quiet tasks for the badge; a failed start whose row's work finished (rule 1a, #3713) | `triageTodos` in the same test file |
 | `related.json` | The keys that relate two to-dos | `relatedKeys` |
 
 - Structure: `{"version": 1, "cases": [...]}`. `input.now` is the moment the case is read at; `input.sessions` are

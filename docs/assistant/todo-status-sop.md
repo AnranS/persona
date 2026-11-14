@@ -57,8 +57,20 @@ The first rule that holds wins.
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |
 
-The hub-only secretary concern is the exception to rule 5: its report leaves it in Delivered · awaiting review rather than
-filing it immediately as Done (docs/assistant/todos.md "Concerns"). Ordinary explicit task closure has no such exception.
+**Open concerns** (`kind = "concern"`, `done_at` unset, #3582) follow that table with these exceptions:
+
+- Rules 1 to 4 apply unchanged: a failed start in its first 48 hours and anything waiting on the owner is Waiting on you;
+  an agent working or starting is Working.
+- A failed start older than 48 hours is Other open by rule `rest`, never Done.
+- Rules 6 (`accepted`) and 7 (`finished_unseen` for delivery) never apply.
+- Rules 8 (`finished_unseen`) and 9 (`pr_open`) apply unchanged.
+- Rule 9a (`seen`) never applies: a finished turn the owner has seen leaves the concern in Other open, not Done.
+- Rule 10 (`stale`) never applies: an open concern is never Shelved, however long nothing happens.
+- Otherwise it is Other open by rule `rest`.
+
+A closed concern (`done_at` set by its report) follows rule 5 like any closed to-do. Every concern row, open or closed,
+carries one neutral **Concern** tag next to its title, using the client's existing tag component; other rows do not change.
+A client whose older hub does not send `kind` keeps its previous behavior.
 
 On the web, the header's Parked count is the number of to-dos in the Parked section (included in open).
 Inactive counts only automatic 48-hour shelving. Cancelled has its own count and is never included in Done / completed.
@@ -208,6 +220,7 @@ Before the first read of the to-dos lands the header shows no counts, not zeros 
 A to-do is shelvable when it is a task (an agent was ever linked, or a conversation handed it out) and has no due date
 ahead. The user's own to-dos without agents (reminders, errands), ones due later, and unaccepted `live` deliveries never
 shelve themselves. The last case remains open under Delivered · awaiting review until it is accepted or explicitly closed.
+An open concern never shelves either: it waits for its report, however long.
 
 - Shelved to-dos are folded under **Inactive** on web (**Shelved** on native clients), not counted as open, and not changed on the hub: nothing is deleted, closed
   or released. Any new activity (an agent working, a report, a review, an edit) takes it out again at once.
@@ -227,6 +240,8 @@ activity); "N related" under the row opens the others. Two to-dos are related wh
 
 Relations chain (A shares a PR with B, B an issue with C: one row). Open, completed and cancelled to-dos use three
 separate sides: none joins a row of another state, and a cancelled task never makes a related failed start look completed.
+An open concern always has a row of its own: it never merges into a related to-do's row, and no related to-do merges
+into its row. A closed concern groups like any closed to-do.
 
 ## Accepted tasks
 
@@ -261,9 +276,11 @@ Every client follows this document with its own copy of the rules, each with the
 
 The shared cases in `spec/fixtures/triage` are read by all four implementations: the web app, Apple and Android fixture
 suites, and the hub. A rule change adds or changes a case there first; copying its expected value into a client-only test
-is not a substitute for replaying the fixture.
+is not a substitute for replaying the fixture. The concern exceptions, standalone open-concern rows and neutral Concern
+row tag are a staged capability under #3582 on the hub and web. Until their native follow-up, Apple and Android replay
+the non-concern cases and keep their documented compatibility behavior, so no existing native triage rule changes here.
 
-A change to the rules changes all of them in the same PR. Native differences: iOS / Mac keep restores in the device's
+A change to an existing rule changes all of them in the same PR. Native differences: iOS / Mac keep restores in the device's
 `UserDefaults` (`todos.restored`) and Android in its local preferences, as the web keeps them per browser; the iOS list
 has no Status | Folder switch (it had no folder view), and the Mac shows a merged row's members as a disclosure under the
 lead. The iOS list draws a row's "N related" inside the lead's row, under its words (Android's card already had it). iOS and

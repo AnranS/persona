@@ -729,8 +729,8 @@ func agentStartTaskWarning(closed bool, linkErr error) string {
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
 // built links it to the task made before the request, by creation_id or the hub-issued session id when available,
-// and by the older bounded adoption heuristic otherwise. Otherwise the pending task stays visible for a later
-// sessions.changed to complete the link.
+// and by the older bounded adoption heuristic otherwise. A failed pre-start list disables only the heuristic, not an
+// exact expectID match. Otherwise the pending task stays visible for a later sessions.changed to complete the link.
 func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, cwd, note, expectID string, knownIDs map[string]bool, task Todo, told string) string {
 	if list, err := s.sessions(ctx, m.ID); err == nil {
 		for _, sess := range list {
@@ -760,7 +760,8 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, 
 		m.Name, cwd, task.ID, note)
 }
 
-// knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no adoption).
+// knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no heuristic
+// adoption, though an exact expectID can still be reconciled).
 func (s *Service) knownSessionIDs(ctx context.Context, machine string) map[string]bool {
 	list, err := s.sessions(ctx, machine)
 	if err != nil {

@@ -92,7 +92,9 @@ final class TodoTriageFixtureTests: XCTestCase {
         let data = try Data(contentsOf: Self.repo.appending(path: "spec/fixtures/triage/\(file)"))
         let fixture = try JSON.decoder.decode(Fixture.self, from: data)
         XCTAssertEqual(fixture.version, 1)
-        XCTAssertFalse(fixture.cases.isEmpty)
-        return fixture.cases
+        // Native concern behavior has its own follow-up (#3582); the shared concern_* cases are hub/web-only until then.
+        let supported = fixture.cases.filter { !$0.name.hasPrefix("concern_") }
+        XCTAssertFalse(supported.isEmpty)
+        return supported
     }
 }
