@@ -331,6 +331,8 @@ func TestAssistantSendSuperviseRoundWhileBusyKeepsContext(t *testing.T) {
 	if got := len(roundStarts(t, argv)); got != 1 {
 		t.Fatalf("%d starts", got)
 	}
+	// The send returns once the message is written to the process; the fake claude appends it to its file after that.
+	waitFor(t, "the third message", func() bool { return len(roundInputs(t, input)) == 3 })
 	if msgs := roundInputs(t, input); len(msgs) != 3 || strings.Contains(msgs[1], fullSnapshot) {
 		t.Fatalf("messages %q", msgs)
 	}

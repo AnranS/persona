@@ -119,13 +119,14 @@ func (p *assistantProc) reapable(now time.Time) bool {
 }
 
 // idleCompactable: about to be let go with a context worth compacting first (assistantIdleCompact); p.mu is held. A
-// supervision round's process never is (assistantProc.round): its next round starts from the first turn anyway.
+// supervision round's process never is (assistantProc.round): its next round starts from the first turn anyway. Unless
+// a message that needs every tool joined it (assistantProc.joined): its chain is no longer the round's alone.
 func (p *assistantProc) idleCompactable() bool {
 	threshold := p.compactIdleAt
 	if threshold == 0 {
 		threshold = assistantIdleCompact
 	}
-	return p.agent == "claude" && !p.round && !p.compacting && !p.compacted && p.context >= threshold
+	return p.agent == "claude" && (!p.round || p.joined) && !p.compacting && !p.compacted && p.context >= threshold
 }
 
 // compactIdle sends /compact to an idle process. It is not a turn: the conversation stays as it was in the app (the

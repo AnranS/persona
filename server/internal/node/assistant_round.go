@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -25,8 +26,11 @@ import (
 // Every assistant.send says which tool set it needs: supervise_round asks for the round's, and its absence (the owner's
 // message, a supervision message once assistant.background_supervisor_keeps_context is on, a manager from before
 // #7315) for every tool. A round's process that is idle when a message needing every tool comes is replaced by a plain
-// --resume with every tool and no round state, so it is compacted when idle again; a busy one, or one running
-// background tasks, takes the message and is replaced at the first message after it is idle (assistantSend).
+// --resume with every tool and no round state, so it is compacted when idle again. One still working (a turn,
+// background tasks, a compaction, a message Claude Code queued: workingLocked) takes the message, since replacing it
+// would lose that work; from then on it is compacted when idle as any other process (assistantProc.joined), and the
+// first message after it is idle replaces it (assistantSend). Until then it runs only its own turns and background
+// tasks: once none is left, nothing but a message starts a turn in it, so the tools need not switch any sooner.
 //
 // --resume-session-at is a print-mode flag Claude Code does not document. It is used only where it was measured: Claude
 // Code on the CLI (not Codex, the Agent SDK runtime, another runtime or a guest), roundMinClaude or later, an idle
@@ -139,7 +143,7 @@ func (n *Node) superviseRound(ctx context.Context, r *roundResult, id string, p 
 	version := ""
 	if p != nil && p.alive() {
 		p.mu.Lock()
-		busy := p.busy || len(p.tasks) > 0 || p.compacting || p.manual
+		busy := p.workingLocked()
 		other := p.agent != "claude" || p.runtime != ""
 		version = p.claudeVersion
 		p.mu.Unlock()
@@ -171,6 +175,15 @@ func (n *Node) superviseRound(ctx context.Context, r *roundResult, id string, p 
 	}
 	r.set(roundFresh, "")
 	return spawnRound{anchor: tr.anchor, toolSet: roundToolSet}
+}
+
+// workingLocked: stopping the process now would lose something it runs or holds (p.mu held): a turn, a background
+// task, a compaction (an idle one, or the user's, which sets no busy flag, assistant_compact.go), or a message Claude
+// Code queued and has not started. A turn's result clears busy before the queued message's turn starts
+// (assistant_queue.go), and a new process would never get that message. A round goes in as before then (superviseRound),
+// and a round's process is not replaced for its tools (assistantSend).
+func (p *assistantProc) workingLocked() bool {
+	return p.busy || len(p.tasks) > 0 || p.compacting || p.manual || slices.ContainsFunc(p.written, func(w assistantInput) bool { return w.queued })
 }
 
 // roundTranscript is what roundAnchor read in a transcript: the anchor ("" for none), the Claude Code version that wrote
