@@ -18,12 +18,14 @@ import { installAutoUpdate } from "./updater.js";
 import { desktopPresence } from "./presence.js";
 import { installSetupProtocol, SETUP_SCHEME } from "./setup-protocol.js";
 import { SETUP_URL } from "./setup-resources.js";
+import { HubWindowLifecycle, sameHubWindow } from "./hub-window-lifecycle.js";
 
 installSmokeCapture();
 // Register the scheme before any ready callback. Its file handler is installed with the app's other ready-time setup.
 protocol.registerSchemesAsPrivileged([{ scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } }]);
 
 let mainWindow: BrowserWindow | undefined;
+let mainWindowHub: string | undefined;
 let hub: HubAddress | undefined;
 let quitting = false;
 let pendingDeepLink: string | undefined;
@@ -31,6 +33,7 @@ let setupWindow: BrowserWindow | undefined;
 let screenLocked = false;
 let presenceTimer: ReturnType<typeof setInterval> | undefined;
 const store = () => JSONStore.inUserData(app.getPath("userData"));
+const hubWindow = new HubWindowLifecycle();
 
 function navigateFromDeepLink(raw: string): void {
   const link = parseDeepLink(raw);
@@ -79,50 +82,76 @@ function secureHubWindow(window: BrowserWindow): void {
 }
 
 // A different hub needs a new window and its own persistent session, not navigation of the old window.
-async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow) => void): Promise<void> {
+async function replaceMainWindow(next: HubAddress): Promise<void> {
   const previous = mainWindow;
-  if (!previous || previous.isDestroyed()) return;
-  // Sub-path containment is not equality: /old/ is inside a new / hub, but still needs its own origin-isolated session.
-  if (inHub(next, previous.webContents.getURL()) && (() => { try { return parseHubAddress(previous.webContents.getURL()).url.href === next.url.href; } catch { return false; } })()) return;
-  // Setting hub first lets closeToTray destroy this window without putting the old hub back on screen.
-  hub = next;
-  const closed = new Promise<void>(done => previous.once("closed", done));
-  close(previous);
-  await closed;
-  mainWindow = undefined;
+  if (previous && !previous.isDestroyed() && mainWindowHub === next.url.href && sameHubWindow(next, previous.webContents.getURL())) {
+    await hubWindow.show(async () => { previous.show(); });
+    return;
+  }
+  // A replacement begins before the next creation, including a still-pending initial load. Never let the retired
+  // operation borrow its old promise or install the next hub's IPC into the old immutable session.
+  if (previous && !previous.isDestroyed()) {
+    const closed = new Promise<void>(done => previous.once("closed", done));
+    previous.destroy();
+    await closed;
+  }
+  if (mainWindow === previous) {
+    mainWindow = undefined;
+    mainWindowHub = undefined;
+  }
 }
 
 async function showMain(): Promise<void> {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    if (hub) await mainWindow.loadURL(hub.url.href);
-    return;
-  }
-  const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
-  const current = new BrowserWindow({
-    ...DEFAULT_WINDOW,
-    ...state,
-    show: false,
-    title: "Persona",
-    autoHideMenuBar: true,
-    backgroundColor: "#111111",
-    webPreferences: {
-      preload: join(import.meta.dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      devTools: !app.isPackaged,
-      nodeIntegrationInWorker: false,
-      nodeIntegrationInSubFrames: false,
-      webviewTag: false,
-      backgroundThrottling: false,
-      spellcheck: true,
-      ...(hub ? { partition: hubPartition(hub) } : {}),
-    },
-  });
+  await hubWindow.show(async () => {
+    const owner = hub;
+    const generation = hubWindow.generation;
+    if (!owner) {
+      if (!setupWindow || setupWindow.isDestroyed()) await showSetup();
+      return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindowHub === owner?.url.href && sameHubWindow(owner, mainWindow.webContents.getURL())) {
+      mainWindow.show();
+      return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+    const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
+    if (owner !== hub || generation !== hubWindow.generation) return;
+    const current = new BrowserWindow({
+      ...DEFAULT_WINDOW,
+      ...state,
+      show: false,
+      title: "Persona",
+      autoHideMenuBar: true,
+      backgroundColor: "#111111",
+      webPreferences: {
+        preload: join(import.meta.dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        devTools: !app.isPackaged,
+        nodeIntegrationInWorker: false,
+        nodeIntegrationInSubFrames: false,
+        webviewTag: false,
+        backgroundThrottling: false,
+        spellcheck: true,
+        ...(owner ? { partition: hubPartition(owner) } : {}),
+      },
+    });
   mainWindow = current;
+  mainWindowHub = owner?.url.href;
+  let usable = true;
+  const discard = () => {
+    if (!usable) return;
+    usable = false;
+    removeIPC();
+    if (mainWindow === current) {
+      mainWindow = undefined;
+      mainWindowHub = undefined;
+    }
+    if (!current.isDestroyed()) current.destroy();
+  };
   if (!app.isPackaged && process.env.PERSONA_DESKTOP_DEBUG === "1") {
     const log = (value: unknown) => {
       const line = `${typeof value === "string" ? value : JSON.stringify(value)}\n`;
@@ -142,8 +171,8 @@ async function showMain(): Promise<void> {
     // The partition is immutable, so derive authorization from this window's actual origin, never a later global hub.
     hub: () => {
       const url = current.webContents.getURL();
-      if (hub && inHub(hub, url)) return hub;
-      try { return parseHubAddress(url); } catch { return undefined; }
+      if (owner && inHub(owner, url)) return owner;
+      return undefined;
     },
     presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
     openLocalSettings: () => { void showSetup(); },
@@ -165,13 +194,26 @@ async function showMain(): Promise<void> {
   current.on("unmaximize", save);
   current.on("close", save);
   current.once("ready-to-show", () => {
+    if (!usable || owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) { discard(); return; }
     if (state.maximized) current.maximize();
     current.show();
     if (pendingDeepLink) navigateFromDeepLink(pendingDeepLink);
     pendingDeepLink = undefined;
   });
-  current.once("closed", () => { removeIPC(); if (mainWindow === current) mainWindow = undefined; });
-  if (hub) await current.loadURL(hub.url.href);
+  current.once("closed", () => { discard(); });
+  if (owner) {
+    try {
+      await current.loadURL(owner.url.href);
+      if (!usable || owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) discard();
+    } catch (error) {
+      const obsolete = !usable || owner !== hub || generation !== hubWindow.generation || current.isDestroyed();
+      discard();
+      // Destroying a retired window rejects its outstanding load. That is the replacement's expected cleanup, not a
+      // startup failure. A current generation's genuine load error must still reach its caller.
+      if (!obsolete) throw error;
+    }
+  }
+  });
 }
 
 async function showSetup(): Promise<void> {
@@ -198,19 +240,37 @@ async function showSetup(): Promise<void> {
   setup.setMenu(null);
   setup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   setup.webContents.on("will-navigate", event => event.preventDefault());
-  setup.once("closed", () => { removeIPC(); if (setupWindow === setup) setupWindow = undefined; if (!mainWindow) void showMain(); });
+  setup.once("closed", () => {
+    removeIPC();
+    if (setupWindow === setup) setupWindow = undefined;
+    if (!mainWindow) {
+      if (hub && !hubWindow.pending) void showMain().catch(() => {});
+      else if (!hub) void showSetup().catch(() => {});
+    }
+  });
+  let connecting = false;
   const removeIPC = installSetupIPC(setup, {
     hub: () => hub,
     connect: async (raw: string) => {
+      if (connecting) return { ok: false, error: "Connecting to the hub…" };
+      connecting = true;
       try {
         const next = parseHubAddress(raw);
-        await store().update({ hub: next.url.href });
-        await replaceMainWindow(next, window => window.destroy());
+        await replaceMainWindow(next);
         hub = next;
-        setup.close();
+        hubWindow.replace();
+        // Keep the setup window and its IPC alive until the new hub actually loaded. A network failure is recoverable
+        // here, not a reason to strand the person with no window or misreport a valid address as malformed.
         await showMain();
+        await store().update({ hub: next.url.href });
+        setup.close();
         return { ok: true };
-      } catch { return { ok: false, error: "Enter a valid HTTP or HTTPS hub address." }; }
+      } catch (error) {
+        hub = undefined;
+        hubWindow.replace();
+        if (!mainWindow && !setup.isDestroyed()) void showSetup().catch(() => {});
+        return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
+      } finally { connecting = false; }
     },
   });
   await setup.loadURL(SETUP_URL);
@@ -262,7 +322,8 @@ else {
     else await showSetup();
     tray = installTray({ open: strings.tray_open ?? "Open Persona", quit: strings.tray_quit ?? "Quit Persona" }, () => {
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); }
-      else void showMain();
+      else if (hub) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); });
+      else void showSetup().catch(() => {});
     }, () => { quitting = true; app.quit(); }, action => {
       if (action === "restart") updates?.restart();
       else updates?.check();

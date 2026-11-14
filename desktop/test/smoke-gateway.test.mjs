@@ -20,9 +20,17 @@ async function fixture(t) {
   });
   await new Promise(done => upstream.listen(0, "127.0.0.1", done));
   const gateway = await startGateway({ dist, mockPort: upstream.address().port, prefix: "/persona" });
+  let upstreamClosed;
+  let closed = false;
   t.after(async () => {
-    await gateway.close();
-    await new Promise(done => { upstream.closeAllConnections(); upstream.close(done); });
+    if (!closed) {
+      closed = true;
+      await gateway.close();
+    }
+    if (upstream.listening) {
+      upstreamClosed ??= new Promise((done, fail) => { upstream.closeAllConnections(); upstream.close(error => { if (error) fail(error); else done(); }); });
+    }
+    await upstreamClosed;
     await rm(directory, { recursive: true, force: true });
   });
   return { gateway, forwarded: () => forwarded };
@@ -67,6 +75,17 @@ test("outside HTTP and UPGRADE fail closed even without browser metadata, with n
   assert.ok(outside.some(entry => entry.includes("/upgrade")));
   assert.ok(outside.some(entry => entry.startsWith("UPGRADE /socket")));
   assert.ok(!JSON.stringify({ outside, requests: gateway.requests() }).includes("synthetic-secret"));
+});
+
+test("gateway close is idempotent and a real server close error rejects", async t => {
+  const { gateway } = await fixture(t);
+  await gateway.close();
+  await gateway.close();
+  const server = createServer();
+  await new Promise(done => server.listen(0, "127.0.0.1", done));
+  const close = () => new Promise((done, fail) => server.close(error => { if (error) fail(error); else done(); }));
+  await close();
+  await assert.rejects(close(), { code: "ERR_SERVER_NOT_RUNNING" });
 });
 
 test("an already-loaded hub registers the same console listener only once", () => {

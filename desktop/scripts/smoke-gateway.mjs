@@ -99,6 +99,17 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
 
   await new Promise((done, fail) => { server.once("error", fail); server.listen(0, "127.0.0.1", done); });
   const port = server.address().port;
+  let closed;
+  const close = () => {
+    if (!closed) {
+      closed = (async () => {
+        for (const socket of sockets) socket.destroy();
+        server.closeAllConnections();
+        await new Promise((done, fail) => server.close(error => { if (error) fail(error); else done(); }));
+      })();
+    }
+    return closed;
+  };
   return {
     port,
     url: `http://127.0.0.1:${port}${prefix}/`,
@@ -106,10 +117,6 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     outside: () => [...outside],
     /** Method, query-free path and response status only; never credentials, bodies or device tokens. */
     requests: () => [...requests],
-    async close() {
-      for (const socket of sockets) socket.destroy();
-      server.closeAllConnections();
-      await new Promise(done => server.close(done));
-    },
+    async close() { await close(); },
   };
 }

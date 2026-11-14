@@ -20,7 +20,8 @@ import { createRequire } from "node:module";
 import { getCurrentFuseWire, FuseState, FuseV1Options } from "@electron/fuses";
 import { DesktopCDP } from "./first-run-cdp.mjs";
 import { startGateway } from "./smoke-gateway.mjs";
-import { firstRunVerdict } from "./first-run-verdict.mjs";
+import { finalizeFirstRun } from "./first-run-finalize.mjs";
+import { classifyFirstRunDiagnostics, SETUP_SECURITY_URLS, setupCSPResource } from "./first-run-diagnostics.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("@electron/asar");
@@ -37,6 +38,7 @@ let work, hub, gateway, log = "", failure, macSignature;
 let artifactSHA256, buildConfiguration;
 const blocked = [];
 const clients = [];
+const observations = [];
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 const step = (name, ok, detail) => {
   steps.push({ name, ok, ...(detail === undefined ? {} : { detail }) });
@@ -60,7 +62,9 @@ function run(command, args, { seconds = 300, env = process.env, quiet = false } 
     const keep = data => { text += data; if (!quiet) process.stdout.write(data); };
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
-    const timer = setTimeout(() => { stop(child); fail(new Error(`${basename(command)} timed out after ${seconds}s`)); }, seconds * 1000);
+    const timer = setTimeout(() => {
+      void stop(child).catch(error => { log += `${error}\n`; }).finally(() => fail(new Error(`${basename(command)} timed out after ${seconds}s`)));
+    }, seconds * 1000);
     child.once("error", error => { clearTimeout(timer); owned.delete(child); fail(error); });
     child.once("close", code => { clearTimeout(timer); owned.delete(child); done({ code, text }); });
   });
@@ -219,9 +223,29 @@ async function launch(file, profile, home, linkLog) {
   return { child, client };
 }
 async function screenshot(page, name) {
+  try {
+    await until(`${name} is painted`, () => page.evaluate("document.fonts.status === 'loaded' && document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity)"), 15000);
+  } catch (error) {
+    await page.capture(`${name}.unsettled.png`).catch(() => {});
+    throw error;
+  }
   await page.capture(`${name}.png`);
-  await until(`${name} is painted`, () => page.evaluate("document.fonts.status === 'loaded' && document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity)"), 15000);
-  await page.capture(`${name}.png`);
+}
+async function observe(client, phase, targetId) {
+  const snapshot = await client.phase(phase);
+  const result = classifyFirstRunDiagnostics({ ...snapshot, hubURL: gateway?.url, signInTargetId: phase === "hub-sign-in" ? targetId : undefined, hubTargetId: phase === "hub-chat" ? targetId : undefined });
+  observations.push(result);
+  need(`${phase} has no unexpected renderer or network failure`, result.ok, { expected: result.expected, unexpected: result.unexpected });
+}
+async function assertSetupSecurityNegatives(client) {
+  await until("the deliberate security negatives have been observed", () => {
+    const snapshot = client.diagnostics();
+    const pages = snapshot.pages;
+    const urls = snapshot.consoleErrors.filter(value => value.kind === "log").map(setupCSPResource);
+    return [...SETUP_SECURITY_URLS].every(url => urls.includes(url))
+      && snapshot.failedRequests.some(value => value.type === "Document" && value.errorText === "net::ERR_ABORTED" && value.url === "https://example.com/" && value.documentURL === "persona-setup://app/setup.html")
+      && pages.some(value => value.url === "persona-setup://app/setup.html");
+  });
 }
 async function absentScenario(file) {
   const home = join(work, "home-absent");
@@ -229,7 +253,6 @@ async function absentScenario(file) {
   await mkdir(home, { recursive: true });
   need("the first profile is empty and no hub is supplied", !existsSync(profile) && !process.env.PERSONA_HUB_URL);
   const { child, client } = await launch(file, profile, home);
-  clients.push(client);
   const setup = await client.pageFor("the first-run setup page", target => target.url === "persona-setup://app/setup.html");
   need("the packaged setup document loads from the trusted local scheme", setup.url() === "persona-setup://app/setup.html");
   await until("setup localization and Link status", async () => (await setup.evaluate("document.querySelector('h1')?.textContent.length > 0 && !document.querySelector('#link-state')?.textContent.includes('…')")) === true);
@@ -241,11 +264,21 @@ async function absentScenario(file) {
   });
   need("the production preload initialized the setup page", await setup.evaluate("typeof window.desktopSetup === 'object' && typeof window.require === 'undefined' && typeof window.process === 'undefined' && document.querySelector('#hub').value === ''"));
   need("Link is optional and absent, not silently installed", await setup.evaluate("(async () => { const status = await window.desktopSetup.linkStatus(); return status.available === false && document.querySelector('#link-reconnect').disabled && document.querySelector('#pair-link').disabled && document.querySelector('#pair button').disabled && document.querySelector('#node-install').hidden && !document.querySelector('#link-install').hidden && document.querySelector('#link-install').disabled; })()"));
-  need("an unknown local-resource path cannot read another packaged file", !(await setup.evaluate("fetch('persona-setup://app/setup-preload.cjs').then(r => r.ok).catch(() => false)")) && !(await setup.evaluate("fetch('persona-setup://app/../main.js').then(r => r.ok).catch(() => false)")));
+  for (const url of SETUP_SECURITY_URLS) {
+    await client.action(setup.id, "setup-resource-negative", url);
+    need(`the setup security negative is refused: ${url}`, !(await setup.evaluate(`fetch(${JSON.stringify(url)}).then(r => r.ok).catch(() => false)`)));
+    await until(`the CSP denial is observed: ${url}`, () => client.diagnostics().consoleErrors.filter(value => value.kind === "log" && setupCSPResource(value) === url && value.action?.url === url).length >= 2);
+    client.finishAction();
+  }
+  await client.action(setup.id, "setup-navigation-negative", "https://example.com/");
   need("the setup window refuses navigation away from its trusted origin", await setup.evaluate("location.href = 'https://example.com/'; true").then(() => sleep(500)).then(() => setup.url() === "persona-setup://app/setup.html"));
+  await until("the deliberate navigation failure is observed", () => client.diagnostics().failedRequests.some(value => value.type === "Document" && value.errorText === "net::ERR_ABORTED" && value.url === "https://example.com/" && value.documentURL === "persona-setup://app/setup.html" && value.action?.kind === "setup-navigation-negative"));
+  client.finishAction();
   await setup.evaluate("document.querySelector('#hub').value = 'persona-setup://app/setup.html'; document.querySelector('#connect').requestSubmit(); true");
   await until("invalid hub address stays recoverable", () => setup.evaluate("!document.querySelector('#error').hidden && !!document.querySelector('#error').textContent"));
   need("an invalid hub does not get saved or open a window", setup.url() === "persona-setup://app/setup.html" && !existsSync(join(profile, "desktop-state.json")));
+  await assertSetupSecurityNegatives(client);
+  await observe(client, "setup-security");
   await stop(child);
 }
 async function pairedScenario(file) {
@@ -283,7 +316,6 @@ process.stdin.on("end", () => {
     need("the synthetic Link answers status before app launch", probe.code === 0 && JSON.parse(probe.text).machine === "Example computer", probe.text);
   }
   const { child, client } = await launch(file, profile, home, platform === "win32" ? record : undefined);
-  clients.push(client);
   const setup = await client.pageFor("setup with the separately installed test Link", target => target.url === "persona-setup://app/setup.html");
   await until("redacted Link state", () => setup.evaluate("document.querySelector('#link-state')?.textContent.includes('connected') && !document.querySelector('#pair-link').disabled"));
   await setup.evaluate("document.querySelector('details').open = true; true");
@@ -303,6 +335,7 @@ process.stdin.on("end", () => {
       uncovered: ["submit the hub address", "web sign-in and pairing", "enter the existing chat page"],
       requiredEnvironment: "the administrator-approved Developer ID signed and notarized release workflow",
     });
+    await observe(client, "setup-with-link");
     await stop(child);
     return;
   }
@@ -312,6 +345,8 @@ process.stdin.on("end", () => {
   need("setup saved the exact hub and opened the hub origin", JSON.parse(await readFile(join(profile, "desktop-state.json"), "utf8")).hub === gateway.url && main.url() === gateway.url);
   await screenshot(main, "03-hub-sign-in");
   need("the hub renderer keeps Node unavailable and receives the existing bridge", await main.evaluate("typeof require === 'undefined' && typeof process === 'undefined' && window.personaDesktop.version === 1"));
+  await until("the unsigned-in password-mode probe is accounted for", () => main.evaluate("!!document.querySelector('form input[type=text]')") && client.diagnostics().consoleErrors.some(value => value.kind === "log" && value.url === new URL("/api/v1/auth/password/state", gateway.url).href));
+  await observe(client, "hub-sign-in", main.id);
   await main.evaluate(`(() => { const input = document.querySelector('form input[type=text]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, ${JSON.stringify(`persona://pair?url=${gateway.url}&token=${hub.token}`)}); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); input.closest('form').requestSubmit(); return true; })()`);
   await until("signed-in hub UI through its own pairing flow", () => main.evaluate("!!window.personaDesktop && !location.search.includes('token') && !document.querySelector('input[type=password]') && !!document.querySelector('nav a[href], aside a[href]')"), 60000);
   await until("the synthetic hub received the pairing exchange", () => gateway.requests().some(entry => entry.path === "/api/v1/auth/tokens" && entry.status === 200));
@@ -319,6 +354,7 @@ process.stdin.on("end", () => {
   await until("the hub's main chat content", () => main.evaluate("!!document.querySelector('main [data-chat-content]')"));
   await screenshot(main, "04-entered-hub");
   need("the packaged first-run path reaches the existing web app", main.url().startsWith(gateway.url));
+  await observe(client, "hub-chat", main.id);
   await stop(child);
 }
 
@@ -372,20 +408,44 @@ async function main() {
 }
 
 async function cleanup() {
-  for (const child of owned) await stop(child);
+  const failures = [];
+  for (const child of owned) {
+    try { await stop(child); } catch (error) { failures.push(error); }
+  }
   await sleep(owned.size ? 2000 : 0);
-  await gateway?.close().catch(() => {});
-  for (const client of clients) client.close();
-  if (work) await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
+  await gateway?.close().catch(error => { failures.push(error); });
+  // The socket remains alive while the last post-stop diagnostics join the verdict; only then freeze and close it.
+  for (const client of clients) {
+    try {
+      const final = classifyFirstRunDiagnostics({ phase: "final-observation", ...client.diagnostics(), hubURL: gateway?.url });
+      observations.push(final);
+    } catch (error) { failures.push(error); }
+    client.freeze();
+  }
+  for (const client of clients) await client.close().catch(error => { failures.push(error); });
+  if (work) await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(error => { failures.push(error); });
+  if (failures.length) throw new AggregateError(failures, "packaged first-run cleanup failed");
 }
-const timeout = setTimeout(() => { failure = "overall test timeout"; for (const child of owned) stop(child); }, 20 * 60 * 1000);
+const timeout = setTimeout(() => {
+  failure = "overall test timeout";
+  for (const child of owned) void stop(child).catch(error => { failure ??= String(error); });
+}, 20 * 60 * 1000);
 let result;
 try { result = await main(); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
-await cleanup().catch(error => { failure ??= String(error); });
+await cleanup().catch(error => {
+  failure ??= error instanceof AggregateError
+    ? `packaged first-run cleanup failed: ${error.errors.map(item => item instanceof Error ? item.message : String(item)).join("; ")}`
+    : String(error);
+});
 clearTimeout(timeout);
+const finalized = finalizeFirstRun({ platform, signature: macSignature, failure, blocked, steps, observations });
+const finalVerdict = finalized.verdict;
+failure = finalized.failure;
+steps.length = 0;
+steps.push(...finalized.steps);
 await mkdir(output, { recursive: true });
 const report = JSON.stringify({
-  ...firstRunVerdict({ platform, signature: macSignature, failure, blocked, passed: steps.length }),
+  ...finalVerdict,
   arch: process.arch,
   shippingPlatform: platform !== "linux",
   ...(failure ? { failure } : {}),
@@ -397,12 +457,13 @@ const report = JSON.stringify({
   signedReleaseAccepted: false,
   ...result,
   steps,
-  scenarios: clients.map(client => client.diagnostics()),
+  diagnostics: observations,
+  scenarios: clients.map(client => client.diagnostics({ since: { consoleErrors: 0, failedRequests: 0 } })),
 }, null, 2);
 const clean = value => value.replaceAll(work ?? "<temporary directory>", "<temporary directory>").replaceAll(homedir(), "<home>").replaceAll(hub?.token ?? "<no token>", "<run token>");
 await writeFile(join(output, "result.json"), `${clean(report)}\n`, "utf8");
 await writeFile(join(output, "electron.log"), clean(log), "utf8");
 await writeFile(join(output, "hub.log"), clean(hub?.text() ?? ""), "utf8");
-const verdict = firstRunVerdict({ platform, signature: macSignature, failure, blocked, passed: steps.length });
+const verdict = finalVerdict;
 console.log(`Desktop packaged first-run (${platform}/${process.arch}): ${verdict.label}; evidence ${output}`);
-process.exitCode = verdict.ok && steps.length > 0 && steps.every(step => step.ok) ? 0 : 1;
+process.exitCode = finalized.exitCode;
