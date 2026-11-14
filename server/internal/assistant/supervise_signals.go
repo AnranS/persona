@@ -277,14 +277,70 @@ func (s *Service) ackSupervisePending(list []superviseSignal) {
 }
 
 // retractStartUnknown retires the provisional start result once its exact session has been linked. A newer unjudged
-// stop on the same task has another key and remains pending; an older key in its predecessor list is retracted too.
+// stop on the same task has another key and remains pending; queued mixed digests keep and regather their other signals.
 func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
 	g := superviseSignal{Todo: todoID, Kind: sigUnjudged, Key: "start-unknown@" + todoID}
 	b := &s.supervise
 	b.mu.Lock()
+	b.init()
 	ackSupervisePendingLocked(b.pending, []superviseSignal{g})
+	for to, queue := range b.queued {
+		found := false
+		for _, candidate := range queue {
+			found = found || candidate.Todo == g.Todo && candidate.Kind == g.Kind && candidate.Key == g.Key
+		}
+		if found {
+			b.setQueuedLocked(to, nil)
+		}
+	}
 	b.mu.Unlock()
-	s.ackSupervisePending([]superviseSignal{g})
+
+	// Queue removal, exact outbox acknowledgment and regathering the rest share each relay-state write. Do not hold
+	// supervise.mu across that I/O; a newer durable stretch with the same id wins over anything regathered here.
+	replay := map[string]superviseSignal{}
+	update := func(pending map[string]superviseSignal, _ []superviseSignal, regather []superviseSignal) bool {
+		before, had := pending[g.id()]
+		beforeLen := len(pending)
+		ackSupervisePendingLocked(pending, []superviseSignal{g})
+		after, ok := pending[g.id()]
+		changed := len(pending) != beforeLen || had && (!ok || !slices.Equal(before.PendingPredecessors, after.PendingPredecessors))
+		for _, candidate := range regather {
+			cur, exists := pending[candidate.id()]
+			if !exists {
+				cur = candidate
+				pending[candidate.id()] = cur
+				changed = true
+			}
+			replay[candidate.id()] = cur
+		}
+		return changed
+	}
+	r := &s.relays
+	r.mu.Lock()
+	var conversations []string
+	if s.relayLocked(context.Background()) {
+		for to := range r.st.Queue {
+			conversations = append(conversations, to)
+		}
+	}
+	r.mu.Unlock()
+	if len(conversations) == 0 {
+		s.updateSupervisePending(func(pending map[string]superviseSignal) { update(pending, nil, nil) })
+	}
+	for _, to := range conversations {
+		_, _ = s.dropQueuedSupervisionSignalAtomic(to, g, update)
+	}
+
+	b.mu.Lock()
+	for id, candidate := range replay {
+		if _, exists := b.pending[id]; !exists {
+			b.pending[id] = candidate
+		}
+	}
+	if len(b.pending) > 0 {
+		s.scheduleDigestLocked(time.Now())
+	}
+	b.mu.Unlock()
 	s.turnsTold(ctx, []superviseSignal{g})
 }
 

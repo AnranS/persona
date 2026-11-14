@@ -304,6 +304,16 @@ func (s *Service) dropQueuedSupervisionTasks(conversation string, ids map[string
 type superviseQueueReplay func(pending map[string]superviseSignal, taken, regather []superviseSignal) bool
 
 func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[string]bool, known []Todo, replay superviseQueueReplay) (int, []superviseSignal) {
+	return s.dropQueuedSupervisionMatchingAtomic(conversation, ids, known, nil, replay)
+}
+
+// dropQueuedSupervisionSignalAtomic is the exact-signal form used when a provisional start result is confirmed. An
+// unstructured legacy message cannot prove that key, so it is left alone rather than dropping a genuine later stop.
+func (s *Service) dropQueuedSupervisionSignalAtomic(conversation string, target superviseSignal, replay superviseQueueReplay) (int, []superviseSignal) {
+	return s.dropQueuedSupervisionMatchingAtomic(conversation, nil, nil, &target, replay)
+}
+
+func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids map[string]bool, known []Todo, exact *superviseSignal, replay superviseQueueReplay) (int, []superviseSignal) {
 	r := &s.relays
 	r.mu.Lock()
 	if !s.relayLocked(context.Background()) {
@@ -325,14 +335,18 @@ func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[
 		structured := m.Signals != nil && len(*m.Signals) > 0
 		if structured {
 			for _, g := range *m.Signals {
-				if ids[g.Todo] {
+				selected := ids[g.Todo]
+				if exact != nil {
+					selected = g.Todo == exact.Todo && g.Kind == exact.Kind && g.Key == exact.Key
+				}
+				if selected {
 					target = true
 					taken = append(taken, g)
 				} else {
 					remaining = append(remaining, g)
 				}
 			}
-		} else {
+		} else if exact == nil {
 			for id := range ids {
 				target = target || strings.Contains(m.Text, id)
 			}

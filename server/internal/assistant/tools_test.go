@@ -264,6 +264,44 @@ func TestAgentStartUnknownLinksDelayedCreationIDAfterTaskClosed(t *testing.T) {
 	requireStartUnknownState(t, s, todo.ID, false)
 }
 
+// Queue admission is another durable form of the provisional result. A later exact confirmation must keep it from
+// replaying after a restart, not only clear the outbox and turn ledger (#5732).
+func TestAgentStartConfirmationRetractsQueuedStartUnknown(t *testing.T) {
+	s, _ := newQuietServiceOn(t, &memStore{})
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	todo, err := s.createTodo(context.Background(), "Confirm the start", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(context.Background(), todo.ID, "conv1", nil, 0)
+	todo = todoNow(s, todo.ID)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start"}
+	other := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "later-real-stop", Detail: "a later genuine stop"}
+	signals := []superviseSignal{g, other}
+	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: "stale unknown start", At: time.Now()}, signals, time.Now(), time.Time{}) {
+		t.Fatal("the unknown start was not admitted to the durable relay queue")
+	}
+	if _, err := s.linkStartedAgentTask(context.Background(), todo, Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	s.supervise.mu.Lock()
+	queued := len(s.supervise.queued["conv1"])
+	s.supervise.mu.Unlock()
+	if queued != 0 {
+		t.Fatal("the confirmed start-unknown remained in the in-memory queue")
+	}
+	simulateSupervisionRestart(t, s)
+	if got := queuedRelays(s, "conv1"); len(got) != 0 {
+		t.Fatalf("the confirmed start-unknown remained queued: %+v", got)
+	}
+	if got := storedSupervisePending(t, s)[other.id()]; got.Key != other.Key {
+		t.Fatalf("the queued retraction deleted the later genuine stop: %+v", got)
+	}
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	s.drainRelays("server", []proto.Session{idle})
+}
+
 // Definite failures stay errors: a request the node refused before running anything, and an unreachable machine
 // (nothing was started) — never a neutral "may be starting" result.
 func TestAgentStartDefiniteFailuresStayErrors(t *testing.T) {
