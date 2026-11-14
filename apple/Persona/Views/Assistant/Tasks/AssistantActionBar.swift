@@ -394,6 +394,7 @@ struct AssistantActionBar: View {
         .overlay(alignment: .top) {
             if let open {
                 tray(open, content)
+                    .padding(.bottom, Theme.Space.s)
                     .alignmentGuide(.top) { $0[.bottom] }
                     .transition(.opacity)
             }
