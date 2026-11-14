@@ -373,16 +373,15 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 // saying so first (assistant/context). Node puts what changed of it at the start of each message (TurnContext).
 type AssistantContext struct {
 	Main     bool
-	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
+	Leader   bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
 	Owner    string
 	Snapshot string
-	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
+	// Directions: for the main conversation, the current leaders used as direction labels;
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection
 	LeaderName string
-	// Background: this is the background supervisor (#4927), which follows up the tasks no leader supervises.
-	// BackgroundStarted: for the main conversation, once: the background supervisor's id, the first message after it
-	// began to follow up the main conversation's tasks.
+	// Background: the legacy background supervisor, which finishes only tasks assigned before universal main supervision.
+	// BackgroundStarted: for the main conversation, once: that legacy supervisor's id, when it began following old tasks.
 	Background        bool
 	BackgroundStarted string
 }

@@ -730,7 +730,7 @@ func TestGoldenBackgroundSupervisor(t *testing.T) {
 	s.noBackground = false
 	on := s.claudeMD(context.Background(), "server", false)
 	golden(t, "assistant_claude_md.background", on)
-	if !strings.Contains(off, "主对话和子对话派出去的任务都由主对话督办") || strings.Contains(off, "后台督办") {
+	if !strings.Contains(off, "新任务统一由主对话督办、验收") || strings.Contains(off, "后台督办") {
 		t.Fatal("with the background supervisor off the CLAUDE.md changed")
 	}
 	if on != off {
