@@ -996,7 +996,7 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   pointer's tooltip, a line over the composer menus' modes, and Allow Everything's own row. An assistant conversation's Allow Everything says "Takes effect from the next message".
 - `/permissions` (#6513): in an agent's "/" list (`SlashMenuRow.permissions`; the BeautifulUI prompt bar's commands too) wherever its mode can be switched from here
   (`SessionModes.offersPermissionsCommand`). Picked, or typed and sent, it opens `PermissionModeSheet`: the header menu's choices with Plan Only (`SessionModes.commandRows`), the current
-  one checked, Allow Everything disabled with its reason where it can't be taken; a menu can't be opened from code, so it is a short sheet. A pick closes it and goes through
+  one checked, Allow Everything disabled with its reason where it can't be taken; a menu can't be opened from code, so it is a full-height sheet (a medium one hid Allow Everything and its note). A pick closes it and goes through
   `ChatView.requestMode` (its confirmation); nothing is sent to the agent. The assistant's page has no "/" list, so it has no `/permissions`. `-openPermissionModes YES` opens the sheet
   and `-openSlashMenu /per` types that draft, for screenshots (with `MOCK_BYPASS_PENDING=1` for the waiting state).
 - Agents header (#3719): the agent's mode at the end of the open header's second row, icon and color only (`HeaderModeButton`,
