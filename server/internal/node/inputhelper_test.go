@@ -96,14 +96,13 @@ func (w *inputWorld) asks() [][]string {
 	return append([][]string(nil), w.launched...)
 }
 
-func eventually(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if ok() {
-			return
-		}
-	}
-	t.Fatalf("never: %s", what)
+// startNow is hello's work done in the test's goroutine (hello runs it on its own): a wait for something that must
+// not happen is then over when start returns, with no fixed sleep.
+func (s *inputSession) startNow() {
+	s.mu.Lock()
+	s.started = true
+	s.mu.Unlock()
+	s.start()
 }
 
 // With the permission, hello starts the helper once; the stream's records reach it as they came, in order; the
@@ -116,7 +115,7 @@ func TestHelloStartsPersonaInputAndRecordsReachIt(t *testing.T) {
 		t.Fatal("a record before hello went to no helper and must fall back")
 	}
 	s.hello()
-	eventually(t, "the helper takes records", func() bool { return s.scroll(first) })
+	waitFor(t, "the helper takes records", func() bool { return s.scroll(first) })
 	s.hello() // again: nothing more
 	second := record(inputKindScroll, 2, 0, -4.5, 1)
 	if !s.scroll(second) {
@@ -160,7 +159,7 @@ func TestWithoutThePermissionHelloAsksOncePerVersion(t *testing.T) {
 	}
 	s := &inputSession{inputs: w.inputs, pair: "K"}
 	s.hello()
-	eventually(t, "macOS asked", func() bool { return len(w.asks()) == 1 })
+	waitFor(t, "macOS asked", func() bool { return len(w.asks()) == 1 })
 	if got := strings.Join(w.asks()[0], " "); got != inputHelperName+" --request-permission" {
 		t.Fatalf("launched %q", got)
 	}
@@ -171,8 +170,7 @@ func TestWithoutThePermissionHelloAsksOncePerVersion(t *testing.T) {
 		t.Fatalf("after asking: %+v", st)
 	}
 	other := &inputSession{inputs: w.inputs, pair: "L"}
-	other.hello()
-	time.Sleep(50 * time.Millisecond)
+	other.startNow()
 	if len(w.asks()) != 1 || w.starts.Load() != 0 {
 		t.Fatalf("asked %d times and started %d: want one ask, no helper", len(w.asks()), w.starts.Load())
 	}
@@ -183,7 +181,7 @@ func TestWithoutThePermissionHelloAsksOncePerVersion(t *testing.T) {
 	w.mu.Unlock()
 	third := &inputSession{inputs: w.inputs, pair: "M"}
 	third.hello()
-	eventually(t, "the new version asked once more", func() bool { return len(w.asks()) == 2 })
+	waitFor(t, "the new version asked once more", func() bool { return len(w.asks()) == 2 })
 }
 
 // Nothing before the stream signed in to Screen Sharing; a helper that says it may not post is let go, and the next
@@ -192,8 +190,7 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	w := newInputWorld(t, "granted")
 	w.signed.Store(false)
 	s := &inputSession{inputs: w.inputs, pair: "K"}
-	s.hello()
-	time.Sleep(50 * time.Millisecond)
+	s.startNow()
 	if w.starts.Load() != 0 || len(w.asks()) != 0 {
 		t.Fatal("a stream that hadn't signed in started or asked for something")
 	}
@@ -205,9 +202,10 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	var preflights atomic.Int32
 	swap(t, &inputPreflight, func(context.Context, string) string { preflights.Add(1); return "granted" })
 	s = &inputSession{inputs: w.inputs, pair: "K"}
-	s.hello()
-	eventually(t, "the helper started", func() bool { return w.starts.Load() == 1 })
-	time.Sleep(20 * time.Millisecond)
+	s.startNow()
+	if n := w.starts.Load(); n != 1 {
+		t.Fatalf("started %d times, want once", n)
+	}
 	if s.scroll(record(inputKindScroll, 2, 0, 1, 0)) || w.inputs.count() != 0 {
 		t.Fatalf("a helper that said missing took a record, or still counts (%d)", w.inputs.count())
 	}
@@ -223,11 +221,9 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	var sessions []*inputSession
 	for _, pair := range []string{"A", "B", "C"} {
 		s := &inputSession{inputs: w.inputs, pair: pair}
-		s.hello()
+		s.startNow() // one after the other: the third finds both places taken
 		sessions = append(sessions, s)
 	}
-	eventually(t, "two helpers", func() bool { return w.starts.Load() == 3 })
-	time.Sleep(50 * time.Millisecond)
 	if n := w.starts.Load(); n != 3 || w.inputs.count() != inputHelpersMost {
 		t.Fatalf("started %d (one earlier), %d running; want two more, %d running", n, w.inputs.count(), inputHelpersMost)
 	}
@@ -304,7 +300,7 @@ func TestAPairedStreamsScrollsReachTheHelper(t *testing.T) {
 	c := w.inputs.wrap("K", s).(*rfbInputConn)
 	signIn(t, c, s, rfbSecAppleDH, 128)
 	_, _ = c.Write(record(inputKindHello, 0, 0, 0, 0))
-	eventually(t, "the helper started", func() bool { return w.inputs.count() == 1 })
+	waitFor(t, "the helper started", func() bool { return w.inputs.count() == 1 })
 	rec := record(inputKindScroll, 1, 0, -7, 0)
 	_, _ = c.Write(rec)
 	w.mu.Lock()
@@ -318,5 +314,5 @@ func TestAPairedStreamsScrollsReachTheHelper(t *testing.T) {
 		t.Fatalf("Screen Sharing got %x", s.got())
 	}
 	_ = c.Close()
-	eventually(t, "the helper let go", func() bool { return w.inputs.count() == 0 })
+	waitFor(t, "the helper let go", func() bool { return w.inputs.count() == 0 })
 }
