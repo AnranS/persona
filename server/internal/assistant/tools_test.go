@@ -138,6 +138,7 @@ type stalledAssistantSendHub struct {
 	attempts chan string
 	calls    atomic.Int32
 	succeed  bool
+	inDoubt  bool
 }
 
 func (h *stalledAssistantSendHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
@@ -154,6 +155,9 @@ func (h *stalledAssistantSendHub) DeviceCall(ctx context.Context, p DeviceCall) 
 	}
 	if h.succeed {
 		return json.RawMessage(`{}`), nil
+	}
+	if h.inDoubt {
+		return nil, context.DeadlineExceeded
 	}
 	return nil, errors.New("send failed")
 }
@@ -385,44 +389,59 @@ func TestAgentStartConfirmationWithdrawsDrainingStartUnknown(t *testing.T) {
 	}
 }
 
-// The successful side of the same in-flight mixed digest: its original text already carried the other signals, so
-// withdrawing the confirmed start must not leave retry evidence that delivers those signals a second time.
+// The delivered side of the same in-flight mixed digest: its original text already carried the other signals, so
+// withdrawing the confirmed start must not leave retry evidence that delivers those signals a second time. This holds
+// both for an acknowledged send and for an in-doubt send whose original line becomes visible before the next drain.
 func TestAgentStartConfirmationAcknowledgesOtherSignalsAfterSuccessfulHead(t *testing.T) {
-	s, f := newQuietServiceOn(t, &memStore{})
-	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	presenceTimes(t, 0, 0)
-	ownerTurnTimes(t, 0, 0)
-	todo, err := s.createTodo(context.Background(), "Confirm during a successful send", "", "conv1", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.superviseTodo(context.Background(), todo.ID, "conv1", nil, 0)
-	todo = todoNow(s, todo.ID)
-	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start", At: time.Now()}
-	other := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "later-real-stop", Detail: "a later genuine stop", At: time.Now()}
-	signals := []superviseSignal{g, other}
-	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: "mixed supervision", At: time.Now()}, signals, time.Now(), time.Time{}) {
-		t.Fatal("the mixed digest was not admitted to the durable relay queue")
-	}
-	hub := &stalledAssistantSendHub{fakeHub: f, started: make(chan struct{}), release: make(chan struct{}), attempts: make(chan string, 2), succeed: true}
-	setHub(s, hub)
-	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
-	s.drainRelays("server", []proto.Session{idle})
-	select {
-	case <-hub.started:
-	case <-time.After(time.Second):
-		t.Fatal("the mixed queue head did not enter its send")
-	}
-	if _, err := s.linkStartedAgentTask(context.Background(), todo, Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
-		t.Fatal(err)
-	}
-	close(hub.release)
-	waitFor(t, "the successful mixed send to settle", func() bool { return !drainingNow(s, "conv1") })
-	if got := storedSupervisePending(t, s); len(got) != 0 {
-		t.Fatalf("the successful original digest left its other signal for a duplicate: %+v", got)
-	}
-	if calls := hub.calls.Load(); calls != 1 {
-		t.Fatalf("the successful mixed digest sent %d times", calls)
+	for _, inDoubt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("in doubt %v", inDoubt), func(t *testing.T) {
+			s, f := newQuietServiceOn(t, &memStore{})
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			presenceTimes(t, 0, 0)
+			ownerTurnTimes(t, 0, 0)
+			todo, err := s.createTodo(context.Background(), "Confirm during a successful send", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.superviseTodo(context.Background(), todo.ID, "conv1", nil, 0)
+			todo = todoNow(s, todo.ID)
+			g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start", At: time.Now()}
+			other := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "later-real-stop", Detail: "a later genuine stop", At: time.Now()}
+			signals := []superviseSignal{g, other}
+			if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: "mixed supervision", At: time.Now()}, signals, time.Now(), time.Time{}) {
+				t.Fatal("the mixed digest was not admitted to the durable relay queue")
+			}
+			hub := &stalledAssistantSendHub{fakeHub: f, started: make(chan struct{}), release: make(chan struct{}), attempts: make(chan string, 2), succeed: !inDoubt, inDoubt: inDoubt}
+			setHub(s, hub)
+			idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+			s.drainRelays("server", []proto.Session{idle})
+			select {
+			case <-hub.started:
+			case <-time.After(time.Second):
+				t.Fatal("the mixed queue head did not enter its send")
+			}
+			if _, err := s.linkStartedAgentTask(context.Background(), todo, Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
+				t.Fatal(err)
+			}
+			close(hub.release)
+			waitFor(t, "the original mixed send to settle", func() bool { return !drainingNow(s, "conv1") })
+			if inDoubt {
+				// The first look found no line, so the head stayed doubtful and withdrawn. Its original text then became
+				// visible: the next drain must acknowledge that delivery rather than replay the other signal.
+				sent := <-hub.attempts
+				f.mu.Lock()
+				f.items = append(f.items, proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: sent, TS: time.Now()})
+				f.mu.Unlock()
+				s.drainRelays("server", []proto.Session{idle})
+				waitFor(t, "the landed withdrawn head to leave the queue", func() bool { return s.queuedFor("conv1") == 0 })
+			}
+			if got := storedSupervisePending(t, s); len(got) != 0 {
+				t.Fatalf("the delivered original digest left its other signal for a duplicate: %+v", got)
+			}
+			if calls := hub.calls.Load(); calls != 1 {
+				t.Fatalf("the delivered mixed digest sent %d times", calls)
+			}
+		})
 	}
 }
 

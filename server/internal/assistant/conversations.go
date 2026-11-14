@@ -562,6 +562,36 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	b.mu.Unlock()
 }
 
+// takeRelayHeadLocked removes msg when it is still the queue head and returns the withdrawn signals to replay.
+// relays.mu is held; the outbox update and queue removal are saved together by the caller.
+func (s *Service) takeRelayHeadLocked(id string, msg relayMsg, stale, replayOK bool) (replay []superviseSignal) {
+	b := &s.relays
+	q := b.st.Queue[id]
+	if len(q) == 0 || stale && q[0] != msg {
+		return nil // another writer changed the head: this copy neither removed it nor owns its replay
+	}
+	if replayOK && msg.Withdrawn && msg.Signals != nil {
+		// A withdrawn head never delivered this copy. Restore only its remaining signals, atomically with removing the
+		// head; a newer durable stretch of the same id still wins (#5732).
+		if b.st.SupervisePending == nil {
+			b.st.SupervisePending = map[string]superviseSignal{}
+		}
+		for _, g := range *msg.Signals {
+			cur, exists := b.st.SupervisePending[g.id()]
+			if !exists {
+				cur = g
+				b.st.SupervisePending[g.id()] = cur
+			}
+			replay = append(replay, cur)
+		}
+	}
+	b.st.Queue[id] = q[1:]
+	if len(b.st.Queue[id]) == 0 {
+		delete(b.st.Queue, id)
+	}
+	return replay
+}
+
 // drainRelays delivers the next queued message to every conversation of the machine that is not running (called
 // whenever its list changes: a turn that just ended, or the hub starting with messages still queued). Next is the
 // best-ranked message the owner's presence does not hold (relay_presence.go); it is moved to the head of the queue,
@@ -635,6 +665,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 			}
 			cancel()
+			// Withdrawing the text does not erase an earlier send's outcome. If its in-doubt line has since landed, the
+			// original mixed digest already carried every remaining signal, so none of them may be replayed (#5732).
+			landed := msg.Withdrawn && s.relayLanded(machine, id, msg)
 			b.mu.Lock()
 			delete(b.draining, id)
 			delete(b.stuck, id)
@@ -643,27 +676,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			taken := false
 			var replay []superviseSignal
 			if stale || !keep && (err == nil || strings.Contains(err.Error(), "is gone")) {
-				if msg.Withdrawn && msg.Signals != nil {
-					// A withdrawn head never delivered this copy. Restore only its remaining signals, atomically with
-					// removing the head; a newer durable stretch of the same id still wins (#5732).
-					if b.st.SupervisePending == nil {
-						b.st.SupervisePending = map[string]superviseSignal{}
-					}
-					for _, g := range *msg.Signals {
-						cur, exists := b.st.SupervisePending[g.id()]
-						if !exists {
-							cur = g
-							b.st.SupervisePending[g.id()] = cur
-						}
-						replay = append(replay, cur)
-					}
-				}
-				if q := b.st.Queue[id]; len(q) > 0 && (!stale || q[0] == msg) {
-					b.st.Queue[id] = q[1:]
-				}
-				if len(b.st.Queue[id]) == 0 {
-					delete(b.st.Queue, id)
-				}
+				replay = s.takeRelayHeadLocked(id, msg, stale, !landed)
 				s.saveRelayLocked()
 				taken = true
 			} else {
