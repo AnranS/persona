@@ -354,8 +354,6 @@ struct AssistantActionBar: View {
     /// Another conversation to open after this one's last card was answered (#4348), in the same row (#7770).
     var nextTitle: String? = nil
     var openNext: (() -> Void)? = nil
-    /// Called before a tray disclosure changes the footer's height (#7770).
-    var onDisclose: () -> Void = {}
     @State private var open: ActionTray?
     /// The open tray's rows, measured: the tray is as tall as they are, up to its cap.
     @State private var listHeight: CGFloat = 0
@@ -376,10 +374,6 @@ struct AssistantActionBar: View {
         let content = Self.content(conversation, key: key)
         let row = entryRow
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let open {
-                tray(open, content)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
             row {
                 ForEach(ActionTray.allCases) { entry($0, count: content.count($0)) }
                 if let nextTitle, let openNext {
@@ -395,10 +389,18 @@ struct AssistantActionBar: View {
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // An open tray floats above the entry row instead of changing the footer's height (#7770). Its own expanded
+        // rows change only the overlay too, so a chat at either the newest end or a historical row never gets pushed.
+        .overlay(alignment: .top) {
+            if let open {
+                tray(open, content)
+                    .alignmentGuide(.top) { $0[.bottom] }
+                    .transition(.opacity)
+            }
+        }
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
         .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
         .onChange(of: open) { _, new in
-            onDisclose()
             if new == nil { expanded = []; drawn = []; planChoices = [:] }
         }
         #if DEBUG

@@ -422,10 +422,11 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   `docs/web/web.md` ("Queued messages").
 - Assistant action row (iOS and web, #7770): **Needs You**, **In Progress** and the post-answer next-conversation entry
   share one capsule row. A long conversation title truncates before the row wraps. While reply text is actively
-  streaming, the whole row yields its height without being unmounted, so an edited answer or open tray survives and
-  returns when streaming ends. The conversation's own pending question / approval cards stay visible and answerable;
-  this never folds those cards or the separate run-status bar. Footer height changes keep newest-end following and a
-  manually chosen reading position stable.
+  streaming, the whole row is visually hidden without being unmounted, so an edited answer or open tray survives and
+  returns when streaming ends. On iOS, expanded queues and trays float over the chat rather than changing footer
+  height. The conversation's own pending question / approval cards stay visible and answerable; this never folds
+  those cards or the separate run-status bar. Footer height changes keep newest-end following and a manually chosen
+  reading position stable.
 - Duplicates: four composer implementations exist (DS-19).
 
 **Run status bar** (web, #5312; the owner asked on 2026-11-12 that it follow cindy's `RunningStatusBar` and

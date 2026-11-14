@@ -20,7 +20,7 @@ final class CalmComposerUITests: XCTestCase {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant", "-dev.openChat", "",
-                               "-openAssistant", main, "-openChatsFresh", "YES", "-openDraftsFresh", "YES", "-showScrollState", "YES"]
+                               "-openAssistant", main, "-openChatsFresh", "YES", "-openDraftsFresh", "YES", "-showScrollState", "YES", "-probes", "YES"]
         app.launchPinned()
         return app
     }
@@ -131,28 +131,30 @@ final class CalmComposerUITests: XCTestCase {
         let rowY = try XCTUnwrap(state(app)["readingY"], "the scroll probe has no historical row position")
         XCTAssertNotEqual(rowY, -1, "the historical row has no measured screen position")
         let rowID = try XCTUnwrap(readingID(app), "the scroll probe has no historical row id")
+        let stripHeight = strip.frame.height
         let stable = {
             abs((self.state(app)["readingY"] ?? rowY + 1000) - rowY) <= 2 && self.readingID(app) == rowID
         }
 
         if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
         XCTAssertTrue(app.buttons.matching(identifier: "queue-item").firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(strip.frame.height, stripHeight, accuracy: 0.5, "expanded queue rows must float rather than grow the footer")
         XCTAssertEqual(app.buttons.matching(identifier: "queue-item").count, 2, "only the owner's two rows may open")
         XCTAssertFalse(app.buttons["queue-relayed-summary"].exists)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "来自「早报")).firstMatch.exists)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "对话空闲后送达")).firstMatch.exists)
-        XCTAssertTrue(waitUntil(5, samples: 3, stable), "opening the queue moved the historical row: before \(rowY), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 4, stable), "opening the queue moved the historical row: before \(rowY), now \(self.state(app))")
 
         if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
         XCTAssertTrue(waitUntil { app.buttons.matching(identifier: "queue-item").count == 0 }, "the queue did not collapse")
-        XCTAssertTrue(waitUntil(5, samples: 3, stable), "closing the queue moved the historical row: before \(rowY), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 4, stable), "closing the queue moved the historical row: before \(rowY), now \(self.state(app))")
 
         stream(upto: 175)
         let bar = app.descendants(matching: .any)["action-bar"].firstMatch
         XCTAssertTrue(waitUntil { !bar.exists }, "streaming did not collapse the action row")
-        XCTAssertTrue(waitUntil(5, samples: 3, stable), "starting the stream moved the historical row: before \(rowY), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 4, stable), "starting the stream moved the historical row: before \(rowY), now \(self.state(app))")
         stream()
         XCTAssertTrue(waitUntil { bar.exists }, "the action row did not return")
-        XCTAssertTrue(waitUntil(5, samples: 3, stable), "ending the stream moved the historical row: before \(rowY), now \(self.state(app))")
+        XCTAssertTrue(waitUntil(5, samples: 4, stable), "ending the stream moved the historical row: before \(rowY), now \(self.state(app))")
     }
 }
