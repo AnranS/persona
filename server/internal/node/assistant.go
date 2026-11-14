@@ -542,7 +542,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			p.mu.Unlock()
 		} else {
 			if otherTools && p.alive() {
-				n.logf("assistant %s: idle with a supervision round's tools: restarted with every tool for this message", short(id))
+				n.logf("assistant %s: started with a supervision round's tools: restarted with every tool for this message", short(id)) // idle, or a recovery's restart
 			}
 			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only), new instructions or tools: resume in a fresh one
 			n.rememberTasks(id, nil)
