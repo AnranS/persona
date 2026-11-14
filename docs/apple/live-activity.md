@@ -382,3 +382,6 @@ rang but its countdown was not shown anywhere.
   allowed without unlocking, that call `AlarmManager` in the app with the alarm's id; they only reach Persona's own alarms.
 - The tint is the one the app gave the alarm (`AlarmAttributes.tintColor`, the app's accent); nothing is read from the App Group or the keychain.
 - The activities live in their own `LiveActivityBundle` inside `PersonaWidgetsBundle` (a widget bundle's builder takes ten at most).
+- **Screenshots**: `-showAlarmSample timer|paused` (DEBUG) starts a 25-minute "Focus" timer as the tool does, and `PersonaUITests/AlarmLiveActivityShots`
+  (`PERSONA_ALARM_SAMPLE=timer|paused`) photographs the island and the Lock Screen. On a device only: the iOS 27.2 simulator's AlarmKit denies
+  every app without asking (`mobiletimerd`: "Denial for … to use AlarmKit"), so no timer starts there and the test skips.

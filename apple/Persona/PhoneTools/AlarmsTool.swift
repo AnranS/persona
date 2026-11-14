@@ -278,12 +278,8 @@ enum AlarmsTool {
     static func startTimer(_ args: JSONValue) async throws -> [ToolContent] {
         let seconds = try timerSeconds(args)
         try AlarmsAccess.require()
-        let id = UUID()
         let label = ToolArgs.string(args, "label") ?? String(localized: "Timer [Persona Alarm]")
-        let configuration = AlarmManager.AlarmConfiguration<PersonaAlarmData>.timer(
-            duration: TimeInterval(seconds), attributes: attributes(label: label, timer: true))
-        let alarm = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
-        Labels.all[id.uuidString] = label
+        let alarm = try await scheduleTimer(seconds: seconds, label: label)
         return Output.json(Output.object([
             ("id", .string(alarm.id.uuidString)),
             ("label", .string(label)),
@@ -291,6 +287,16 @@ enum AlarmsTool {
             ("ends_at", .string(ToolDate.string(Date().addingTimeInterval(TimeInterval(seconds))))),
             ("state", .string(stateName(alarm.state))),
         ]))
+    }
+
+    /// A countdown timer of Persona's, its label kept for phone_alarms_list.
+    private static func scheduleTimer(seconds: Int, label: String) async throws -> Alarm {
+        let id = UUID()
+        let configuration = AlarmManager.AlarmConfiguration<PersonaAlarmData>.timer(
+            duration: TimeInterval(seconds), attributes: attributes(label: label, timer: true))
+        let alarm = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
+        Labels.all[id.uuidString] = label
+        return alarm
     }
 
     static func cancel(_ args: JSONValue) throws -> [ToolContent] {
@@ -307,6 +313,20 @@ enum AlarmsTool {
         if resume { try AlarmManager.shared.resume(id: id) } else { try AlarmManager.shared.pause(id: id) }
         return Output.json(Output.object([("id", .string(id.uuidString)), ("state", .string(resume ? "countdown" : "paused"))]))
     }
+
+    #if DEBUG
+    /// `-showAlarmSample`: asks for AlarmKit, cancels the alarms Persona set before, starts a 25-minute "Focus" timer as
+    /// the tool does and, for `paused`, pauses it 3 s later.
+    static func showSample(paused: Bool) {
+        Task {
+            guard await AlarmsAccess.request() == .granted else { return }
+            for alarm in (try? AlarmManager.shared.alarms) ?? [] { try? AlarmManager.shared.cancel(id: alarm.id) }
+            guard let alarm = try? await scheduleTimer(seconds: 1500, label: "Focus"), paused else { return }
+            try? await Task.sleep(for: .seconds(3))
+            try? AlarmManager.shared.pause(id: alarm.id)
+        }
+    }
+    #endif
 
     /// An id Persona's own alarms have; anything else is refused (the Clock app's alarms are out of reach).
     private static func alarmID(_ args: JSONValue) throws -> UUID {
