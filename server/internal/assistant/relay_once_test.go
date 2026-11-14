@@ -309,3 +309,28 @@ func TestWithdrawnRelayReplayRequiresRemovingSameHead(t *testing.T) {
 		t.Fatalf("the landed updated head was replayed or retained: replay=%+v queued=%d", replay, queued)
 	}
 }
+
+// Selective /stop owns the same doubtful-head boundary as start confirmation. If the original mixed text did not land,
+// its stopped task must not be sent again; the remaining task is replayed without the old text (#5732).
+func TestStopDoubtfulMixedDigestDoesNotResendStoppedTask(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	stopped := superviseSignal{Todo: "stopped-task", Kind: sigReview, Key: "stopped-review", At: time.Now()}
+	other := superviseSignal{Todo: "other-task", Kind: sigReview, Key: "other-review", At: time.Now()}
+	signals := []superviseSignal{stopped, other}
+	msg := relayMsg{Tool: superviseTool, Text: "stopped task\nremaining task", At: time.Now(), DoubtedAt: time.Now().Add(-time.Second), Signals: &signals}
+	s.queueRelay("conv1", msg)
+	n, taken := s.dropQueuedSupervisionTasks("conv1", map[string]bool{stopped.Todo: true}, nil)
+	if n != 0 || len(taken) != 1 || taken[0].Key != stopped.Key {
+		t.Fatalf("selective stop of a doubtful head = %d, %+v", n, taken)
+	}
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	s.drainRelays("server", []proto.Session{idle})
+	waitFor(t, "the doubtful stopped head to settle", func() bool { return s.queuedFor("conv1") == 0 })
+	if got := strings.Join(f.noticesTo("conv1"), "\n"); strings.Contains(got, "stopped task") {
+		t.Fatalf("the failed original resent a stopped task: %q", got)
+	}
+	if got := storedSupervisePending(t, s)[other.id()]; got.Key != other.Key {
+		t.Fatalf("the other mixed signal was not replayed after the doubtful head failed: %+v", got)
+	}
+}

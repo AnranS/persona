@@ -330,7 +330,7 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 			continue
 		}
 		target := false
-		var remaining []superviseSignal
+		remaining := make([]superviseSignal, 0) // non-nil: an empty list must persist as [], not legacy null
 		// An empty detached list has no signals to replay; its text still identifies tasks for a selective /stop.
 		structured := m.Signals != nil && len(*m.Signals) > 0
 		if structured {
@@ -371,23 +371,12 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 			}
 		}
 		if i == 0 && r.draining[conversation] || m.Withdrawn || !m.DoubtedAt.IsZero() {
-			// The send owns a draining head's text until it finishes. An exact retraction additionally withdraws the head
-			// so a failed try or restart cannot send that old text again. A withdrawn or doubtful head stays queued even
-			// when it is not draining: its original outcome must be checked before other signals can be regathered (#5732).
-			if exact != nil && target {
+			// A retained head keeps its original text only for the send already in flight. Once any selected signal is
+			// removed, that text is stale for every later try. Keep the other structured signals with the withdrawn head;
+			// drainRelays checks any durable doubt, then replays them only if the original did not land (#5732).
+			if target {
 				m.Withdrawn = true
-				// Keep only the other signals with the withdrawn head. They are regathered by a later drain only when
-				// this in-flight text did not succeed; regathering them now would race a successful original send (#5732).
 				m.Signals = &remaining
-				changed = true
-			} else if target {
-				// An empty, non-nil list is the durable detached marker: it prevents the next restart from
-				// treating the retained text as an unreconciled legacy message and replaying it again.
-				detached := []superviseSignal{}
-				if structured {
-					detached = append(detached, remaining...)
-				}
-				m.Signals = &detached
 				changed = true
 			}
 			kept = append(kept, m)
