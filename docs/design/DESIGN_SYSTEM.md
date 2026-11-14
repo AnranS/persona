@@ -929,7 +929,8 @@ confirmation repeats it). While the restart waits (`bypass_pending`), the mode b
 nothing is drawn before it happens, and say the session restarts when the turn ends: on iOS in the header menu's title,
 VoiceOver's hint, the pointer's tooltip and a line over the composer menus' modes. `/permissions` in the composer's "/"
 list opens the mode list with all five modes, nothing sent. iOS can't open a `Menu` from code, so there it is
-`PermissionModeSheet` (`apple/Persona/Views/Chat/SessionModes.swift`): a medium-detent grouped form of the same rows
+`PermissionModeSheet` (`apple/Persona/Views/Chat/SessionModes.swift`): a full-height grouped form (a medium detent cut
+off Allow Everything's note in English) of the same rows
 (symbol, name, what it does, a check on the current one, Allow Everything in `Theme.danger`, a row that can't be picked
 disabled with its reason), Cancel in the toolbar, the waiting restart in the section's footer; a pick closes it and goes
 through the page's confirmation. No new token or style.

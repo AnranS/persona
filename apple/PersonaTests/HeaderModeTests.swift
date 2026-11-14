@@ -57,7 +57,9 @@ struct HeaderModeTests {
     }
 
     @Test func allowEverythingIsOfferedOnlyWhereTheAgentCanTakeIt() throws {
-        let plain = try session(#","permission_mode":"default""#)
+        // Not in a pane: the node can't restart it into Allow Everything (#6513), so only a flag would let it switch.
+        let plain = try JSON.decoder.decode(Session.self, from: Data(
+            #"{"machine_id":"box","session_id":"s1","status":"idle","state":"idle","permission_mode":"default"}"#.utf8))
         #expect(!plain.bypassAvailable)
         #expect(!SessionModes.switchableModes(plain).contains { $0.id == "bypassPermissions" })
         #expect(SessionModes.bypassUnavailable(plain)?.id == "bypassPermissions")

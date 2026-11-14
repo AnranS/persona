@@ -761,6 +761,8 @@ struct PermissionModeSheet: View {
                         } label: {
                             PermissionModeRow(option: row.option, checked: row.option.id == mode)
                         }
+                        // the row draws its own inks (a form tints a default button's label with the accent)
+                        .buttonStyle(.plain)
                         .disabled(!row.enabled)
                         .accessibilityIdentifier("permissions.\(row.option.id)")
                         .accessibilityAddTraits(row.option.id == mode ? .isSelected : [])
@@ -782,7 +784,8 @@ struct PermissionModeSheet: View {
         #if os(macOS)
         .macSheet()
         #else
-        .presentationDetents([.medium, .large])
+        // Tall enough for Allow Everything and its note at every language's line breaks (medium cut them off in English).
+        .presentationDetents([.large])
         #endif
         .accessibilityIdentifier("permissions.sheet")
     }
