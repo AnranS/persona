@@ -520,7 +520,7 @@ func (s *Service) putTaskBrief(ctx context.Context, rec briefRecord, todoID stri
 
 // continueBriefFor puts a newly adopted agent's card on its previous card's brief. Older tasks without one get a
 // reconstructed brief first, so the source and take-over remain traceable in both directions (#5732).
-func (s *Service) continueBriefFor(ctx context.Context, self string, previous, todo Todo, reason string, doneWhen []string, expect int) error {
+func (s *Service) continueBriefFor(ctx context.Context, self, supervisor string, previous, todo Todo, reason string, doneWhen []string, expect int) (Supervision, error) {
 	if _, ok := s.briefOfTodo(previous.ID); !ok {
 		var criteria []string
 		minutes := 0
@@ -531,17 +531,14 @@ func (s *Service) continueBriefFor(ctx context.Context, self string, previous, t
 	}
 	brief, ok := s.briefOfTodo(previous.ID)
 	if !ok {
-		return fmt.Errorf("previous task %s has no brief", previous.ID)
+		return Supervision{}, fmt.Errorf("previous task %s has no brief", previous.ID)
 	}
 	if err := s.linkTaskBrief(ctx, brief.ID, todo.ID, previous.ID, reason); err != nil {
-		return err
+		return Supervision{}, err
 	}
-	if len(doneWhen) > 0 || expect > 0 {
-		if _, err := s.rescope(ctx, todo, self, self, "agent_takeover", doneWhen, expect); err != nil {
-			s.logf("task %s: takeover scope: %v", todo.ID, err)
-		}
-	}
-	return nil
+	// Rescope also creates the new ledger when no criteria changed, inheriting the linked brief. Its error is fatal:
+	// swallowing it would let a rejected risky takeover proceed with unapproved work (#5732).
+	return s.rescope(ctx, todo, self, supervisor, "agent_takeover", doneWhen, expect)
 }
 
 // linkTaskBrief puts to-do todoID on brief id, continuing to-do continues for reason (a take-over); a to-do already on

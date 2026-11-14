@@ -221,24 +221,28 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	if retitle {
 		s.nameTodoLater(ctx, todo.ID, title, cmp.Or(strings.TrimSpace(prompt), title))
 	}
-	v, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
-		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, doneWhen, expect
-		return true
-	})
-	if err != nil {
-		s.dropAdoption(ctx, todo.ID, err)
-		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
-	}
-	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
-	todo.Supervision = &v
+	var v Supervision
 	if continuing {
-		if err := s.continueBriefFor(ctx, self, previous, todo, notes, doneWhen, expect); err != nil {
+		// A takeover inherits the brief and changes its scope before any ledger or Agent link is committed. A rejected
+		// risky criterion therefore aborts the whole adoption instead of surviving in an unapproved open card (#5732).
+		v, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
+		if err != nil {
 			s.dropAdoption(ctx, todo.ID, err)
 			return Todo{}, false, fmt.Errorf("continue the previous task: %w", err)
 		}
 	} else {
+		v, _, err = s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, doneWhen, expect
+			return true
+		})
+		if err != nil {
+			s.dropAdoption(ctx, todo.ID, err)
+			return Todo{}, false, fmt.Errorf("supervise it: %w", err)
+		}
 		s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	}
+	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, v.DoneWhen, todo.PRURL), false)
+	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("link the agent: %w", err)

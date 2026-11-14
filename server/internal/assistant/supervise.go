@@ -240,8 +240,9 @@ func cleanDoneWhen(list []string) []string {
 	return out
 }
 
-// superviseTodo makes todo id a supervised task of conversation supervisor.
-func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) {
+// superviseTodo makes todo id a supervised task of conversation supervisor. A persistence failure leaves its in-memory
+// ledger untouched; callers that must not start untracked work check the returned error.
+func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(doneWhen), max(0, min(expect, 24*60))
 		return true
@@ -249,6 +250,7 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	if err != nil {
 		s.logf("task %s: supervision: %v", id, err)
 	}
+	return err
 }
 
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed

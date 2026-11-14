@@ -84,6 +84,33 @@ func agentTurn(s *Service, f *fakeHub, status, text string, pending int) {
 	}
 }
 
+type failingSupervisionStore struct {
+	*db.DB
+}
+
+func (failingSupervisionStore) PutTodoSupervision(context.Context, db.TodoSupervisionRow) error {
+	return errors.New("injected supervision write failure")
+}
+
+// A task whose supervision ledger could not be persisted is not tracked and never reaches session.start.
+func TestAgentStartStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	st := failingSupervisionStore{DB: todoTestDB(t)}
+	s, f := newQuietServiceOn(t, st)
+	res, err := runJSON(t, s, "conv1", "agent_start", map[string]any{
+		"machine": "box", "cwd": "/code/app", "prompt": "check the build",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no agent was started") {
+		t.Fatalf("agent_start = %q (%v), want a tracking failure", res, err)
+	}
+	if len(f.starts) != 0 {
+		t.Fatalf("session.start ran without a supervision ledger: %+v", f.starts)
+	}
+	todos := s.todosOf(context.Background(), "*")
+	if len(todos) != 1 || todos[0].DoneAt == nil || todos[0].Supervision != nil || len(todos[0].Agents) != 0 {
+		t.Fatalf("failed preparation left an unsupervised task: %+v", todos)
+	}
+}
+
 // A task the main conversation opens is quiet and supervised: when it is done, the main conversation gets one supervision
 // message with what its agent said, as is (not wrapped like a message from another conversation), and the task waits
 // for review (not closed); the receipt is there as always.

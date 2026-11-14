@@ -71,6 +71,43 @@ func TestAgentStartAdoptsTheSessionThatStartedLate(t *testing.T) {
 	}
 }
 
+// Once a creation id identifies the started session, a link failure cannot fall back to a heuristic and bind another
+// Agent. The answer keeps that exact session's identity and warns the caller not to start a duplicate (#5732).
+func TestAgentStartExactCreationIDLinkFailureDoesNotAdoptAnotherSession(t *testing.T) {
+	st := newCtxAwareLinkStore()
+	st.failSession = "s-exact-1"
+	s, f := newQuietServiceOn(t, st)
+	shortAgentStartTimeout(t)
+	f.slowStart = true
+	f.onStart = func(f *fakeHub, a map[string]any) {
+		id, _ := a["creation_id"].(string)
+		launcher, _ := a["launcher"].(string)
+		now := time.Now().UTC()
+		f.sessions["box"] = []proto.Session{
+			{SessionID: "s-exact-1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: launcher,
+				Hierarchy: &proto.SessionHierarchy{CreationID: id}, StartedByPersona: true, Status: proto.StatusWorking, UpdatedAt: now},
+			{SessionID: "s-other-1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Launcher: launcher,
+				StartedByPersona: true, Status: proto.StatusWorking, UpdatedAt: now.Add(time.Second)},
+		}
+	}
+	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
+		json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"check CI"}`))
+	if err != nil {
+		t.Fatalf("the Agent started; its link failure is a warning, not a start failure: %v", err)
+	}
+	if !strings.Contains(res, "s-exact-1") || !strings.Contains(res, "task link could not be recorded") ||
+		!strings.Contains(res, "Do NOT start it again") || strings.Contains(res, "s-other-1") {
+		t.Fatalf("exact-session link failure answer = %q", res)
+	}
+	todo := onlyTodo(s)
+	if len(todo.Agents) != 0 {
+		t.Fatalf("another session was linked after the exact link failed: %+v", todo.Agents)
+	}
+	if st.linkCount() != 1 {
+		t.Fatalf("link attempts = %d, want only the exact session", st.linkCount())
+	}
+}
+
 // The user can close the pre-created card while session.start is in flight. The node has still launched the Agent:
 // return started-with-warning, keep it linked to the closed card for cleanup, and never invite a duplicate start.
 func TestAgentStartReportsStartedWhenTaskClosesDuringLaunch(t *testing.T) {

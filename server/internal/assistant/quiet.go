@@ -264,7 +264,10 @@ func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m D
 		s.nameTodoLater(ctx, todo.ID, title, prompt)
 	}
 	if supervisor != "" {
-		s.superviseTodo(ctx, todo.ID, supervisor, nil, 0)
+		if err := s.superviseTodo(ctx, todo.ID, supervisor, nil, 0); err != nil {
+			s.dropAdoption(ctx, todo.ID, err)
+			return Todo{}, "", false
+		}
 	}
 	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0)
 	if _, err := s.appendFeed(ctx, conversation, feedTask, todo.ID, nil); err != nil {

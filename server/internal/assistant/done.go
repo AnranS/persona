@@ -126,6 +126,58 @@ func directOwnerMarker(lower, marker string) bool {
 	return false
 }
 
+// ownerOfferMarker reports an unquoted, unresolved occurrence of an English offer/question. Resolved narration is
+// scoped to its own sentence, so a genuine later offer remains an owner action (#5732).
+func ownerOfferMarker(lower, marker string) bool {
+	for from := 0; from < len(lower); {
+		i := strings.Index(lower[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		start := strings.LastIndexAny(lower[:i], ".!?;") + 1
+		end := len(lower)
+		if j := strings.IndexAny(lower[i+len(marker):], ".!?;"); j >= 0 {
+			end = i + len(marker) + j
+		}
+		sentence := lower[start:end]
+		resolved := false
+		for _, phrase := range []string{
+			"i answered", "i've answered", "i have answered", "already answered", "was answered", "has been answered",
+			"already resolved", "was resolved", "has been resolved", "no further action is needed", "no further action needed",
+			"nothing further is needed",
+		} {
+			resolved = resolved || strings.Contains(sentence, phrase)
+		}
+		if !resolved && !ownerMarkerQuoted(lower, i) {
+			return true
+		}
+		from = i + len(marker)
+	}
+	return false
+}
+
+// ownerMarkerQuoted reports whether byte offset at is inside straight double quotes or Chinese curly quotes.
+func ownerMarkerQuoted(text string, at int) bool {
+	straight, curly := false, 0
+	for i, r := range text {
+		if i >= at {
+			break
+		}
+		switch r {
+		case '"':
+			straight = !straight
+		case '“':
+			curly++
+		case '”':
+			if curly > 0 {
+				curly--
+			}
+		}
+	}
+	return straight || curly > 0
+}
+
 // ownerActionLine is a final reply's explicit request for the owner to act. The judge still decides the task as a
 // whole; these unambiguous offers and hand-offs are a safety net against calling the work done (#5732). Negated forms
 // are informational, not a request.
@@ -185,7 +237,7 @@ func ownerActionLine(text string) string {
 			for _, n := range p.negations {
 				negated = negated || strings.Contains(lower, n)
 			}
-			if !negated {
+			if !negated && ownerOfferMarker(lower, p.marker) {
 				return line
 			}
 		}

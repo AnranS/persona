@@ -755,11 +755,11 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, 
 		for _, sess := range list {
 			if sess.CreationID() == task.ID {
 				closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID)
-				if closed || linkErr == nil {
-					return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
-						"confirmed by its creation id), a task of this conversation (its card is in the conversation; %s).%s",
-						m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
-				}
+				// The creation id proves which Agent this start made. Even when its link write fails, never turn that
+				// failure into permission to heuristically bind a different session (#5732).
+				return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
+					"confirmed by its creation id), a task of this conversation (its card is in the conversation; %s).%s",
+					m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
 			}
 		}
 	}
