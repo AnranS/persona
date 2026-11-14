@@ -204,12 +204,16 @@ func (s *Service) deliverOwnerWait(ctx context.Context, t Todo, work time.Time, 
 		b.ownerPushMu.Unlock()
 	}()
 	current, ok := s.todoNow(t.ID)
-	if !ok || current.Supervision == nil || current.Supervision.Waits == nil || current.Supervision.State != reviewNeedsUser ||
+	if !ok || current.DoneAt != nil || current.Supervision == nil || current.Supervision.Waits == nil || current.Supervision.State != reviewNeedsUser ||
 		!current.Supervision.Waits.Work.Equal(work) || !current.Supervision.Waits.PushPending || current.Supervision.Waits.NotifiedAt != nil {
 		return
 	}
 	if !s.notifyTaskNeedsUser(ctx, current, work, reason) {
 		return
+	}
+	current, ok = s.todoNow(t.ID)
+	if !ok || current.DoneAt != nil {
+		return // the push was already in flight when the task closed; its receipt is obsolete too (#5732)
 	}
 	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		if v.Waits == nil || v.State != reviewNeedsUser || !v.Waits.Work.Equal(work) || !v.Waits.PushPending || v.Waits.NotifiedAt != nil {

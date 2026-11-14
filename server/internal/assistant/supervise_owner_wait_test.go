@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -240,6 +241,69 @@ func TestOwnerPushStalledWriterDoesNotBlockOtherTasks(t *testing.T) {
 			}
 		}
 		return true
+	})
+}
+
+// Closing a task withdraws its obsolete owner action. A notification already inside the hub cannot be unsent, but its
+// durable delivery receipt must not be written after the close (#5732).
+func TestOwnerPushStopsWhenTaskCloses(t *testing.T) {
+	t.Run("before delivery", func(t *testing.T) {
+		s, f := newQuietService(t)
+		work := time.Now().UTC()
+		todo := Todo{ID: "closed-before-owner-push", Title: "已关闭", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1",
+			State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "obsolete", PushPending: true}}}
+		putTodo(s, todo)
+		done := true
+		if _, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &done}); err != nil {
+			t.Fatal(err)
+		}
+		s.deliverOwnerWait(context.Background(), todoNow(s, todo.ID), work, "obsolete")
+		if got := f.pushed(); len(got) != 0 {
+			t.Fatalf("a closed task emitted its obsolete owner-action push: %+v", got)
+		}
+		if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || w.NotifiedAt != nil || !w.PushPending {
+			t.Fatalf("a closed task received an owner-push receipt: %+v", w)
+		}
+	})
+
+	t.Run("while notification is in flight", func(t *testing.T) {
+		s, f := newQuietService(t)
+		hub := &stalledOwnerPushHub{fakeHub: f, entered: make(chan string, 1), release: make(chan struct{})}
+		setHub(s, hub)
+		released := false
+		defer func() {
+			if !released {
+				close(hub.release)
+			}
+		}()
+		work := time.Now().UTC()
+		todo := Todo{ID: "closed-during-owner-push", Title: "发送途中关闭", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1",
+			State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "obsolete", PushPending: true}}}
+		putTodo(s, todo)
+		finished := make(chan struct{})
+		go func() {
+			s.deliverOwnerWait(context.Background(), todo, work, "obsolete")
+			close(finished)
+		}()
+		select {
+		case <-hub.entered:
+		case <-time.After(time.Second):
+			t.Fatal("the owner push did not reach the stalled writer")
+		}
+		done := true
+		if _, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &done}); err != nil {
+			t.Fatal(err)
+		}
+		close(hub.release)
+		released = true
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("the released owner push did not finish")
+		}
+		if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || w.NotifiedAt != nil || !w.PushPending {
+			t.Fatalf("a push released after the task closed wrote its receipt: %+v", w)
+		}
 	})
 }
 
