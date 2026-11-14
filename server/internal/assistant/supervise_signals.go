@@ -276,6 +276,18 @@ func (s *Service) ackSupervisePending(list []superviseSignal) {
 	})
 }
 
+// retractStartUnknown retires the provisional start result once its exact session has been linked. A newer unjudged
+// stop on the same task has another key and remains pending; an older key in its predecessor list is retracted too.
+func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
+	g := superviseSignal{Todo: todoID, Kind: sigUnjudged, Key: "start-unknown@" + todoID}
+	b := &s.supervise
+	b.mu.Lock()
+	ackSupervisePendingLocked(b.pending, []superviseSignal{g})
+	b.mu.Unlock()
+	s.ackSupervisePending([]superviseSignal{g})
+	s.turnsTold(ctx, []superviseSignal{g})
+}
+
 // replaceSupervisePending atomically turns an undelivered leader signal into the escalation that replaces it.
 func (s *Service) replaceSupervisePending(old, next superviseSignal) {
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {

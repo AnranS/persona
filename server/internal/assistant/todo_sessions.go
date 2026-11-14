@@ -162,6 +162,9 @@ func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creat
 	if err != nil {
 		s.logf("todos: delayed creation-id link %s on %s/%s: %v", creationID, machine, c.SessionID, err)
 	}
+	if linked {
+		s.retractStartUnknown(ctx, creationID)
+	}
 	return true, linked
 }
 
@@ -236,7 +239,6 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 	}
 
 	s.todos.writing.Lock()
-	defer s.todos.writing.Unlock()
 	now := time.Now().UTC()
 	var pending []pendingAutoLink
 
@@ -323,6 +325,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 		}
 	}
 	s.todos.mu.Unlock()
+	s.todos.writing.Unlock()
 
 	if len(pending) > 0 {
 		if st := s.todoDB(); st != nil {
@@ -359,6 +362,9 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 						item.agent, item.startError, item.source, item.via, item.linkedAt)
 					if err == nil && inserted {
 						s.todos.writing.Unlock()
+						if item.source == "assistant_start" {
+							s.retractStartUnknown(ctx, item.todoID)
+						}
 						continue
 					}
 					// The store has it otherwise (an error, a row memory did not know of: one just dismissed, or a link by hand since).
@@ -375,6 +381,14 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 					s.todosChanged(ctx)
 				}
 			}()
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for _, item := range pending {
+				if item.source == "assistant_start" {
+					s.retractStartUnknown(ctx, item.todoID)
+				}
+			}
 		}
 	}
 	return doneLinked || len(pending) > 0

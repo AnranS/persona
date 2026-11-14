@@ -100,6 +100,34 @@ func TestAgentStartReportsStartedWhenTaskClosesDuringLaunch(t *testing.T) {
 	}
 }
 
+func requireStartUnknownState(t *testing.T, s *Service, todoID string, want bool) {
+	t.Helper()
+	key := "start-unknown@" + todoID
+	s.supervise.mu.Lock()
+	pending := s.supervise.pending[todoID+"|"+sigUnjudged]
+	s.supervise.mu.Unlock()
+	durable := storedSupervisePending(t, s)[todoID+"|"+sigUnjudged]
+	s.tasks.turns.mu.Lock()
+	var ledger *turnSignal
+	if sig := s.tasks.turns.doc.Turns[todoID].Signal; sig != nil {
+		copy := *sig
+		ledger = &copy
+	}
+	s.tasks.turns.mu.Unlock()
+	if want {
+		if pending.Key != key || durable.Key != key {
+			t.Fatalf("start-unknown is not pending everywhere: memory=%+v durable=%+v", pending, durable)
+		}
+		return
+	}
+	if pending.Key == key || durable.Key == key {
+		t.Fatalf("start-unknown survived confirmation: memory=%+v durable=%+v", pending, durable)
+	}
+	if ledger != nil && ledger.Kind == sigUnjudged && ledger.Key == key && ledger.Told == nil {
+		t.Fatalf("start-unknown can still replay from the turn ledger: %+v", ledger)
+	}
+}
+
 // An unknown start result can be confirmed from either the node's creation identity or its bounded session adoption.
 // If the card closed during the same launch, both paths retain the Agent on that done card and report the confirmed session.
 func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T) {
@@ -112,7 +140,7 @@ func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T)
 		{"adopted session", false, "confirmed from the machine's own list"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f := newQuietService(t)
+			s, f := newQuietServiceOn(t, &memStore{})
 			shortAgentStartTimeout(t)
 			f.slowStart = true
 			f.onStart = func(f *fakeHub, a map[string]any) {
@@ -123,6 +151,7 @@ func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T)
 					todo.DoneAt = &now
 				}
 				s.todos.mu.Unlock()
+				s.signal(superviseSignal{Todo: id, Kind: sigUnjudged, Key: "start-unknown@" + id, Detail: "earlier unknown start"})
 				sess := proto.Session{SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude",
 					Launcher: a["launcher"].(string), StartedByPersona: true, Status: proto.StatusWorking,
 					State: proto.StateWorking, UpdatedAt: now}
@@ -147,6 +176,7 @@ func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T)
 			if todo.DoneAt == nil || len(todo.Agents) != 1 || todo.Agents[0].SessionID != "s-late" {
 				t.Fatalf("the confirmed Agent is not linked to the closed card for cleanup: %+v", todo)
 			}
+			requireStartUnknownState(t, s, todo.ID, false)
 		})
 	}
 }
@@ -154,7 +184,7 @@ func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T)
 // An unanswered start still has its task from before the request. When the session appears later, its persisted
 // creation id links it back to that same card without guessing from cwd or adopting a manual session (#5732).
 func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {
-	s, f := newQuietService(t)
+	s, f := newQuietServiceOn(t, &memStore{})
 	shortAgentStartTimeout(t)
 	f.slowStart = true
 	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
@@ -169,6 +199,7 @@ func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {
 	if len(f.starts) != 1 || f.starts[0]["creation_id"] != todo.ID || f.starts[0]["incarnation"] == "" {
 		t.Fatalf("start lacks task identity: %+v", f.starts)
 	}
+	requireStartUnknownState(t, s, todo.ID, true)
 
 	// The session list arrives later with the node's persisted creation identity. It joins the pending card directly.
 	s.autoLinkTodos("box", []proto.Session{{SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude",
@@ -177,12 +208,25 @@ func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {
 	if len(got.Agents) != 1 || got.Agents[0].SessionID != "s-late" || got.Agents[0].Source != "assistant_start" {
 		t.Fatalf("late session not linked: %+v", got)
 	}
+	requireStartUnknownState(t, s, todo.ID, false)
+	// A later, genuinely unjudged stop has another key and is not part of this retraction.
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "later-real-stop", Detail: "a later judge failure"})
+	if _, err := s.linkStartedAgentTask(context.Background(), got, Device{ID: "box"}, "/code/app", "s-other"); err != nil {
+		t.Fatal(err)
+	}
+	requireStartUnknownState(t, s, todo.ID, false)
+	s.supervise.mu.Lock()
+	pending := s.supervise.pending[todo.ID+"|"+sigUnjudged]
+	s.supervise.mu.Unlock()
+	if pending.Key != "later-real-stop" || storedSupervisePending(t, s)[todo.ID+"|"+sigUnjudged].Key != "later-real-stop" {
+		t.Fatalf("confirmation deleted the later unjudged stop: memory=%+v durable=%+v", pending, storedSupervisePending(t, s)[todo.ID+"|"+sigUnjudged])
+	}
 }
 
 // A creation-id confirmation can arrive after the start wait has ended and the user has closed the prepared card.
 // That exact session still belongs on the done card for cleanup; an unrelated manual session gains no link (#5732).
 func TestAgentStartUnknownLinksDelayedCreationIDAfterTaskClosed(t *testing.T) {
-	s, f := newQuietService(t)
+	s, f := newQuietServiceOn(t, &memStore{})
 	shortAgentStartTimeout(t)
 	f.slowStart = true
 	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
@@ -191,6 +235,7 @@ func TestAgentStartUnknownLinksDelayedCreationIDAfterTaskClosed(t *testing.T) {
 		t.Fatalf("unknown start: res=%q err=%v", res, err)
 	}
 	todo := onlyTodo(s)
+	requireStartUnknownState(t, s, todo.ID, true)
 	now := time.Now().UTC()
 	s.todos.mu.Lock()
 	s.todos.todos[todo.ID].DoneAt = &now
@@ -216,6 +261,7 @@ func TestAgentStartUnknownLinksDelayedCreationIDAfterTaskClosed(t *testing.T) {
 			t.Fatalf("an unrelated manual session was auto-linked: %+v", got.Agents)
 		}
 	}
+	requireStartUnknownState(t, s, todo.ID, false)
 }
 
 // Definite failures stay errors: a request the node refused before running anything, and an unreachable machine

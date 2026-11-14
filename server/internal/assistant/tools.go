@@ -679,10 +679,18 @@ func startResultUnknown(err error) bool {
 // was in flight, retain the Agent on the done card for the close loop to retire, for answered and unknown starts alike.
 func (s *Service) linkStartedAgentTask(ctx context.Context, task Todo, m Device, cwd, sid string) (bool, error) {
 	err := s.linkPreparedAgentTask(ctx, task, m, cwd, sid)
+	if err == nil {
+		s.retractStartUnknown(ctx, task.ID)
+		return false, nil
+	}
 	if !errors.Is(err, db.ErrTodoCompleted) {
 		return false, err
 	}
-	return true, s.linkTodoAgentOfDoneTask(ctx, task.ID, m.ID, sid, task.Title, cwd, "")
+	if err := s.linkTodoAgentOfDoneTask(ctx, task.ID, m.ID, sid, task.Title, cwd, ""); err != nil {
+		return true, err
+	}
+	s.retractStartUnknown(ctx, task.ID)
+	return true, nil
 }
 
 func agentStartTaskWarning(closed bool, linkErr error) string {
