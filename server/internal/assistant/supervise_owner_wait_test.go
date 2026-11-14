@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -60,6 +61,11 @@ func TestNeedsUserJudgmentWaitsAndPushesOnce(t *testing.T) {
 	if len(pushes) != 1 || pushes[0].Kind != NotifyPush || pushes[0].SessionID != "conv1" ||
 		!strings.Contains(pushes[0].Body, "需要你本人操作") || !strings.Contains(pushes[0].Body, testWeb+"/todos?id="+todo.ID) {
 		t.Fatalf("needs-user pushes = %+v", pushes)
+	}
+	wantRelated := "todo:" + todo.ID + "@" + cur.Supervision.Waits.Work.UTC().Format(time.RFC3339Nano)
+	if pushes[0].Level != assistantwire.LevelP0 || pushes[0].RelatedKey != wantRelated {
+		t.Fatalf("an owner action must interrupt low-distraction mode once per work stretch: level=%q related=%q, want P0 %q",
+			pushes[0].Level, pushes[0].RelatedKey, wantRelated)
 	}
 	s.superviseJudged(context.Background(), cur, cur.Supervision.Waits.Work, taskDoneCheck{Verdict: verdictNeedsUser, Reason: "需要你本人操作"}, nil)
 	if got := len(f.pushed()); got != 1 {
@@ -192,10 +198,10 @@ type stalledOwnerPushHub struct {
 	release chan struct{}
 }
 
-func (h *stalledOwnerPushHub) NotifyRequest(ctx context.Context, p NotifyRequest) error {
+func (h *stalledOwnerPushHub) NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error) {
 	h.entered <- p.Notification.ID
 	<-h.release // like rpc.Peer.writeContext's ongoing Write, this cannot be interrupted by ctx
-	return nil
+	return NotifyResult{}, nil
 }
 
 // One hub writer that cannot be interrupted must not hold every later task's push behind global dedup state (#5732).

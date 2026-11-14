@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -259,8 +260,10 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 		body = strings.TrimSpace(body + "\n" + link)
 	}
 	n := Notification{ID: "ntf_task_needs_" + t.ID + "_" + work.UTC().Format(time.RFC3339Nano), Kind: NotifyPush,
-		Subtitle: "Persona", DeviceID: here, SessionID: conversation, Title: title, Body: body}
-	if err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+		Subtitle: "Persona", DeviceID: here, SessionID: conversation, Title: title, Body: body,
+		// Only the owner can take this action: it interrupts low-distraction mode, once per stretch of work (#5732).
+		Level: assistantwire.LevelP0, RelatedKey: "todo:" + t.ID + "@" + work.UTC().Format(time.RFC3339Nano)}
+	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: needs-user push: %v", t.ID, err)
 		return false
 	}
