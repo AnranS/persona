@@ -547,7 +547,8 @@
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
     <string name="agents_todos_section_waiting">Waiting for you</string>
     <string name="agents_todos_section_working">Working</string>
-    <string name="agents_todos_section_just_done">Delivered · awaiting review</string>
+    <string name="agents_todos_section_just_done">Just finished</string>
+    <string name="agents_todos_section_awaiting_review">Delivered · awaiting review</string>
     <string name="agents_todos_section_pr">PR to merge</string>
     <string name="agents_todos_section_other">Other open</string>
     <string name="agents_todos_section_shelved">Shelved</string>

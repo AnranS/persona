@@ -249,7 +249,7 @@ fun TodoDetailScreen(
                             } else if (todo.waitsForOwner()) {
                                 JTag(stringResource(R.string.agents_todos_section_waiting), status = Status.NeedsYou)
                             } else if (todo.deliveredAwaitingReview(sessionLookup)) {
-                                JTag(stringResource(R.string.agents_todos_section_just_done), status = Status.Unread)
+                                JTag(stringResource(R.string.agents_todos_section_awaiting_review), status = Status.Unread)
                             } else {
                                 JTag(state.label)
                             }

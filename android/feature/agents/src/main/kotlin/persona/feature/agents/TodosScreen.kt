@@ -500,9 +500,12 @@ fun TodosScreen(
                     val rows = sortedRows(rest.rows(section), listSort, zone)
                     if (rows.isEmpty()) continue
                     val folded = isFolded(section)
+                    val awaitingOnly = section == TriageSection.JustDone && rows.all { row ->
+                        row.members.all { row.triage.getValue(it.id).rule == TriageRule.FinishedUnseen }
+                    }
                     item(key = "section:${section.name}") {
                         JSectionHeader(
-                            section.label,
+                            section.label(awaitingOnly),
                             count = rest.listed(section),
                             status = section.status,
                             countTone = section.status ?: Status.Idle,
@@ -535,7 +538,7 @@ fun TodosScreen(
                             )
                             if (open) {
                                 for (m in group.members.drop(1)) {
-                                    TodoRelatedLine(m, group.triage.getValue(m.id).section, Modifier.padding(start = Tokens.Space.xxl)) { onOpenTodo(m.id) }
+                                    TodoRelatedLine(m, group.triage.getValue(m.id), Modifier.padding(start = Tokens.Space.xxl)) { onOpenTodo(m.id) }
                                 }
                             }
                         }
@@ -558,6 +561,11 @@ private val TriageSection.label: String @Composable get() = stringResource(when 
     TriageSection.Cancelled -> R.string.agents_todo_cancelled
 })
 
+/** A mixed Just finished section keeps its original name; only a wholly unaccepted-delivery section is awaiting review. */
+@Composable
+private fun TriageSection.label(awaitingReview: Boolean): String =
+    if (this == TriageSection.JustDone && awaitingReview) stringResource(R.string.agents_todos_section_awaiting_review) else label
+
 /** The state colour a section's header borrows (the Board style draws it). */
 private val TriageSection.status: Status? get() = when (this) {
     TriageSection.Waiting -> Status.NeedsYou
@@ -576,7 +584,7 @@ private fun prLabel(url: String): String {
 
 /** A related to-do under its row's lead (#3206): its title and section, a tap opens it. */
 @Composable
-private fun TodoRelatedLine(todo: Todo, section: TriageSection, modifier: Modifier = Modifier, onOpen: () -> Unit) {
+private fun TodoRelatedLine(todo: Todo, triage: Triage, modifier: Modifier = Modifier, onOpen: () -> Unit) {
     if (todo.kind == "concern") {
         Column(
             modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).clickable(onClick = onOpen).padding(vertical = Tokens.Space.xs),
@@ -588,7 +596,7 @@ private fun TodoRelatedLine(todo: Todo, section: TriageSection, modifier: Modifi
             ) {
                 Text(todo.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                JTag(section.label)
+                JTag(triage.section.label(triage.rule == TriageRule.FinishedUnseen))
             }
             val label = stringResource(R.string.agents_todo_concern)
             JTag(label, Modifier.clearAndSetSemantics { contentDescription = label })
@@ -601,7 +609,7 @@ private fun TodoRelatedLine(todo: Todo, section: TriageSection, modifier: Modifi
         ) {
             Text(todo.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            JTag(section.label)
+            JTag(triage.section.label(triage.rule == TriageRule.FinishedUnseen))
         }
     }
 }
@@ -676,7 +684,7 @@ private fun TodoTriageRow(
                         accepted && state != TodoState.Working && state != TodoState.NeedsYou ->
                             JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
                         todo.waitsForOwner() -> JTag(stringResource(R.string.agents_todos_section_waiting), status = Status.NeedsYou)
-                        todo.deliveredAwaitingReview(sessionLookup) -> JTag(stringResource(R.string.agents_todos_section_just_done), status = Status.Unread)
+                        todo.deliveredAwaitingReview(sessionLookup) -> JTag(stringResource(R.string.agents_todos_section_awaiting_review), status = Status.Unread)
                         todo.isCancelled -> JTag(stringResource(R.string.agents_todo_cancelled))
                         finished && todo.doneBy == "auto" -> JTag(stringResource(R.string.agents_todo_auto_done))
                         finished -> {}

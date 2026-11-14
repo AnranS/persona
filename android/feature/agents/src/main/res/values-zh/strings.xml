@@ -529,7 +529,8 @@
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
     <string name="agents_todos_section_waiting">等你处理</string>
     <string name="agents_todos_section_working">工作中</string>
-    <string name="agents_todos_section_just_done">已交付·待看</string>
+    <string name="agents_todos_section_just_done">刚做完</string>
+    <string name="agents_todos_section_awaiting_review">已交付·待看</string>
     <string name="agents_todos_section_pr">PR 待合并</string>
     <string name="agents_todos_section_other">其他未完成</string>
     <string name="agents_todos_section_shelved">已搁置</string>

@@ -41,7 +41,7 @@ const (
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0xd887ffbaf954d33a
+const hierarchyWireLayout = 0x44788eec0080a766
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -271,6 +271,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.str(`"asking_parent_session_id":`, h.AskingParentSessionID, true)
 		w.str(`"folded_under":`, h.FoldedUnder, true)
 		w.str(`"folded_as":`, h.FoldedAs, true)
+		w.str(`"folded_side":`, h.FoldedSide, true)
 		if c := h.Children; c != nil {
 			w.key(`"children":`)
 			w.open()
@@ -278,6 +279,10 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.integer(`"working":`, int64(c.Working), true)
 			w.integer(`"needs_you":`, int64(c.NeedsYou), true)
 			w.integer(`"workers":`, int64(c.Workers), true)
+			w.integer(`"sides":`, int64(c.Sides), true)
+			w.integer(`"sides_working":`, int64(c.SidesWorking), true)
+			w.integer(`"sides_needs_you":`, int64(c.SidesNeedsYou), true)
+			w.integer(`"sides_unread":`, int64(c.SidesUnread), true)
 			w.close()
 		}
 		if len(h.EngineHistory) > 0 {
