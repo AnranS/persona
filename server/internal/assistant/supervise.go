@@ -254,6 +254,12 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.
 func (s *Service) updateSupervision(ctx context.Context, id string, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuarded(ctx, id, nil, change)
+}
+
+// updateSupervisionGuarded is updateSupervision with a current-todo guard evaluated in the same write boundary. A close
+// or other conflicting write that landed while this call waited for writeMu therefore cannot be overwritten (#5732).
+func (s *Service) updateSupervisionGuarded(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
@@ -264,6 +270,9 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 	v := t.Supervision.clone()
 	if v == nil {
 		v = (&Supervision{}).clone()
+	}
+	if guard != nil && !guard(t) {
+		return *v, false, nil
 	}
 	if !change(v) {
 		return *v, false, nil

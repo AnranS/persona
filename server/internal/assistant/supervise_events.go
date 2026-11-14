@@ -216,7 +216,9 @@ func (s *Service) deliverOwnerWait(ctx context.Context, t Todo, work time.Time, 
 	if !ok || current.DoneAt != nil {
 		return // the push was already in flight when the task closed; its receipt is obsolete too (#5732)
 	}
-	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+	if _, _, err := s.updateSupervisionGuarded(ctx, t.ID, func(current Todo) bool {
+		return current.DoneAt == nil
+	}, func(v *Supervision) bool {
 		if v.Waits == nil || v.State != reviewNeedsUser || !v.Waits.Work.Equal(work) || !v.Waits.PushPending || v.Waits.NotifiedAt != nil {
 			return false
 		}

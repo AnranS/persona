@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -309,6 +310,46 @@ func TestOwnerPushStopsWhenTaskCloses(t *testing.T) {
 		}
 		if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || w.NotifiedAt != nil || !w.PushPending {
 			t.Fatalf("a push released after the task closed wrote its receipt: %+v", w)
+		}
+	})
+
+	t.Run("while the receipt waits for the ledger", func(t *testing.T) {
+		s, f := newQuietService(t)
+		work := time.Now().UTC()
+		todo := Todo{ID: "closed-during-owner-receipt", Title: "回执途中关闭", Origin: "conv1", Supervision: &Supervision{Supervisor: "conv1",
+			State: reviewNeedsUser, Waits: &OwnerWait{Work: work, At: work, Reason: "obsolete", PushPending: true}}}
+		putTodo(s, todo)
+		s.supervise.writeMu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				s.supervise.writeMu.Unlock()
+			}
+		}()
+		finished := make(chan struct{})
+		go func() {
+			s.deliverOwnerWait(context.Background(), todo, work, "obsolete")
+			close(finished)
+		}()
+		waitFor(t, "the push before the close-during-receipt fixture", func() bool { return len(f.pushed()) == 1 })
+		waitFor(t, "the receipt to wait for the supervision write lock", func() bool {
+			buf := make([]byte, 1<<20)
+			stack := string(buf[:runtime.Stack(buf, true)])
+			return strings.Contains(stack, "assistant.(*Service).deliverOwnerWait") && strings.Contains(stack, "assistant.(*Service).updateSupervision")
+		})
+		done := true
+		if _, err := s.editTodo(context.Background(), todo.ID, db.TodoEdit{Done: &done}); err != nil {
+			t.Fatal(err)
+		}
+		s.supervise.writeMu.Unlock()
+		locked = false
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("the receipt did not finish after the ledger was released")
+		}
+		if w := todoNow(s, todo.ID).Supervision.Waits; w == nil || w.NotifiedAt != nil || !w.PushPending {
+			t.Fatalf("a close while the receipt waited for the ledger was overwritten: %+v", w)
 		}
 	})
 }
