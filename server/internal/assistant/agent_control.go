@@ -397,10 +397,9 @@ func (s *Service) adoptedTitle(ctx context.Context, c proto.Session, given, prom
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
 	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
+	// Only the configured main supervises an assistant hand-off. With no main, keep the origin but leave Supervisor
+	// empty: the calling leader must not become the acceptance authority for its own assistant-dispatched task (#5732).
 	supervisor := s.settings(ctx).Main
-	if supervisor == "" {
-		supervisor = self
-	}
 	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
@@ -428,7 +427,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	refused := ""
 	if h.made {
 		s.taskCard(ctx, h.self, h.todo.ID, h.wake)
-		if h.todo.Supervision != nil && h.todo.Supervision.Supervisor != h.self {
+		if h.todo.Supervision != nil && h.todo.Supervision.Supervisor != "" && h.todo.Supervision.Supervisor != h.self {
 			s.taskCard(ctx, h.todo.Supervision.Supervisor, h.todo.ID, h.wake)
 		}
 	} else {

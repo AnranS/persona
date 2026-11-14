@@ -212,6 +212,31 @@ func TestAgentSendTaskFromSideIsSupervisedByMain(t *testing.T) {
 	}
 }
 
+// Without a configured main, a leader's hand-off keeps its origin but never makes that leader the acceptance authority.
+// The task can be accepted after main is configured; the empty supervisor is not a delivery route (#5732).
+func TestAgentSendTaskFromLeaderWithoutMainHasNoLeaderSupervisor(t *testing.T) {
+	s, f := newQuietService(t)
+	secretary(f)
+	f.known["lead1"] = true
+	setSettings(t, s, func(v *Settings) { v.Main, v.Leaders = "", []string{"lead1"} })
+	_, err := runJSON(t, s, "lead1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下",
+		"task": map[string]any{"title": "拉周报数据", "done_when": []string{"表格链接贴回来"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := onlyTodo(s)
+	if todo.Origin != "lead1" {
+		t.Fatalf("the hand-off lost its origin: %+v", todo)
+	}
+	if todo.Supervision == nil || todo.Supervision.Supervisor != "" {
+		t.Errorf("the calling leader became the supervisor without main: %+v", todo.Supervision)
+	}
+	if _, err := runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted"}); err == nil ||
+		!strings.Contains(err.Error(), "not handed out") {
+		t.Errorf("the calling leader accepted its own assistant-dispatched task: %v", err)
+	}
+}
+
 // An agent working for the user's own todo or another conversation's task stays theirs: refused with why, nothing
 // sent, no todo made.
 func TestAgentSendTaskRefusesWhatIsNotItsOwn(t *testing.T) {
