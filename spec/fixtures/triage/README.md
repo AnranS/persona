@@ -6,9 +6,9 @@ stuck. These cases hold the copies to one definition. All four implementations r
 (`web/src/lib/todo-triage-fixture.test.ts`), Apple (`apple/PersonaTests/TodoTriageFixtureTests.swift`), Android
 (`android/core/domain/src/test/kotlin/persona/core/domain/tasks/TodoTriageFixtureTest.kt`), and the hub
 (`TestTriageFollowsTheSharedCases`, `TestTriageTodosFollowsTheSharedCases`,
-`TestTriageRelatedKeysFollowTheSharedCases` in `server/internal/assistant/todo_triage_test.go`). The hub and web replay
-every case. Until their native concern follow-up, Apple and Android replay every non-concern case; the concern cases are
-explicitly scoped to the hub and web rather than silently changing native behavior.
+`TestTriageRelatedKeysFollowTheSharedCases` in `server/internal/assistant/todo_triage_test.go`). The hub, web and Android
+replay every case. Until Apple's native concern follow-up, its fixture suite replays every non-concern case; the concern
+cases remain explicit rather than silently changing Apple behavior.
 
 | File | Rule | Cases |
 | --- | --- | --- |

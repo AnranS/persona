@@ -102,10 +102,7 @@ class TodoTriageFixtureTest(private val name: String, private val fixture: Fixtu
 
     companion object {
         @JvmStatic @Parameterized.Parameters(name = "{0}")
-        fun cases(): List<Array<Any>> = FixtureReader.read("triage").filter {
-            // Native concern behavior has its own follow-up (#3582); these shared cases are hub/web-only until then.
-            !it.value.getValue("name").jsonPrimitive.content.startsWith("concern_")
-        }.map {
+        fun cases(): List<Array<Any>> = FixtureReader.read("triage").map {
             arrayOf("${it.file}: ${it.value.getValue("name").jsonPrimitive.content}", it)
         }
     }

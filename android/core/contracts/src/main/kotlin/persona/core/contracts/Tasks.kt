@@ -209,6 +209,8 @@ data class Todo(
     /** Nobody is working on it (#3618): every agent of this open to-do is gone and nothing brings one back; null otherwise
      *  and from an older hub. */
     val orphaned: TodoOrphaned? = null,
+    /** Empty for an ordinary to-do or task; "concern" for one of the owner's concerns. Unknown values stay ordinary. */
+    val kind: String = "",
 ) {
     val isDone: Boolean get() = doneAt != null
     /** Closed by cancellation, including the legacy supervision-only representation; never counted as completed (#5732). */

@@ -276,9 +276,8 @@ Every client follows this document with its own copy of the rules, each with the
 
 The shared cases in `spec/fixtures/triage` are read by all four implementations: the web app, Apple and Android fixture
 suites, and the hub. A rule change adds or changes a case there first; copying its expected value into a client-only test
-is not a substitute for replaying the fixture. The concern exceptions, standalone open-concern rows and neutral Concern
-row tag are a staged capability under #3582 on the hub and web. Until their native follow-up, Apple and Android replay
-the non-concern cases and keep their documented compatibility behavior, so no existing native triage rule changes here.
+is not a substitute for replaying the fixture. The hub, web and Android replay every concern case. Until Apple's native
+concern follow-up, its fixture suite replays every non-concern case and keeps the documented compatibility behavior.
 
 A change to an existing rule changes all of them in the same PR. Native differences: iOS / Mac keep restores in the device's
 `UserDefaults` (`todos.restored`) and Android in its local preferences, as the web keeps them per browser; the iOS list
