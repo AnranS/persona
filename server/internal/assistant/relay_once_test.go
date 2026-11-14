@@ -262,22 +262,32 @@ func TestRelayInDoubtLooksAgainBeforeSendingAgain(t *testing.T) {
 }
 
 // A second exact confirmation can rewrite a withdrawn head while its earlier copy is being drained. The old copy must
-// not restore signals from a head it did not actually remove, or a confirmed start-unknown becomes pending again (#5732).
+// not restore signals from a head it did not actually remove. The head's durable doubt time must also survive restart
+// and a landed check that could not remove that changed head, or a later drain replays delivered signals (#5732).
 func TestWithdrawnRelayReplayRequiresRemovingSameHead(t *testing.T) {
-	s, _ := newQuietServiceOn(t, &memStore{})
+	s, f := newQuietServiceOn(t, &memStore{})
 	start := superviseSignal{Todo: "todo-b", Kind: sigUnjudged, Key: "start-unknown@todo-b", At: time.Now()}
 	other := superviseSignal{Todo: "todo-c", Kind: sigStalled, Key: "still-pending", At: time.Now()}
 	oldSignals := []superviseSignal{start, other}
-	msg := relayMsg{Tool: superviseTool, Text: "mixed supervision", At: time.Now(), Withdrawn: true, Signals: &oldSignals}
+	msg := relayMsg{Tool: superviseTool, Text: "mixed supervision", At: time.Now(), Withdrawn: true, DoubtedAt: time.Now().Add(-time.Second), Signals: &oldSignals}
 	if s.queueRelay("conv1", msg) != 1 {
 		t.Fatal("the withdrawn head was not queued")
 	}
+	f.mu.Lock()
+	f.items = append(f.items, proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: msg.Text, TS: time.Now()})
+	f.mu.Unlock()
 	newSignals := []superviseSignal{other}
 	updated := msg
-	updated.Signals = &newSignals // the second confirmation removed start from the durable head
+	updated.Signals = &newSignals // the second confirmation removed start from the durable head, retaining its doubt time
 	r := &s.relays
 	r.mu.Lock()
 	r.st.Queue["conv1"][0] = updated
+	r.doubted = nil // only the durable head survives a real restart
+	r.mu.Unlock()
+	if !s.relayLanded("server", "conv1", msg) {
+		t.Fatal("the persisted in-doubt original was not recognized after restart")
+	}
+	r.mu.Lock()
 	replay := s.takeRelayHeadLocked("conv1", msg, true, true)
 	queued := len(r.st.Queue["conv1"])
 	restored := r.st.SupervisePending[start.id()]
@@ -287,5 +297,15 @@ func TestWithdrawnRelayReplayRequiresRemovingSameHead(t *testing.T) {
 	}
 	if queued != 1 {
 		t.Fatalf("the changed queue head was removed by an older copy: %d queued", queued)
+	}
+	if !s.relayLanded("server", "conv1", updated) {
+		t.Fatal("the changed-head check discarded the durable delivery evidence before removal")
+	}
+	r.mu.Lock()
+	replay = s.takeRelayHeadLocked("conv1", updated, true, false)
+	queued = len(r.st.Queue["conv1"])
+	r.mu.Unlock()
+	if len(replay) != 0 || queued != 0 {
+		t.Fatalf("the landed updated head was replayed or retained: replay=%+v queued=%d", replay, queued)
 	}
 }

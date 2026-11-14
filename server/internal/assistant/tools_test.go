@@ -393,8 +393,17 @@ func TestAgentStartConfirmationWithdrawsDrainingStartUnknown(t *testing.T) {
 // withdrawing the confirmed start must not leave retry evidence that delivers those signals a second time. This holds
 // both for an acknowledged send and for an in-doubt send whose original line becomes visible before the next drain.
 func TestAgentStartConfirmationAcknowledgesOtherSignalsAfterSuccessfulHead(t *testing.T) {
-	for _, inDoubt := range []bool{false, true} {
-		t.Run(fmt.Sprintf("in doubt %v", inDoubt), func(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		inDoubt, restart, confirmAfter bool
+	}{
+		{name: "acknowledged"},
+		{name: "in doubt", inDoubt: true},
+		{name: "in doubt across restart", inDoubt: true, restart: true},
+		{name: "confirmation after in-doubt send", inDoubt: true, confirmAfter: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inDoubt := tc.inDoubt
 			s, f := newQuietServiceOn(t, &memStore{})
 			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 			presenceTimes(t, 0, 0)
@@ -420,15 +429,29 @@ func TestAgentStartConfirmationAcknowledgesOtherSignalsAfterSuccessfulHead(t *te
 			case <-time.After(time.Second):
 				t.Fatal("the mixed queue head did not enter its send")
 			}
-			if _, err := s.linkStartedAgentTask(context.Background(), todo, Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
-				t.Fatal(err)
+			confirm := func() {
+				if _, err := s.linkStartedAgentTask(context.Background(), todo, Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !tc.confirmAfter {
+				confirm()
 			}
 			close(hub.release)
 			waitFor(t, "the original mixed send to settle", func() bool { return !drainingNow(s, "conv1") })
+			if tc.confirmAfter {
+				confirm()
+			}
 			if inDoubt {
 				// The first look found no line, so the head stayed doubtful and withdrawn. Its original text then became
 				// visible: the next drain must acknowledge that delivery rather than replay the other signal.
 				sent := <-hub.attempts
+				if tc.restart {
+					simulateSupervisionRestart(t, s)
+					s.relays.mu.Lock()
+					s.relays.doubted = nil // a real process restart loses the in-memory doubt book too
+					s.relays.mu.Unlock()
+				}
 				f.mu.Lock()
 				f.items = append(f.items, proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: sent, TS: time.Now()})
 				f.mu.Unlock()

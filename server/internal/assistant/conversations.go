@@ -201,6 +201,9 @@ type relayMsg struct {
 	// Withdrawn marks a supervision message whose remaining text must not be sent or retried. A send already in flight
 	// still finishes, but its failed queue head and every later restart drain drop it instead (#5732).
 	Withdrawn bool `json:"withdrawn,omitempty"`
+	// DoubtedAt is when a supervision send whose answer was lost began. It stays with the queued head across restart
+	// until that head is removed, so a late-visible original line can still acknowledge its remaining signals (#5732).
+	DoubtedAt time.Time `json:"doubted_at,omitzero"`
 	// State is a task notice's state (quiet.go: done | needs | interrupted | failed); "" for other relays.
 	State string `json:"state,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
@@ -442,6 +445,9 @@ func (s *Service) queueRelay(to string, msg relayMsg) int {
 		b.mu.Unlock()
 		return 0
 	}
+	if msg.Tool == superviseTool && msg.DoubtedAt.IsZero() {
+		msg.DoubtedAt = b.doubted[relayMsgID(to, msg)] // a direct send became doubtful before it was queued
+	}
 	msg.QueuedAt, msg.Depth = time.Now().UTC(), len(b.st.Queue[to])+1
 	b.st.Queue[to] = append(b.st.Queue[to], msg)
 	if msg.Tool == superviseTool && msg.Signals != nil {
@@ -586,6 +592,7 @@ func (s *Service) takeRelayHeadLocked(id string, msg relayMsg, stale, replayOK b
 		}
 	}
 	b.st.Queue[id] = q[1:]
+	delete(b.doubted, relayMsgID(id, msg)) // durable and in-memory delivery evidence leave only with the actual head
 	if len(b.st.Queue[id]) == 0 {
 		delete(b.st.Queue, id)
 	}

@@ -116,8 +116,25 @@ func (s *Service) relaySettled(machine, to string, msg relayMsg, tried time.Time
 	if b.doubted == nil {
 		b.doubted = map[string]time.Time{}
 	}
-	if _, ok := b.doubted[relayMsgID(to, msg)]; !ok {
-		b.doubted[relayMsgID(to, msg)] = tried
+	id := relayMsgID(to, msg)
+	triedAt, ok := b.doubted[id]
+	if !ok {
+		triedAt = tried
+		b.doubted[id] = triedAt
+	}
+	if msg.Tool == superviseTool {
+		// Keep the doubt with the durable queue head too. A restart loses b.doubted, and a confirmation may rewrite
+		// the head's signals while this send is in flight; neither may turn a late-visible original into a replay (#5732).
+		q := b.st.Queue[to]
+		for i := range q {
+			if relayMsgID(to, q[i]) != id || !q[i].DoubtedAt.IsZero() {
+				continue
+			}
+			q[i].DoubtedAt = triedAt
+			b.st.Queue[to] = q
+			s.saveRelayLocked()
+			break
+		}
 	}
 	b.mu.Unlock()
 	if msg.Tool == superviseTool {
@@ -133,6 +150,9 @@ func (s *Service) relayLanded(machine, to string, msg relayMsg) bool {
 	b.mu.Lock()
 	tried, ok := b.doubted[relayMsgID(to, msg)]
 	b.mu.Unlock()
+	if !ok && !msg.DoubtedAt.IsZero() {
+		tried, ok = msg.DoubtedAt, true // the durable head survived a manager restart
+	}
 	if !ok || !s.relayArrived(machine, to, msg, tried) {
 		return false
 	}

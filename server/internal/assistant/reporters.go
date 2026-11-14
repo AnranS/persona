@@ -370,9 +370,10 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 				}
 			}
 		}
-		if i == 0 && r.draining[conversation] {
-			// The send owns this head's text until it finishes. An exact retraction additionally withdraws the head so a
-			// failed try or restart cannot send that old text again; its other signals are regathered for their own digest.
+		if i == 0 && r.draining[conversation] || m.Withdrawn || !m.DoubtedAt.IsZero() {
+			// The send owns a draining head's text until it finishes. An exact retraction additionally withdraws the head
+			// so a failed try or restart cannot send that old text again. A withdrawn or doubtful head stays queued even
+			// when it is not draining: its original outcome must be checked before other signals can be regathered (#5732).
 			if exact != nil && target {
 				m.Withdrawn = true
 				// Keep only the other signals with the withdrawn head. They are regathered by a later drain only when
