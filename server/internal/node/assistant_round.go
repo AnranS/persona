@@ -22,6 +22,12 @@ import (
 // MCP server, told PERSONA_TOOL_SET=supervise (the manager narrows the list it gives), and the built-ins
 // roundBuiltinTools.
 //
+// Every assistant.send says which tool set it needs: supervise_round asks for the round's, and its absence (the owner's
+// message, a supervision message once assistant.background_supervisor_keeps_context is on, a manager from before
+// #7315) for every tool. A round's process that is idle when a message needing every tool comes is replaced by a plain
+// --resume with every tool and no round state, so it is compacted when idle again; a busy one, or one running
+// background tasks, takes the message and is replaced at the first message after it is idle (assistantSend).
+//
 // --resume-session-at is a print-mode flag Claude Code does not document. It is used only where it was measured: Claude
 // Code on the CLI (not Codex, the Agent SDK runtime, another runtime or a guest), roundMinClaude or later, an idle
 // process with no background tasks, and an anchor found on the transcript's latest chain (roundAnchor). Anything else
@@ -52,7 +58,7 @@ const roundBuiltinTools = "Bash,Read,Write,Skill,ToolSearch"
 const roundToolSet = "supervise"
 
 // spawnRound is how a process starts for a round: resumed at anchor, with tool set toolSet. The zero value is an
-// ordinary start.
+// ordinary start, with every tool: what any message that is no round starting from the first turn needs.
 type spawnRound struct{ anchor, toolSet string }
 
 // roundResult is what became of a round asked for by one assistant.send, for its answer.

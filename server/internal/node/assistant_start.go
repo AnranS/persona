@@ -462,7 +462,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: execution, fingerprint: n.executionFingerprint(launcher, execution),
 		instructions: instructions, fallback: fallback, personaMCPOnly: !legacyMCP, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
-		round: round.anchor != ""}
+		round: round.anchor != "", toolSet: round.toolSet}
 	if first != nil {
 		p.runtime = proto.AssistantRuntimeAgentSDK
 		if err := p.write(first); err != nil {

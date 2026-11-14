@@ -285,6 +285,36 @@ func TestBackgroundSwitchFlippedWithAQueuedWake(t *testing.T) {
 	}
 }
 
+// The switch turned on after a round: the next supervision message to the background supervisor asks for no round,
+// which is what tells the node it needs every tool (its round's process, narrowed, is replaced while idle,
+// node/assistant_round_switch_test.go), and it is rendered whole. Turned off again, the next one is a round again.
+func TestBackgroundSwitchOnAfterARoundAsksForEveryTool(t *testing.T) {
+	s, f, todo := newBackgroundService(t)
+	bg := withBackgroundBG1(t, s, f)
+	on, off := true, false
+	wakeRound(s, superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "k1", Minutes: 30})
+	waitFor(t, "the round", func() bool { return len(assistantSendsTo(f, bg)) == 1 })
+	if a := assistantSendsTo(f, bg)[0]; a[superviseRoundParam] != true {
+		t.Fatalf("the first message is no round: %v", a)
+	}
+
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisorKeepsContext = &on })
+	wakeRound(s, superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "k2"})
+	waitFor(t, "the message after the switch", func() bool { return len(assistantSendsTo(f, bg)) == 2 })
+	a := assistantSendsTo(f, bg)[1]
+	text, _ := a["text"].(string)
+	if _, asked := a[superviseRoundParam]; asked || prompts.IsSuperviseRound(text) || strings.Contains(text, roundHeader) || a[holdPushesParam] != true {
+		t.Fatalf("with the switch on: %v\n%s", a, text)
+	}
+
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisorKeepsContext = &off })
+	wakeRound(s, superviseSignal{Todo: todo.ID, Kind: sigInterrupted, Key: "k3"})
+	waitFor(t, "the message after the switch is off again", func() bool { return len(assistantSendsTo(f, bg)) == 3 })
+	if a := assistantSendsTo(f, bg)[2]; a[superviseRoundParam] != true {
+		t.Fatalf("with the switch off again: %v", a)
+	}
+}
+
 // A round queued before the manager restarted goes in as a round after it, from its persisted text, with the pushes of
 // its turn held as any supervision message's.
 func TestBackgroundQueuedWakeAfterManagerRestart(t *testing.T) {

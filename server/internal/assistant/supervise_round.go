@@ -25,7 +25,8 @@ import (
 // through mcp.tools' tool_set).
 //
 // assistant.background_supervisor_keeps_context (off by default) brings back the one long conversation from its next
-// round: no round is asked for, the message is rendered whole and the process keeps every tool.
+// round: no round is asked for, the message is rendered whole, and a message that asks for no round needs every tool,
+// so the node replaces a round's process, once it is idle, by a plain resume with every tool (node/assistant_round.go).
 //
 // The node says how each round went (superviseRoundAnswered). A round it could not start from the first turn because
 // that turn is no longer on the conversation's chain (a compaction, before #7315 or since: no_anchor), and a round that

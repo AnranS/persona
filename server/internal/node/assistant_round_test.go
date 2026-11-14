@@ -237,7 +237,8 @@ const fullSnapshot = "实时快照（这条消息发出时的" // i18n-ignore: t
 
 // A round goes into a new process resumed at the end of the first turn, with the round's tools only and the whole
 // snapshot (the earlier rounds that saw it are out of its context); the answer says so. The idle process before it
-// stops; the one the round runs in is never compacted when idle, and the owner's next message goes on in it.
+// stops; the one the round runs in is never compacted when idle, and the owner's next message, which needs every tool,
+// replaces it with a plain resume (assistant_round_switch_test.go).
 func TestAssistantSendSuperviseRoundResumesAtTheFirstTurn(t *testing.T) {
 	n, argv, input := roundTestNode(t, roundStarted("2.1.322", 2), false)
 	if _, err := n.assistantSend(context.Background(), roundConversation, "", "", "the owner's message", nil, "", ""); err != nil {
@@ -292,12 +293,13 @@ func TestAssistantSendSuperviseRoundResumesAtTheFirstTurn(t *testing.T) {
 	if !p.round || compactable {
 		t.Fatalf("the round's process: round %v, compactable %v", p.round, compactable)
 	}
-	// The owner writing to it: the same process, as any message to an idle one.
+	// The owner writing to it: a plain resume of the latest round with every tool, not the round's process.
 	if _, err := n.assistantSend(context.Background(), roundConversation, "", "", "and this one?", nil, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(roundStarts(t, argv)); got != 2 {
-		t.Fatalf("the owner's message started a process again (%d starts)", got)
+	if all := roundStarts(t, argv); len(all) != 3 || argAfter(all[2], "--resume") != roundConversation || hasArg(all[2], "--resume-session-at") ||
+		argAfter(all[2], "--tools") != assistantBuiltinTools || hasArg(all[2], "--strict-mcp-config") {
+		t.Fatalf("the owner's message after the round: %q", all)
 	}
 	// The same message asked again under its once id: not sent again, and its answer says nothing of a round.
 	if again := sendRound(t, n, "once-1"); again["context"] != nil {

@@ -147,6 +147,9 @@ type assistantProc struct {
 	// (assistant_round.go). It is never compacted when idle: that would cut the first turn off the chain the next
 	// round resumes on. It has started once it prints its init, not any line: a refused anchor prints a result first.
 	round bool
+	// toolSet: the tool set it was started with, "" every tool of the assistant's, roundToolSet a round's
+	// (assistant_round.go). A message that needs another set restarts it once it is idle (assistantSend).
+	toolSet string
 }
 
 func (p *assistantProc) write(line []byte) error {
@@ -514,7 +517,13 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if want == "" && p != nil {
 		want, _ = n.modesOf(id)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale()) {
+	// The tool set this message needs is round.toolSet: the round's when the round starts from the first turn (p is
+	// gone by then), else every tool: the owner's message, a supervision message once
+	// assistant.background_supervisor_keeps_context is on, any message of a manager that asks for no round, and a round
+	// that goes in as before. A process a round started has fewer tools and is never idle-compacted, so it is replaced
+	// by a plain --resume with every tool, compacted when idle as any other process (assistant_round.go).
+	otherTools := p != nil && p.toolSet != round.toolSet
+	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale() || otherTools) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		p.mu.Unlock()
@@ -522,6 +531,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			// Answering, or running background tasks a new process would kill: the message goes to this process on
 			// what it runs, and the switch waits for the first message after it is idle. Refusing it left the user
 			// unable to send while the conversation kept starting tasks (#1554).
+			if otherTools {
+				n.logf("assistant %s: busy with a supervision round's tools: this message goes to it, and the first one after it is idle restarts it with every tool", short(id))
+			}
 			p.mu.Lock()
 			launcher, execution = p.launcher, p.model
 			if p.needsRestartForLocked(mode) {
@@ -529,7 +541,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 			p.mu.Unlock()
 		} else {
-			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
+			if otherTools && p.alive() {
+				n.logf("assistant %s: idle with a supervision round's tools: restarted with every tool for this message", short(id))
+			}
+			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only), new instructions or tools: resume in a fresh one
 			n.rememberTasks(id, nil)
 			p = nil
 		}
