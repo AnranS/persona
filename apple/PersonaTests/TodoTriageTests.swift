@@ -391,6 +391,17 @@ struct TodoTriageTests {
         #expect(!old.isCancelled && old.lineage == nil)
     }
 
+    @Test func cancelledReopenedAndExplicitlyCompletedIsNotCancelled() throws {
+        for json in [
+            #"{"id":"reopened-user","done_at":"2026-11-13T08:00:00Z","reopened_at":"2026-11-13T07:00:00Z","supervision":{"supervisor":"main","state":"cancelled"}}"#,
+            #"{"id":"reopened-auto","done_at":"2026-11-13T08:00:00Z","done_by":"auto","reopened_at":"2026-11-13T07:00:00Z","supervision":{"supervisor":"main","state":"cancelled"}}"#,
+        ] {
+            let completed = try JSON.decoder.decode(TodoItem.self, from: Data(json.utf8))
+            #expect(!completed.isCancelled)
+            #expect(completed.cancellationReason == nil)
+        }
+    }
+
     @Test func decodesSeenAtAndABadOneFilesNothing() throws {
         let t = try JSON.decoder.decode(TodoItem.self, from: Data(#"{"id":"t","title":"x","seen_at":"2026-11-10T08:00:00Z"}"#.utf8))
         #expect(t.seenAt == ISO8601DateFormatter().date(from: "2026-11-10T08:00:00Z"))

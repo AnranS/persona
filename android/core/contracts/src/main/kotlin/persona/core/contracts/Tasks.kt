@@ -212,7 +212,7 @@ data class Todo(
 ) {
     val isDone: Boolean get() = doneAt != null
     /** Closed by cancellation, including the legacy supervision-only representation; never counted as completed (#5732). */
-    val isCancelled: Boolean get() = cancelledAt != null || doneBy == "cancelled" || doneAt != null && supervision?.state == "cancelled"
+    val isCancelled: Boolean get() = cancelledAt != null || doneBy == "cancelled" || doneBy == "review" && doneAt != null && supervision?.state == "cancelled"
     val cancellationReason: String? get() = if (isCancelled) cancelledReason ?: doneReason else null
     val activeAgents get() = agents.filter { it.releasedAt == null }
     val currentAgents: List<TodoAgent> get() = activeAgents

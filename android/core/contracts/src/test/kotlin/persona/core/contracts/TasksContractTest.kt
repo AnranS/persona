@@ -1,6 +1,7 @@
 package persona.core.contracts
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -127,6 +128,16 @@ class TasksContractTest {
         val oldHub = JsonCodec.decodeFromString<Todo>("""{"id":"plain","title":"Unchanged"}""")
         assertEquals(null, oldHub.cancelledReason)
         assertEquals(null, oldHub.lineage)
+    }
+
+    @Test fun cancelledReopenedAndExplicitlyCompletedIsNotCancelled() {
+        for (doneBy in listOf("", "auto")) {
+            val marker = if (doneBy.isEmpty()) "" else """"done_by":"$doneBy","""
+            val completed = JsonCodec.decodeFromString<Todo>("""{"id":"reopened","done_at":"2026-11-13T08:00:00Z",
+                $marker"reopened_at":"2026-11-13T07:00:00Z","supervision":{"state":"cancelled"}}""")
+            assertFalse(completed.isCancelled)
+            assertEquals(null, completed.cancellationReason)
+        }
     }
 
     /** An answered record has every question with its answer in full (#1231); one from before it shows its line. */

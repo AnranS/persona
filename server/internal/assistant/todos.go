@@ -676,8 +676,8 @@ func (t Todo) Cancelled() bool {
 	if t.DoneBy == db.DoneByCancelled {
 		return true
 	}
-	if t.Supervision != nil && t.Supervision.state(t) == reviewCancelled {
-		return true
+	if t.DoneBy == db.DoneByReview && t.Supervision != nil && t.Supervision.state(t) == reviewCancelled {
+		return true // legacy cancellation: the compatible review marker plus its supervision verdict (#5732)
 	}
 	return false
 }

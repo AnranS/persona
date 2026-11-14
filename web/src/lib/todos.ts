@@ -110,7 +110,7 @@ export interface Todo {
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
 export function isCancelled(todo: Pick<Todo, "cancelled_at" | "done_at" | "done_by" | "supervision">): boolean {
-  return Boolean(todo.cancelled_at) || todo.done_by === "cancelled" || reviewState(todo) === "cancelled";
+  return Boolean(todo.cancelled_at) || todo.done_by === "cancelled" || (todo.done_by === "review" && reviewState(todo) === "cancelled");
 }
 
 /** Why the to-do was cancelled; older hubs carry it in done_reason. */

@@ -615,7 +615,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// The hub marked it done because its task's work was judged finished; reopening undoes it.
     var autoDone: Bool { doneAt != nil && doneBy == "auto" }
     /// Cancellation is not completion, including the legacy supervision-only form (#5732).
-    var isCancelled: Bool { cancelledAt != nil || doneBy == "cancelled" || reviewState == .cancelled }
+    var isCancelled: Bool { cancelledAt != nil || doneBy == "cancelled" || doneBy == "review" && reviewState == .cancelled }
     var cancellationReason: String? { isCancelled ? cancelledReason ?? doneReason : nil }
 }
 

@@ -923,6 +923,18 @@ describe("取消是独立状态，不是完成 (#5732)", () => {
     expect(todoStatusLabel(legacy, "done")).toBe("已取消");
     expect(isCancelled(closed)).toBe(false);
   });
+
+  it("does not reuse the old cancelled verdict after reopening and explicit completion", () => {
+    const cancelled = { ...closed, cancelled_at: closed.done_at };
+    const reopened = { ...cancelled, done_at: null, done_by: "", cancelled_at: null, reopened_at: "2026-11-03T09:00:00Z" };
+    for (const doneBy of ["", "auto"]) {
+      const completed: Todo = { ...reopened, done_at: "2026-11-03T10:00:00Z", done_by: doneBy,
+        supervision: { supervisor: "main", state: "cancelled" } };
+      expect(isCancelled(completed)).toBe(false);
+      expect(cancellationReason(completed)).toBe("");
+      expect(todoStatusLabel(completed, "done")).not.toBe("已取消");
+    }
+  });
 });
 
 describe("a to-do's decisions shown (#6447)", () => {
