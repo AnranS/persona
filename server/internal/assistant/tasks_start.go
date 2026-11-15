@@ -156,11 +156,19 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 // visible failed-start link; Error keeps the async dispatcher from starting an unsupervised Agent.
 func (s *Service) failPlanSupervision(ctx context.Context, todo Todo, t *PlanTask, cause error) {
 	reason := clip(oneLine(fmt.Sprintf("record supervision: %v", cause)), 200)
-	if err := s.failTodo(ctx, todo.ID, reason); err != nil {
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+	defer cancel()
+	if err := s.failTodo(fctx, todo.ID, reason); err != nil {
 		s.logf("task %s: fail after supervision error: %v", todo.ID, err)
 	}
 	t.Error = reason
+	// No async start body will run, so release every claim that body would have released.
 	s.releaseTakenTodo(t.ReuseTodo)
+	s.releaseTaskWorkspace(todo.ID)
+	if t.admissionRelease != nil {
+		t.admissionRelease()
+		t.admissionRelease = nil
+	}
 }
 
 // notReusable is the refusal of a todo_id: it says why, so the assistant can plan again without it.
