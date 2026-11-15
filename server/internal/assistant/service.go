@@ -786,7 +786,9 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 		f(d)
 	}
 	s.toolLoopsChanged(d)
-	s.drainRelays(d.MachineID, d.Sessions)
+	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {
+		s.drainRelays(d.MachineID, d.Sessions)
+	}
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
 	s.taskStageSessions(ctx, d)

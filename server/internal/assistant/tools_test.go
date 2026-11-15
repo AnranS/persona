@@ -299,6 +299,50 @@ func TestAgentStartConfirmationCleansOutboxWhenToldPredatesRestart(t *testing.T)
 	}
 }
 
+// The production session-list entry retracts a confirmed start before it drains an idle supervisor's queue. A crash may
+// leave the told receipt and the queued notice behind together; a later ledger failure must hold the drain for a retry,
+// not let the stale start result escape first (#5732).
+func TestSessionsChangedRetractsToldStartUnknownBeforeRelayDrain(t *testing.T) {
+	st := &turnsFailureStore{Store: &memStore{}}
+	s, f := newQuietServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Retract before the production relay drain", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start", At: time.Now()}
+	markLeaderTurnSignalled(t, s, g)
+	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: "stale unknown start " + todo.ID, At: time.Now()},
+		[]superviseSignal{g}, time.Now(), time.Time{}) {
+		t.Fatal("the unknown start was not admitted to the durable relay queue")
+	}
+	if !s.turnsTold(ctx, []superviseSignal{g}) {
+		t.Fatal("the crash-boundary fixture did not persist told")
+	}
+	simulateSupervisionRestart(t, s)
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	turns.loaded, turns.doc = false, taskTurnsDoc{}
+	turns.mu.Unlock()
+	idle := proto.Session{SessionID: "conv1", MachineID: "box", Assistant: true, Status: proto.StatusIdle}
+	confirmed := proto.Session{SessionID: "s-confirmed", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, StartedByPersona: true, Status: proto.StatusDone, UpdatedAt: time.Now()}
+	d := DeviceSessions{MachineID: "box", Sessions: []proto.Session{idle, confirmed}}
+
+	st.readFailure.Store(true)
+	s.SessionsChanged(ctx, d)
+	st.readFailure.Store(false)
+	s.SessionsChanged(ctx, d)
+	waitFor(t, "the confirmed queue head to be withdrawn", func() bool { return s.queuedFor("conv1") == 0 })
+	if text := strings.Join(f.noticesTo("conv1"), "\n"); strings.Contains(text, "stale unknown start") {
+		t.Fatalf("SessionsChanged drained the confirmed start-unknown before retracting it: %s", text)
+	}
+}
+
 // turnsFailureStore injects a task-ledger failure only after the fixture has been persisted.
 type turnsFailureStore struct {
 	Store

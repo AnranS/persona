@@ -40,6 +40,9 @@ var (
 	// superviseEvery is the least time between two supervision messages; superviseUrgentEvery when one waits on a decision.
 	superviseEvery       = 10 * time.Minute
 	superviseUrgentEvery = 2 * time.Minute
+	// superviseNoMainLogEvery is how often a digest that still finds no main conversation says so in the log: the
+	// watch's every pass (superviseTick) tries again, and each said it once before.
+	superviseNoMainLogEvery = time.Hour
 	// superviseNeedsAfter is how long an agent waits for an answer before the supervisor hears of it (the user was
 	// pushed; a quiet task's at once: the user was not).
 	superviseNeedsAfter = 3 * time.Minute
@@ -153,8 +156,11 @@ type superviseBook struct {
 	legacyBackground map[string]bool
 	timer            *time.Timer
 	timerAt          time.Time
-	hold             map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	visible          map[string]bool      // an explicit user action makes the current triage turn visible
+	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
+	// when that was last logged (sendDigest).
+	noMainSince, noMainLogged time.Time
+	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
+	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -425,6 +431,53 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
 		s.scheduleDigestLocked(time.Now())
 	}
 	b.mu.Unlock()
+	return true
+}
+
+// retractConfirmedStartUnknowns reconciles every start whose exact outcome is already known before a session-list
+// drain can deliver an idle supervisor's old queue. A persisted told receipt is confirmation even when the task Agent
+// is listed by another computer; a non-offline creation id also confirms before the asynchronous auto-link write.
+// False holds the whole drain so an unreadable or unwritable ledger cannot let a stale start result escape first.
+func (s *Service) retractConfirmedStartUnknowns(ctx context.Context, sessions []proto.Session) bool {
+	r := &s.relays
+	r.mu.Lock()
+	loaded := s.relayLocked(context.Background())
+	empty := len(r.st.Queue) == 0
+	r.mu.Unlock()
+	if !loaded || empty {
+		return true // drainRelays takes the same no-op path; no ledger scan is needed without a queued message.
+	}
+	confirmed := map[string]struct{}{}
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	if !s.turnsReadLocked(ctx) {
+		turns.mu.Unlock()
+		return false
+	}
+	for id, entry := range turns.doc.Turns {
+		if sig := entry.Signal; sig != nil && sig.Kind == sigUnjudged && sig.Key == "start-unknown@"+id && sig.Told != nil {
+			confirmed[id] = struct{}{}
+		}
+	}
+	turns.mu.Unlock()
+	for _, session := range sessions {
+		if session.Status == proto.StatusOffline {
+			continue
+		}
+		if id := session.CreationID(); id != "" {
+			confirmed[id] = struct{}{}
+		}
+	}
+	ids := make([]string, 0, len(confirmed))
+	for id := range confirmed {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if !s.retractStartUnknown(ctx, id) {
+			return false
+		}
+	}
 	return true
 }
 

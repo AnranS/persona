@@ -1,5 +1,13 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
+- A retry that puts a failed send back for the next digest must first ask whether the next try can succeed (#8518).
+  The task leader path picked "resume and escalate" from the listed status (`StatusOffline`), but a stopped, read-only
+  agent is also listed `interrupted` when a restart cut it off, and the node refuses every send to it
+  (`agent_stopped`). Put back as an ordinary failure, that became a node round trip every 30 seconds that nobody above
+  the leader heard of. Classify by the node's refusal code, not by status or its words: a refusal that holds until
+  someone acts goes the escalation path once, with a growing retry; transient failures keep the digest retry.
+
 - A finite startup wait cannot make a one-shot MCP tool list reliable (#8470). Registering a task leader and resolving
   its pane can both happen after discovery. Capture a change cursor before building the list, wake it from persisted
   task-link changes, and refresh only when the tool definitions actually differ. Re-resolve identity on heartbeat,
@@ -596,6 +604,8 @@ A parked task intermittently regained an old idle signal when `watchTurn` replay
 ## Retract a signal from every durable form, not only the outbox (#5732)
 
 A confirmed `start-unknown` can still replay after pending memory, the durable outbox and the turn ledger have all been cleared: queue admission has already copied its structured signal into a relay message, with a second in-memory index in `supervise.queued`. Retraction therefore has to cover the queued digest too, using its exact Todo/Kind/Key rather than deleting every signal for that task. Removing a mixed digest means regathering its other signals without overwriting a newer durable stretch. An actively draining head owns its original text only for the current try: mark it withdrawn with the remaining structured signals, but do not regather those signals before the send's outcome is known. A successful original send already carried them; regather only when a later drain actually removes that same withdrawn head after failure or restart. Before replaying, check an earlier in-doubt send with `relayLanded`: a late-visible original line also means the other signals were delivered. The send's `DoubtedAt` must stay on the durable queue head across restart and head rewrites, and its in-memory doubt is forgotten only when that head is actually removed. A withdrawn or doubtful head cannot be replaced or have its other signals regathered before that check, including when confirmation arrives only after the send settles. Selective `/stop` uses the same withdrawal: once any signal is removed, the old mixed text must not be retried. Keep the remaining slice non-nil even when empty: `signals:[]` is a durable detached marker, whereas `signals:null` reloads as a legacy text message and can rehome the withdrawn task again. If another confirmation changed the head, the old copy must not replay signals from a queue entry it did not remove. Hold `dedupMu` across retraction so `sendDigest` cannot admit a new queue message between confirmation and withdrawal. Test acknowledged, in-doubt-late and failed in-flight sends, including restart, a changed-head control and a different-Key control, not just the pending map.
+
+Cleanup in `watchTurn` is too late when the production restart path drains an idle supervisor first: `SessionsChanged` used to call `drainRelays` before exact creation-id linking, so even a persisted told receipt could not stop the stale queue head from being sent. Reconcile told receipts and the current list's non-offline exact creation ids before that drain, and hold the drain when the ledger cannot be read or written; an empty relay queue must keep a constant-time path without scanning the ledger. Cover this through `SessionsChanged` with an actually delivered stale-message assertion, not only by calling `watchTurn` directly.
 
 ## Closing a task and recording delivery need one admission boundary (#5732)
 
