@@ -187,7 +187,7 @@ func TestLegacySideQueuedReviewRehomesToMain(t *testing.T) {
 	if got := strings.Join(f.noticesTo("side1"), "\n"); strings.Contains(got, "legacy-review-marker-5732") {
 		t.Fatalf("the old side received the rehomed review:\n%s", got)
 	}
-	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过", "checks": completeReviewChecks(todoNow(s, todo.ID))}); err != nil {
 		t.Fatalf("main could not accept the rehomed review: %v", err)
 	}
 	if got := todoNow(s, todo.ID); got.DoneAt == nil {
@@ -545,7 +545,7 @@ func TestLegacySideDrainingReviewRehomesAfterRestart(t *testing.T) {
 	if got := h.count("conv1"); got != before {
 		t.Fatalf("the detached head generated another main turn after restart: before %d, after %d", before, got)
 	}
-	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过", "checks": completeReviewChecks(todoNow(s, todo.ID))}); err != nil {
 		t.Fatalf("main could not accept the review replayed during the old side's drain: %v", err)
 	}
 	if got := todoNow(s, todo.ID); got.DoneAt == nil {
@@ -603,7 +603,7 @@ func TestLegacySideDrainingTextNoticeRehomesAfterRestart(t *testing.T) {
 	if got := h.count("conv1"); got != before {
 		t.Fatalf("the text fallback repeated after its head was detached: before %d, after %d", before, got)
 	}
-	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"}); err != nil {
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过", "checks": completeReviewChecks(todoNow(s, todo.ID))}); err != nil {
 		t.Fatalf("main could not accept the pre-structured notice's task: %v", err)
 	}
 }
@@ -637,7 +637,8 @@ func TestManualLeaderCanAcceptAssignedAgentTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, todo.ID, "lead1", []string{"完成"}, 0)
-	if _, err := runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted"}); err != nil {
+	if _, err := runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))}); err != nil {
 		t.Fatalf("the explicit manual leader could not review its task: %v", err)
 	}
 	if todoNow(s, todo.ID).DoneAt == nil {

@@ -48,7 +48,8 @@ func TestSnapshotTasksUseDeliveryAndOwnerWaitStates(t *testing.T) {
 	if got := byID()[delivered.ID]; got.State != "等你处理" || got.Health != "等你处理" {
 		t.Fatalf("owner-wait projection = %+v", got)
 	}
-	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": delivered.ID, "verdict": "accepted", "note": "verified"}); err != nil {
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": delivered.ID, "verdict": "accepted", "note": "verified",
+		"checks": completeReviewChecks(todoNow(s, delivered.ID))}); err != nil {
 		t.Fatal(err)
 	}
 	if got := byID()[delivered.ID]; got.State != "已完成" || got.Health != "已验收" {

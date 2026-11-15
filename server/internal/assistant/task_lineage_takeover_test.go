@@ -14,7 +14,7 @@ import (
 func TestAgentSuperviseAfterCloseLinksTheTakeoverLineage(t *testing.T) {
 	s, f, old := newSupervisedService(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收", "checks": completeReviewChecks(todoNow(s, old.ID))})
 	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestAgentSuperviseAfterCloseLinksTheTakeoverLineage(t *testing.T) {
 func TestAgentSendAfterCloseStartsAnIndependentBrief(t *testing.T) {
 	s, f, old := newSupervisedService(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收", "checks": completeReviewChecks(todoNow(s, old.ID))})
 	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
 		t.Fatal(err)
 	}
