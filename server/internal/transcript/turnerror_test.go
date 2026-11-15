@@ -188,6 +188,48 @@ func TestClaudeTurnSucceededEvidence(t *testing.T) {
 	}
 }
 
+func TestTailSettleReplaysVisibleTurnOutcome(t *testing.T) {
+	const failure = "API Error: 529 Overloaded"
+	bEnd := strings.Replace(strings.Replace(turnEndLine, `"uuid":"d"`, `"uuid":"db"`, 1), `"parentUuid":"x"`, `"parentUuid":"b"`, 1)
+	bReply := `{"type":"assistant","uuid":"b","parentUuid":"ub","timestamp":"2026-01-01T12:00:00Z","message":{"id":"mb","model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"B succeeded"}]}}`
+	bTool := `{"type":"assistant","uuid":"b","parentUuid":"ub","timestamp":"2026-01-01T12:00:00Z","message":{"id":"mb","model":"claude-opus-5-5","role":"assistant","content":[{"type":"tool_use","id":"tb","name":"Bash","input":{"command":"true"}}]}}`
+	for _, c := range []struct {
+		name, next string
+		base, drop []string
+	}{
+		{
+			name: "hidden tool-only success",
+			base: []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine},
+			next: bTool,
+		},
+		{
+			name: "hidden success after a newer visible error",
+			base: []string{prompt("u1", "A"), replyLine, turnEndLine, apiErrorLine(t, "e2", failure, map[string]any{"error": "server_error"})},
+			next: bReply,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var m Meta
+			var tail Tail
+			feed := func(lines []string) {
+				for i, line := range lines {
+					tail.Line(&m, ParseLine(i, []byte(line), &m))
+				}
+			}
+			feed(c.base)
+			tail.Rewound([]string{"ub", "b", "db"})
+			feed([]string{prompt("ub", "B"), c.next, bEnd})
+			if !tail.Settle(&m) {
+				t.Fatal("settling the abandoned turn changed nothing")
+			}
+			if m.TurnSucceeded() || m.LastText != failure || m.TurnError != failure || m.TurnErrorKind == "" {
+				t.Fatalf("visible outcome = last %q, error %q (%q), succeeded %v; want the visible failure",
+					m.LastText, m.TurnError, m.TurnErrorKind, m.TurnSucceeded())
+			}
+		})
+	}
+}
+
 // Whether Claude Code still goes on by itself once the limit resets: its notices say it and take it back, a wake
 // leaves it, a message cancels it, a reply or another kind of failure ends it.
 func TestClaudeLimitResumes(t *testing.T) {

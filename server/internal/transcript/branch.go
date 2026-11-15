@@ -55,6 +55,15 @@ type treeLine struct {
 	spoke  bool
 }
 
+type turnFailureState struct {
+	text, kind, code string
+	resetsAt         time.Time
+	resumes          bool
+	afterWork        bool
+	resumesSaid      bool
+	line             string
+}
+
 // treeRec is a line with a uuid, as the tree keeps it: prompt says it is one of the user's own messages, reply that it
 // is the assistant's, system that it is a system line and turnEnd a turn_duration one.
 type treeRec struct {
@@ -64,6 +73,8 @@ type treeRec struct {
 	system       bool
 	turnEnd      bool
 	succeeded    bool // the turn this turn_duration closes answered without a model error
+	failure      turnFailureState
+	clearsError  bool // a new prompt or ordinary reply clears the previous turn's error
 }
 
 // branchTree tracks the lines read so far (file order) and which of them lie on abandoned branches.
@@ -373,6 +384,12 @@ func (t *Tail) Line(meta *Meta, items []proto.Item) {
 	if rec.turnEnd {
 		rec.succeeded = meta.TurnSucceeded()
 	}
+	if meta.TurnError != "" {
+		rec.failure = turnFailureState{text: meta.TurnError, kind: meta.TurnErrorKind, code: meta.TurnErrorCode,
+			resetsAt: meta.TurnErrorResetsAt, resumes: meta.TurnErrorResumes, afterWork: meta.TurnErrorAfterWork,
+			resumesSaid: meta.resumesSaid, line: meta.turnErrorLine}
+	}
+	rec.clearsError = meta.TurnError == "" && (rec.prompt || rec.reply)
 	if (rec.prompt || rec.reply) && t.gone[rec.parent] && !t.gone[rec.uuid] {
 		// Claude went on from a line Rewound named: that rewind was not one (File.RewoundAt). The lines of its turn, as
 		// far back as the tail goes, stop being left out (another turn's stay out), and the tree is worked out again.
@@ -452,36 +469,61 @@ func (t *Tail) Settle(meta *Meta) bool {
 	if meta.turnErrorLine != "" && t.tree.hidden[meta.turnErrorLine] {
 		meta.clearTurnError()
 	}
-	dropped := false
+	wordsDropped, outcomeDropped := false, false
 	for _, w := range t.words {
 		if t.tree.hidden[w.uuid] {
-			dropped = true
+			wordsDropped = true
 			break
 		}
 	}
-	if !dropped {
+	for _, rec := range t.tree.recs {
+		if t.tree.hidden[rec.uuid] && (rec.turnEnd || rec.failure.text != "") {
+			outcomeDropped = true
+			break
+		}
+	}
+	if !wordsDropped && !outcomeDropped {
 		return false
 	}
-	// The close that proved success may be on the abandoned branch too. Restore the latest visible close's outcome
-	// instead of letting it clear the visible branch's failure; a newer visible tool-only success still counts.
+	// Replay only visible evidence: a prompt or ordinary reply clears the previous outcome, a model error makes an
+	// earlier close unsuccessful, and a visible close succeeds only when no visible error followed it. This also
+	// handles an abandoned tool-only turn, which has no words but still left a close behind.
 	meta.turnSucceeded = false
-	for i := len(t.tree.recs) - 1; i >= 0; i-- {
-		rec := t.tree.recs[i]
-		if t.tree.hidden[rec.uuid] || !rec.turnEnd {
+	var failure turnFailureState
+	for _, rec := range t.tree.recs {
+		if t.tree.hidden[rec.uuid] {
 			continue
 		}
-		meta.turnSucceeded = rec.succeeded
-		break
+		if rec.prompt {
+			meta.turnSucceeded = false
+			failure = turnFailureState{}
+		}
+		if rec.clearsError {
+			failure = turnFailureState{}
+		}
+		if rec.failure.text != "" && (rec.failure.line == "" || !t.tree.hidden[rec.failure.line]) {
+			failure = rec.failure
+			meta.turnSucceeded = false
+		}
+		if rec.turnEnd {
+			meta.turnSucceeded = rec.succeeded && failure.text == ""
+		}
 	}
-	meta.LastText, meta.LastTextAt = "", time.Time{}
-	for _, w := range t.words {
-		if t.tree.hidden[w.uuid] {
-			continue
+	meta.clearTurnError()
+	meta.TurnError, meta.TurnErrorKind, meta.TurnErrorCode = failure.text, failure.kind, failure.code
+	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = failure.resetsAt, failure.resumes, failure.afterWork
+	meta.turnErrorLine, meta.resumesSaid = failure.line, failure.resumesSaid
+	if wordsDropped {
+		meta.LastText, meta.LastTextAt = "", time.Time{}
+		for _, w := range t.words {
+			if t.tree.hidden[w.uuid] {
+				continue
+			}
+			if w.said != "" {
+				meta.LastText = w.said
+			}
+			meta.LastTextAt = w.saidAt
 		}
-		if w.said != "" {
-			meta.LastText = w.said
-		}
-		meta.LastTextAt = w.saidAt
 	}
 	return true
 }
