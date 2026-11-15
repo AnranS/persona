@@ -10,12 +10,12 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// sideReviewFixture is a legacy task side conversation side1 handed out: its ledger still names side1 and its old
-// review notice is already there. New task_plan work is main-supervised (#5732), so the legacy state is explicit.
+// sideReviewFixture installs a pre-#5732 ledger: side1 handed out the task and still owns its pending review, with
+// the old supervision message already delivered there. New task_plan work is supervised by conv1; this fixture keeps
+// the legacy handover path testable without restoring that old routing. Both conversations are idle.
 func sideReviewFixture(t *testing.T) (*Service, *fakeHub, Todo) {
 	t.Helper()
 	s, f := newQuietService(t)
-	f.judge = `{"verdict":"done","reason":"PR 已合并"}`
 	f.known["side1"] = true
 	listSide(f, proto.StatusIdle)
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
@@ -27,15 +27,15 @@ func sideReviewFixture(t *testing.T) (*Service, *fakeHub, Todo) {
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
+	v, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
 		v.Supervisor, v.State = "side1", reviewPending
 		return true
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	f.mu.Lock()
-	f.sends = append(f.sends, map[string]any{"session_id": "side1", "text": "📋 督办 legacy review " + todo.ID})
-	f.mu.Unlock()
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReview, Key: reviewKey(&v), To: "side1"})
+	waitFor(t, "the legacy side conversation's supervision message", func() bool { return reviewsTold(f, "side1", todo.ID) == 1 })
 	if v := todoNow(s, todo.ID).Supervision; v == nil || v.Supervisor != "side1" || v.State != reviewPending {
 		t.Fatalf("ledger = %+v, want side1's legacy task waiting for review", v)
 	}
@@ -113,13 +113,15 @@ func TestReviewLeftWaitingByASideConversationGoesToTheMainConversation(t *testin
 	waitFor(t, "the side conversation's end notice", func() bool { return len(endNotices(f, "side1")) == 1 })
 }
 
-// An existing legacy background does not take a newly handed-over review: after #5732 every new task signal,
-// including this compatibility handover, goes to main.
-func TestReviewLeftWaitingByASideConversationStaysWithMainWhenLegacyBackgroundExists(t *testing.T) {
+// Even with the legacy background supervisor configured, a handed-over review follows #5732's current routing:
+// the ledger and the supervision message both stay with the main conversation, and no background stream is started.
+func TestReviewLeftWaitingByASideConversationStaysWithMainWhenBackgroundIsConfigured(t *testing.T) {
 	s, f, todo := sideReviewFixture(t)
 	ctx := context.Background()
 	s.noBackground = false
-	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	setSettings(t, s, func(v *Settings) {
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server"
+	})
 	f.setSessions("server",
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "side1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
@@ -131,7 +133,7 @@ func TestReviewLeftWaitingByASideConversationStaysWithMainWhenLegacyBackgroundEx
 	}
 	waitFor(t, "the review told to the main conversation", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
 	if n := reviewsTold(f, "bg1", todo.ID); n != 0 {
-		t.Fatalf("the legacy background got %d new handover message(s), want none", n)
+		t.Fatalf("the legacy background conversation got %d new supervision message(s)", n)
 	}
 	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "PR 已合并",
 		"checks": []map[string]any{{"criterion": "PR 合并到 main", "met": true, "evidence": "pull/7"}}}); err != nil {
