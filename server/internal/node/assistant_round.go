@@ -101,6 +101,17 @@ func (r *roundResult) set(context, why string) {
 	r.mu.Unlock()
 }
 
+// keptBusy: the round goes in as before because the conversation's process works (roundWhyBusy), so it joins that
+// process (assistantSend).
+func (r *roundResult) keptBusy() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.decided && r.context == roundKept && r.why == roundWhyBusy
+}
+
 func (r *roundResult) sized(n int64) {
 	if r == nil {
 		return

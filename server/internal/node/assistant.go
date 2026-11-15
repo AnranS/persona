@@ -511,6 +511,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// the idle one stops once it settled, and the round gets the whole snapshot, the earlier ones being out of its
 	// context. One that began to work meanwhile (a turn Claude Code started on its own) takes the round as before.
 	var round spawnRound
+	joins := false // the round goes in as before because the process works: it joins that process (below)
 	if r := superviseRoundFrom(ctx); r != nil {
 		round = n.superviseRound(ctx, r, id, p, agent, guest != nil, execution)
 		if round.anchor != "" && p != nil && !n.stopSettled(ctx, p) {
@@ -518,6 +519,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.logf("assistant %s: supervision round goes in as before (%s)", short(id), roundWhyBusy)
 			round = spawnRound{}
 		}
+		joins = r.keptBusy()
 		if round.anchor != "" {
 			if p != nil {
 				n.rememberTasks(id, nil) // idle, with no background task (superviseRound)
@@ -545,8 +547,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if otherTools {
 			// A round's process is not replaced for its tools while anything in it would be lost (workingLocked): also
 			// a compaction, the user's included, which sets no busy flag, and a message Claude Code queued or started.
-			// It is what superviseRound calls busy, so a round it keeps as busy joins this process.
-			active = p.workingLocked()
+			// It is what superviseRound calls busy, so a round it keeps as busy joins this process, as its answer says:
+			// also one kept because the process did not settle while stopSettled waited (it printed all along), which
+			// may have gone quiet by now. A round kept for another reason (no anchor) needs every tool like any message.
+			active = p.workingLocked() || joins
 		}
 		p.mu.Unlock()
 		alive := p.alive()
