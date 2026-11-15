@@ -1,6 +1,9 @@
 import Foundation
+import SwiftUI
 import Testing
+import UIKit
 @testable import Persona
+import PersonaWire
 
 /// A stopped Agent's manager work card can still be put off or dismissed, which send the Agent nothing; Continue, a typed
 /// answer and every other card stay closed (#6839, web #6753).
@@ -41,6 +44,7 @@ struct StoppedWorkCardTests {
         #expect(!ix.isLocalResolution(Resolution(answers: [Self.ask: "帮我重试一下"])), "a typed answer goes to the Agent") // i18n-ignore
         #expect(!ix.isLocalResolution(Resolution(answers: [:])))
         #expect(!ix.isLocalResolution(Resolution(message: "x", dismiss: true)), "a dismiss carrying more is not bare")
+        #expect(!ix.isLocalResolution(.cancelled), "Skip cancels the question, which the Agent hears")
     }
 
     @Test func otherCardsHaveNoLocalAnswers() {
@@ -63,6 +67,26 @@ struct StoppedWorkCardTests {
         await model.resolve(ix, r)
         #expect(hub.sent("POST", "/api/v1/interactions/work/resolve").count == 1)
         #expect(model.pendingInteractions.isEmpty)
+    }
+
+    /// A conversation showing the card still fits an iPhone's main-thread stack in a Debug build (#6735): the card sits in
+    /// the conversation's footer, its deepest path (#7309), with the local-only environment this card adds. Measured with
+    /// the card first, so its number is not the one helped by metadata the other render built.
+    @Test func aConversationShowingTheCardFitsAPhonesStack() throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        func peak(withCard: Bool) -> Int {
+            let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "stack-work-" + UUID().uuidString))
+            model.applySessions([MachineRef(group: "", id: "m"): [stopped()]])
+            if withCard { model.replaceInteractions("", [card()]) }
+            let chat = NavigationStack { ChatView(key: SessionKey(machineID: "m", sessionID: "s")) }.environment(model)
+            let (bytes, window) = StackPeak.render(chat, in: scene)
+            window.isHidden = true
+            return bytes
+        }
+        let with = peak(withCard: true), without = peak(withCard: false)
+        print("StoppedWorkCardTests: the conversation with the card \(with / 1024) KB, without \(without / 1024) KB")
+        #expect(with < StackPeak.pageBudget,
+                "a conversation showing a stopped Agent's work card reached \(with / 1024) KB of stack (budget \(StackPeak.pageBudget / 1024) KB)")
     }
 
     @Test func continueOnAStoppedAgentSendsNothing() async {
