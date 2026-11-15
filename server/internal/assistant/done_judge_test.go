@@ -126,6 +126,8 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"English direct owner operation", "The spec is ready. You need to deploy it yourself.", verdictNeedsUser, "You need to"},
 		{"English direct owner operation after a semicolon", "The spec is ready; you need to deploy it yourself.", verdictNeedsUser, "you need to"},
 		{"English direct requirement after a conditional", "If you need to roll back, use the backup. Otherwise, you need to approve the release yourself.", verdictNeedsUser, "you need to"},
+		{"nested if-question does not hide a direct requirement", "The report checks if the deploy succeeded: you need to approve the release.", verdictNeedsUser, ""},
+		{"genuine conditional after an if-question control", "If the deploy succeeded: you need to approve the release.", verdictDone, ""},
 		{"English direct requirement after otherwise without a comma", "If you need to roll back, use the backup. Otherwise you need to approve the release yourself.", verdictNeedsUser, "you need to"},
 		{"English direct contraction after a conditional", "If you'll need to roll back, use the backup. Otherwise, you'll need to approve the release yourself.", verdictNeedsUser, "you'll need to"},
 		{"English unconditional requirement after even if", "Even if you need to roll back, you need to notify the owner first.", verdictNeedsUser, "you need to"},
