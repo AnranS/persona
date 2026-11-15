@@ -103,7 +103,7 @@ func directOwnerMarker(lower, marker string) bool {
 		for _, end := range []string{".", "!", "?", ":", ";"} {
 			direct = direct || strings.HasSuffix(before, end)
 		}
-		if strings.HasSuffix(before, ",") {
+		if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
 			end := strings.LastIndexAny(clause, ".!?;")
 			// A colon starts a clause after whitespace; a time such as 10:30 does not end the conditional scope.
@@ -150,6 +150,33 @@ func ownerOfferMarker(lower, marker string) bool {
 			resolved = resolved || strings.Contains(sentence, phrase)
 		}
 		if !resolved && !ownerMarkerQuoted(lower, i) {
+			return true
+		}
+		from = i + len(marker)
+	}
+	return false
+}
+
+// ownerChineseQuestionMarker reports an unquoted, unresolved Chinese offer/question. Negated phrases have already
+// been blanked by the caller, so one negated occurrence cannot hide a later direct question (#5732).
+func ownerChineseQuestionMarker(text, marker string) bool {
+	for from := 0; from < len(text); {
+		i := strings.Index(text[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		start := strings.LastIndexAny(text[:i], ".!?;。！？；") + 1
+		end := len(text)
+		if j := strings.IndexAny(text[i+len(marker):], ".!?;。！？；"); j >= 0 {
+			end = i + len(marker) + j
+		}
+		sentence := text[start:end]
+		resolved := false
+		for _, phrase := range []string{"我回答了", "我已回答", "已经回答", "已回答", "已经解决", "已解决", "无需进一步操作", "不需要进一步操作"} {
+			resolved = resolved || strings.Contains(sentence, phrase)
+		}
+		if !resolved && !ownerMarkerQuoted(text, i) {
 			return true
 		}
 		from = i + len(marker)
@@ -207,6 +234,12 @@ func ownerActionLine(text string) string {
 				candidate = strings.ReplaceAll(candidate, n, strings.Repeat(" ", len(n)))
 			}
 			// Negation is occurrence-local here too: masking its own phrase cannot hide a later direct requirement.
+			if p.marker == "要不要" { // i18n-ignore: parser marker, not display copy
+				if ownerChineseQuestionMarker(candidate, p.marker) {
+					return line
+				}
+				continue
+			}
 			if strings.Contains(candidate, p.marker) {
 				return line
 			}

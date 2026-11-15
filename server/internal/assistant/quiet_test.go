@@ -86,9 +86,13 @@ func agentTurn(s *Service, f *fakeHub, status, text string, pending int) {
 
 type failingSupervisionStore struct {
 	*db.DB
+	onWrite func()
 }
 
-func (failingSupervisionStore) PutTodoSupervision(context.Context, db.TodoSupervisionRow) error {
+func (f failingSupervisionStore) PutTodoSupervision(context.Context, db.TodoSupervisionRow) error {
+	if f.onWrite != nil {
+		f.onWrite()
+	}
 	return errors.New("injected supervision write failure")
 }
 
@@ -108,6 +112,61 @@ func TestAgentStartStopsWhenSupervisionCannotBeStored(t *testing.T) {
 	todos := s.todosOf(context.Background(), "*")
 	if len(todos) != 1 || todos[0].DoneAt == nil || todos[0].Supervision != nil || len(todos[0].Agents) != 0 {
 		t.Fatalf("failed preparation left an unsupervised task: %+v", todos)
+	}
+}
+
+// task_plan has the same admission boundary as agent_start: a failed ledger write closes the prepared card and
+// leaves no dispatch for runPlanTaskStart to start.
+func TestTaskPlanStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	st := failingSupervisionStore{DB: todoTestDB(t)}
+	s, f := newQuietServiceOn(t, st)
+	res, err := runJSON(t, s, "conv1", "task_plan", briefTask(nil))
+	if err != nil {
+		t.Fatalf("task_plan returned a tool error instead of the task's dispatch failure: %v", err)
+	}
+	waitFor(t, "the task start reservation to settle", func() bool { return s.taskStarting.Load() == 0 })
+	if len(f.starts) != 0 {
+		t.Fatalf("session.start ran without a supervision ledger: %+v", f.starts)
+	}
+	if !strings.Contains(res, "dispatch failed") || !strings.Contains(res, "injected supervision write failure") {
+		t.Fatalf("task_plan did not report the ledger failure: %q", res)
+	}
+	todos := s.todosOf(context.Background(), "*")
+	if len(todos) != 1 || todos[0].DoneAt == nil || !strings.Contains(todos[0].StartError, "injected supervision write failure") ||
+		todos[0].Supervision != nil || len(todos[0].Agents) != 0 {
+		t.Fatalf("failed plan preparation left an open or unsupervised task: %+v", todos)
+	}
+	plan, err := s.loadPlan(context.Background(), todos[0].PlanID)
+	if err != nil {
+		t.Fatalf("load the failed task's plan: %v", err)
+	}
+	if len(plan.Tasks) != 1 || plan.Tasks[0].TodoID != "" || !strings.Contains(plan.Tasks[0].Error, "injected supervision write failure") {
+		t.Fatalf("failed plan retained a dispatchable task: %+v", plan.Tasks)
+	}
+}
+
+// The caller may disconnect exactly when the ledger write fails. The prepared card still has to close on real
+// Postgres; suppressing session.start alone would otherwise leave an open, unexplained card.
+func TestTaskPlanSupervisionFailureSurvivesCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	st := failingSupervisionStore{DB: todoTestDB(t), onWrite: cancel}
+	s, f := newQuietServiceOn(t, st)
+	raw, _ := json.Marshal(briefTask(nil))
+	res, err := s.runTool(ctx, "server", "conv1", "task_plan", raw)
+	if err != nil {
+		t.Fatalf("cancelled task_plan returned a tool error instead of the task's dispatch failure: %v", err)
+	}
+	if !strings.Contains(res, "dispatch failed") {
+		t.Fatalf("cancelled task_plan did not report the ledger failure: %q", res)
+	}
+	waitFor(t, "the cancelled task start reservation to settle", func() bool { return s.taskStarting.Load() == 0 })
+	if len(f.starts) != 0 {
+		t.Fatalf("session.start ran after caller cancellation and a supervision failure: %+v", f.starts)
+	}
+	todos := s.todosOf(context.Background(), "*")
+	if len(todos) != 1 || todos[0].DoneAt == nil || !strings.Contains(todos[0].StartError, "injected supervision write failure") ||
+		len(todos[0].Agents) != 0 {
+		t.Fatalf("caller cancellation lost the failed prepared card: %+v", todos)
 	}
 }
 

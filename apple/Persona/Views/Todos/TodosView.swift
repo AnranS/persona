@@ -156,7 +156,8 @@ struct TodosView: View {
                         if !groups.isEmpty {
                             let folded = section.startsFolded && !isUnfolded(section)
                             // The to-dos its rows list, a merged row's related ones too: the number says what is under it.
-                            sectionView(section, groups: groups, count: groups.reduce(0) { $0 + $1.members.count }, folded: folded)
+                            sectionView(section, groups: groups, count: groups.reduce(0) { $0 + $1.members.count }, folded: folded,
+                                        awaitingReview: section == .justDone && result.justDoneAwaitingReview)
                                 .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
                         }
                     }
@@ -302,7 +303,8 @@ struct TodosView: View {
         unfolded.contains(section) || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    @ViewBuilder private func sectionView(_ section: TodoSection, groups: [TodoTriageGroup], count: Int, folded: Bool) -> some View {
+    @ViewBuilder private func sectionView(_ section: TodoSection, groups: [TodoTriageGroup], count: Int, folded: Bool,
+                                          awaitingReview: Bool = false) -> some View {
         Section {
             if !folded {
                 if section == .shelved {
@@ -318,18 +320,18 @@ struct TodosView: View {
             // The Agents list's state header (#3712): the name, and the count in the state's color. Folding ones are a
             // FoldButton, spoken as "name, expanded / collapsed, N to-dos".
             if section.startsFolded {
-                FoldButton(title: section.title, folded: folded, detail: String(localized: "\(count) to-dos")) {
+                FoldButton(title: section.title(awaitingReview: awaitingReview), folded: folded, detail: String(localized: "\(count) to-dos")) {
                     withAnimation(Theme.Motion.state) {
                         if unfolded.contains(section) { unfolded.remove(section) } else { unfolded.insert(section) }
                     }
                 } label: {
-                    SectionHeader(title: section.title, count: count, tone: section.tone)
+                    SectionHeader(title: section.title(awaitingReview: awaitingReview), count: count, tone: section.tone)
                 }
                 .font(Theme.Font.sectionHeader)
                 .textCase(nil)
                 .accessibilityIdentifier("todos.section.\(section.rawValue)")
             } else {
-                SectionHeader(title: section.title, count: count, tone: section.tone)
+                SectionHeader(title: section.title(awaitingReview: awaitingReview), count: count, tone: section.tone)
                     .font(Theme.Font.sectionHeader)
                     .textCase(nil)
                     .accessibilityElement(children: .combine)

@@ -1300,10 +1300,14 @@ const SECTION_TONE: Record<TriageSection, string> = {
   cancelled: "text-ink-3",
 };
 
-/** A section's title: the two that are agent states take the state names (lib/state-labels.ts). */
-function sectionTitle(section: TriageSection): string {
+/** A mixed Just finished section keeps its ordinary name; only wholly unaccepted deliveries await review. */
+function sectionTitle(section: TriageSection, groups: readonly TriageGroup[]): string {
   if (section === "waiting") return t("todos.section_waiting");
   if (section === "working") return stateName("working");
+  if (section === "just_done") {
+    const awaiting = groups.every((group) => group.members.every((todo) => group.triage.get(todo.id)?.rule === "finished_unseen"));
+    return t(awaiting ? "todos.section_awaiting_review" : "todos.section_just_done");
+  }
   return t(`todos.section_${section}`);
 }
 
@@ -1343,7 +1347,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
     <section className="mt-1 first:mt-0" data-testid="todo-section" data-section={section} data-count={groups.length} data-todos={count}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] hover:bg-hover">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
-        <span className={cx("min-w-0 flex-1 truncate font-semibold whitespace-nowrap", SECTION_TONE[section])}>{sectionTitle(section)}</span>
+        <span className={cx("min-w-0 flex-1 truncate font-semibold whitespace-nowrap", SECTION_TONE[section])}>{sectionTitle(section, groups)}</span>
         <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{count}</span>
       </button>
       {!folded && section === "shelved" && <p className="px-2.5 pb-1 text-[11.5px] text-ink-3">{t("todos.shelved_hint")}</p>}

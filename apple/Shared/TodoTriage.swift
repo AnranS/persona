@@ -29,12 +29,17 @@ nonisolated enum TodoSection: String, CaseIterable, Sendable {
     /// Shelved, Done and Cancelled start folded; unfinished to-dos stay open (#5707, #5732).
     var startsFolded: Bool { self == .shelved || self == .done || self == .cancelled }
 
-    /// The section's header (the web's `todos.section_*`).
-    var title: String {
+    /// The section's ordinary header; `title(awaitingReview:)` upgrades only a wholly unaccepted-delivery section.
+    var title: String { title(awaitingReview: false) }
+
+    func title(awaitingReview: Bool) -> String {
         switch self {
         case .waiting: String(localized: "Waiting for You [To-do Sections]")
         case .working: StateName.working.text
-        case .justDone: String(localized: "Delivered · Awaiting Review [To-do Sections]")
+        case .justDone:
+            awaitingReview
+                ? String(localized: "Delivered · Awaiting Review [To-do Sections]")
+                : String(localized: "Just Finished [To-do Sections]")
         case .pr: String(localized: "PR to Merge")
         case .other: String(localized: "Other Open")
         case .shelved: String(localized: "Shelved")
@@ -89,6 +94,8 @@ nonisolated struct TodoTriageResult: Sendable {
     var finished: Int
     /// Cancelled to-dos, separate from completed (#5732).
     var cancelled: Int
+    /// Precomputed for the view: only a wholly FinishedUnseen Just finished section uses the review wording.
+    var justDoneAwaitingReview: Bool
 
     func groups(_ section: TodoSection) -> [TodoTriageGroup] { sections[section] ?? [] }
     var isEmpty: Bool { sections.values.allSatisfy(\.isEmpty) }
@@ -97,6 +104,8 @@ nonisolated struct TodoTriageResult: Sendable {
 nonisolated enum TodoTriageLogic {
     /// No activity for this long, nothing of it running: shelved.
     static let shelveAfter: TimeInterval = 48 * 3600
+    /// A reported concern stays in Just finished this long when its report closed it, unless seen since.
+    static let justDone: TimeInterval = 24 * 3600
 
     /// How a to-do's linked agents stand, the way the web's `todoStatus` reads them: an open ask does not count here
     /// (rules 3 and 8 read it), unlike `TaskState(todo:agents:)`.
@@ -182,7 +191,7 @@ nonisolated enum TodoTriageLogic {
     ///  2. agentAsks      an agent asks (question, approval) or was cut off → Waiting on you
     ///  3. ownerDecides   review says needs_user, or a decision / "cannot" ask → Waiting on you
     ///  4. agentRunning   an agent is working or starting                   → Working
-    ///  5. closed         done_at set                                       → Done immediately
+    ///  5. closed         done_at set; a fresh reported concern stays Just finished → Done otherwise
     ///  6. accepted       the latest review accepted it (even reopened)     → Done immediately
     ///  7. finishedUnseen its delivery is live, not accepted                → Delivered · awaiting review, no timeout
     ///  8. finishedUnseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
@@ -200,6 +209,7 @@ nonisolated enum TodoTriageLogic {
         // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
         // Explicit closure and acceptance are already Done; Seen does not move them through awaiting review.
         let seen = { (at: Date) in todo.seenAt.map { $0 >= at } ?? false }
+        let fresh = { (at: Date) in now.timeIntervalSince(at) < justDone && !seen(at) }
         let ask = openAsk(todo)
         let review = todo.reviewState
         func at(_ s: TodoSection, _ r: TodoTriageRule) -> TodoTriage { TodoTriage(section: s, rule: r, last: last) }
@@ -215,7 +225,9 @@ nonisolated enum TodoTriageLogic {
             return at(.waiting, .ownerDecides)
         }
         if status == .working || status == .waiting { return at(.working, .agentRunning) }
-        if todo.doneAt != nil { return at(.done, .closed) }
+        if let done = todo.doneAt {
+            return at(todo.kind == "concern" && fresh(done) ? .justDone : .done, .closed)
+        }
         if todo.acceptanceStands {
             return at(.done, .accepted)
         }
@@ -403,8 +415,13 @@ nonisolated enum TodoTriageLogic {
         for s in TodoSection.allCases {
             sections[s]!.sort { a, b in a.last != b.last ? a.last > b.last : a.key < b.key }
         }
+        let justDoneGroups = sections[.justDone] ?? []
+        let justDoneAwaitingReview = !justDoneGroups.isEmpty && justDoneGroups.allSatisfy { group in
+            group.members.allSatisfy { group.triage[$0.id]?.rule == .finishedUnseen }
+        }
         return TodoTriageResult(sections: sections, todoCounts: counts, open: open, shelved: shelved,
-                                finished: list.count - open - shelved - cancelled, cancelled: cancelled)
+                                finished: list.count - open - shelved - cancelled, cancelled: cancelled,
+                                justDoneAwaitingReview: justDoneAwaitingReview)
     }
 }
 

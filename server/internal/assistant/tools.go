@@ -613,9 +613,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
 		failBeforeStart := func(reason string) {
 			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
-			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.
-			if ferr := s.failTodo(ctx, task.ID, clip(oneLine(reason), 200)); ferr != nil {
-				s.logf("task %s: pre-start failure: %v", task.ID, ferr)
+			// open task with no Agent and no explanation (#5732). The caller may have cancelled after the node refused
+			// the detached start; failure bookkeeping gets its own bound. Unknown start results are handled below instead.
+			fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+			defer fcancel()
+			if ferr := s.failTodo(fctx, task.ID, clip(oneLine(reason), 200)); ferr != nil {
+				s.logf("task %s: definite start failure: %v", task.ID, ferr)
 			}
 		}
 		// A Claude start also takes the session id the hub picks (node session.start's session_id, used by
@@ -678,9 +681,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				// do not report failure (the model would start it again, duplicating the run).
 				return s.startedWithoutAnswer(ctx, am, picked, a.Cwd, note, expectID, knownIDs, task, told), nil
 			}
-			if ferr := s.failTodo(ctx, task.ID, clip(oneLine(err.Error()), 200)); ferr != nil {
-				s.logf("task %s: fail: %v", task.ID, ferr)
-			}
+			failBeforeStart(err.Error())
 			return "", err
 		}
 		s.recordStartSuccess(ctx, am.ID, launcher)

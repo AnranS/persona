@@ -269,6 +269,35 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 	refused("a closed task's leader", call("s1", workerArgs(nil)))
 }
 
+// A worker whose own supervision ledger cannot be stored never starts. The leader is linked directly so its setup
+// does not depend on the deliberately failing worker ledger.
+func TestTaskLeaderWorkerStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	st := failingSupervisionStore{DB: todoTestDB(t)}
+	s, f := newQuietServiceOn(t, st)
+	ctx := context.Background()
+	leader, err := s.createTaskTodo(ctx, "leader", "", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgentWithSource(ctx, leader.ID, "box", "s1", "leader", "/code/app", "", "", sourceLeader, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	res := s.mcpCall(ctx, "box", "s1", "task_plan", workerArgs(nil), false)
+	waitFor(t, "the worker start reservation to settle", func() bool { return s.taskStarting.Load() == 0 })
+	if len(f.starts) != 0 {
+		t.Fatalf("session.start ran for a worker without its supervision ledger: %+v", f.starts)
+	}
+	if res.IsError || !strings.Contains(res.Content[0].Text, "injected supervision write failure") {
+		t.Fatalf("the worker's ledger failure was not reported: %+v", res)
+	}
+	workers := todosOpenedBy(s, "box/s1")
+	if len(workers) != 1 || workers[0].DoneAt == nil || !strings.Contains(workers[0].StartError, "injected supervision write failure") ||
+		workers[0].Supervision != nil || len(workers[0].Agents) != 0 {
+		t.Fatalf("failed worker preparation left an open or unsupervised card: %+v", workers)
+	}
+}
+
 // The room is bounded: a leader cannot keep more than leaderWorkersMost workers open. Workers count by the task they
 // belong to, so a leader started again (a new session) does not get a new allowance.
 func TestTaskLeaderWorkersAreBounded(t *testing.T) {

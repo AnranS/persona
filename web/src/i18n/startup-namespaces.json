@@ -168,6 +168,7 @@
   "todos.delivery_",
   "todos.kicker_",
   "todos.section_just_done",
+  "todos.section_awaiting_review",
   "todos.section_waiting",
   "todos.stage_",
   "ui-assistantcard",

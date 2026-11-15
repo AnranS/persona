@@ -77,6 +77,22 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	if !ok {
 		return nil, errPlanNotOpen
 	}
+	failSupervision := func(t *PlanTask, todoID string, err error) {
+		reason := clip(oneLine(fmt.Sprintf("supervision could not be recorded: %v", err)), 200)
+		t.Error, t.TodoID = reason, ""
+		fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		defer fcancel()
+		if ferr := s.failTodo(fctx, todoID, reason); ferr != nil {
+			s.logf("task %s: supervision failure close: %v", todoID, ferr)
+		}
+		// No start body will run for this task, so release every claim that body would have released.
+		s.releaseTakenTodo(t.ReuseTodo)
+		s.releaseTaskWorkspace(todoID)
+		if t.admissionRelease != nil {
+			t.admissionRelease()
+			t.admissionRelease = nil
+		}
+	}
 	for i := range p.Tasks {
 		t := &p.Tasks[i]
 		var todo Todo
@@ -116,11 +132,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				if t.ReuseTodo == "" && sup != p.Conversation {
 					s.taskCard(ctx, sup, todo.ID, "")
 				}
-				s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+				if err := s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes); err != nil {
+					failSupervision(t, todo.ID, err)
+					continue
+				}
 			}
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
-			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			if err := s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes); err != nil {
+				failSupervision(t, todo.ID, err)
+			}
 			continue
 		}
 		if t.ReuseTodo != "" {

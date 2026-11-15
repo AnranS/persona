@@ -80,6 +80,30 @@ struct TodoTriageTests {
         #expect(at(todo("t", updated: 30, done: 30)).section == .done)
     }
 
+    @Test func freshClosedConcernIsJustFinishedAndSectionTitlesFollowMemberRules() throws {
+        let closedJSON = """
+        {"id":"reported","title":"Reported concern","kind":"concern","done_at":"\(ISO8601DateFormatter().string(from: ago(1)))"}
+        """
+        let closed = try JSON.decoder.decode(TodoItem.self, from: Data(closedJSON.utf8))
+        #expect(closed.kind == "concern")
+        let closedTriage = at(closed)
+        #expect(closedTriage.section == .justDone && closedTriage.rule == .closed)
+        #expect(at(todo("old", done: 30) { $0.kind = "concern" }).section == .done)
+        #expect(at(todo("seen", done: 3) { $0.kind = "concern"; $0.seenAt = ago(2) }).section == .done)
+        #expect(at(todo("ordinary", done: 1)).section == .done)
+
+        let closedResult = TodoTriageLogic.triageTodos([closed], lookup: lookup, now: now)
+        #expect(!closedResult.justDoneAwaitingReview)
+        #expect(TodoSection.justDone.title(awaitingReview: closedResult.justDoneAwaitingReview) == "刚做完")
+        let live = todo("live") { $0.delivery = .init(state: "live", at: ago(1)) }
+        let liveResult = TodoTriageLogic.triageTodos([live], lookup: lookup, now: now)
+        #expect(liveResult.justDoneAwaitingReview)
+        #expect(TodoSection.justDone.title(awaitingReview: liveResult.justDoneAwaitingReview) == "已交付·待看")
+        let mixedResult = TodoTriageLogic.triageTodos([closed, live], lookup: lookup, now: now)
+        #expect(!mixedResult.justDoneAwaitingReview)
+        #expect(TodoSection.justDone.title(awaitingReview: mixedResult.justDoneAwaitingReview) == "刚做完")
+    }
+
     @Test func acceptedTaskReopenedByMoreWorkIsFinishedNotFollowUp() {
         let td = todo("t", agents: ["idle"]) {
             $0.reopenedAt = ago(4)

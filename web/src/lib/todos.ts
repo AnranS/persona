@@ -343,7 +343,7 @@ export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (isCancelled(todo)) return t("lib-todos.review_cancelled");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (waitsForOwner(todo)) return t("todos.section_waiting");
-  if (awaitsReview(todo, status)) return t("todos.section_just_done");
+  if (awaitsReview(todo, status)) return t("todos.section_awaiting_review");
   if (status === "done" && isReviewDone(todo)) return t("lib-todos.review_done");
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }

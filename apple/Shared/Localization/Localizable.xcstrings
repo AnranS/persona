@@ -77116,6 +77116,29 @@
         }
       }
     },
+    "Just Finished [To-do Sections]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Just finished"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚做完"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了したばかり"
+          }
+        }
+      }
+    },
     "Just Me" : {
       "extractionState" : "manual",
       "localizations" : {
