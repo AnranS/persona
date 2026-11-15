@@ -48,7 +48,7 @@ type treeLine struct {
 	assistant    bool // the line is the assistant's (a reply, a tool call): the message it grew from was answered
 	system       bool // a system line (a recap, a turn's duration, a notice)
 	turnEnd      bool // a turn_duration line: the turn it closes ended
-	turnStart    bool // a model turn, not a local command, started here
+	raw          []byte
 	// said / saidAt: the agent's words on this line (Meta.LastText / LastTextAt as it set them); spoke says it wrote
 	// text at all (said is "" for botmux's sentinel alone).
 	said   string
@@ -56,36 +56,18 @@ type treeLine struct {
 	spoke  bool
 }
 
-type turnFailureState struct {
-	text, kind, code string
-	resetsAt         time.Time
-	resumes          bool
-	afterWork        bool
-	line             string
-}
-
 // treeRec is a line with a uuid, as the tree keeps it: prompt says it is one of the user's own messages, reply that it
-// is the assistant's, system that it is a system line and turnEnd a turn_duration one. The outcome fields are the
-// actual parser state after this line; outcomeChanged distinguishes a real transition from a later line merely
-// inheriting state (including state from a turn that is about to be hidden).
+// is the assistant's, system that it is a system line and turnEnd a turn_duration one. raw is the parsed record to
+// replay when it remains visible; hasOutcome is false for a structural-only skipped tool result or compact summary.
 type treeRec struct {
-	uuid, parent   string
-	prompt         bool
-	reply          bool
-	system         bool
-	turnEnd        bool
-	turnStart      bool
-	succeeded      bool
-	open           bool
-	closed         bool
-	localTurn      bool
-	beforeLocal    [2]bool
-	resumesSaid    bool
-	turnResumes    bool
-	resumeLine     string
-	failure        turnFailureState
-	outcomeChanged bool
-	hasOutcome     bool
+	uuid, parent string
+	prompt       bool
+	reply        bool
+	system       bool
+	turnEnd      bool
+	raw          []byte
+	errorLine    string
+	hasOutcome   bool
 }
 
 // branchTree tracks the lines read so far (file order) and which of them lie on abandoned branches.
@@ -344,7 +326,7 @@ func trackLine(t *branchTree, meta *Meta, items []proto.Item, kept, sent *[]prot
 }
 
 func (tl treeLine) rec(items []proto.Item) treeRec {
-	return treeRec{uuid: tl.uuid, parent: tl.parent, prompt: isMessage(items), reply: tl.assistant, system: tl.system, turnEnd: tl.turnEnd, turnStart: tl.turnStart}
+	return treeRec{uuid: tl.uuid, parent: tl.parent, prompt: isMessage(items), reply: tl.assistant, system: tl.system, turnEnd: tl.turnEnd, raw: tl.raw}
 }
 
 // Tail follows the tree over lines read one at a time with ParseLine outside a File (the node's quick read of a
@@ -394,37 +376,11 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool) {
 		return
 	}
 	rec := tl.rec(items)
-	rec.hasOutcome = recordOutcome
-	if recordOutcome {
-		rec.succeeded = meta.TurnSucceeded()
-		rec.open, rec.closed = meta.TurnOpen, meta.TurnClosed
-		rec.localTurn, rec.beforeLocal = meta.localTurn, meta.beforeLocal
-		rec.resumesSaid = meta.resumesSaid
-		rec.turnResumes = meta.TurnErrorResumes
-		if meta.TurnError != "" {
-			rec.failure = turnFailureState{text: meta.TurnError, kind: meta.TurnErrorKind, code: meta.TurnErrorCode,
-				resetsAt: meta.TurnErrorResetsAt, resumes: meta.TurnErrorResumes, afterWork: meta.TurnErrorAfterWork, line: meta.turnErrorLine}
-		}
-		previous := treeRec{}
-		for i := len(t.tree.recs) - 1; i >= 0; i-- {
-			if t.tree.recs[i].hasOutcome {
-				previous = t.tree.recs[i]
-				break
-			}
-		}
-		rec.resumeLine = rec.failure.line
-		if rec.turnResumes && rec.resumeLine == "" {
-			rec.resumeLine = previous.resumeLine
-		}
-		if !rec.turnResumes {
-			rec.resumeLine = ""
-		}
-		rec.outcomeChanged = rec.open != previous.open || rec.closed != previous.closed || rec.succeeded != previous.succeeded ||
-			rec.localTurn != previous.localTurn || rec.beforeLocal != previous.beforeLocal || rec.resumesSaid != previous.resumesSaid ||
-			rec.turnResumes != previous.turnResumes || rec.resumeLine != previous.resumeLine || rec.failure != previous.failure
-	} else {
-		// Skipped is tree shape only: even a real prompt's turn-start is not evidence the quick reader may apply.
-		rec.turnStart = false
+	// A parsed record is replayable. A skipped large prompt is replayable too (its quick-tail transition is real),
+	// while a skipped tool result or compact summary is tree shape only.
+	rec.hasOutcome = recordOutcome || rec.prompt
+	if meta.TurnError != "" {
+		rec.errorLine = meta.turnErrorLine
 	}
 	if (rec.prompt || rec.reply) && t.gone[rec.parent] && !t.gone[rec.uuid] {
 		// Claude went on from a line Rewound named: that rewind was not one (File.RewoundAt). The lines of its turn, as
@@ -499,8 +455,8 @@ func (t *Tail) Skipped(line []byte) {
 // Settle puts into meta the agent's last words on the lines still in the conversation, when words on an abandoned
 // branch were among them (meta is left as it is otherwise). It says whether it changed them; LastText is "" then when
 // no words in the lines read are left. A turn error said on such a branch goes too: the conversation that is left did
-// not fail there, and nothing older comes back (the user went back to start over). Turn success follows the latest
-// visible close for the same reason: a hidden turn's success cannot erase the visible branch's failure.
+// not fail there, and nothing older comes back (the user went back to start over). Replaying only the visible raw
+// records likewise keeps turn success, open/closed/local state, and automatic resume on the current branch.
 func (t *Tail) Settle(meta *Meta) bool {
 	if meta.turnErrorLine != "" && t.tree.hidden[meta.turnErrorLine] {
 		meta.clearTurnError()
@@ -513,7 +469,7 @@ func (t *Tail) Settle(meta *Meta) bool {
 		}
 	}
 	for _, rec := range t.tree.recs {
-		if t.tree.hidden[rec.uuid] && (rec.outcomeChanged || rec.turnStart || rec.turnEnd || rec.failure.text != "") {
+		if t.tree.hidden[rec.uuid] && rec.hasOutcome && len(rec.raw) > 0 {
 			outcomeDropped = true
 			break
 		}
@@ -521,47 +477,21 @@ func (t *Tail) Settle(meta *Meta) bool {
 	if !wordsDropped && !outcomeDropped {
 		return false
 	}
-	// Replay actual state transitions only. A visible recap that merely inherits an abandoned turn's state changes
-	// nothing; a visible prompt/reply/close/local transition applies its parser state. This also covers tool-only
-	// turns, wake-driven turns, local commands, and the open/closed state left after an unclosed turn is hidden.
-	meta.turnSucceeded = false
-	meta.TurnOpen, meta.TurnClosed = false, false
-	meta.localTurn, meta.beforeLocal = false, [2]bool{}
-	var failure turnFailureState
-	resumesSaid := false
-	turnResumes := false
-	resumeLine := ""
+	// Replay the raw records that remain visible, not the parser state that an abandoned turn left behind. ParseLine
+	// supplies the real prompt/wake/local/close and error transitions, including idempotent starts and resume state.
+	var replay Meta
 	for _, rec := range t.tree.recs {
-		if t.tree.hidden[rec.uuid] {
+		if t.tree.hidden[rec.uuid] || !rec.hasOutcome || len(rec.raw) == 0 || rec.errorLine != "" && t.tree.hidden[rec.errorLine] {
 			continue
 		}
-		hiddenFailure := rec.failure.text != "" && rec.failure.line != "" && t.tree.hidden[rec.failure.line]
-		if hiddenFailure {
-			continue // a line whose failure belongs to the abandoned branch contributes no outcome at all
-		}
-		if !rec.outcomeChanged && !rec.turnStart && !rec.turnEnd && rec.failure.text == "" {
-			continue
-		}
-		meta.TurnOpen, meta.TurnClosed = rec.open, rec.closed
-		meta.localTurn, meta.beforeLocal = rec.localTurn, rec.beforeLocal
-		meta.turnSucceeded = rec.succeeded
-		failure = rec.failure
-		resumesSaid = rec.resumesSaid
-		turnResumes = rec.turnResumes
-		resumeLine = rec.resumeLine
-		if hiddenFailure {
-			failure = turnFailureState{}
-			resumesSaid = false
-		}
-		if turnResumes && resumeLine != "" && t.tree.hidden[resumeLine] {
-			turnResumes = false
-			resumeLine = ""
-		}
+		ParseLine(0, rec.raw, &replay)
 	}
-	meta.clearTurnError()
-	meta.TurnError, meta.TurnErrorKind, meta.TurnErrorCode = failure.text, failure.kind, failure.code
-	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = failure.resetsAt, turnResumes, failure.afterWork
-	meta.turnErrorLine, meta.resumesSaid = failure.line, resumesSaid
+	meta.TurnOpen, meta.TurnClosed = replay.TurnOpen, replay.TurnClosed
+	meta.localTurn, meta.beforeLocal = replay.localTurn, replay.beforeLocal
+	meta.turnWorked, meta.turnSucceeded = replay.turnWorked, replay.turnSucceeded
+	meta.TurnError, meta.TurnErrorKind, meta.TurnErrorCode = replay.TurnError, replay.TurnErrorKind, replay.TurnErrorCode
+	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = replay.TurnErrorResetsAt, replay.TurnErrorResumes, replay.TurnErrorAfterWork
+	meta.turnErrorLine, meta.resumesSaid = replay.turnErrorLine, replay.resumesSaid
 	if wordsDropped {
 		meta.LastText, meta.LastTextAt = "", time.Time{}
 		for _, w := range t.words {
