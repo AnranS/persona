@@ -526,6 +526,40 @@ func TestOfflineLeaderDedupHitRetriesPending(t *testing.T) {
 	waitFor(t, "the offline dedup retry's real-send acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
 }
 
+// The crash window after a real send's outbox ACK but before its turn receipt is recovered by the next dedup hit.
+// Signals filtered as moot need the same receipt; neither path may wait for the dedup window to expire and replay.
+func TestLeaderEmptyDeliveryMarksTurnToldAfterRestart(t *testing.T) {
+	for _, mode := range []string{"dedup hit", "moot"} {
+		t.Run(mode, func(t *testing.T) {
+			st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+			s, f, todo := newSupervisedServiceOn(t, st)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			ctx := context.Background()
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+				t.Fatal(err)
+			}
+			g := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "leader-empty-" + strings.ReplaceAll(mode, " ", "-"), At: time.Now()}
+			s.signal(g)
+			markLeaderTurnSignalled(t, s, g)
+			f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking})
+			if mode == "dedup hit" {
+				reserveUndelivered(t, s, g)
+				s.ackSupervisePending([]superviseSignal{g}) // the real send's ACK landed; its turn receipt did not
+			} else {
+				closed := todoNow(s, todo.ID)
+				now := time.Now().UTC()
+				closed.DoneAt = &now
+				putTodo(s, closed)
+			}
+			lead := TodoAgent{MachineID: "box", SessionID: "s1"}
+			if s.deliverToLeaderAgent(ctx, lead, []superviseSignal{g}, testWeb, time.Now(), time.Time{}) {
+				t.Fatal("an empty dedup/moot batch must not report a new send")
+			}
+			requireLeaderTurnToldAfterRestart(t, s, g)
+		})
+	}
+}
+
 // reserveUndelivered simulates a crash after dedup was reserved but before any delivery or queue admission.
 func reserveUndelivered(t *testing.T, s *Service, g superviseSignal) {
 	t.Helper()
@@ -657,6 +691,35 @@ func TestTaskLeaderMixedDedupBatchDeliversEveryPending(t *testing.T) {
 	if got := storedSupervisePending(t, s); len(got) != 0 {
 		t.Fatalf("the leader's mixed batch left delivered members pending: %+v", got)
 	}
+}
+
+// A mixed real send also covers the members suppressed by dedup. Their pre-reservation ledger receipts must land with
+// the delivered member's receipt, including on the leader path's asynchronous recovery.
+func TestLeaderMixedDeliveryMarksDedupHitTurnTold(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+		t.Fatal(err)
+	}
+	other := Todo{ID: "other-worker", Title: "Other worker", Origin: "conv1", Supervision: &Supervision{Supervisor: "box/s1", State: reviewPending}}
+	putTodo(s, other)
+	old := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "leader-mixed-acknowledged", At: time.Now()}
+	newer := superviseSignal{Todo: other.ID, Kind: sigReview, Key: "leader-mixed-new-send", At: time.Now()}
+	s.signal(old)
+	markLeaderTurnSignalled(t, s, old)
+	reserveUndelivered(t, s, old)
+	s.ackSupervisePending([]superviseSignal{old})
+	s.signal(newer)
+	markLeaderTurnSignalled(t, s, newer)
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking})
+	lead := TodoAgent{MachineID: "box", SessionID: "s1"}
+	if !s.deliverToLeaderAgent(ctx, lead, []superviseSignal{old, newer}, testWeb, time.Now(), time.Time{}) {
+		t.Fatal("the mixed leader batch's new member was not delivered")
+	}
+	requireLeaderTurnToldAfterRestart(t, s, old)
+	requireLeaderTurnToldAfterRestart(t, s, newer)
 }
 
 // /stop silences a reporting task's gathered notices even when the manager restarts before the stop (#3308, #5732).

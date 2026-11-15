@@ -424,16 +424,20 @@ func (s *Service) leaderRoute(g superviseSignal) (lead TodoAgent, handled, reach
 // so nothing is queued here.
 func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list []superviseSignal, web string, now, prev time.Time) bool {
 	var entries []prompts.SuperviseEntry
-	var kept []superviseSignal
+	var kept, moot []superviseSignal
 	for _, g := range list {
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			entries, kept = append(entries, e), append(kept, g)
+		} else {
+			moot = append(moot, g)
 		}
 	}
+	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either
 	if len(entries) == 0 {
 		s.ackSupervisePending(list)
 		return false
 	}
+	holds := kept
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
 	if err != nil {
 		s.logf("supervise: deduplication unavailable; retrying: %v", err)
@@ -442,9 +446,10 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	if len(entries) == 0 {
 		s.ackSupervisePending(list)
+		s.turnsTold(ctx, holds) // already covered by the deduplication history
 		return false
 	}
-	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), list, kept)
+	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), list, holds)
 	if err != nil {
 		var escalated leaderEscalated
 		if errors.As(err, &escalated) {
@@ -469,7 +474,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
 	s.ackSupervisePending(list)
 	s.parkedDueTold(ctx, kept)
-	s.turnsTold(ctx, kept) // how a turn ended is told once, to a leader too (task_turns.go)
+	s.turnsTold(ctx, holds) // kept went, the rest was said the same within the deduplication window
 	return true
 }
 

@@ -296,6 +296,12 @@ func legacyStartUnknownMessage(text, todoID string) bool {
 	return strings.Contains(text, todoID) && strings.Contains(text, startUnknownDetail) && strings.Count(text, "任务「") <= 1 // i18n-ignore: legacy rendered entry marker
 }
 
+// legacyIdleMessage identifies only a one-entry pre-structured idle. A mixed legacy digest has no exact way to rebuild
+// its other members, so it stays queued rather than risking an unrelated stop or a genuine later decision.
+func legacyIdleMessage(text, todoID string) bool {
+	return strings.Contains(text, todoID) && strings.Contains(text, "Agent 停下了，但没做完") && strings.Count(text, "任务「") <= 1 // i18n-ignore: legacy rendered idle and entry markers
+}
+
 // startUnknownArmed reports whether any durable or in-memory form still needs retraction. The read-only check keeps
 // repeated sightings of an already-recognized done session from writing an empty acknowledgment on every sync.
 func (s *Service) startUnknownArmed(g superviseSignal) bool {
@@ -466,6 +472,10 @@ func (s *Service) retractSuperviseSignalLocked(g superviseSignal) {
 // every durable form available for retry when the ledger cannot be read or written.
 func (s *Service) retractSupervisedIdle(ctx context.Context, todoID string) bool {
 	b := &s.supervise
+	// A restore holds pendingLoadMu from its durable snapshot through insertion. Take it before dedupMu, matching
+	// retractStartUnknowns and simulateSupervisionRestart, so an older snapshot cannot land after this retraction.
+	b.pendingLoadMu.Lock()
+	defer b.pendingLoadMu.Unlock()
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	keys := map[string]struct{}{}
@@ -493,6 +503,9 @@ func (s *Service) retractSupervisedIdle(ctx context.Context, todoID string) bool
 		for _, queue := range r.st.Queue {
 			for _, msg := range queue {
 				if msg.Signals == nil {
+					if legacyIdleMessage(msg.Text, todoID) {
+						collect(superviseSignal{Todo: todoID, Kind: sigIdle, Key: "legacy-idle@" + todoID, At: msg.At})
+					}
 					continue
 				}
 				for _, g := range *msg.Signals {

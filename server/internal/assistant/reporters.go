@@ -307,8 +307,9 @@ func (s *Service) dropQueuedSupervisionTasksAtomic(conversation string, ids map[
 	return s.dropQueuedSupervisionMatchingAtomic(conversation, ids, known, nil, replay)
 }
 
-// dropQueuedSupervisionSignalAtomic is the exact-signal form used when a provisional start result is confirmed. An
-// unstructured legacy message cannot prove that key, so it is left alone rather than dropping a genuine later stop.
+// dropQueuedSupervisionSignalAtomic is the exact-signal form used when a provisional start result is confirmed or an
+// old idle retires. Unstructured legacy text is removable only as an unambiguous one-entry notice of the exact kind and
+// task; mixed text stays because its other members cannot be reconstructed exactly.
 func (s *Service) dropQueuedSupervisionSignalAtomic(conversation string, target superviseSignal, replay superviseQueueReplay) (int, []superviseSignal) {
 	return s.dropQueuedSupervisionMatchingAtomic(conversation, nil, nil, &target, replay)
 }
@@ -347,7 +348,9 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 				}
 			}
 		} else if exact != nil {
-			if m.Signals == nil && legacyStartUnknownMessage(m.Text, exact.Todo) {
+			legacy := exact.Kind == sigUnjudged && legacyStartUnknownMessage(m.Text, exact.Todo) ||
+				exact.Kind == sigIdle && legacyIdleMessage(m.Text, exact.Todo)
+			if m.Signals == nil && legacy {
 				target = true
 				taken = append(taken, *exact)
 			}

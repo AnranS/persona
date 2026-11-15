@@ -58,18 +58,18 @@ fun Todo.waitsForOwner(): Boolean =
     !isDone && (reviewState == "needs_user" || openAsk?.outcome == "decide" || openAsk?.outcome == "cannot")
 
 /** Delivered work at rest still awaits acceptance; `live` alone never means done (#5732). */
-fun Todo.deliveredAwaitingReview(lookup: (SessionKey) -> Session?): Boolean {
+fun Todo.deliveredAwaitingReview(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): Boolean {
     if (isDone || waitsForOwner()) return false
-    val atRest = triageStatus(lookup) in setOf(TriageStatus.FollowUp, TriageStatus.Unread, TriageStatus.NotStarted)
+    val atRest = triageStatus(lookup, now) in setOf(TriageStatus.FollowUp, TriageStatus.Unread, TriageStatus.NotStarted)
     val reviewRequired = reviewState == "pending_review" || openAsk != null || (kind != "concern" && delivery?.state == "live")
     return atRest && reviewRequired
 }
 
 /** The agent-state mark for the same effective delivery state ([state] for ordinary work). */
-fun Todo.shownState(lookup: (SessionKey) -> Session?): TodoState = when {
-    acceptedAtRest(lookup) -> TodoState.Done
+fun Todo.shownState(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): TodoState = when {
+    acceptedAtRest(lookup, now) -> TodoState.Done
     waitsForOwner() -> TodoState.NeedsYou
-    deliveredAwaitingReview(lookup) -> TodoState.Unread
+    deliveredAwaitingReview(lookup, now) -> TodoState.Unread
     else -> state(lookup)
 }
 

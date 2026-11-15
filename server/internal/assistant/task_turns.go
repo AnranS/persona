@@ -726,9 +726,15 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		skip = true
 	}
 	b.mu.Unlock()
-	if known && e.Signal != nil && e.Signal.Kind == sigUnjudged && e.Signal.Key == "start-unknown@"+t.ID {
-		// The linked Agent is the exact confirmation. Retry retraction even when told already landed: a crash between that
-		// receipt and queue/outbox cleanup must not restore the confirmed signal. Failed ledger I/O waits for the next sweep.
+	confirmed := known && e.Signal != nil && e.Signal.Told != nil
+	for _, c := range agents {
+		confirmed = confirmed || c.Status != proto.StatusOffline && c.CreationID() == t.ID
+	}
+	if known && e.Signal != nil && e.Signal.Kind == sigUnjudged && e.Signal.Key == "start-unknown@"+t.ID && confirmed {
+		// Only the exact creation id or an already persisted told receipt confirms the start. A manual, workspace or chat
+		// link can name another session while the prepared start is still unanswered. Retry retraction even when told
+		// already landed: a crash between that receipt and queue/outbox cleanup must not restore the confirmed signal.
+		// Failed ledger I/O waits for the next sweep.
 		if !s.retractStartUnknown(ctx, t.ID) {
 			return
 		}

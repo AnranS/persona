@@ -576,6 +576,10 @@ class TodoTriageTest {
 
         val recentLookup = lookupOf(expiredSession.copy(turnErrorResetsAt = Instant.ofEpochMilli(now - 5 * 60_000L).toString()))
         assertEquals(TriageStatus.UsageLimit, limited.triageStatus(recentLookup, now))
+
+        val defaultExpired = expiredSession.copy(turnErrorResetsAt = Instant.now().minusSeconds(11 * 60).toString())
+        assertEquals("the default is real current time, not epoch zero", TriageStatus.Interrupted,
+            limited.triageStatus(lookupOf(defaultExpired)))
     }
 
     @Test

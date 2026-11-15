@@ -70,3 +70,55 @@ func TestWorkingRetractsLedgerIdleAcrossRestart(t *testing.T) {
 		t.Error("the newer ledger replay also revived the previous stretch's idle")
 	}
 }
+
+// A pre-structured queue has no signal key, but its one-entry idle text is still unambiguous. Retire that old form on
+// resume; leave a mixed legacy digest alone because its other members cannot be reconstructed exactly.
+func TestWorkingRetractsLegacyQueuedIdleAcrossRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mixed        bool
+		startControl bool
+		wantQueue    int
+	}{
+		{name: "single idle", wantQueue: 0},
+		{name: "mixed digest control", mixed: true, wantQueue: 1},
+		{name: "provisional start control", startControl: true, wantQueue: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+			s, _, todo := newSupervisedServiceOn(t, st)
+			ctx := context.Background()
+			if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+				v.State = reviewPending
+				return true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			text := "📋 督办：你派出去的任务有 1 个要你处理\n1. 任务「Legacy」（" + todo.ID + "）：Agent 停下了，但没做完" // i18n-ignore: legacy rendered prompt fixture
+			if tc.mixed {
+				text += "\n2. 任务「Other」（todo_other）：Agent 停下了，但没做完" // i18n-ignore: legacy rendered prompt fixture
+			}
+			if got := s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Text: text, At: time.Now()}); got != 1 {
+				t.Fatal("the legacy supervision message was not admitted to the durable queue")
+			}
+			if tc.startControl {
+				startText := "1. 任务「Legacy」（" + todo.ID + "）：Agent 停下了，hub 没判断出来是不是做完了（" + startUnknownDetail + "）" // i18n-ignore: legacy rendered prompt fixture
+				if got := s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Text: startText, At: time.Now()}); got != 2 {
+					t.Fatal("the legacy provisional-start control was not admitted")
+				}
+			}
+			s.supervisedWorking(ctx, todoNow(s, todo.ID))
+			simulateSupervisionRestart(t, s)
+			if got := s.queuedFor("conv1"); got != tc.wantQueue {
+				t.Fatalf("legacy queue length after resume and restart = %d, want %d", got, tc.wantQueue)
+			}
+			if tc.startControl {
+				for _, msg := range queuedRelays(s, "conv1") {
+					if msg.Text == text {
+						t.Error("idle retraction kept the idle but withdrew the provisional-start control")
+					}
+				}
+			}
+		})
+	}
+}

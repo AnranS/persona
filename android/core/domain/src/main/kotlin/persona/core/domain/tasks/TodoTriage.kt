@@ -38,7 +38,7 @@ private fun ms(at: String?): Long = parseTime(at)?.toEpochMilli() ?: 0L
 enum class TriageStatus { Failed, Done, NotStarted, NeedsYou, Interrupted, UsageLimit, Unread, Working, Waiting, FollowUp }
 
 /** The status the triage reads from the to-do and its current agents' sessions, as the web computes it. */
-fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = 0): TriageStatus {
+fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): TriageStatus {
     if (!startError.isNullOrEmpty()) return TriageStatus.Failed
     if (isDone) return TriageStatus.Done
     val active = currentAgents

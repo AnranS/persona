@@ -96,6 +96,7 @@ private val RESTING = setOf(TriageStatus.FollowUp, TriageStatus.Unread, TriageSt
 
 /** The web's `todoRank` (what the user must act on first), on the triage status. */
 private fun Todo.entryRank(status: TriageStatus): Int {
+    if (waitsForOwner()) return 0
     if ((supervision?.state == "pending_review" || openAsk != null) && status in RESTING) return 20
     return when (status) {
         TriageStatus.NeedsYou -> 0

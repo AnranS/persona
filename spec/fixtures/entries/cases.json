@@ -730,8 +730,8 @@
       "expected": {
         "needs_you": [
           "task:t-asks",
-          "task:t-verify",
-          "task:t-user"
+          "task:t-user",
+          "task:t-verify"
         ],
         "running": [
           "task:t-fresh"

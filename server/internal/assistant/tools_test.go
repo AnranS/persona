@@ -215,6 +215,38 @@ func TestExactCreationConfirmationRetractsLedgerOnlyStartUnknownAfterRestart(t *
 	}
 }
 
+// A manually linked or workspace-linked session is not evidence that the prepared start got its own Agent. Keep the
+// unknown-start warning until the current list contains the exact creation id; then retract every durable form.
+func TestWatchTurnKeepsStartUnknownUntilExactCreationConfirmation(t *testing.T) {
+	oldRecoverMost := turnRecoverMost
+	turnRecoverMost = 0 // no transcript recovery: this control exercises only the confirmation gate
+	t.Cleanup(func() { turnRecoverMost = oldRecoverMost })
+	ctx := context.Background()
+	s, _ := newQuietServiceOn(t, &memStore{})
+	todo, err := s.createTodo(ctx, "Wait for the exact start", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", []string{"confirm the exact start"}, 30)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "provisional start", At: time.Now()}
+	markLeaderTurnSignalled(t, s, g)
+	s.signal(g)
+	manual := proto.Session{SessionID: "manual", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		StartedByPersona: true, Status: proto.StatusDone, State: proto.StateUnread, UpdatedAt: time.Now()}
+	if err := s.linkTodoAgent(ctx, todo.ID, manual.MachineID, manual.SessionID, manual.Title, manual.Cwd, manual.Agent); err != nil {
+		t.Fatal(err)
+	}
+	s.watchTurn(ctx, todoNow(s, todo.ID), []proto.Session{manual})
+	requireStartUnknownState(t, s, todo.ID, true)
+
+	exact := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, StartedByPersona: true, Status: proto.StatusDone,
+		State: proto.StateUnread, UpdatedAt: manual.UpdatedAt.Add(time.Second)}
+	s.autoLinkTodos("box", []proto.Session{exact})
+	s.watchTurn(ctx, todoNow(s, todo.ID), []proto.Session{manual, exact})
+	requireStartUnknownState(t, s, todo.ID, false)
+}
+
 func TestAgentStartConfirmationRetriesIncompleteLedgerRetraction(t *testing.T) {
 	for _, mode := range []string{"read", "write"} {
 		t.Run(mode, func(t *testing.T) {

@@ -287,8 +287,7 @@ export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
 export function todoRank(todo: Todo, status: TodoStatus): number {
-  if (acceptedAtRest(todo, status)) return TODO_STATUS_RANK.done;
-  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
+  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[shownStatus(todo, status)];
 }
 
 export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" | "green" | "amber" | "idle" | "off" }> = {

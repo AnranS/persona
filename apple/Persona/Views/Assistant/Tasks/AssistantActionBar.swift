@@ -138,6 +138,7 @@ nonisolated enum AssistantEntries {
 
     /// It waits for the user's review while nothing of it runs or asks (the web's `awaitsReview`): rank 2.
     static func rank(_ todo: TodoItem, _ status: Status) -> Double {
+        if todo.waitsForOwner { return 0 }
         let resting = status == .followUp || status == .unread || status == .notStarted
         return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
     }
