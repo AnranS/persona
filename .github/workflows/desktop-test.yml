@@ -5,6 +5,12 @@ on:
   # unsigned artifacts, so this workflow never receives a certificate or a notarization key.
   workflow_call:
   workflow_dispatch:
+    inputs:
+      acceptance:
+        description: 'full: all acceptance including update installation; first-run: native packaged first-run only'
+        type: choice
+        options: [full, first-run]
+        default: full
 
 permissions:
   contents: read
@@ -40,6 +46,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Linux Electron acceptance smoke (headless)
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         run: scripts/ci/desktop-smoke.sh
       - name: Linux packaged first-run acceptance (headless)
         if: ${{ !cancelled() }}
@@ -52,7 +59,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-linux-smoke
           path: desktop/release/smoke
@@ -83,6 +90,7 @@ jobs:
           name: persona-desktop-web-dist
           path: web/dist
       - name: macOS Electron acceptance smoke
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         run: scripts/ci/desktop-smoke.sh
       - name: Build universal macOS packages
         if: ${{ !cancelled() }} # the package and the smoke report separately
@@ -91,8 +99,6 @@ jobs:
         run: scripts/ci/desktop-package.sh mac
       - name: Unsigned macOS packaged setup; hub acceptance requires a valid signature
         if: ${{ !cancelled() }}
-        env:
-          PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/Persona-${{ env.PERSONA_DESKTOP_VERSION || '0.1.0' }}-mac-universal.zip
         run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
@@ -102,14 +108,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-macos-smoke
           path: desktop/release/smoke
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-macos-unsigned
           path: |
@@ -142,6 +148,7 @@ jobs:
           name: persona-desktop-web-dist
           path: web/dist
       - name: Windows Electron acceptance smoke
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         shell: bash
         run: scripts/ci/desktop-smoke.sh
       - name: Build Windows NSIS
@@ -153,8 +160,6 @@ jobs:
       - name: Packaged Windows app first-run acceptance
         if: ${{ !cancelled() }}
         shell: bash
-        env:
-          PERSONA_DESKTOP_TEST_PACKAGE: desktop/release/win-unpacked/Persona.exe
         run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
@@ -164,14 +169,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-windows-smoke
           path: desktop/release/smoke
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-windows-unsigned
           path: |
@@ -183,6 +188,7 @@ jobs:
   # A real update with no certificate and no published release: the packaged old version finds, downloads and
   # verifies a new one from a feed served on the runner (desktop/scripts/update-test.mjs).
   update:
+    if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
     name: Update from a local feed (${{ matrix.name }})
     strategy:
       fail-fast: false

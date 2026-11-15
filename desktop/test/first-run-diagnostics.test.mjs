@@ -456,6 +456,27 @@ test("ExtraInfo credentials make a password-state 401 unexpected in either CDP e
   }
 });
 
+test("a late compatibility response stays bound to the same chat page without exempting other targets", () => {
+  const hubURL = "http://127.0.0.1:18760/";
+  const request = { requestId: "late-compatible", sessionId: "session-hub", targetId: "hub", responseTargetId: "hub", documentURL: hubURL, status: 404, url: `${hubURL}api/v1/hub/update` };
+  const log = { kind: "log", text: "Failed to load resource: the server responded with a status of 404 (Not Found)", targetId: "hub", pageURL: hubURL, url: request.url, requestId: request.requestId, sessionId: request.sessionId };
+  const base = { phase: "final-observation", hubURL, hubTargetId: "hub", pages: [{ targetId: "hub", url: hubURL }], requests: [request], consoleErrors: [log] };
+  const accepted = classifyFirstRunDiagnostics(base);
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.expected.length, 1);
+  assert.equal(finalOutcome([accepted]).exitCode, 0);
+  for (const changed of [
+    { hubTargetId: undefined },
+    { hubTargetId: "another-window" },
+    { requests: [{ ...request, url: `${hubURL}api/v1/unknown` }], consoleErrors: [{ ...log, url: `${hubURL}api/v1/unknown` }] },
+    { requests: [{ ...request, documentURL: "https://example.com/" }] },
+  ]) {
+    const result = classifyFirstRunDiagnostics({ ...base, ...changed });
+    assert.equal(result.ok, false, JSON.stringify(changed));
+    assert.equal(finalOutcome([result]).exitCode, 1);
+  }
+});
+
 test("freeze fixes the final observation and close waits for the real socket", async t => {
   const { client, event, target } = await connected(t);
   target("hub", "http://127.0.0.1:18760/");

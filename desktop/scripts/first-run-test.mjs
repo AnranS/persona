@@ -9,8 +9,8 @@
 // Windows runs an unpacked build from the same configuration as NSIS so it cannot replace a production-identity
 // install. Linux is supplementary, not a shipping target.
 import { spawn } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -22,6 +22,7 @@ import { DesktopCDP } from "./first-run-cdp.mjs";
 import { startGateway } from "./smoke-gateway.mjs";
 import { finalizeFirstRun } from "./first-run-finalize.mjs";
 import { classifyFirstRunDiagnostics, SETUP_SECURITY_URLS, setupCSPResource } from "./first-run-diagnostics.mjs";
+import { appAsarPath, sha256File, sourceIdentity } from "./first-run-evidence.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("@electron/asar");
@@ -35,7 +36,15 @@ const npm = platform === "win32" ? "npm.cmd" : "npm";
 const owned = new Set();
 const steps = [];
 let work, hub, gateway, log = "", failure, macSignature;
-let artifactSHA256, buildConfiguration;
+let artifactSHA256, appAsarSHA256, buildConfiguration;
+const source = sourceIdentity(root);
+const runIdentity = {
+  node: process.version,
+  platform: process.platform,
+  arch: process.arch,
+  runner: process.env.GITHUB_ACTIONS === "true" ? "github-actions" : "local",
+  ...source,
+};
 const blocked = [];
 const clients = [];
 const observations = [];
@@ -56,7 +65,7 @@ async function until(label, probe, timeout = 30000) {
 }
 function run(command, args, { seconds = 300, env = process.env, quiet = false } = {}) {
   return new Promise((done, fail) => {
-    const child = spawn(command, args, { cwd: root, env, shell: platform === "win32" && command.endsWith(".cmd"), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd: root, env, shell: platform === "win32" && command.endsWith(".cmd"), stdio: ["ignore", "pipe", "pipe"], detached: platform !== "win32" });
     owned.add(child);
     let text = "";
     const keep = data => { text += data; if (!quiet) process.stdout.write(data); };
@@ -386,18 +395,16 @@ async function main() {
   work = await mkdtemp(join(tmpdir(), "persona-first-run-test-"));
   await mkdir(output, { recursive: true });
   await build();
+  if (!process.env.PERSONA_DESKTOP_TEST_PACKAGE) need("the package is built from the recorded tracked source", source.sourceMatchesHead, source);
   const { file, installed } = await executable();
   if (platform === "darwin" && !process.env.PERSONA_DESKTOP_TEST_PACKAGE) {
     // The locally produced .app is the tested artifact; CI hashes the exact supplied universal ZIP.
-    const hash = createHash("sha256");
-    for await (const chunk of createReadStream(file)) hash.update(chunk);
-    artifactSHA256 = `universal-app-executable:${hash.digest("hex")}`;
+    artifactSHA256 = `universal-app-executable:${await sha256File(file)}`;
   } else {
     const archive = platform === "darwin" ? resolve(process.env.PERSONA_DESKTOP_TEST_PACKAGE) : file;
-    const hash = createHash("sha256");
-    for await (const chunk of createReadStream(archive)) hash.update(chunk);
-    artifactSHA256 = hash.digest("hex");
+    artifactSHA256 = await sha256File(archive);
   }
+  appAsarSHA256 = await sha256File(appAsarPath(platform, file, desktop));
   await fuseCheck(file);
   await packageCheck(file);
   hub = await startHub();
@@ -417,7 +424,10 @@ async function cleanup() {
   // The socket remains alive while the last post-stop diagnostics join the verdict; only then freeze and close it.
   for (const client of clients) {
     try {
-      const final = classifyFirstRunDiagnostics({ phase: "final-observation", ...client.diagnostics(), hubURL: gateway?.url });
+      const hubTargetId = gateway && client.diagnostics().pages.find(page => {
+        try { const url = new URL(page.url), hub = new URL(gateway.url); return url.origin === hub.origin && url.pathname.startsWith(hub.pathname); } catch { return false; }
+      })?.targetId;
+      const final = classifyFirstRunDiagnostics({ phase: "final-observation", ...client.diagnostics(), hubURL: gateway?.url, hubTargetId });
       observations.push(final);
     } catch (error) { failures.push(error); }
     client.freeze();
@@ -431,7 +441,7 @@ const timeout = setTimeout(() => {
   for (const child of owned) void stop(child).catch(error => { failure ??= String(error); });
 }, 20 * 60 * 1000);
 let result;
-try { result = await main(); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+try { result = await main(); } catch (error) { failure ??= error instanceof Error ? error.message : String(error); }
 await cleanup().catch(error => {
   failure ??= error instanceof AggregateError
     ? `packaged first-run cleanup failed: ${error.errors.map(item => item instanceof Error ? item.message : String(item)).join("; ")}`
@@ -450,7 +460,20 @@ const report = JSON.stringify({
   shippingPlatform: platform !== "linux",
   ...(failure ? { failure } : {}),
   ...(artifactSHA256 ? { artifactSHA256 } : {}),
-  ...(buildConfiguration ? { buildConfiguration } : {}),
+  ...(appAsarSHA256 ? { appAsarSHA256 } : {}),
+  runIdentity,
+  artifactBuild: process.env.PERSONA_DESKTOP_TEST_PACKAGE ? {
+    kind: "externally-supplied",
+    sourceVerified: false,
+    note: "The supplied artifact is hashed and executed; its source and build configuration are not established by this checkout.",
+  } : {
+    kind: "built-from-checkout",
+    ...source,
+  },
+  ...(buildConfiguration ? {
+    buildConfiguration,
+    ...(buildConfiguration !== "not-rebuilt-supplied-artifact" ? { buildConfigurationSHA256: await sha256File(buildConfiguration) } : { buildConfigurationSHA256: null }),
+  } : {}),
   ...(process.env.PERSONA_DESKTOP_TEST_PACKAGE ? { sourceArtifact: process.env.PERSONA_DESKTOP_TEST_PACKAGE } : {}),
   artifactKind: platform === "darwin" ? "universal-zip" : "unpacked",
   installationAccepted: false,

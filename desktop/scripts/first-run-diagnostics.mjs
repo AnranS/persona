@@ -54,7 +54,7 @@ function classifyConsole(value, phase, page) {
       }
       return { classification: "unexpected", reason: `HTTP ${resource.status} is not the unsigned-in password-mode probe` };
     }
-    if (phase.name === "hub-chat" && value.targetId === phase.hubTargetId && resource.status === 404) {
+    if ((phase.name === "hub-chat" || phase.name === "final-observation") && phase.hubTargetId && value.targetId === phase.hubTargetId && resource.status === 404) {
       const optional = hubPath === "api/v1/hub/update" ? "older hub has no update notice"
         : hubPath === "api/v1/workspace-board/settings" ? "older hub has no board-setting switch"
           : hubPath === "api/v1/plugins" ? "hub has no voice extension"
