@@ -313,6 +313,7 @@ fun AssistantScreen(
     LaunchedEffect(mainReadiness, readinessOn, machinesSeen) { if (readinessOn) mainReadiness.refresh() }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         if (readinessOn) scope.launch { mainReadiness.refresh() }
+        if (!settingsOpen) scope.launch { assistantAttempt { repository.refresh() } }
     }
     val refusedMain = mainMessages.filter { it.setupRefusal() != null }.map { it.clientMessageId }
     LaunchedEffect(mainReadiness, readinessOn, refusedMain) { if (readinessOn && refusedMain.isNotEmpty()) mainReadiness.refresh() }
@@ -1088,7 +1089,7 @@ fun AssistantScreen(
             assistantAttempt { assistantMachine = pageManagement.notes().machineId }
             // The old main conversation is an ordinary one on the old machine now: back here, start the new one.
             newConversation()
-        }, onOpenConversation = openFromSchedule, onModelConfiguration = openModelConfiguration)
+        }, onOpenConversation = openFromSchedule, onModelConfiguration = openModelConfiguration, conversations = repository)
         return@PersonaTheme
     }
     if (proactiveOpen && pageManagement != null) {

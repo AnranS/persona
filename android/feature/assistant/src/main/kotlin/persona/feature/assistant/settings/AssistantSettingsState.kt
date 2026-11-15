@@ -18,6 +18,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -159,6 +161,7 @@ internal class AssistantSettingsState(
      * to the main conversation goes to that one, an ordinary conversation now.
      */
     private val mainChanged: suspend () -> Unit = {},
+    private val recentTaskChatsChanged: suspend (Boolean?) -> Unit = {},
     /** After a move: the conversation list now comes from the other machine. */
     private val onMoved: suspend () -> Unit = {},
 ) {
@@ -167,18 +170,19 @@ internal class AssistantSettingsState(
     val phoneZone: String get() = timezone.phoneZone
 
     private var configRevision = 0L
+    private val recentTaskChatsLock = Mutex()
 
     private fun set(change: AssistantSettingsUiState.() -> AssistantSettingsUiState) = mutable.update(change)
 
     fun clearNotice() = set { copy(notice = null) }
 
-    suspend fun load() {
+    suspend fun load() = recentTaskChatsLock.withLock {
         val revision = ++configRevision
         set { copy(loading = true, loadFailed = false) }
         try {
             val config = api.config()
             currentCoroutineContext().ensureActive()
-            if (revision != configRevision) return
+            if (revision != configRevision) return@withLock
             set { copy(config = config) }
             // Like iOS: opening the page brings the hub's zone along with the phone's.
             quietly {
@@ -299,6 +303,28 @@ internal class AssistantSettingsState(
             set { copy(config = updated) }
         }
         if (!ok) set { copy(config = this.config?.copy(mainBackgroundFolded = !on)) }
+    }
+
+    /** Show scheduled task chats in Recent: update the shared snapshot at once and restore it if the hub refuses. */
+    suspend fun setRecentTaskChats(on: Boolean) = recentTaskChatsLock.withLock {
+        val config = state.value.config ?: return@withLock
+        val was = config.recentTaskChats ?: return@withLock
+        if (state.value.busy || was == on) return@withLock
+        set { copy(config = config.copy(recentTaskChats = on)) }
+        var applied = on
+        val ok = perform(SettingsText(R.string.assistant_settings_save_failed)) {
+            recentTaskChatsChanged(on)
+            val updated = api.updateConfig(AssistantConfigUpdate(recentTaskChats = on))
+            applied = updated.recentTaskChats ?: on
+            set { copy(config = updated.copy(recentTaskChats = applied)) }
+        }
+        if (!ok) {
+            set { copy(config = this.config?.copy(recentTaskChats = was)) }
+            quietly { recentTaskChatsChanged(was) }
+        } else {
+            // The hub accepted the write; a local snapshot sync failure is not a refusal and must not roll it back.
+            quietly { recentTaskChatsChanged(applied) }
+        }
     }
 
     /** Suggest the next message: moves at once, follows the hub's answer, and rolls back on failure. */
