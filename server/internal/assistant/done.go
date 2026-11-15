@@ -123,9 +123,9 @@ func directOwnerMarker(lower, marker string) bool {
 }
 
 // ownerConditionalOpen reports a plain "if" whose condition still owns the clause. The caller has already removed
-// everything through the last sentence or semicolon boundary; a colon may introduce the conditional. Narrative such
-// as "checks if" does not open a conditional scope. "Even if" is different: its main clause applies regardless of
-// the condition, so a later owner requirement stays direct.
+// everything through the last sentence or semicolon boundary; a colon or a short discourse marker may introduce the
+// conditional. Narrative such as "checks if" does not open a conditional scope. "Even if" is different: its main
+// clause applies regardless of the condition, so a later owner requirement stays direct.
 func ownerConditionalOpen(clause string) bool {
 	for from := 0; from < len(clause); {
 		i := strings.Index(clause[from:], "if ")
@@ -140,6 +140,11 @@ func ownerConditionalOpen(clause string) bool {
 				j--
 			}
 			boundary = j >= 0 && clause[j] == ':'
+			intro := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(clause[:i]), ","))
+			switch intro {
+			case "so", "then", "therefore", "and", "but", "now", "next":
+				boundary = true
+			}
 		}
 		if boundary && !strings.HasSuffix(clause[:i], "even ") {
 			return true

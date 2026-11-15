@@ -318,7 +318,8 @@ func TestStartDefaultsGoalRefusedStartsWithoutIt(t *testing.T) {
 }
 
 // The facts a start gives say who follows the task up, so a source can tell a leader's worker from the main
-// conversation's own task; read-only and the task's role ride along.
+// conversation's own task; read-only and the task's role ride along. Since #5732 a leader conversation's new plan is
+// main-supervised too; the explicit manual-Agent and task-leader worker topologies keep their specialized class.
 func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	s, f := newQuietService(t)
 	f.devices = []Device{{ID: "box", Name: "box", Home: "/home/me", Online: true, Reachable: true}}
@@ -362,14 +363,14 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	planWait(3)
 	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	got := seen()
-	if a := got[0]; a.Supervisor != dispatchClassLeader || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
-		t.Fatalf("leader's task: %+v", a)
+	if a := got[0]; a.Supervisor != dispatchClassMain || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
+		t.Fatalf("leader conversation's new plan: %+v", a)
 	}
 	if b := got[1]; b.Supervisor != dispatchClassMain || !b.Readonly {
 		t.Fatalf("main's own task: %+v", b)
 	}
-	if c := got[2]; c.Supervisor != dispatchClassLeader {
-		t.Fatalf("task handed to the leader: %+v", c)
+	if c := got[2]; c.Supervisor != dispatchClassMain {
+		t.Fatalf("new plan with the legacy leader input: %+v", c)
 	}
 }
 
@@ -389,9 +390,9 @@ func putStartDefaults(t *testing.T, s *Service, role, ext, body string) (int, st
 	return rec.Code, rec.Body.String()
 }
 
-// A policy whose rule picks the tasks a leader conversation follows up: those start with the defaults, the main
-// conversation's own task starts exactly as it would without the policy, and a read-only task is left alone too. The
-// policy is the one an extension wrote through the route.
+// A policy whose rule picks tasks an explicit leader follows up: those start with the defaults. New plans from either
+// a leader conversation or main stay main-supervised (#5732), so they do not match, and a read-only task is left alone
+// too. The policy is the one an extension wrote through the route.
 func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 	s, f := newQuietService(t)
 	f.devices = []Device{{ID: "box", Name: "box", Home: "/home/me", Online: true, Reachable: true}}
@@ -429,13 +430,26 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 		waitFor(t, "the start", func() bool { return len(startsOf(f)) == before+1 })
 		return startsOf(f)[before]
 	}
-	led := start("lead1", false)
-	if led["ultracode"] != true || led["effort"] != "max" || led["goal"] == nil {
-		t.Fatalf("a leader's worker started without the defaults: %v", led)
+	planned := start("lead1", false)
+	if planned["ultracode"] != nil || planned["goal"] != nil || planned["effort"] == "max" {
+		t.Fatalf("a leader conversation's new main-supervised plan got the leader defaults: %v", planned)
 	}
 	own := start("conv1", false)
 	if own["ultracode"] != nil || own["goal"] != nil || own["effort"] == "max" {
-		t.Fatalf("the main conversation's own task got the defaults: %v", own)
+		t.Fatalf("the main conversation's own task got the leader defaults: %v", own)
+	}
+	// The specialized manual-leader topology still matches. Its worker takes the leader conversation's class from the
+	// parent task's ledger, rather than from the new-plan default (#5732).
+	putTodo(s, Todo{ID: "todo_leader_defaults", Title: "L", Supervision: &Supervision{Supervisor: "lead1"},
+		Agents: []TodoAgent{{MachineID: "server", SessionID: "lead1", Source: sourceLeader, Agent: "claude"}}})
+	worker := PlanTask{Title: "W", Prompt: "fix it", Machine: "box", Cwd: "/code/app", Permission: "bypassPermissions",
+		DoneWhen: []string{"CI is green"}, ExpectMinutes: 30, Parent: "todo_leader_defaults"}
+	if _, _, err := s.startTaskAgent(ctx, &worker, false); err != nil {
+		t.Fatal(err)
+	}
+	led := startsOf(f)[2]
+	if led["ultracode"] != true || led["effort"] != "max" || led["goal"] == nil {
+		t.Fatalf("a manual leader's worker started without the defaults: %v", led)
 	}
 	ro := start("lead1", true)
 	if ro["ultracode"] != nil || ro["goal"] != nil || ro["effort"] == "max" {
