@@ -81,8 +81,10 @@ type treeRec struct {
 	localTurn      bool
 	beforeLocal    [2]bool
 	resumesSaid    bool
+	turnResumes    bool
 	failure        turnFailureState
 	outcomeChanged bool
+	hasOutcome     bool
 }
 
 // branchTree tracks the lines read so far (file order) and which of them lie on abandoned branches.
@@ -391,21 +393,27 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool) {
 		return
 	}
 	rec := tl.rec(items)
+	rec.hasOutcome = recordOutcome
 	if recordOutcome {
 		rec.succeeded = meta.TurnSucceeded()
 		rec.open, rec.closed = meta.TurnOpen, meta.TurnClosed
 		rec.localTurn, rec.beforeLocal = meta.localTurn, meta.beforeLocal
 		rec.resumesSaid = meta.resumesSaid
+		rec.turnResumes = meta.TurnErrorResumes
 		if meta.TurnError != "" {
 			rec.failure = turnFailureState{text: meta.TurnError, kind: meta.TurnErrorKind, code: meta.TurnErrorCode,
 				resetsAt: meta.TurnErrorResetsAt, resumes: meta.TurnErrorResumes, afterWork: meta.TurnErrorAfterWork, line: meta.turnErrorLine}
 		}
 		previous := treeRec{}
-		if len(t.tree.recs) > 0 {
-			previous = t.tree.recs[len(t.tree.recs)-1]
+		for i := len(t.tree.recs) - 1; i >= 0; i-- {
+			if t.tree.recs[i].hasOutcome {
+				previous = t.tree.recs[i]
+				break
+			}
 		}
 		rec.outcomeChanged = rec.open != previous.open || rec.closed != previous.closed || rec.succeeded != previous.succeeded ||
-			rec.localTurn != previous.localTurn || rec.beforeLocal != previous.beforeLocal || rec.resumesSaid != previous.resumesSaid || rec.failure != previous.failure
+			rec.localTurn != previous.localTurn || rec.beforeLocal != previous.beforeLocal || rec.resumesSaid != previous.resumesSaid ||
+			rec.turnResumes != previous.turnResumes || rec.failure != previous.failure
 	} else {
 		// Skipped is tree shape only: even a real prompt's turn-start is not evidence the quick reader may apply.
 		rec.turnStart = false
@@ -513,6 +521,7 @@ func (t *Tail) Settle(meta *Meta) bool {
 	meta.localTurn, meta.beforeLocal = false, [2]bool{}
 	var failure turnFailureState
 	resumesSaid := false
+	turnResumes := false
 	for _, rec := range t.tree.recs {
 		if t.tree.hidden[rec.uuid] {
 			continue
@@ -529,6 +538,7 @@ func (t *Tail) Settle(meta *Meta) bool {
 		meta.turnSucceeded = rec.succeeded
 		failure = rec.failure
 		resumesSaid = rec.resumesSaid
+		turnResumes = rec.turnResumes
 		if hiddenFailure {
 			failure = turnFailureState{}
 			resumesSaid = false
@@ -536,7 +546,7 @@ func (t *Tail) Settle(meta *Meta) bool {
 	}
 	meta.clearTurnError()
 	meta.TurnError, meta.TurnErrorKind, meta.TurnErrorCode = failure.text, failure.kind, failure.code
-	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = failure.resetsAt, failure.resumes, failure.afterWork
+	meta.TurnErrorResetsAt, meta.TurnErrorResumes, meta.TurnErrorAfterWork = failure.resetsAt, turnResumes, failure.afterWork
 	meta.turnErrorLine, meta.resumesSaid = failure.line, resumesSaid
 	if wordsDropped {
 		meta.LastText, meta.LastTextAt = "", time.Time{}

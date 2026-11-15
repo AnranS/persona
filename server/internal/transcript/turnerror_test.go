@@ -242,6 +242,7 @@ func TestTailSettleRestoresVisibleTurnState(t *testing.T) {
 		last, failure      string
 		open, closed       bool
 		succeeded          bool
+		resumes            bool
 	}{
 		{name: "unclosed hidden tool turn", base: []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine},
 			drop: []string{prompt("ub", "B"), bTool}, last: failure, failure: failure, closed: true},
@@ -249,6 +250,10 @@ func TestTailSettleRestoresVisibleTurnState(t *testing.T) {
 			drop: []string{prompt("ub", "B"), bReply}, last: "done", closed: true, succeeded: true},
 		{name: "visible wake", base: []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine},
 			middle: []string{wake("w1")}, drop: []string{prompt("ub", "B"), bReply, bEnd}, open: true},
+		{name: "visible wake preserves automatic resume", base: []string{prompt("u1", "A"),
+			apiErrorLine(t, "e1", fixtureLimit, map[string]any{"error": "rate_limit", "quotaLimits": map[string]any{"status": "rejected", "resetsAt": 1767284400}}),
+			informational("Usage limit reached · continuing automatically at 4:20pm · esc to cancel"), turnEndLine},
+			middle: []string{wake("w1")}, drop: []string{prompt("ub", "B"), bReply, bEnd}, open: true, resumes: true},
 		{name: "visible same-state prompt after hidden prompt", base: []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine},
 			drop: []string{prompt("ub", "B"), prompt("uc", "C")}, open: true},
 		{name: "visible local command", base: []string{prompt("u1", "A"), replyLine, turnEndLine},
@@ -273,6 +278,9 @@ func TestTailSettleRestoresVisibleTurnState(t *testing.T) {
 			if m.TurnOpen != c.open || m.TurnClosed != c.closed || m.TurnSucceeded() != c.succeeded || m.TurnError != c.failure {
 				t.Fatalf("open %v closed %v succeeded %v error %q; want %v/%v/%v %q",
 					m.TurnOpen, m.TurnClosed, m.TurnSucceeded(), m.TurnError, c.open, c.closed, c.succeeded, c.failure)
+			}
+			if m.TurnErrorResumes != c.resumes {
+				t.Fatalf("TurnErrorResumes = %v, want %v", m.TurnErrorResumes, c.resumes)
 			}
 			if c.last != "" && m.LastText != c.last {
 				t.Fatalf("LastText = %q, want %q", m.LastText, c.last)
