@@ -6,11 +6,17 @@ import SwiftUI
 /// one-time hint says how to stop iOS asking every time.
 struct ClipboardSection: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.displayScale) private var displayScale
     let ref: MachineRef
     let machine: Machine
     var listed: MachineClipboard
     var online: Bool
     @State private var model: ClipboardModel?
+    @State private var previewWidth: CGFloat?
+    nonisolated private struct PreviewDecode: Hashable, Sendable {
+        var image: ObjectIdentifier?
+        var maxPixel: CGFloat
+    }
 
     var body: some View {
         let state = model?.state(listed) ?? listed
@@ -35,6 +41,12 @@ struct ClipboardSection: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                // This decode-only width is quantized (P7): a window drag writes state per 128-pixel bucket, not per point.
+                let quantum = 128 / displayScale
+                let quantized = ceil(max(width, Theme.Size.box200) / quantum) * quantum
+                if previewWidth != quantized { previewWidth = quantized }
+            }
             .card()
             if model?.showsPasteHint == true, state.usable { pasteHint }
         }
@@ -47,6 +59,12 @@ struct ClipboardSection: View {
             // `-showClipboardFetch YES`: runs Get Clipboard against the (mock) hub on opening (screenshots).
             if d.bool(forKey: "showClipboardFetch"), state.usable, online { await fetch() }
             #endif
+        }
+        .task(id: PreviewDecode(image: model?.fetchedImage.map { ObjectIdentifier($0) }, maxPixel: previewMaxPixel)) {
+            guard model?.needsPreviewResize(maxPixel: previewMaxPixel) == true else { return }
+            try? await Task.sleep(for: .milliseconds(200)) // one decode when a window drag pauses, not one per pixel
+            guard !Task.isCancelled else { return }
+            await model?.resizePreview(maxPixel: previewMaxPixel)
         }
         .onChange(of: listed) { _, new in model?.synchronize(new) }
     }
@@ -128,7 +146,7 @@ struct ClipboardSection: View {
             .font(Theme.Font.label)
             switch content.kind {
             case .image:
-                if let bytes = content.image?.bytes, let image = UIImage(data: bytes) {
+                if let image = model?.fetchedImage {
                     Image(uiImage: image).resizable().scaledToFit()
                         .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
@@ -215,9 +233,17 @@ struct ClipboardSection: View {
         report(await model.send(content, machineID: ref.id))
     }
 
+    private var previewMaxPixel: CGFloat {
+        // scaledToFit never draws the longer side beyond the inner card's width or the 200 pt height limit. The
+        // fallback only covers a DEBUG auto-fetch that wins the race with the first geometry report. Quantizing the
+        // decode bound, never the drawn frame, keeps an interactive resize from starting work for every pixel.
+        let points = max(previewWidth ?? Theme.Size.box200 * 3, Theme.Size.box200)
+        return ceil(points * displayScale / 128) * 128
+    }
+
     private func fetch() async {
         guard let model else { return }
-        report(await model.fetch(machineID: ref.id))
+        if let outcome = await model.fetch(machineID: ref.id, maxPixel: previewMaxPixel) { report(outcome) }
     }
 
     private func report(_ outcome: ClipboardOutcome) {

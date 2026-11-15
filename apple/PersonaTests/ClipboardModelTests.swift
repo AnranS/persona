@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import Persona
 
 /// Clipboard sharing with a computer (#3064): wire decoding, Send / Get / the switch against a FakeHub, the hub's
@@ -25,9 +26,51 @@ import Testing
         }
     }
 
+    /// Holds each decode until the test chooses its completion order.
+    @MainActor final class ControlledDecoder {
+        struct Request {
+            let data: Data
+            let maxPixel: CGFloat
+            let continuation: CheckedContinuation<ExtensionPicture.Decoded?, Never>
+        }
+        private(set) var requests: [Request] = []
+
+        func decode(_ data: Data, maxPixel: CGFloat) async -> ExtensionPicture.Decoded? {
+            await withCheckedContinuation { requests.append(Request(data: data, maxPixel: maxPixel, continuation: $0)) }
+        }
+
+        func wait(for count: Int) async {
+            while requests.count < count { await Task.yield() }
+        }
+
+        func finish(_ index: Int, image: UIImage) {
+            let request = requests[index]
+            request.continuation.resume(returning: .init(image: image, data: request.data, cost: request.data.count))
+        }
+    }
+
+    private func picture(width: Int, height: Int, color: UIColor = .red) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { context in
+            color.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    private func png(width: Int, height: Int) throws -> Data {
+        try #require(picture(width: width, height: height).pngData())
+    }
+
+    private func imageContent(_ data: Data) -> ClipboardContent {
+        .image(ClipboardImage(mime: "image/png", bytes: data))
+    }
+
     private func model(_ hub: FakeHub, _ board: Board, hints: ClipboardHints = Hints().store(),
-                       updated: @escaping (MachineClipboard) -> Void = { _ in }) -> ClipboardModel {
-        ClipboardModel(deps: .init(api: { hub.client }, pasteboard: board.pasteboard, updated: updated, hints: hints))
+                       updated: @escaping (MachineClipboard) -> Void = { _ in },
+                       decoder: ClipboardModel.Decoder? = nil) -> ClipboardModel {
+        ClipboardModel(deps: .init(api: { hub.client }, pasteboard: board.pasteboard, updated: updated, hints: hints),
+                       decoder: decoder)
     }
 
     @Test func decodesMachinesAndContent() throws {
@@ -104,6 +147,185 @@ import Testing
         hub.on("GET", "/api/v1/machines/mac/clipboard", json: #"{"kind":"empty"}"#)
         #expect(await m.fetch(machineID: "mac") == .remoteEmpty)
         #expect(board.content == .text("from the Mac"), "nothing overwritten")
+    }
+
+    @Test func fetchDownsamplesLargeImagesWithoutUpscalingSmallOnes() async throws {
+        let hub = FakeHub()
+        let board = Board()
+        let m = model(hub, board)
+        let large = imageContent(try png(width: 400, height: 200))
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(large) }
+
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .fetched(.image))
+        #expect(m.fetched == large && board.content == large, "the original goes to the phone and stays with the preview")
+        #expect(m.fetchedImage?.cgImage?.width == 100 && m.fetchedImage?.cgImage?.height == 50)
+
+        let small = imageContent(try png(width: 40, height: 20))
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(small) }
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .fetched(.image))
+        #expect(m.fetched == small && m.fetchedImage?.cgImage?.width == 40 && m.fetchedImage?.cgImage?.height == 20)
+    }
+
+    @Test func aLargerPreviewIsDecodedAgainFromTheOriginalWithoutRefetching() async throws {
+        let hub = FakeHub()
+        let m = model(hub, Board())
+        let content = imageContent(try png(width: 400, height: 200))
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(content) }
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .fetched(.image))
+        #expect(m.fetchedImage?.cgImage?.width == 100)
+
+        await m.resizePreview(maxPixel: 200)
+        #expect(m.fetched == content && m.fetchedImage?.cgImage?.width == 200 && m.fetchedImage?.cgImage?.height == 100)
+        await m.resizePreview(maxPixel: 100)
+        #expect(m.fetchedImage?.cgImage?.width == 200, "a smaller window keeps the sharper image")
+        #expect(hub.sent("GET", "/api/v1/machines/mac/clipboard").count == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func resizingTheOldPreviewDoesNotCancelANewerFetch() async throws {
+        let hub = FakeHub()
+        let board = Board()
+        let decoder = ControlledDecoder()
+        let m = model(hub, board, decoder: { data, maxPixel in await decoder.decode(data, maxPixel: maxPixel) })
+        let old = imageContent(try png(width: 40, height: 20))
+        let new = imageContent(try png(width: 60, height: 30))
+        var answers = [old, new]
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(answers.removeFirst()) }
+
+        let initial = Task { await m.fetch(machineID: "mac", maxPixel: 100) }
+        await decoder.wait(for: 1)
+        decoder.finish(0, image: picture(width: 40, height: 20))
+        #expect(await initial.value == .fetched(.image))
+
+        let newFetch = Task { await m.fetch(machineID: "mac", maxPixel: 100) }
+        await decoder.wait(for: 2)
+        let resize = Task { await m.resizePreview(maxPixel: 200) }
+        await decoder.wait(for: 3)
+
+        let newImage = picture(width: 60, height: 30, color: .blue)
+        decoder.finish(1, image: newImage)
+        #expect(await newFetch.value == .fetched(.image), "a resize of the old preview never supersedes the user's fetch")
+        #expect(m.fetched == new && m.fetchedImage === newImage && board.content == new)
+
+        decoder.finish(2, image: picture(width: 80, height: 40, color: .green))
+        await resize.value
+        #expect(m.fetched == new && m.fetchedImage === newImage, "the old resize cannot overwrite the new fetch either")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aFailedFetchDoesNotCancelTheCurrentPreviewResize() async throws {
+        let hub = FakeHub()
+        let decoder = ControlledDecoder()
+        let m = model(hub, Board(), decoder: { data, maxPixel in await decoder.decode(data, maxPixel: maxPixel) })
+        let content = imageContent(try png(width: 40, height: 20))
+        var reads = 0
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in
+            reads += 1
+            if reads == 1 { return try JSON.encoder.encode(content) }
+            throw APIError(status: 503, message: "offline")
+        }
+
+        let initial = Task { await m.fetch(machineID: "mac", maxPixel: 100) }
+        await decoder.wait(for: 1)
+        decoder.finish(0, image: picture(width: 40, height: 20))
+        #expect(await initial.value == .fetched(.image))
+
+        let resize = Task { await m.resizePreview(maxPixel: 200) }
+        await decoder.wait(for: 2)
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .failed(.offline))
+        let larger = picture(width: 80, height: 40, color: .green)
+        decoder.finish(1, image: larger)
+        await resize.value
+        #expect(m.fetched == content && m.fetchedImage === larger)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func cancelledResizeTasksShareOneWorkerAndKeepTheNewestSize() async throws {
+        let hub = FakeHub()
+        let decoder = ControlledDecoder()
+        let m = model(hub, Board(), decoder: { data, maxPixel in await decoder.decode(data, maxPixel: maxPixel) })
+        let content = imageContent(try png(width: 400, height: 200))
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(content) }
+
+        let initial = Task { await m.fetch(machineID: "mac", maxPixel: 100) }
+        await decoder.wait(for: 1)
+        let initialImage = picture(width: 40, height: 20)
+        decoder.finish(0, image: initialImage)
+        #expect(await initial.value == .fetched(.image))
+
+        let cancelled = Task { await m.resizePreview(maxPixel: 200) }
+        await decoder.wait(for: 2)
+        let newest = Task { await m.resizePreview(maxPixel: 400) }
+        await Task.yield()
+        cancelled.cancel() // SwiftUI cancels the old task when the geometry changes again.
+        await Task.yield()
+        #expect(decoder.requests.count == 2, "the second size waits for the in-flight decode instead of overlapping it")
+
+        decoder.finish(1, image: picture(width: 80, height: 40, color: .green))
+        await decoder.wait(for: 3)
+        #expect(decoder.requests.map(\.maxPixel) == [100, 200, 400])
+        #expect(m.fetchedImage === initialImage, "the superseded size is not published")
+
+        let larger = picture(width: 160, height: 80, color: .blue)
+        decoder.finish(2, image: larger)
+        await cancelled.value
+        await newest.value
+        #expect(m.fetched == content && m.fetchedImage === larger)
+        #expect(decoder.requests.count == 3, "the cancelled caller did not cancel the shared worker")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func newerFetchWinsWhenTheOlderDecodeFinishesLater() async throws {
+        let hub = FakeHub()
+        let board = Board()
+        let decoder = ControlledDecoder()
+        let m = model(hub, board, decoder: { data, maxPixel in await decoder.decode(data, maxPixel: maxPixel) })
+        let old = imageContent(try png(width: 40, height: 20))
+        let new = imageContent(try png(width: 60, height: 30))
+        var answers = [old, new]
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(answers.removeFirst()) }
+
+        let oldFetch = Task { await m.fetch(machineID: "mac", maxPixel: 100) }
+        await decoder.wait(for: 1)
+        let newFetch = Task { await m.fetch(machineID: "mac", maxPixel: 100) }
+        await decoder.wait(for: 2)
+
+        let newImage = picture(width: 60, height: 30, color: .blue)
+        decoder.finish(1, image: newImage)
+        #expect(await newFetch.value == .fetched(.image))
+        #expect(m.fetched == new && m.fetchedImage === newImage && board.content == new)
+
+        let oldImage = picture(width: 40, height: 20, color: .green)
+        decoder.finish(0, image: oldImage)
+        #expect(await oldFetch.value == nil, "a superseded fetch has no result to report")
+        #expect(m.fetched == new && m.fetchedImage === newImage && board.content == new)
+        #expect(m.busy == nil)
+    }
+
+    @Test func clearingThePreviewDropsItsDecodedImage() async throws {
+        let hub = FakeHub()
+        let m = model(hub, Board())
+        let content = imageContent(try png(width: 40, height: 20))
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(content) }
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .fetched(.image))
+        #expect(m.fetchedImage != nil)
+
+        m.preview(fetched: nil, hint: false)
+        #expect(m.fetched == nil && m.fetchedImage == nil)
+
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .fetched(.image))
+        #expect(m.fetchedImage != nil)
+        hub.on("PUT", "/api/v1/machines/mac/clipboard/settings", json: #"{"supported":true,"enabled":false}"#)
+        #expect(await m.setEnabled(false, machineID: "mac"))
+        #expect(m.fetched == nil && m.fetchedImage == nil)
+    }
+
+    @Test func nonPictureBytesPublishNoImage() async {
+        let hub = FakeHub()
+        let board = Board()
+        let m = model(hub, board)
+        let invalid = imageContent(Data("not a picture".utf8))
+        hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(invalid) }
+
+        #expect(await m.fetch(machineID: "mac", maxPixel: 100) == .fetched(.image))
+        #expect(m.fetched == invalid && board.content == invalid, "the existing content and outcome behavior is unchanged")
+        #expect(m.fetchedImage == nil)
     }
 
     @Test func hubRefusalsInWords() async {

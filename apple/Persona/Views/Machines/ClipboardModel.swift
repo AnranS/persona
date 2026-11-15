@@ -1,10 +1,18 @@
 import Foundation
 import Observation
+import UIKit
 
 /// A computer's clipboard section (#3064): its switch, Send Clipboard (the phone's to the computer), Get Clipboard (the
 /// computer's onto the phone), and the one-time hint to stop iOS asking before every paste. The hub and the phone's
 /// pasteboard come in through `Deps`, so the tests run it with a FakeHub and a pasteboard of their own.
 @Observable final class ClipboardModel {
+    typealias Decoder = @Sendable (Data, CGFloat) async -> ExtensionPicture.Decoded?
+
+    private struct PreviewResize: Equatable {
+        var content: ClipboardContent
+        var maxPixel: CGFloat
+    }
+
     struct Deps {
         var api: () -> APIClient?
         var pasteboard: PhonePasteboard
@@ -20,14 +28,26 @@ import Observation
     private(set) var saved: MachineClipboard?
     /// What Get Clipboard put on the phone, for its preview.
     private(set) var fetched: ClipboardContent?
+    /// The fetched picture, decoded once at the preview's size rather than in the view's body.
+    private(set) var fetchedImage: UIImage?
     /// The last result, said under the buttons.
     private(set) var outcome: ClipboardOutcome?
     /// "Asked every time?": after the first paste the user allowed (iOS only), until dismissed.
     private(set) var showsPasteHint = false
     @ObservationIgnored private let deps: Deps
+    @ObservationIgnored private let decoder: Decoder
+    @ObservationIgnored private var fetchGeneration = 0
+    @ObservationIgnored private var pendingResize: PreviewResize?
+    @ObservationIgnored private var resizeTask: Task<Void, Never>?
+    @ObservationIgnored private var fetchedImageMaxPixel: CGFloat = 0
 
-    init(deps: Deps) {
+    init(deps: Deps, decoder: Decoder? = nil) {
         self.deps = deps
+        self.decoder = decoder ?? { data, maxPixel in
+            await Task.detached(priority: .userInitiated) {
+                ExtensionPicture.decode(data, maxPixel: maxPixel)
+            }.value
+        }
     }
 
     /// Send Clipboard: reads the phone's clipboard (iOS may ask "Allow Paste?") and puts it on the computer.
@@ -54,18 +74,37 @@ import Observation
         }
     }
 
-    /// Get Clipboard: the computer's clipboard onto the phone's (no prompt), kept for the preview.
-    @discardableResult func fetch(machineID: String) async -> ClipboardOutcome {
-        guard busy == nil else { return outcome ?? .nothingToSend }
+    /// Get Clipboard: the computer's clipboard onto the phone's (no prompt), kept for the preview. A newer fetch may
+    /// replace one still decoding; a superseded fetch returns nil and publishes nothing.
+    @discardableResult func fetch(machineID: String, maxPixel: CGFloat = Theme.Size.box200 * 3) async -> ClipboardOutcome? {
+        guard busy == nil || busy == .fetching else { return outcome ?? .nothingToSend }
+        fetchGeneration += 1
+        let generation = fetchGeneration
         busy = .fetching
-        defer { busy = nil }
+        defer {
+            if fetchGeneration == generation { busy = nil }
+        }
         do {
             guard let api = deps.api() else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
             let content = try await api.clipboard(machine: machineID)
+            guard fetchGeneration == generation else { return nil }
             switch content.kind {
-            case .text where content.text?.isEmpty == false, .image where content.image?.bytes != nil:
+            case .text where content.text?.isEmpty == false:
                 deps.pasteboard.write(content)
+                pendingResize = nil
                 fetched = content
+                fetchedImage = nil
+                fetchedImageMaxPixel = 0
+                return finish(.fetched(content.kind))
+            case .image:
+                guard let bytes = content.image?.bytes else { return finish(.remoteEmpty) }
+                let decoded = await decoder(bytes, maxPixel)
+                guard fetchGeneration == generation else { return nil }
+                deps.pasteboard.write(content)
+                pendingResize = nil
+                fetched = content
+                fetchedImage = decoded?.image
+                fetchedImageMaxPixel = maxPixel
                 return finish(.fetched(content.kind))
             case .concealed:
                 return finish(.remoteConcealed)
@@ -73,8 +112,49 @@ import Observation
                 return finish(.remoteEmpty)
             }
         } catch {
+            guard fetchGeneration == generation else { return nil }
             return finish(.failed(ClipboardFailure(error)))
         }
+    }
+
+    /// Whether a larger bound would sharpen the current picture; the view checks this before its resize debounce.
+    func needsPreviewResize(maxPixel: CGFloat) -> Bool {
+        fetched?.kind == .image && maxPixel > fetchedImageMaxPixel
+    }
+
+    /// A wider window or a new display scale needs more pixels for the same fetched picture. Keep the current preview
+    /// visible while the original bytes are downsampled again off the main actor; never refetch or shrink it here. One
+    /// model-owned worker outlives a cancelled view task and coalesces requests, so a window drag never overlaps decodes.
+    func resizePreview(maxPixel: CGFloat) async {
+        guard let content = fetched, content.kind == .image, maxPixel > fetchedImageMaxPixel,
+              content.image?.bytes != nil else { return }
+        if pendingResize?.content != content || (pendingResize?.maxPixel ?? 0) < maxPixel {
+            pendingResize = PreviewResize(content: content, maxPixel: maxPixel)
+        }
+        if resizeTask == nil {
+            resizeTask = Task { [weak self] in
+                guard let self else { return }
+                await self.drainPreviewResizes()
+            }
+        }
+        await resizeTask?.value
+    }
+
+    private func drainPreviewResizes() async {
+        while let request = pendingResize {
+            guard fetched == request.content, request.maxPixel > fetchedImageMaxPixel,
+                  let bytes = request.content.image?.bytes else {
+                pendingResize = nil
+                continue
+            }
+            let decoded = await decoder(bytes, request.maxPixel)
+            guard pendingResize == request else { continue } // a newer size or content superseded this decode
+            pendingResize = nil
+            guard fetched == request.content else { continue }
+            if let decoded { fetchedImage = decoded.image }
+            fetchedImageMaxPixel = request.maxPixel
+        }
+        resizeTask = nil
     }
 
     /// The computer's switch; the result goes to the machine list too.
@@ -87,7 +167,12 @@ import Observation
             let state = try await api.setClipboardEnabled(machine: machineID, enabled: on)
             saved = state
             deps.updated(state)
-            if !state.enabled { fetched = nil }
+            if !state.enabled {
+                pendingResize = nil
+                fetched = nil
+                fetchedImage = nil
+                fetchedImageMaxPixel = 0
+            }
             outcome = nil
             return true
         } catch {
@@ -125,7 +210,10 @@ import Observation
     #if DEBUG
     /// Screenshots: a state without a hub (`-showClipboardFetched text|image`, `-showClipboardHint YES`).
     func preview(fetched: ClipboardContent?, hint: Bool) {
+        pendingResize = nil
         self.fetched = fetched
+        fetchedImage = nil
+        fetchedImageMaxPixel = 0
         if let fetched { outcome = .fetched(fetched.kind) }
         showsPasteHint = hint
     }

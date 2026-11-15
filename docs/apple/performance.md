@@ -321,8 +321,6 @@ decode takes tens of milliseconds. `UIImage(data:)` decodes lazily at first draw
   first draw of each avatar decodes on the main thread (cached afterwards).
 - `apple/Persona/Views/Inbox/Lark/LarkAttachmentView.swift:33` and `apple/Persona/Views/Session/CompareView.swift:249`: `UIImage(data:)` in `body`, on every render.
 - `apple/Persona/Views/Chat/PhotoAttach.swift:35`: picked photos decoded, scaled and encoded on the main actor.
-- `apple/Persona/Views/Machines/ClipboardSection.swift:131`: the clipboard preview builds `UIImage(data:)` from the
-  computer's full-size picture in `body`, so every redraw of the machine page decodes it again (#3281, listed in #5414).
 
 **Do.** Follow `LarkMedia` (`apple/Persona/Views/Inbox/Lark/LarkMedia.swift:101-120`): download, then
 `Task.detached { decode(data, maxPixel:) }` with a `nonisolated` ImageIO thumbnail, in-flight requests shared, an `NSCache`
