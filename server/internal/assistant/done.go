@@ -99,33 +99,47 @@ func directOwnerMarker(lower, marker string) bool {
 		}
 		i += from
 		before := strings.TrimSpace(lower[:i])
-		direct := before == ""
+		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise")
 		for _, end := range []string{".", "!", "?", ";"} {
 			direct = direct || strings.HasSuffix(before, end)
 		}
 		if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
 			end := strings.LastIndexAny(clause, ".!?;")
-			// A colon after an open "if" introduces its guidance; it does not start an independent owner requirement.
-			// Outside a conditional, a colon starts a clause after whitespace; a time such as 10:30 changes neither scope.
-			openConditional := strings.HasPrefix(strings.TrimSpace(clause[end+1:]), "if ")
-			if !openConditional {
-				if i := strings.LastIndex(clause, ": "); i > end {
-					end = i
-				}
-				if i := strings.LastIndex(clause, ":\t"); i > end {
-					end = i
-				}
-			}
-			if end >= 0 {
-				clause = strings.TrimSpace(clause[end+1:])
-			}
-			direct = !strings.HasPrefix(clause, "if ") || strings.HasSuffix(clause, "otherwise,") || strings.HasSuffix(clause, "otherwise:")
+			conditional := strings.TrimSpace(clause[end+1:])
+			// Commas and colons introduce guidance without closing an "if" elsewhere in this sentence. Only a
+			// sentence boundary or an explicit "otherwise" clause makes the next requirement independent.
+			openConditional := ownerConditionalOpen(conditional)
+			direct = !openConditional || strings.HasSuffix(clause, "otherwise,") || strings.HasSuffix(clause, "otherwise:")
 		}
 		if direct && !ownerNoAction(lower[i+len(marker):]) {
 			return true
 		}
 		from = i + len(marker)
+	}
+	return false
+}
+
+// ownerConditionalOpen reports a plain "if" whose condition still owns the clause. "Even if" is different: its main
+// clause applies regardless of the condition, so a later owner requirement stays direct.
+func ownerConditionalOpen(clause string) bool {
+	for from := 0; from < len(clause); {
+		i := strings.Index(clause[from:], "if ")
+		if i < 0 {
+			return false
+		}
+		i += from
+		boundary := i == 0
+		if i > 0 {
+			switch clause[i-1] {
+			case ' ', '\t', '\n', '\r':
+				boundary = true
+			}
+		}
+		if boundary && !strings.HasSuffix(clause[:i], "even ") {
+			return true
+		}
+		from = i + 2
 	}
 	return false
 }
