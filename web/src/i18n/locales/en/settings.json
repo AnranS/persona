@@ -160,5 +160,7 @@
   "search_key_words": "API key, secret key",
   "device_tokens": "Device tokens",
   "outbound_confirm": "Confirm outward-facing actions",
-  "outbound_confirm_hint": "Ask one extra confirmation before allowing pushes, deploys, or messages sent as you."
+  "outbound_confirm_hint": "Ask one extra confirmation before allowing pushes, deploys, or messages sent as you.",
+  "pi_too": "pi too",
+  "pi_too_title": "pi on the computers in its scope can use this provider too, without a models.json"
 }
