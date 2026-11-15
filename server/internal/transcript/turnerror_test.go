@@ -289,6 +289,29 @@ func TestTailSettleRestoresVisibleTurnState(t *testing.T) {
 	}
 }
 
+func TestTailSettleDoesNotInheritHiddenResume(t *testing.T) {
+	var m Meta
+	var tail Tail
+	feed := func(lines []string) {
+		for i, line := range lines {
+			tail.Line(&m, ParseLine(i, []byte(line), &m))
+		}
+	}
+	feed([]string{prompt("u1", "A"), replyLine, turnEndLine})
+	tail.Rewound([]string{"ub", "eb", "n", "db"})
+	feed([]string{prompt("ub", "B"),
+		apiErrorLine(t, "eb", fixtureLimit, map[string]any{"error": "rate_limit", "quotaLimits": map[string]any{"status": "rejected", "resetsAt": 1767284400}}),
+		informational("Usage limit reached · continuing automatically at 4:20pm · esc to cancel"),
+		strings.Replace(strings.Replace(turnEndLine, `"uuid":"d"`, `"uuid":"db"`, 1), `"parentUuid":"x"`, `"parentUuid":"eb"`, 1)})
+	feed([]string{wake("w1")})
+	if !tail.Settle(&m) {
+		t.Fatal("settling the abandoned limited turn changed nothing")
+	}
+	if m.TurnErrorResumes {
+		t.Fatal("a hidden turn's automatic resume leaked into the visible wake")
+	}
+}
+
 // Whether Claude Code still goes on by itself once the limit resets: its notices say it and take it back, a wake
 // leaves it, a message cancels it, a reply or another kind of failure ends it.
 func TestClaudeLimitResumes(t *testing.T) {

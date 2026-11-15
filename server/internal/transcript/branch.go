@@ -82,6 +82,7 @@ type treeRec struct {
 	beforeLocal    [2]bool
 	resumesSaid    bool
 	turnResumes    bool
+	resumeLine     string
 	failure        turnFailureState
 	outcomeChanged bool
 	hasOutcome     bool
@@ -411,9 +412,16 @@ func (t *Tail) line(meta *Meta, items []proto.Item, recordOutcome bool) {
 				break
 			}
 		}
+		rec.resumeLine = rec.failure.line
+		if rec.turnResumes && rec.resumeLine == "" {
+			rec.resumeLine = previous.resumeLine
+		}
+		if !rec.turnResumes {
+			rec.resumeLine = ""
+		}
 		rec.outcomeChanged = rec.open != previous.open || rec.closed != previous.closed || rec.succeeded != previous.succeeded ||
 			rec.localTurn != previous.localTurn || rec.beforeLocal != previous.beforeLocal || rec.resumesSaid != previous.resumesSaid ||
-			rec.turnResumes != previous.turnResumes || rec.failure != previous.failure
+			rec.turnResumes != previous.turnResumes || rec.resumeLine != previous.resumeLine || rec.failure != previous.failure
 	} else {
 		// Skipped is tree shape only: even a real prompt's turn-start is not evidence the quick reader may apply.
 		rec.turnStart = false
@@ -522,6 +530,7 @@ func (t *Tail) Settle(meta *Meta) bool {
 	var failure turnFailureState
 	resumesSaid := false
 	turnResumes := false
+	resumeLine := ""
 	for _, rec := range t.tree.recs {
 		if t.tree.hidden[rec.uuid] {
 			continue
@@ -539,9 +548,14 @@ func (t *Tail) Settle(meta *Meta) bool {
 		failure = rec.failure
 		resumesSaid = rec.resumesSaid
 		turnResumes = rec.turnResumes
+		resumeLine = rec.resumeLine
 		if hiddenFailure {
 			failure = turnFailureState{}
 			resumesSaid = false
+		}
+		if turnResumes && resumeLine != "" && t.tree.hidden[resumeLine] {
+			turnResumes = false
+			resumeLine = ""
 		}
 	}
 	meta.clearTurnError()
