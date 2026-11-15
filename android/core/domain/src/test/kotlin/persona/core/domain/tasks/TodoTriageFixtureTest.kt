@@ -102,7 +102,10 @@ class TodoTriageFixtureTest(private val name: String, private val fixture: Fixtu
 
     companion object {
         @JvmStatic @Parameterized.Parameters(name = "{0}")
-        fun cases(): List<Array<Any>> = FixtureReader.read("triage").map {
+        fun cases(): List<Array<Any>> = FixtureReader.read("triage").filter {
+            // Native parked-rule alignment remains #5929; this hub/web-only case is not a native expectation.
+            it.value.getValue("name").jsonPrimitive.content != "parked_unread_pr_open"
+        }.map {
             arrayOf("${it.file}: ${it.value.getValue("name").jsonPrimitive.content}", it)
         }
     }

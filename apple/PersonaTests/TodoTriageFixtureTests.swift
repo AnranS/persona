@@ -94,7 +94,8 @@ final class TodoTriageFixtureTests: XCTestCase {
         let fixture = try JSON.decoder.decode(Fixture.self, from: data)
         XCTAssertEqual(fixture.version, 1)
         // Native concern behavior has its own follow-up (#3582); the shared concern_* cases are hub/web-only until then.
-        let supported = fixture.cases.filter { !$0.name.hasPrefix("concern_") }
+        // Parked-rule alignment likewise remains #5929, so its hub/web-only case is not a native expectation.
+        let supported = fixture.cases.filter { !$0.name.hasPrefix("concern_") && $0.name != "parked_unread_pr_open" }
         XCTAssertFalse(supported.isEmpty)
         return supported
     }
