@@ -45,6 +45,10 @@ func tellLegacyBackground(t *testing.T, s *Service, f *fakeHub, todoID, backgrou
 	waitFor(t, "the legacy background notification", func() bool {
 		return strings.Contains(strings.Join(f.noticesTo(background), "\n"), todoID)
 	})
+	// Visibility precedes deliverDigest's grant defer. Use the production read barrier before inspecting or restarting.
+	if !s.legacyBackgroundNotice(context.Background(), background, todoID) {
+		t.Fatal("the visible legacy notice did not publish its closeout grant")
+	}
 }
 
 // conversationStarts are the assistant.send calls that started a conversation (no session id).
