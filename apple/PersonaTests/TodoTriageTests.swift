@@ -83,6 +83,14 @@ struct TodoTriageTests {
         #expect(t.section == .working && t.rule == .agentRunning)
     }
 
+    @Test func blockedAgentWaitingIsWorkingEvenOnAnOldTodo() {
+        var blocked = session("blocked", state: .idle, updatedHoursAgo: 100)
+        blocked.work = try! JSON.decoder.decode(WorkState.self, from: Data(#"{"phase":"blocked","on":"external"}"#.utf8))
+        let result = TodoTriageLogic.triage(todo("t", updated: 400, agents: ["blocked"]),
+                                            lookup: TodosLogic.makeSessionLookup([blocked]), now: now)
+        #expect(result.section == .working && result.rule == .agentRunning)
+    }
+
     @Test func closedIsImmediatelyDone() {
         #expect(at(todo("t", done: 3)).section == .done)
         #expect(at(todo("t", updated: 30, done: 30)).section == .done)
