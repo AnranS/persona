@@ -261,6 +261,14 @@ export function shownFeed(feed: FeedItem[], now = new Date()): FeedItem[] {
   return hidden.size === 0 ? feed : feed.filter((it) => !hidden.has(it.id));
 }
 
+/** What a Persona conversation draws of its feed (#8237, docs/assistant/unified-entry.md "Receipts"): a task's card comes
+ *  once, when it is handed out, and updates in place; how it goes on (a receipt for each stretch of work, its Agent's
+ *  reports, its reviews) is its row in Needs you / In progress, never another card. The hub keeps writing them all: the
+ *  trays read them, and a hub-side reader (the "Today" card) still does. */
+export function drawnFeed(feed: FeedItem[]): FeedItem[] {
+  return feed.filter((it) => it.kind !== "receipt" && it.kind !== "report" && it.kind !== "review");
+}
+
 /** Persona's messages to task `todoId`, oldest first: what its card lists. */
 export function sentTo(feed: FeedItem[], todoId: string): FeedItem[] {
   return feed
@@ -673,13 +681,15 @@ export async function retryTask(todo: Todo) {
 export type AskAnswer = { option: string } | { response: string };
 
 /** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified). Any other failure throws. `answer`: a decision's option or fixed response
- *  instead of its recommendation. */
+ *  (asked again since, or already verified: 409 with no code of its own). Any other failure throws, since nothing was
+ *  taken: the Agent's node refusing it (dialog_open: a dialog has its terminal, #7343) is 423 with that code, or a 409
+ *  with it from a hub built between the two.
+ *  `answer`: a decision's option or fixed response instead of its recommendation. */
 export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "handled"> {
   try {
     await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
   } catch (e) {
-    if (e instanceof ApiError && e.status === 409) return "handled";
+    if (e instanceof ApiError && e.status === 409 && (!e.code || e.code === "conflict")) return "handled";
     throw e;
   }
   void refreshTodos();
@@ -918,8 +928,8 @@ export function loadedFrom(items: Item[]): number | undefined {
  *  stack on top of the newest page, with their day lines, and read as the conversation's start with its messages gone;
  *  they wait for the page that covers them. */
 export function displayLines(lines: ChatLine[], all: FeedItem[], from?: number): DisplayLine[] {
-  // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
-  const feed = shownFeed(all).filter((it) => from === undefined || !(Date.parse(it.at) < from));
+  // the hand-offs the task cards take in are drawn there, not among the lines (#1542); how a task goes on is its row (#8237)
+  const feed = drawnFeed(shownFeed(all)).filter((it) => from === undefined || !(Date.parse(it.at) < from));
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {
