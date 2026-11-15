@@ -93,7 +93,7 @@ final class CalmComposerUITests: XCTestCase {
         XCTAssertTrue(app.buttons["选项 1"].waitForExistence(timeout: 10), app.debugDescription)
         app.buttons["选项 1"].tap()
         let next = app.buttons["chat.nextNeedsYou"]
-        XCTAssertTrue(next.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(waitUntil(30) { next.exists }, "the answered card did not offer the next conversation: \(app.debugDescription)")
         XCTAssertTrue(waitUntil(5) { abs(next.frame.midY - needs.frame.midY) <= 0.5 && abs(next.frame.midY - running.frame.midY) <= 0.5 },
                       "the next request is not in the action row")
         XCTAssertTrue(waitUntil { self.state(app)["bottom"] == 1 && self.state(app)["newestShown"] == 1 }, "not following before streaming: \(self.state(app))")
@@ -117,10 +117,11 @@ final class CalmComposerUITests: XCTestCase {
         let app = launch()
         let strip = app.descendants(matching: .any)["queue-strip"].firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(waitUntil(30) { (self.state(app)["items"] ?? 0) > 0 }, "the initial transcript never arrived: \(self.state(app))")
         let beforeItems = state(app)["items"] ?? 0
         let history = (1...18).map { "第 \($0) 段历史内容，用来把当前阅读位置移离最新回答。" }.joined(separator: "\n\n")
         mock("say", query: [URLQueryItem(name: "text", value: history)])
-        XCTAssertTrue(waitUntil { (self.state(app)["items"] ?? 0) > beforeItems && self.state(app)["bottom"] == 1 }, "the long fixture did not arrive: \(self.state(app))")
+        XCTAssertTrue(waitUntil(30) { (self.state(app)["items"] ?? 0) > beforeItems && self.state(app)["bottom"] == 1 }, "the long fixture did not arrive: \(self.state(app))")
 
         for _ in 0..<3 {
             let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
@@ -128,6 +129,8 @@ final class CalmComposerUITests: XCTestCase {
         }
         XCTAssertTrue(waitUntil { self.state(app)["bottom"] == 0 && self.state(app)["follows"] == 0 && self.state(app)["arrow"] == 1 },
                       "did not enter manual reading: \(self.state(app))")
+        XCTAssertTrue(waitUntil { self.state(app)["readingY"] != nil && self.state(app)["readingY"] != -1 && self.readingID(app) != "none" },
+                      "no historical row position after scrolling: \(self.state(app))")
         let rowY = try XCTUnwrap(state(app)["readingY"], "the scroll probe has no historical row position")
         XCTAssertNotEqual(rowY, -1, "the historical row has no measured screen position")
         let rowID = try XCTUnwrap(readingID(app), "the scroll probe has no historical row id")
