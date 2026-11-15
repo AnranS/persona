@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -43,6 +44,39 @@ func TestAssistantProfileUsesValidSourceAfterReadFailure(t *testing.T) {
 	}
 	if groups := taggedAssistantBypassGroups(got); len(groups) != 1 {
 		t.Fatalf("later valid source was not seeded: %s", raw)
+	}
+}
+
+func TestAssistantProfileIgnoresUnrelatedSourceReadFailure(t *testing.T) {
+	f := sdkProfileTest(t)
+	n := f.n
+	n.home = os.Getenv("HOME")
+	source := filepath.Join(n.home, ".claude")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "settings.json"), []byte(`{"hooks":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := filepath.Join(n.home, "some-project-claude")
+	if err := os.MkdirAll(unrelated, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unrelated, "settings.json"), []byte(`{"hooks": {,}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n.claudeStartDir.Store(&unrelated)
+	const id = "a5500000-0000-4000-8000-000000000590"
+	p, err := n.spawnClaude(id, t.TempDir(), "claude", false, false, sdkExec(proto.AssistantRuntimeAgentSDK))
+	if err != nil {
+		t.Fatalf("an unrelated broken source without any opt-in blocked a new profile: %v", err)
+	}
+	defer p.stop()
+	if _, err := os.Stat(filepath.Join(n.dir, "profiles", "claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("a source without an opt-in produced settings: %v", err)
+	}
+	if got := f.log.String(); !strings.Contains(got, unrelated) {
+		t.Fatalf("the ignored source error was not observable in the node log: %q", got)
 	}
 }
 

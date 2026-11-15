@@ -56,15 +56,23 @@ func (n *Node) prepareAssistantProfile(configPath string) error {
 // context: this directory was just created and has no local ask/deny rules.
 //
 // Nonempty existing profiles never come here (prepareAssistantProfile). No
-// readable source entry means no file. If no source supplies an entry, an
-// unreadable source aborts the start instead of silently losing its policy.
+// readable source entry means no file. The default directory and ~/.claude are
+// authoritative: an unreadable one aborts the start when no later source supplies
+// the tagged opt-in. An unrelated profile or session directory is logged and
+// skipped instead, so its unrelated typo cannot block every new profile.
 // Only the tagged entries are copied: other hooks, credentials, modes and
 // settings stay out of the private profile, and the source file is not changed.
 func (n *Node) seedAssistantBypassHook(configPath string) error {
 	var sourceReadErr error
+	defaultDir := n.defaultClaudeDir()
+	legacyDir := filepath.Join(n.home, ".claude")
 	for _, dir := range n.claudeConfigDirs() {
 		settings, err := readSettingsFile(settingsFile(dir))
 		if err != nil {
+			if dir != defaultDir && dir != legacyDir {
+				n.logger.Printf("assistant profile seed: ignoring unrelated source %s: %v", settingsFile(dir), err)
+				continue
+			}
 			if sourceReadErr == nil {
 				sourceReadErr = err
 			}
