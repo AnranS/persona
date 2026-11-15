@@ -535,7 +535,7 @@ func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
 	b := &s.tasks.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.loaded {
+	if !s.turnsLocked(ctx) {
 		return
 	}
 	changed := false

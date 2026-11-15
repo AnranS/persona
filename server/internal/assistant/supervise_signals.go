@@ -328,11 +328,12 @@ func (s *Service) startUnknownArmed(g superviseSignal) bool {
 	turns := &s.tasks.turns
 	turns.mu.Lock()
 	defer turns.mu.Unlock()
-	if turns.loaded {
-		if entry, ok := turns.doc.Turns[g.Todo]; ok && entry.Signal != nil {
-			sig := entry.Signal
-			return sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil
-		}
+	if !s.turnsLocked(context.Background()) {
+		return true // an unreadable ledger cannot prove that retraction is a no-op
+	}
+	if entry, ok := turns.doc.Turns[g.Todo]; ok && entry.Signal != nil {
+		sig := entry.Signal
+		return sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil
 	}
 	return false
 }
