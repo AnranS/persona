@@ -155,9 +155,9 @@ func ownerOfferMarker(lower, marker string) bool {
 			return false
 		}
 		i += from
-		start := strings.LastIndexAny(lower[:i], ".!?;") + 1
+		start := strings.LastIndexAny(lower[:i], ownerSentenceEnds) + 1
 		end := len(lower)
-		if j := strings.IndexAny(lower[i+len(marker):], ".!?;"); j >= 0 {
+		if j := strings.IndexAny(lower[i+len(marker):], ownerSentenceEnds); j >= 0 {
 			end = i + len(marker) + j
 		}
 		sentence := lower[start:end]
