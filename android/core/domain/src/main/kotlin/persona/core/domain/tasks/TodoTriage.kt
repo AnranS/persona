@@ -37,14 +37,19 @@ private fun ms(at: String?): Long = parseTime(at)?.toEpochMilli() ?: 0L
 /** The web's todo status (`web/src/lib/todos.ts` `todoStatus`), which the triage reads: an open ask does not make it Needs you. */
 enum class TriageStatus { Failed, Done, NotStarted, NeedsYou, Interrupted, UsageLimit, Unread, Working, Waiting, FollowUp }
 
-/** The status the triage reads from the to-do and its current agents' sessions, as the web computes it. */
+/**
+ * The status the triage reads from the to-do and its current agents' sessions, as the web computes it.
+ * A subscription usage limit ([Session.isUsageLimited]) is its own status (iOS `AgentsStatus.usageLimit`): it is not
+ * [Session.interrupted], which stays the shared flag the capsule and the Agents list already use. [now] is epoch
+ * millis, so a limit past its grace reads as interrupted on the next tick.
+ */
 fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): TriageStatus {
     if (!startError.isNullOrEmpty()) return TriageStatus.Failed
     if (isDone) return TriageStatus.Done
     val active = currentAgents
     if (active.isEmpty()) return TriageStatus.NotStarted
     var interrupted = false
-    var limited = false
+    var limit = false
     var unread = false
     var working = false
     var waiting = false
@@ -53,13 +58,9 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
         val s = lookup(a.key)
         val st = s?.agentState ?: AgentState.Offline
         if (st == AgentState.NeedsYou || s != null && (s.pendingInteractions > 0 || s.status == "blocked")) return TriageStatus.NeedsYou
-        val stopped = st == AgentState.Unread || st == AgentState.Idle
-        val reset = parseTime(s?.turnErrorResetsAt ?: s?.work?.resetsAt)
-        val usageLimit = stopped && !s?.turnError.isNullOrEmpty() && s?.turnErrorKind == "usage_limit" &&
-            (reset == null || now <= reset.toEpochMilli() + 10 * 60_000L)
         when {
-            usageLimit -> limited = true
-            stopped && !s?.turnError.isNullOrEmpty() -> interrupted = true
+            s?.isUsageLimited(now) == true -> limit = true
+            s?.interrupted == true -> interrupted = true
             st == AgentState.Unread -> unread = true
             s?.backgroundWorking == true && st == AgentState.Working -> waiting = true
             st == AgentState.Working || s?.starting == true -> working = true
@@ -68,7 +69,7 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
     }
     return when {
         interrupted -> TriageStatus.Interrupted
-        limited -> TriageStatus.UsageLimit
+        limit -> TriageStatus.UsageLimit
         unread -> TriageStatus.Unread
         working -> TriageStatus.Working
         waiting -> TriageStatus.Waiting
@@ -185,6 +186,19 @@ fun Todo.triage(
     if (finished && !concern) return at(TriageSection.Done, TriageRule.Seen)
     if (shelvable(now, zone) && now - last >= SHELVE_AFTER_MS) return at(TriageSection.Shelved, TriageRule.Stale)
     return at(TriageSection.Other, TriageRule.Rest)
+}
+
+/** Whether a task belongs in the assistant's recent-finished tray. Closed/accepted work is immediately Done on the
+ * to-do page (#5732), but this separate projection keeps it visible for 24 hours until opened (#8237). */
+fun Todo.showsJustFinished(t: Triage, now: Long): Boolean {
+    if (t.section == TriageSection.JustDone) return true
+    val completedAt = when (t.rule) {
+        TriageRule.Closed -> ms(doneAt)
+        TriageRule.Accepted -> ms(supervision?.latestReview?.at)
+        else -> 0
+    }
+    val seenAt = ms(this.seenAt)
+    return completedAt > 0 && now - completedAt < JUST_DONE_MS && (seenAt == 0L || seenAt < completedAt)
 }
 
 /**

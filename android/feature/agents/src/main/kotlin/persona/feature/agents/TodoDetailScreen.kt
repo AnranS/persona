@@ -3,6 +3,7 @@ package persona.feature.agents
 import persona.core.domain.tasks.acceptedAtRest
 import persona.core.domain.tasks.deliveredAwaitingReview
 import persona.core.domain.tasks.shownState
+import persona.core.domain.tasks.showsJustFinished
 import persona.core.domain.tasks.waitsForOwner
 
 import persona.core.domain.tasks.hold
@@ -121,7 +122,7 @@ fun TodoDetailScreen(
         val store = tasks ?: return@LaunchedEffect
         if (!seenOn) return@LaunchedEffect
         val placed = todo.triage(sessionLookup, now.toEpochMilli(), superseded = todo.id in supersededFailedStarts(todos))
-        if (placed.section != TriageSection.JustDone) return@LaunchedEffect
+        if (!todo.showsJustFinished(placed, now.toEpochMilli())) return@LaunchedEffect
         try { store.setTodoSeen(todo.id, true, placed.last) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { } // Opening is silently seen only if the hub accepts it.

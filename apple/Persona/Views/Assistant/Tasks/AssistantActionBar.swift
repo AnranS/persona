@@ -143,6 +143,20 @@ nonisolated enum AssistantEntries {
         return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
     }
 
+    /// Whether a task belongs in the recent-finished tray. Closed/accepted work is immediately Done on the to-do page
+    /// (#5732); this separate projection keeps it visible for 24 hours until opened (web `showsJustFinished`, #8237).
+    static func showsJustFinished(_ todo: TodoItem, _ triage: TodoTriage, now: Date) -> Bool {
+        if triage.section == .justDone { return true }
+        let completedAt: Date?
+        switch triage.rule {
+        case .closed: completedAt = todo.doneAt
+        case .accepted: completedAt = todo.supervision?.latestReview?.at
+        default: completedAt = nil
+        }
+        guard let completedAt else { return false }
+        return now.timeIntervalSince(completedAt) < 24 * 3600 && (todo.seenAt.map { $0 < completedAt } ?? true)
+    }
+
     /// How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
     /// past it the review is overdue and the task is the owner's, under Needs You. The web's `REVIEW_OVERDUE_MS`.
     static let reviewOverdueAfter: TimeInterval = 60 * 60
@@ -264,7 +278,7 @@ nonisolated enum AssistantEntries {
             else if bucket == .open || supervisorReviewing(todo, now: now) { open.append((row, rank(todo, status), when)); listed() }
             else if bucket == .shelved { shelved.append((row, rank(todo, status), when)); listed() }
             // finished work handed out by a conversation (a failed start that a related to-do finished is history, not news)
-            else if triage.section == .justDone, status != .failed, !(todo.origin ?? "").isEmpty { finished.append((row, triage.last)) }
+            else if showsJustFinished(todo, triage, now: now), status != .failed, !(todo.origin ?? "").isEmpty { finished.append((row, triage.last)) }
         }
 
         // Agents that belong to no task, the main conversation's only: asking ones wait on the user, working ones run. The
@@ -998,7 +1012,7 @@ struct AssistantActionBar: View {
         guard AppModel.shared.hubFeatures.contains(TodoSeen.feature) else { return }
         // the task's own Agents, as the row has them: the bar never reads every session (AllSessionsReadersTests)
         let t = TodoTriageLogic.triage(todo, lookup: TodosLogic.makeSessionLookup(store.sessions(todo)), now: .now)
-        guard t.section == .justDone else { return }
+        guard AssistantEntries.showsJustFinished(todo, t, now: .now) else { return }
         Task { try? await TodoStore.shared.setSeen(id: todo.id, true, after: t.last) }
     }
 
