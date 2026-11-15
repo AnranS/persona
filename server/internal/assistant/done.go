@@ -247,12 +247,21 @@ func ownerChineseConditionalPrefix(prefix string) bool {
 	}
 	clause := prefix[start:]
 	for _, word := range []string{"如果", "假如", "倘若", "若"} { // i18n-ignore: parser markers, not display copy
-		if i := strings.LastIndex(clause, word); i >= 0 {
+		for end := len(clause); end > 0; {
+			i := strings.LastIndex(clause[:end], word)
+			if i < 0 {
+				break
+			}
+			if word == "若" && strings.HasPrefix(clause[i+len(word):], "干") { // i18n-ignore: 若干 is a quantifier, not conditional 若
+				end = i
+				continue
+			}
 			lead := strings.TrimSpace(clause[:i])
 			if lead == "" || strings.HasSuffix(lead, "：") || strings.HasSuffix(lead, ":") ||
 				strings.HasSuffix(lead, "，") || strings.HasSuffix(lead, ",") { // i18n-ignore: parser punctuation
 				return true
 			}
+			break
 		}
 	}
 	return false

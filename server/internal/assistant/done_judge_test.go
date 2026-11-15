@@ -186,6 +186,9 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"Chinese direct requirement after a conditional clause", "如果部署需要审批，先记录；需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
 		{"Chinese direct requirement after an ASCII semicolon", "如果部署需要审批，先记录;需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
 		{"Chinese direct requirement after an ASCII full stop", "如果部署需要审批，先记录.需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
+		{"Chinese quantifier is not a conditional", "还有若干事项需要你本人操作。", verdictNeedsUser, "需要你本人操作"},
+		{"Chinese sentence-initial quantifier is not a conditional", "若干事项需要你本人操作。", verdictNeedsUser, "需要你本人操作"},
+		{"Chinese conditional using ruo", "若需要你本人操作，说明尚未完成；现已自动完成。", verdictDone, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}
