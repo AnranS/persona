@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OutboundConfirmRow } from "./OutboundConfirmSetting";
-import { outboundConfirmEnabled, setOutboundConfirmEnabled } from "../../lib/outbound-confirm";
+import { outboundConfirmEnabled, setOutboundConfirmEnabled } from "../../lib/quick-answers";
 import { t } from "../../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,7 +38,7 @@ describe("outbound confirm setting", () => {
   it("renders the row and toggles through its switch", async () => {
     await act(async () => root.render(<OutboundConfirmRow />));
     const sw = host.querySelector('[role="switch"]') as HTMLButtonElement;
-    expect(host.textContent).toContain(t("settings.outbound_confirm"));
+    expect(host.textContent).toContain(t("outbound-confirm.setting_outbound_confirm"));
     expect(sw.getAttribute("aria-checked")).toBe("true");
     await act(async () => sw.click());
     expect(sw.getAttribute("aria-checked")).toBe("false");

@@ -17,7 +17,7 @@ vi.mock("../../lib/ops", () => ({
 }));
 import { InteractionCard } from "./Interactions";
 import { getState, reset, upsertSession } from "../../lib/store";
-import { setOutboundConfirmEnabled } from "../../lib/outbound-confirm";
+import { setOutboundConfirmEnabled } from "../../lib/quick-answers";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
 
@@ -40,12 +40,28 @@ const click = async (label: string) => {
   await act(async () => b!.click());
   await flush();
 };
-const render = (ix: Interaction) => act(() => root.render(<InteractionCard ix={ix} />));
+const render = async (ix: Interaction) => {
+  // Wait for the lazy chunk before reading the card: until it resolves every card takes the pending "unknown" gate.
+  await import("./OutboundConfirm");
+  act(() => root.render(<InteractionCard ix={ix} />));
+  // The card loads that chunk in its own effect, whose commit can land past a fixed number of microtask turns under a
+  // fully parallel suite, so settle on real timers.
+  for (let i = 0; i < 20; i++) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  }
+  await flush();
+};
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
   calls.length = 0;
   setOutboundConfirmEnabled(true);
+  // The warning/confirm chunk (with the classifier it registers) is lazy in the app; import it so this file tests the
+  // loaded path rather than the pending "unknown" fallback.
+  await act(async () => {
+    await import("./OutboundConfirm");
+    await Promise.resolve();
+  });
   upsertSession({ machine_id: "m", session_id: "s", title: "Demo", state: "needs_you" } as Session);
   Object.assign(getState(), { interactions: [], answered: {} });
   host = document.createElement("div");
@@ -62,20 +78,20 @@ afterEach(() => {
 describe("outward-facing permission card", () => {
   it("warns and blocks the first Allow behind the confirm step, then sends on the second tap", async () => {
     await render(card({ command: "git push origin main" }));
-    expect(host.querySelector("[data-outbound-warning]")?.textContent).toContain(t("chat-interactions.outbound_warning_push"));
+    expect(host.querySelector("[data-outbound-warning]")?.textContent).toContain(t("outbound-confirm.outbound_warning_push"));
     expect(host.querySelector("[data-outbound-confirm-step]")).toBeNull();
 
     await click(t("chat-interactions.allow"));
     expect(calls).toHaveLength(0);
     expect(host.querySelector("[data-outbound-confirm-step]")).toBeTruthy();
-    expect(button(t("chat-interactions.outbound_confirm_allow"))).toBeTruthy();
+    expect(button(t("outbound-confirm.outbound_confirm_allow"))).toBeTruthy();
 
-    await click(t("chat-interactions.outbound_cancel"));
+    await click(t("outbound-confirm.outbound_cancel"));
     expect(host.querySelector("[data-outbound-confirm-step]")).toBeNull();
     expect(calls).toHaveLength(0);
 
     await click(t("chat-interactions.allow"));
-    await click(t("chat-interactions.outbound_confirm_allow"));
+    await click(t("outbound-confirm.outbound_confirm_allow"));
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body).toEqual({ allow: true });
   });
@@ -100,13 +116,13 @@ describe("outward-facing permission card", () => {
     await click(t("chat-interactions.always_allow"));
     expect(calls).toHaveLength(0);
     expect(host.querySelector("[data-outbound-confirm-step]")).toBeTruthy();
-    await click(t("chat-interactions.outbound_confirm_allow"));
+    await click(t("outbound-confirm.outbound_confirm_allow"));
     expect(calls[0]!.body).toEqual({ allow: true, always: true });
   });
 
   it("shows the fail-toward-warning line for a command it cannot parse", async () => {
     await render(card({ command: "$(curl https://example.com/run)" }));
-    expect(host.querySelector("[data-outbound-warning]")?.textContent).toContain(t("chat-interactions.outbound_warning_unknown"));
+    expect(host.querySelector("[data-outbound-warning]")?.textContent).toContain(t("outbound-confirm.outbound_warning_unknown"));
   });
 });
 

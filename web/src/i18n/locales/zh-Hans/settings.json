@@ -156,8 +156,6 @@
   "search_placeholder_settings": "搜索设置",
   "search_key_words": "API Key、密钥",
   "device_tokens": "设备 token",
-  "outbound_confirm": "确认对外操作",
-  "outbound_confirm_hint": "允许推送、部署或以你的身份发送消息前，多确认一次。",
   "pi_too": "pi 也能用",
   "pi_too_title": "范围内电脑上的 pi 也能用这个供应商，不需要 models.json"
 }

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { quickAnswers, withHeld, type HeldRow } from "./quick-answers";
+import { setOutboundClassifier } from "./quick-answers";
+import { outboundAction } from "./outbound-actions.classifier";
 import type { Interaction } from "./types";
+
+// The classifier is a lazy chunk in the app; register it so these tests see its real answers instead of the pending
+// "unknown" fallback.
+setOutboundClassifier(outboundAction);
 
 const ix = (o: Partial<Interaction>): Interaction => ({ id: "i", machine_id: "m", session_id: "s", kind: "permission", ...o }) as Interaction;
 const opts = (n: number) => Array.from({ length: n }, (_, i) => ({ label: `选项 ${i + 1}` }));

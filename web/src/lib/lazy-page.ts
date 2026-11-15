@@ -85,6 +85,12 @@ export function loadPages(): Promise<unknown> {
   return Promise.all(loaders.map((l) => l()));
 }
 
+/** Registers a non-page chunk (for example a small first-screen helper's heavy implementation) to load at idle with
+ *  the idle pages: same Data Saver skip and timeout as preloadPages. */
+export function preloadAtIdle(load: Loader): void {
+  idleLoaders.push(load);
+}
+
 interface IntentTarget {
   addEventListener(type: string, f: (e: Event) => void, opts: AddEventListenerOptions): void;
   removeEventListener(type: string, f: (e: Event) => void, opts: AddEventListenerOptions): void;

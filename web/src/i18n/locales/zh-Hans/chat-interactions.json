@@ -104,12 +104,5 @@
   "secret_handoff_note": "Persona 和助手都看不到这些值。",
   "secret_handoff_always_scope": "总是允许：{scope}。",
   "secret_handoff_card_only": "请在聊天里的卡片上批准。",
-  "outbound_warning_push": "这会把代码推送到他人可见的地方。",
-  "outbound_warning_deploy": "这会改动已部署的环境。",
-  "outbound_warning_send": "这会以你的身份发送消息或对外操作。",
-  "outbound_warning_unknown": "这个操作可能会离开本机，且无法确认它只在本地执行。",
-  "outbound_confirm_hint": "仍要允许就点确认按钮，否则可以拒绝。",
-  "outbound_confirm_allow": "确认并允许",
-  "outbound_cancel": "返回",
   "show_card": "查看完整请求"
 }

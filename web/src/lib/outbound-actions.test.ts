@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { outboundAction } from "./outbound-actions";
-
+import { outboundAction } from "./outbound-actions.classifier";
+import { outboundAction as facade, setOutboundClassifier } from "./quick-answers";
 const classify = (tool: string, input: Record<string, unknown>) => outboundAction(tool, input)?.kind ?? null;
 
 describe("outboundAction: push and remote writes", () => {
@@ -147,5 +147,23 @@ describe("outboundAction: fail toward warning", () => {
 
   it("handles a missing tool or input without throwing", () => {
     expect(() => outboundAction(undefined, undefined)).not.toThrow();
+  });
+});
+
+describe("outboundAction facade around the lazy classifier", () => {
+  it("answers the warning bucket for every request until the lazy chunk registers the classifier", () => {
+    // A fresh module graph has no registration yet: a rule match and a local-only tool both read as "unknown" so a
+    // pending chunk can never take the quiet single-Allow path.
+    expect(facade("Bash", { command: "git push origin main" })).toEqual({ kind: "unknown" });
+    expect(facade("Bash", { command: "npm test" })).toEqual({ kind: "unknown" });
+    expect(facade("Read", { file_path: "/tmp/a.txt" })).toEqual({ kind: "unknown" });
+    expect(facade(undefined, undefined)).toEqual({ kind: "unknown" });
+  });
+
+  it("gives the classifier's own answers, null for a confidently local request, once registered", () => {
+    setOutboundClassifier(outboundAction);
+    expect(facade("Bash", { command: "git push origin main" })?.kind).toBe("push");
+    expect(facade("Bash", { command: "npm test" })).toBeNull();
+    expect(facade("Read", { file_path: "/tmp/a.txt" })).toBeNull();
   });
 });

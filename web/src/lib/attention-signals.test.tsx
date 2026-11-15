@@ -36,6 +36,11 @@ vi.mock("./api", async (original) => ({
 const { useAttentionSignals } = await import("./attention-signals");
 const { BATCH_MAX_MS, BATCH_QUIET_MS, SETTLE_MS } = await import("./attention");
 const { _setTabId, markFront } = await import("./notify");
+// The classifier is a lazy chunk in the app; register it so these tests see its real answers instead of the pending
+// "unknown" fallback.
+const { setOutboundClassifier } = await import("./quick-answers");
+const { outboundAction } = await import("./outbound-actions.classifier");
+setOutboundClassifier(outboundAction);
 
 const T0 = Date.parse("2026-01-01T10:00:00Z");
 const session = (id: string, state: AgentState, since?: string): Session => ({

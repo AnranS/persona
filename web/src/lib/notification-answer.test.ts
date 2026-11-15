@@ -20,6 +20,11 @@ vi.mock("./router", async (original) => ({ ...(await original<typeof import("./r
 const { failedTagsOver, NOTE_MESSAGE, onWorkerMessage, planClick } = await import("./notification-answer");
 const worker = await import("./sw-click");
 const { allowBody, denyBody } = await import("./quick-answers");
+// The classifier is a lazy chunk in the app; register it so these tests see its real answers instead of the pending
+// "unknown" fallback.
+const { setOutboundClassifier } = await import("./quick-answers");
+const { outboundAction } = await import("./outbound-actions.classifier");
+setOutboundClassifier(outboundAction);
 
 const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "go test ./..." } };
 const ask: Interaction = { id: "q1", machine_id: "m", session_id: "a", kind: "question" };

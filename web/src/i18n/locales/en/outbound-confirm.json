@@ -1,0 +1,11 @@
+{
+  "setting_outbound_confirm": "Confirm outward-facing actions",
+  "setting_outbound_confirm_hint": "Ask one extra confirmation before allowing pushes, deploys, or messages sent as you.",
+  "outbound_warning_push": "This pushes code where others can see it.",
+  "outbound_warning_deploy": "This changes a deployed environment.",
+  "outbound_warning_send": "This sends a message or external action as you.",
+  "outbound_warning_unknown": "This could reach outside this machine and cannot be read as local-only.",
+  "outbound_confirm_hint": "Tap the confirmation button to send it anyway, or deny it.",
+  "outbound_confirm_allow": "Confirm and allow",
+  "outbound_cancel": "Back"
+}

@@ -1,0 +1,11 @@
+{
+  "setting_outbound_confirm": "外部への操作を確認",
+  "setting_outbound_confirm_hint": "プッシュ、デプロイ、あなたとしてのメッセージ送信を許可する前に、もう一度確認します。",
+  "outbound_warning_push": "他の人に見える場所へコードをプッシュします。",
+  "outbound_warning_deploy": "デプロイ済みの環境を変更します。",
+  "outbound_warning_send": "あなたとしてメッセージや外部操作を送信します。",
+  "outbound_warning_unknown": "この操作はこのマシンの外へ届く可能性があり、ローカル限定とは判断できません。",
+  "outbound_confirm_hint": "それでも実行するには確認ボタンを、取り消すには拒否を押してください。",
+  "outbound_confirm_allow": "確認して許可",
+  "outbound_cancel": "戻る"
+}

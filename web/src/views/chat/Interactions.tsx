@@ -1,5 +1,5 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
@@ -34,13 +34,19 @@ import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { alwaysScope, offersAlways } from "../../lib/always-scope";
-import { outboundAction } from "../../lib/outbound-actions";
-import { useOutboundConfirm } from "../../lib/outbound-confirm";
+import { preloadAtIdle } from "../../lib/lazy-page";
+import { outboundConfirmEnabled } from "../../lib/quick-answers";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
-import { OutboundWarning } from "./OutboundConfirm";
 import { useChatCardTapGuard, useChatTapGuardView } from "./card-tap-guard";
+
+// The single loader for the outward-confirm lazy chunk (classifier plus warning/confirm UI). The chunk registers the
+// real classifier on the first-screen facade as a side effect of loading. Registered at idle so a real approval card
+// normally has it ready; the idle runner skips it under Data Saver, and the card still loads it on mount.
+const loadOutboundConfirm = (): Promise<typeof import("./OutboundConfirm")> => import("./OutboundConfirm");
+type LazyOutboundConfirm = Awaited<ReturnType<typeof loadOutboundConfirm>>;
+preloadAtIdle(loadOutboundConfirm);
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
 export async function resolve(ix: Interaction, body: Record<string, unknown>) {
@@ -522,8 +528,15 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   // The extra confirmation an outward-facing Allow goes through, and which answer it confirms (Allow or Always allow).
   const [confirming, setConfirming] = useState(false);
   const pending = useRef<"allow" | "always">("allow");
-  const confirmOn = useOutboundConfirm();
-  const risk = useMemo(() => outboundAction(ix.tool_name, ix.tool_input), [ix.tool_name, ix.tool_input]);
+  const confirmOn = outboundConfirmEnabled();
+  // The warning/confirm chunk (with the classifier it imports) loads on mount and at idle; until it is in, every
+  // request reads as the "unknown" warning bucket, so a pending chunk gates instead of quietly allowing.
+  const [confirmUi, setConfirmUi] = useState<LazyOutboundConfirm | null>(null);
+  // A setConfirmUi after the card unmounted is a harmless no-op, so the effect needs no live flag.
+  useEffect(() => {
+    void loadOutboundConfirm().then(setConfirmUi, () => {});
+  }, []);
+  const risk = confirmUi ? confirmUi.outboundRisk(ix.tool_name, ix.tool_input) : { kind: "unknown" as const };
   const gated = confirmOn && risk !== null;
   useEffect(() => setConfirming(false), [ix.id]);
   const go = async (body: Record<string, unknown>) => {
@@ -533,11 +546,13 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   };
   // Enter allows (the Allow button). Deny is never a key away: it stays an explicit press of its button — or Enter
   // while that button is focused, which is the button's own activation, not the card's main action. With the outbound
-  // gate on, the first Enter only arms the second confirmation step; a second Enter sends the Allow.
+  // gate on, the first Enter only arms the second confirmation step; a second Enter sends the Allow. While the
+  // confirm chunk is still loading the arm does nothing rather than send, so a pending chunk can never allow.
   const keys = useCardKeys({
     enter: () => {
       if (busy) return false;
       if (gated && !confirming) {
+        if (!confirmUi) return;
         pending.current = "allow";
         setConfirming(true);
         return;
@@ -546,6 +561,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
     },
   });
   const arm = (which: "allow" | "always") => {
+    if (!confirmUi) return;
     pending.current = which;
     setConfirming(true);
   };
@@ -559,22 +575,14 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       onDismiss={() => go({ dismiss: true })}
       busy={busy}
       footer={
-        gated && confirming ? (
-          <>
-            {/* Deny stays one tap even while the second step is open */}
-            <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
-              {t("chat-interactions.deny")}
-            </Button>
-            <span className="flex gap-1.5">
-              <Button tone="quiet" disabled={busy} onClick={() => setConfirming(false)}>
-                {t("chat-interactions.outbound_cancel")}
-              </Button>
-              <Button tone="danger" busy={busy} onClick={() => go(pending.current === "always" ? { allow: true, always: true } : allowBody())}>
-                {t("chat-interactions.outbound_confirm_allow")}
-                {keys.focused && <Kbd>Enter</Kbd>}
-              </Button>
-            </span>
-          </>
+        gated && confirming && confirmUi ? (
+          <confirmUi.OutboundConfirmFooter
+            busy={busy}
+            focused={keys.focused}
+            onDeny={() => go(denyBody())}
+            onBack={() => setConfirming(false)}
+            onConfirm={() => go(pending.current === "always" ? { allow: true, always: true } : allowBody())}
+          />
         ) : (
           <>
             <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
@@ -597,10 +605,10 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       }
     >
       <PermissionBody ix={ix} />
-      {gated && risk && (
+      {gated && risk && confirmUi && (
         <>
-          <OutboundWarning risk={risk} />
-          {confirming && <p data-outbound-confirm-step className="mt-1.5 text-[12px] leading-snug text-orange">{t("chat-interactions.outbound_confirm_hint")}</p>}
+          <confirmUi.OutboundWarning risk={risk} />
+          {confirming && <confirmUi.OutboundConfirmStep />}
         </>
       )}
       {alwaysScope(ix) && <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
