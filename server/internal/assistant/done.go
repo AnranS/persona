@@ -106,12 +106,16 @@ func directOwnerMarker(lower, marker string) bool {
 		if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
 			end := strings.LastIndexAny(clause, ".!?;")
-			// A colon starts a clause after whitespace; a time such as 10:30 does not end the conditional scope.
-			if i := strings.LastIndex(clause, ": "); i > end {
-				end = i
-			}
-			if i := strings.LastIndex(clause, ":\t"); i > end {
-				end = i
+			// A colon after an open "if" introduces its guidance; it does not start an independent owner requirement.
+			// Outside a conditional, a colon starts a clause after whitespace; a time such as 10:30 changes neither scope.
+			openConditional := strings.HasPrefix(strings.TrimSpace(clause[end+1:]), "if ")
+			if !openConditional {
+				if i := strings.LastIndex(clause, ": "); i > end {
+					end = i
+				}
+				if i := strings.LastIndex(clause, ":\t"); i > end {
+					end = i
+				}
 			}
 			if end >= 0 {
 				clause = strings.TrimSpace(clause[end+1:])

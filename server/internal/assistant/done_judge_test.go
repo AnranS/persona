@@ -125,6 +125,7 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"English direct contraction after a conditional", "If you'll need to roll back, use the backup. Otherwise, you'll need to approve the release yourself.", verdictNeedsUser, "you'll need to"},
 		{"repeated English marker within one conditional", "If you need to deploy, you need to notify the owner first.", verdictDone, ""},
 		{"repeated English marker after a conditional colon", "If you need to deploy: you need to notify the owner first.", verdictDone, ""},
+		{"conditional colon does not end an open scope", "If you need to deploy: check the build, you need to notify the owner first.", verdictDone, ""},
 		{"English direct owner operation after a colon", "Deployment is ready: you need to notify the owner first.", verdictNeedsUser, "you need to"},
 		{"repeated English contraction within one conditional", "If you'll need to deploy, you'll need to notify the owner first.", verdictDone, ""},
 		{"conditional scope survives a semicolon introduction", "The spec is ready; if you need to deploy, you need to notify the owner first.", verdictDone, ""},

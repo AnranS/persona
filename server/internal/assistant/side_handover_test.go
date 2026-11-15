@@ -174,10 +174,10 @@ func TestReviewOfASideConversationThatIsGoneIsHandedOver(t *testing.T) {
 	waitFor(t, "the review told to the main conversation", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
 }
 
-// The compatibility handover does not rewrite a legacy leader's ledger. Its newly emitted signal still follows the
-// current #5732 topology: ordinary assistant-chat leader work is main-supervised; only an explicitly assigned manual
-// Agent keeps the leader route.
-func TestReviewLeftWaitingByALegacyLeaderKeepsItsLedgerButSignalsMain(t *testing.T) {
+// A leader conversation keeps the reviews of its tasks however long they wait: the ledger's supervisor is what places
+// a task in its direction, so handing the review over would take the task out of the direction the owner set up. Its
+// already-delivered legacy signal is not repeated to main.
+func TestReviewLeftWaitingByALeaderStaysWithIt(t *testing.T) {
 	s, f, todo := sideReviewFixture(t)
 	ctx := context.Background()
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"side1"} })
@@ -187,7 +187,7 @@ func TestReviewLeftWaitingByALegacyLeaderKeepsItsLedgerButSignalsMain(t *testing
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "side1" {
 		t.Fatalf("a leader's review was handed to %q", got)
 	}
-	if n := reviewsTold(f, "conv1", todo.ID); n != 1 {
-		t.Fatalf("the main conversation got %d supervision message(s) for a legacy leader's task, want one", n)
+	if n := reviewsTold(f, "conv1", todo.ID); n != 0 {
+		t.Fatalf("the main conversation got %d supervision message(s) for a leader's already-told task", n)
 	}
 }
