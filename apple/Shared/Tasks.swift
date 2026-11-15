@@ -458,6 +458,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// there is filed under Done (`TodoTriageLogic`). Nil when never seen, and from older hubs.
     var seenAt: Date?
     var origin: String?
+    /// `concern` for something the owner raised in the main conversation; nil for an ordinary to-do or an older hub.
+    /// Kept as a string so a kind this build does not know remains an ordinary to-do (#3582).
+    var kind: String?
     var planID: String?
     /// The task's agent did not start, and why: the hub ended the todo there (it is done, #1077).
     var startError: String?
@@ -606,7 +609,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         orphaned = (try? c.decodeIfPresent(TodoOrphaned.self, forKey: .orphaned)) ?? nil
         // New (#2581): absent with none and from older hubs; "" is none too.
         project = ((try? c.decodeIfPresent(String.self, forKey: .project)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
-        kind = try c.decodeIfPresent(String.self, forKey: .kind)
+        // New (#3582): absent on older hubs and caches; an unknown value is an ordinary to-do, never a decode failure.
+        kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? nil
     }
 
     /// An ended task cannot keep an old decision card alive.
@@ -617,6 +621,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var activeAgents: [Agent] { agents.filter(\.isActive) }
     /// The hub ended it because its agent did not start.
     var failedToStart: Bool { !(startError ?? "").isEmpty }
+    /// Only the exact kind is a concern; missing and future kinds stay ordinary to-dos.
+    var isConcern: Bool { kind == "concern" }
     /// The hub marked it done because its task's work was judged finished; reopening undoes it.
     var autoDone: Bool { doneAt != nil && doneBy == "auto" }
     /// Cancellation is not completion, including the legacy supervision-only form (#5732).
