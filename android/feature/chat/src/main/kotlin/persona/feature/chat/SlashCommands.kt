@@ -43,6 +43,10 @@ internal data class SlashCommand(val title: String, val word: String, val detail
         fun clearCommand(resources: Resources) =
             SlashCommand(resources.getString(R.string.chat_slash_clear_title), CLEAR, resources.getString(R.string.chat_slash_clear_detail), CLEAR)
 
+        /** The main conversation clears its own context in place, rather than starting an Agent session (web mainCommands). */
+        fun mainClearCommand(resources: Resources) =
+            SlashCommand(resources.getString(R.string.chat_slash_clear_title), CLEAR, resources.getString(R.string.chat_slash_clear_main_detail), CLEAR)
+
         /** Claude Code's /model and /loop (web AGENT_COMMANDS): only in the "/" list, never sent from the "+" sheet. */
         const val MODEL = "/model"
         const val LOOP = "/loop"
@@ -78,6 +82,14 @@ internal data class SlashCommand(val title: String, val word: String, val detail
             matching(draft, clear, resources, model, loop, permissions).takeUnless {
                 it.singleOrNull()?.let { only -> !only.clear && !only.model && !only.permissions && only.word.equals(draft, ignoreCase = true) } == true
             }.orEmpty()
+
+        /** The main conversation has its own list (web mainCommands), never the Agent quick messages or terminal commands. */
+        fun mainSuggestions(draft: String, clear: Boolean, resources: Resources, permissions: Boolean = false): List<SlashCommand> {
+            if (!draft.startsWith("/") || draft.any { it == ' ' || it == '\n' }) return emptyList()
+            // /permissions where the conversation has a permission mode picker (the web offers it in Persona's too, #6513).
+            return listOfNotNull(permissionsCommand(resources).takeIf { permissions }, mainClearCommand(resources).takeIf { clear })
+                .filter { it.word.startsWith(draft, ignoreCase = true) }
+        }
 
         @Composable
         fun suggestions(draft: String, clear: Boolean, model: Boolean = false, loop: Boolean = false, permissions: Boolean = false): List<SlashCommand> =
