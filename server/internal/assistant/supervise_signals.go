@@ -279,6 +279,64 @@ func (s *Service) ackSupervisePending(list []superviseSignal) {
 	})
 }
 
+// startUnknownArmed reports whether any durable or in-memory form still needs retraction. The read-only check keeps
+// repeated sightings of an already-recognized done session from writing an empty acknowledgment on every sync.
+func (s *Service) startUnknownArmed(g superviseSignal) bool {
+	exact := func(candidate superviseSignal) bool {
+		return candidate.Todo == g.Todo && candidate.Kind == g.Kind && candidate.Key == g.Key
+	}
+	pendingMatch := func(candidate superviseSignal) bool {
+		return exact(candidate) || slices.Contains(candidate.PendingPredecessors, g.Key)
+	}
+	b := &s.supervise
+	b.mu.Lock()
+	armed := pendingMatch(b.pending[g.id()])
+	for _, queue := range b.queued {
+		for _, candidate := range queue {
+			armed = armed || exact(candidate)
+		}
+	}
+	b.mu.Unlock()
+	if armed {
+		return true
+	}
+
+	r := &s.relays
+	r.mu.Lock()
+	if !s.relayLocked(context.Background()) {
+		r.mu.Unlock()
+		return true // an unreadable store cannot prove that retraction is a no-op
+	}
+	armed = pendingMatch(r.st.SupervisePending[g.id()])
+	for _, queue := range r.st.Queue {
+		for _, msg := range queue {
+			if msg.Signals == nil {
+				// A legacy text queue has no structured key: dropQueuedSupervisionSignalAtomic matches its todo id.
+				armed = armed || strings.Contains(msg.Text, g.Todo)
+				continue
+			}
+			for _, candidate := range *msg.Signals {
+				armed = armed || exact(candidate)
+			}
+		}
+	}
+	r.mu.Unlock()
+	if armed {
+		return true
+	}
+
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	defer turns.mu.Unlock()
+	if turns.loaded {
+		if entry, ok := turns.doc.Turns[g.Todo]; ok && entry.Signal != nil {
+			sig := entry.Signal
+			return sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil
+		}
+	}
+	return false
+}
+
 // retractStartUnknown retires the provisional start result once its exact session has been linked. A newer unjudged
 // stop on the same task has another key and remains pending; queued mixed digests keep and regather their other signals.
 func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
@@ -288,6 +346,9 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
 	// waits for its queue admission and retracts that message too; a post-confirmation queue cannot slip between them.
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
+	if !s.startUnknownArmed(g) {
+		return
+	}
 	b.mu.Lock()
 	b.init()
 	ackSupervisePendingLocked(b.pending, []superviseSignal{g})

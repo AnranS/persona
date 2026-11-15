@@ -9,10 +9,11 @@ import type { Todo } from "./todos";
 /** The hub keeps seen marks (hello `features`): `PUT` / `DELETE /todos/{id}/seen` and `seen_at` on a to-do. */
 export const TODO_SEEN_FEATURE = "todo_seen";
 
-/** Whether Got it can file a finished turn under Done. Seen is not acceptance: a supervised task, a pending review and
- *  an unaccepted live delivery stay open, so their rows must not offer an action that says "Moved to Done" (#5732). */
+/** Whether Got it can file a finished turn. Seen is not acceptance: a supervised task, a pending review and an
+ *  unaccepted live delivery must not claim ordinary Done. An open concern bypasses only the live restriction and files
+ *  into Other open instead (#5732, #3582). */
 export function seenCanFile(todo: Todo): boolean {
-  return todo.delivery?.state !== "live" && reviewState(todo) !== "pending_review" && !todo.supervision?.supervisor;
+  return (todo.kind === "concern" || todo.delivery?.state !== "live") && reviewState(todo) !== "pending_review" && !todo.supervision?.supervisor;
 }
 
 /** Whether the page offers Got it and counts opening a to-do as seeing it: only when the hub says it keeps the mark. */

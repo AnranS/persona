@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 // The real snapshot projection, not a hand-built template value: delivered work and owner waits use the same words as
@@ -54,5 +56,17 @@ func TestSnapshotTasksUseDeliveryAndOwnerWaitStates(t *testing.T) {
 	}
 	if got := byID()[delivered.ID]; got.State != "已完成" || got.Health != "已验收" {
 		t.Fatalf("accepted projection = %+v", got)
+	}
+}
+
+func TestDeliveryAwaitsReviewExcludesLiveConcern(t *testing.T) {
+	live := Todo{Delivery: &TodoDelivery{State: deliveryLive, At: time.Now()}}
+	if !deliveryAwaitsReview(live, nil) {
+		t.Fatal("an ordinary live delivery at rest must await review")
+	}
+	concern := live
+	concern.Kind = db.KindConcern
+	if deliveryAwaitsReview(concern, nil) {
+		t.Fatal("an open concern with live delivery was projected as awaiting review")
 	}
 }

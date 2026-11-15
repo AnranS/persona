@@ -153,6 +153,9 @@ func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creat
 	}
 	if !eligible {
 		s.todos.writing.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		s.retractStartUnknown(ctx, creationID)
 		return true, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -162,9 +165,9 @@ func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creat
 	if err != nil {
 		s.logf("todos: delayed creation-id link %s on %s/%s: %v", creationID, machine, c.SessionID, err)
 	}
-	if linked {
-		s.retractStartUnknown(ctx, creationID)
-	}
+	// Recognition of the exact done identity retires the provisional signal even when membership already existed,
+	// was dismissed, or a guarded write lost its race; all those paths remain handled without a new link.
+	s.retractStartUnknown(ctx, creationID)
 	return true, linked
 }
 

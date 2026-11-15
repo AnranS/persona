@@ -166,6 +166,74 @@ func requireStartUnknownState(t *testing.T, s *Service, todoID string, want bool
 	}
 }
 
+func TestDelayedCreationRecognitionRetractsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dismissed bool
+	}{{"already linked", false}, {"dismissed stays dismissed", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newQuietServiceOn(t, &memStore{})
+			todo, err := s.createTodo(context.Background(), "Delayed creation", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			member := TodoAgent{MachineID: "box", SessionID: "s-delayed", LinkedAt: now.Add(-time.Hour)}
+			if tc.dismissed {
+				member.DismissedAt = &now
+			}
+			s.todos.mu.Lock()
+			stored := s.todos.todos[todo.ID]
+			stored.DoneAt = &now
+			stored.Agents = []TodoAgent{member}
+			if !tc.dismissed {
+				s.todos.activeBySession[[2]string{"box", "s-delayed"}] = todo.ID
+			}
+			s.todos.mu.Unlock()
+			s.signal(superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, At: now})
+			requireStartUnknownState(t, s, todo.ID, true)
+
+			session := proto.Session{SessionID: "s-delayed", MachineID: "box", Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}}
+			handled, linked := s.linkDelayedDoneCreation("box", session, todo.ID, "")
+			if !handled || linked {
+				t.Fatalf("handled=%v linked=%v, want recognized without a new link", handled, linked)
+			}
+			requireStartUnknownState(t, s, todo.ID, false)
+			got := todoNow(s, todo.ID)
+			if len(got.Agents) != 1 || (got.Agents[0].DismissedAt != nil) != tc.dismissed {
+				t.Fatalf("existing membership changed: %+v", got.Agents)
+			}
+		})
+	}
+}
+
+func TestDelayedCreationRecognitionWithoutUnknownDoesNotWrite(t *testing.T) {
+	st := &relayWriteWatch{Store: &memStore{}}
+	s, _ := newQuietServiceOn(t, st)
+	todo, err := s.createTodo(context.Background(), "Already linked creation", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	s.todos.mu.Lock()
+	stored := s.todos.todos[todo.ID]
+	stored.DoneAt = &now
+	stored.Agents = []TodoAgent{{MachineID: "box", SessionID: "s-known", LinkedAt: now.Add(-time.Hour)}}
+	s.todos.activeBySession[[2]string{"box", "s-known"}] = todo.ID
+	s.todos.mu.Unlock()
+	session := proto.Session{SessionID: "s-known", MachineID: "box", Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}}
+	before := len(st.writes)
+	for range 2 {
+		handled, linked := s.linkDelayedDoneCreation("box", session, todo.ID, "")
+		if !handled || linked {
+			t.Fatalf("handled=%v linked=%v, want an existing recognized link", handled, linked)
+		}
+	}
+	if got := len(st.writes); got != before {
+		t.Fatalf("recognition without start-unknown wrote relay %d time(s), want zero", got-before)
+	}
+}
+
 // stalledAssistantSendHub blocks a relay send without fakeHub's mutex held, so the test can link the confirmed session
 // while that send is genuinely in flight.
 type stalledAssistantSendHub struct {
