@@ -181,6 +181,34 @@ func TestGuestAgentSDKStart(t *testing.T) {
 	}
 }
 
+// A fresh isolated guest never loads the owner's source settings, so malformed JSON there cannot block its start.
+func TestAssistantGuestStartDoesNotReadUnusedSourceSettings(t *testing.T) {
+	f := sdkProfileTest(t)
+	f.n.home = os.Getenv("HOME")
+	settings := filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte("not valid JSON"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if dirs := f.n.claudeConfigDirs(); !slices.Contains(dirs, filepath.Dir(settings)) {
+		t.Fatalf("the fixture's source settings are not in scope: %v", dirs)
+	}
+	profile := filepath.Join(f.n.dir, "profiles", "claude")
+	if _, err := os.Stat(profile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the guest's profile is not fresh: %v", err)
+	}
+	id, err := f.n.assistantSend(withGuest(context.Background(), []string{"larkbridge_docs"}), "", t.TempDir(), "claude", "search", nil, "", "",
+		sdkExec(proto.AssistantRuntimeAgentSDK))
+	if err != nil {
+		t.Fatalf("an isolated guest was blocked by a settings file it never loads: %v", err)
+	}
+	if got := f.start(t)["sessionId"]; got != id {
+		t.Fatalf("started session = %v, want %q", got, id)
+	}
+}
+
 // Its directory holds only its instructions; a path out of the home is refused. Tool names are plain identifiers.
 func TestGuestPrepareAndTools(t *testing.T) {
 	n, _ := testNode(t)
