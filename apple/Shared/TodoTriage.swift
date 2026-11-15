@@ -168,8 +168,9 @@ nonisolated enum TodoTriageLogic {
     private static func stageIndex(_ stage: String?) -> Int { max(stages.firstIndex(of: stage ?? "") ?? 0, 0) }
 
     /// A task (an agent was linked, or a conversation handed it out) with no due date ahead. The user's own to-dos
-    /// without agents — reminders, errands — never shelve themselves.
+    /// without agents — reminders, errands — never shelve themselves. An open concern never shelves (#3582).
     static func shelvable(_ todo: TodoItem, now: Date, calendar: Calendar = .current) -> Bool {
+        if todo.isConcern { return false }
         if let due = TodosLogic.dueBy(todo, calendar: calendar), due >= now { return false }
         return !todo.agents.isEmpty || !(todo.origin ?? "").isEmpty
     }
@@ -211,15 +212,19 @@ nonisolated enum TodoTriageLogic {
         // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
         // Acceptance and ordinary closure are already Done; a fresh reported concern leaves Just finished once seen.
         let seen = { (at: Date) in todo.seenAt.map { $0 >= at } ?? false }
+        let fresh = { (at: Date) in now.timeIntervalSince(at) < justDoneAfter && !seen(at) }
         let ask = openAsk(todo)
         let review = todo.reviewState
+        // An open concern closes only with its report: nothing else files it with the finished ones (#3582).
+        let concern = todo.isConcern && todo.doneAt == nil
         func at(_ s: TodoSection, _ r: TodoTriageRule) -> TodoTriage { TodoTriage(section: s, rule: r, last: last) }
 
         if todo.isCancelled { return at(.cancelled, .cancelled) }
         if status == .failed {
             // the same piece of work finished in a related to-do (`supersededFailedStarts`): history, nothing to retry
             if superseded { return at(.done, .superseded) }
-            return at(now.timeIntervalSince(last) < shelveAfter ? .waiting : .done, .failedStart)
+            if now.timeIntervalSince(last) < shelveAfter { return at(.waiting, .failedStart) }
+            return concern ? at(.other, .rest) : at(.done, .failedStart)
         }
         if status == .needsYou || status == .interrupted { return at(.waiting, .agentAsks) }
         if todo.doneAt == nil, review == .needsUser || ask?.outcome == "decide" || ask?.outcome == "cannot" {
@@ -227,25 +232,22 @@ nonisolated enum TodoTriageLogic {
         }
         if status == .working || status == .waiting { return at(.working, .agentRunning) }
         if let doneAt = todo.doneAt {
-            // Apple has no concern kind on the wire; done_by=reported is the hub's report-close marker. Match the web:
-            // an unseen report stays in Just finished for 24 h, but its rule remains Closed, not FinishedUnseen.
-            if todo.doneBy == "reported", now.timeIntervalSince(doneAt) < justDoneAfter, !seen(doneAt) {
-                return at(.justDone, .closed)
-            }
-            return at(.done, .closed)
+            // A concern's unseen report stays in Just finished for 24 h; its rule remains Closed, not FinishedUnseen.
+            return at(todo.isConcern && fresh(doneAt) ? .justDone : .done, .closed)
         }
-        if todo.acceptanceStands {
+        if !concern, todo.acceptanceStands {
             return at(.done, .accepted)
         }
         // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old (#5732).
-        if todo.delivery?.state == "live" { return at(.justDone, .finishedUnseen) }
+        // An open concern still waits for its own report instead (#3582).
+        if !concern, todo.delivery?.state == "live" { return at(.justDone, .finishedUnseen) }
         let finished = status == .unread || review == .pendingReview || (ask != nil && (ask?.outcome ?? "").isEmpty)
             || ask?.outcome == "done"
         let acceptanceRequired = !seenCanFile(todo)
         if finished, !seen(last) || acceptanceRequired { return at(.justDone, .finishedUnseen) }
         if openPR(todo) { return at(.pr, .prOpen) }
-        // seen since it last moved, and no PR waits on the owner
-        if finished { return at(.done, .seen) }
+        // seen since it last moved, and no PR waits on the owner; a concern is never Done while open
+        if finished, !concern { return at(.done, .seen) }
         if shelvable(todo, now: now, calendar: calendar), now.timeIntervalSince(last) >= shelveAfter { return at(.shelved, .stale) }
         return at(.other, .rest)
     }
@@ -342,6 +344,8 @@ nonisolated enum TodoTriageLogic {
         }
         var owner: [String: String] = [:]
         for td in list {
+            // An open concern has its own row and cannot join, directly or through another to-do (#3582).
+            if td.isConcern && td.doneAt == nil { continue }
             let side = td.isCancelled ? "x" : td.doneAt != nil ? "c" : "o"
             for k in relatedKeys(td) {
                 let key = side + "|" + k

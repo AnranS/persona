@@ -86,7 +86,11 @@ func TestMainSupervisesWithoutStartingBackground(t *testing.T) {
 	}
 
 	review := func(self, verdict, note string) (string, error) {
-		return runJSON(t, s, self, "task_review", map[string]any{"todo_id": todo.ID, "verdict": verdict, "note": note})
+		args := map[string]any{"todo_id": todo.ID, "verdict": verdict, "note": note}
+		if verdict == reviewAccepted {
+			args["checks"] = completeReviewChecks(todoNow(s, todo.ID))
+		}
+		return runJSON(t, s, self, "task_review", args)
 	}
 	if _, err := review("conv2", "rework", "x"); err == nil {
 		t.Fatal("another side conversation reviewed the task")

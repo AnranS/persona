@@ -188,7 +188,11 @@ func TestReviewAcceptedRecordsOutcome(t *testing.T) {
 				ctx := context.Background()
 				setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 				s.superviseTodo(ctx, todo.ID, "conv1", []string{"PR 合并"}, 0)
-				raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"})
+				args := map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"}
+				if c.verdict == reviewAccepted {
+					args["checks"] = completeReviewChecks(todoNow(s, todo.ID))
+				}
+				raw, _ := json.Marshal(args)
 				if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
 					t.Fatalf("%s: %v", c.verdict, err)
 				}
