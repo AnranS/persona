@@ -176,11 +176,11 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 				break
 			}
 		}
-		start := strings.LastIndexAny(prefix, "。！？；.!?;，,：:") + 1
+		start := strings.LastIndexAny(prefix, "。！？；.!?;，,：:") + 1 // i18n-ignore: clause punctuation for parser markers
 		resolved := false
 		for _, phrase := range []string{
-			"我回答了", "我已回答", "已经回答", "已回答", "已经解决", "已解决",
-			"无需进一步操作", "不需要进一步操作", "不用进一步操作", "不必进一步操作",
+			"我回答了", "我已回答", "已经回答", "已回答", "已经解决", "已解决", // i18n-ignore: parser markers, not display copy
+			"无需进一步操作", "不需要进一步操作", "不用进一步操作", "不必进一步操作", // i18n-ignore: parser markers, not display copy
 		} { // i18n-ignore: parser markers, not display copy
 			resolved = resolved || strings.Contains(prefix[start:], phrase)
 		}
@@ -191,11 +191,11 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 			end = i + len(marker) + next
 		}
 		tail := text[i+len(marker) : end]
-		question := strings.IndexAny(tail, "？?")
+		question := strings.IndexAny(tail, "？?") // i18n-ignore: question punctuation for parser markers
 		if !resolved && question >= 0 {
 			_, width := utf8.DecodeRuneInString(tail[question:])
 			following := tail[question+width:]
-			if stop := strings.IndexAny(following, "。！？；.!?;"); stop >= 0 {
+			if stop := strings.IndexAny(following, "。！？；.!?;"); stop >= 0 { // i18n-ignore: sentence punctuation for parser markers
 				following = following[:stop]
 			}
 			resolved = ownerResolutionSuffix(following)
@@ -212,16 +212,16 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 // "no action" words. A following comma/colon lets the explanation continue; "的是上一个问题" is another topic instead.
 func ownerResolutionSuffix(clause string) bool {
 	for _, phrase := range []string{
-		"这个问题已回答", "这个问题已经回答", "该问题已回答", "该问题已经回答", "此问题已回答", "此问题已经回答",
-		"这个问题已解决", "这个问题已经解决", "该问题已解决", "该问题已经解决", "此问题已解决", "此问题已经解决",
-		"无需进一步操作", "不需要进一步操作", "不用进一步操作", "不必进一步操作",
+		"这个问题已回答", "这个问题已经回答", "该问题已回答", "该问题已经回答", "此问题已回答", "此问题已经回答", // i18n-ignore: parser markers, not display copy
+		"这个问题已解决", "这个问题已经解决", "该问题已解决", "该问题已经解决", "此问题已解决", "此问题已经解决", // i18n-ignore: parser markers, not display copy
+		"无需进一步操作", "不需要进一步操作", "不用进一步操作", "不必进一步操作", // i18n-ignore: parser markers, not display copy
 	} { // i18n-ignore: parser markers, not display copy
 		if !strings.HasPrefix(clause, phrase) {
 			continue
 		}
 		rest := clause[len(phrase):]
-		if rest == "" || strings.HasPrefix(rest, "，") || strings.HasPrefix(rest, ",") ||
-			strings.HasPrefix(rest, "：") || strings.HasPrefix(rest, ":") {
+		if rest == "" || strings.HasPrefix(rest, "，") || strings.HasPrefix(rest, ",") || // i18n-ignore: parser punctuation
+			strings.HasPrefix(rest, "：") || strings.HasPrefix(rest, ":") { // i18n-ignore: parser punctuation
 			return true
 		}
 	}
@@ -273,7 +273,7 @@ func ownerActionLine(text string) string {
 			if p.marker == "要不要" && !strings.ContainsAny(line, "？?") { // i18n-ignore: parser markers, not display copy
 				continue // evaluating whether to do something is narrative, not asking the owner to choose (#5732)
 			}
-			if p.marker == "要不要" {
+			if p.marker == "要不要" { // i18n-ignore: parser markers, not display copy
 				if ownerChineseOfferMarker(compact, p.marker, p.negations) {
 					return line
 				}
