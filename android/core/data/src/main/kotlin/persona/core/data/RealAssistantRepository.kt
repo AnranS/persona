@@ -75,6 +75,7 @@ class RealAssistantRepository(
             conversations, request.manager, request.owner,
             leaders = leadersOf(data),
             backgroundSupervisor = backgroundSupervisorOf(data),
+            recentTaskChats = (data["recent_task_chats"] as? JsonPrimitive)?.booleanOrNull,
         )
     }
 
@@ -245,6 +246,17 @@ class RealAssistantRepository(
     }
 
     override suspend fun refresh() = refresh(request())
+
+    override suspend fun updateRecentTaskChats(value: Boolean?) {
+        val request = request()
+        lock.withLock {
+            if (!selected(request)) return
+            ++refreshVersion
+            val updated = current.value.copy(recentTaskChats = value)
+            current.value = updated
+            cached[request.key] = updated
+        }
+    }
 
     private suspend fun refresh(request: Request) {
         val version = lock.withLock {
