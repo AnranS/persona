@@ -31,6 +31,18 @@ class ModelsTest {
         assertEquals(0, s.pendingInteractions)
     }
 
+    @Test fun suggestionRiskDecodesAndAnAbsentFieldIsSafeByDefault() {
+        for ((field, expected) in mapOf("\"suggestion_risky\":true" to true,
+            "\"suggestion_risky\":false" to false, "" to false)) {
+            val comma = if (field.isEmpty()) "" else ","
+            val session = JsonCodec.decodeFromString<Session>(
+                """{"session_id":"s","suggestion":"Review the plan"$comma$field}""",
+            )
+            assertEquals(field.ifEmpty { "absent" }, expected, session.suggestionRisky)
+            assertEquals("Review the plan", session.suggestion)
+        }
+    }
+
     @Test fun zeroTimeIsUnset() {
         assertNull(parseTime("0001-01-01T00:00:00Z"))
         assertTrue(parseTime("2026-10-29T15:05:32.42Z") != null)
@@ -175,6 +187,17 @@ class ModelsTest {
         assertEquals("DSH 请求使用 read_file：读取报表", (dsh.copy(kind = "permission", toolName = "read_file", summary = "读取报表").headline).zhAny())
         assertNull(JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question","agent":"claude"}""").agentDisplayName)
         assertEquals("Claude 在问你", (JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question"}""").headline).zhAny())
+    }
+
+    @Test fun questionOptionDecodesDeferActionAndDefaultsForOldHubs() {
+        val marked = JsonCodec.decodeFromString<QuestionOption>(
+            """{"label":"Leave it","description":"Handle it later","action":"defer"}""",
+        )
+        assertEquals("Leave it", marked.label)
+        assertEquals("Handle it later", marked.description)
+        assertEquals("defer", marked.action)
+        assertEquals(marked, JsonCodec.decodeFromString<QuestionOption>(JsonCodec.encodeToString(marked)))
+        assertNull(JsonCodec.decodeFromString<QuestionOption>("""{"label":"Continue"}""").action)
     }
 
     @Test fun sessionInfoDecodes() {
