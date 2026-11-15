@@ -241,7 +241,13 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 func ownerChineseConditionalPrefix(prefix string) bool {
 	start := 0
 	for i, r := range prefix {
-		if r == '\n' || strings.ContainsRune(ownerSentenceEnds, r) {
+		boundary := r == '\n' || strings.ContainsRune(ownerSentenceEnds, r)
+		// A decimal point inside a version or number is not a sentence boundary; an ASCII stop between clauses is.
+		if r == '.' && i > 0 && i+1 < len(prefix) &&
+			prefix[i-1] >= '0' && prefix[i-1] <= '9' && prefix[i+1] >= '0' && prefix[i+1] <= '9' {
+			boundary = false
+		}
+		if boundary {
 			start = i + utf8.RuneLen(r)
 		}
 	}
