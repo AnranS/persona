@@ -1578,13 +1578,16 @@ internal fun AssistantDrawer(
                         size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) })
             }
             if (recentOpen) itemsIndexed(groups.recent, key = { _, session -> "recent-" + session.key.path }) { index, session ->
+                val builtIn = session.sessionId == groups.background
                 ConversationRow(session, selected = session.key == active,
                     position = GroupPosition.of(index, groups.recent.size),
-                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
-                    onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
-                    onRename = onRename?.let { action -> { action(session) } },
+                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onCopy = { onCopy(session) }, onArchive = onArchive?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onRename = onRename?.takeUnless { builtIn }?.let { action -> { action(session) } },
                     onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
-                    onLeader = onLeader?.let { action -> { action(session) } })
+                    onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null,
+                    origin = if (builtIn) AssistantConversationOrigin.Task.id else session.origin)
             }
             // Every other chat is under one "All chats" row, which opens the list in place (a search lists what it finds
             // at once instead; the drawer's search finds every conversation either way).
