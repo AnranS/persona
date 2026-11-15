@@ -37,10 +37,20 @@ func TestAssistantProfileSeedSerializesConcurrentStarts(t *testing.T) {
 			<-release
 			_, err = file.Write(settings)
 		}
-		writerDone <- err
-		if file != nil {
-			_ = file.Close()
+		// Replace the FIFO before closing it: the first reader keeps its open file, and later startup reads see a regular file.
+		regular := fifo + ".regular"
+		if err == nil {
+			err = os.WriteFile(regular, settings, 0o600)
 		}
+		if err == nil {
+			err = os.Rename(regular, fifo)
+		}
+		if file != nil {
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		writerDone <- err
 	}()
 
 	type answer struct {
