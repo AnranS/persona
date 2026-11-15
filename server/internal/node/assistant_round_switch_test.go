@@ -331,6 +331,23 @@ func TestRoundProcessWorkingKeepsSupervisionQueued(t *testing.T) {
 	}
 }
 
+// begun has p's Claude Code say what Claude Code 2.1.322 says of a message within milliseconds of its write, queued and
+// then started, for every message it has said nothing of yet: the one whose turn p runs now (measured: also for a
+// message to an idle process).
+func begun(n *Node, p *assistantProc) {
+	p.mu.Lock()
+	var lines []string
+	for _, w := range p.written {
+		if !w.queued {
+			lines = append(lines, fmt.Sprintf(lifecycleShape, w.id, "queued"), fmt.Sprintf(lifecycleShape, w.id, "started"))
+		}
+	}
+	p.mu.Unlock()
+	if len(lines) > 0 {
+		feedAssistant(n, p, lines...)
+	}
+}
+
 // A turn Claude Code has started (command_lifecycle started) is under way though the model has not answered yet
 // (measured on 2.1.322: started 3 ms after the turn before it ended, the first token seconds later): nothing replaces
 // the process under it, and nothing it was given is lost.
@@ -354,6 +371,7 @@ func TestAStartedTurnIsNotCut(t *testing.T) {
 			t.Fatalf("the round: %v", out)
 		}
 		round := roundProc(n)
+		begun(n, round)
 		startedIn(t, n, round, func() { // a round while the round answers goes in as before, the round's own
 			if out := sendRound(t, n, "once-kept"); out["context"] != roundKept || out["why"] != roundWhyBusy {
 				t.Fatalf("the round kept: %v", out)
@@ -377,6 +395,7 @@ func TestAStartedTurnIsNotCut(t *testing.T) {
 			t.Fatalf("the round: %v", out)
 		}
 		round := roundProc(n)
+		begun(n, round)
 		if out := sendRound(t, n, "once-kept"); out["context"] != roundKept || out["why"] != roundWhyBusy {
 			t.Fatalf("the round kept: %v", out)
 		}
@@ -396,6 +415,7 @@ func TestAStartedTurnIsNotCut(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := roundProc(n)
+		begun(n, p)
 		startedIn(t, n, p, func() { ownerSends(t, n, "the owner's second") })
 		// A round now would resume at the first turn and leave the owner's second message off the chain it goes on.
 		if out := sendRound(t, n, "once-gap"); out["context"] != roundKept || out["why"] != roundWhyBusy {
@@ -403,7 +423,12 @@ func TestAStartedTurnIsNotCut(t *testing.T) {
 		}
 		stillRound(t, n, p, argv, 1)
 		waitFor(t, "the round in the process", func() bool { return len(roundInputs(t, input)) == 3 })
-		feedAssistant(n, p, turnInitLine, messageStartLine, turnResult, turnInitLine, messageStartLine, turnResult)
+		p.mu.Lock()
+		gap := p.written[len(p.written)-1].id
+		p.mu.Unlock()
+		// Queued behind the owner's second, started once that ended.
+		feedAssistant(n, p, fmt.Sprintf(lifecycleShape, gap, "queued"), turnInitLine, messageStartLine, turnResult,
+			fmt.Sprintf(lifecycleShape, gap, "started"), turnInitLine, messageStartLine, turnResult)
 		if out := sendRound(t, n, "once-next"); out["context"] != roundFresh {
 			t.Fatalf("the round once idle: %v", out)
 		}

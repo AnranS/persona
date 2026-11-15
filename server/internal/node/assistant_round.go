@@ -29,8 +29,8 @@ import (
 // #7315) for every tool. A round's process that has settled (not working, workingLocked, and silent for
 // assistantSettle) when a message needing every tool comes is replaced by a plain --resume with every tool and no round
 // state, so it is compacted when idle again (stopSettled; a fresh round stops the process the same way). Replacing one
-// still working (a turn, one Claude Code started, background tasks, a compaction, a message it queued) would lose that
-// work, so there is no second queue at the node: a round's process reports itself working until it settled
+// still working (a turn, one Claude Code started, background tasks, a compaction, a message it queued or has not
+// reported on yet) would lose that work, so there is no second queue at the node: a round's process reports itself working until it settled
 // (assistantSessions), the manager keeps its supervision messages in its persisted relay queue meanwhile, and a message
 // that comes anyway (the owner's, or one sent as the process began to work) goes into it as Claude Code queues it and
 // runs once on the round's tools. The process is then marked to retire and is let go once it settled (roundSettled),
@@ -194,12 +194,21 @@ func (n *Node) superviseRound(ctx context.Context, r *roundResult, id string, p 
 
 // workingLocked: stopping the process now would lose something it runs or holds (p.mu held): a turn, a background
 // task, a compaction (an idle one, or the user's, which sets no busy flag, assistant_compact.go), or a message Claude
-// Code queued and has not started. A turn's result clears busy before the queued message's turn starts
-// (assistant_queue.go), and a new process would never get that message; once Claude Code says it started, the turn is
-// busy (commandLifecycle), as is a turn Claude Code starts on its own from its init (readAssistant). A round goes in as
-// before then (superviseRound), and so does a message that needs every tool (assistantSend).
+// Code queued and has not started, or was written and Claude Code has said nothing of yet (its lifecycle lines may
+// still wait in the pipe behind a turn's result, or Claude Code may not have read it). A turn's result clears busy
+// before the queued message's turn starts (assistant_queue.go), and a new process would never get that message; once
+// Claude Code says it started, the turn is busy (commandLifecycle), as is a turn Claude Code starts on its own from its
+// init (readAssistant). A round goes in as before then (superviseRound), and so does a message that needs every tool
+// (assistantSend).
 func (p *assistantProc) workingLocked() bool {
-	return p.busy || len(p.tasks) > 0 || p.compacting || p.manual || slices.ContainsFunc(p.written, func(w assistantInput) bool { return w.queued })
+	return p.busy || len(p.tasks) > 0 || p.compacting || p.manual || slices.ContainsFunc(p.written, p.holdsLocked)
+}
+
+// holdsLocked: Claude Code may hold message w, written to p (p.mu held): it said it queued it, or says what became of
+// every message (lifecycle) and has said nothing of this one yet, for up to assistantInputKeep. One that never says
+// anything (no command_lifecycle) holds none it did not queue.
+func (p *assistantProc) holdsLocked(w assistantInput) bool {
+	return w.queued || p.lifecycle && time.Since(w.at) <= assistantInputKeep
 }
 
 // assistantSettle is how long a process that is not working (workingLocked) prints nothing before the node takes it for
@@ -220,10 +229,20 @@ func (p *assistantProc) printed() {
 	p.lastOut.Store(int64(time.Since(p.born)))
 }
 
-// quiet is how long ago p printed its last line (printed), or was born when it printed none. Both are offsets from born
-// on the monotonic clock: a step of the wall clock (an NTP correction, a suspended machine's clock catching up) neither
-// takes a process for settled while it prints nor keeps one unsettled.
+// lineRead notes that the reader is done with a line and back at the pipe (readAssistant): the quiet counts from now.
+func (p *assistantProc) lineRead() {
+	p.printed()
+	p.reading.Add(-1)
+}
+
+// quiet is how long ago p printed its last line (printed) and the reader was done with it (lineRead), or was born
+// when it printed none; none while the reader is on a line, as a line behind it (a turn's init) is not read yet. Both
+// are offsets from born on the monotonic clock: a step of the wall clock (an NTP correction, a suspended machine's
+// clock catching up) neither takes a process for settled while it prints nor keeps one unsettled.
 func (p *assistantProc) quiet() time.Duration {
+	if p.reading.Load() > 0 {
+		return 0
+	}
 	return time.Since(p.born) - time.Duration(p.lastOut.Load())
 }
 

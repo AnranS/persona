@@ -138,6 +138,10 @@ type assistantProc struct {
 	// written: the user's messages written to Claude, in order, until its command_lifecycle says it started, cancelled
 	// or finished them; the ones it said it queued are the conversation's queue (assistant_queue.go, #4342).
 	written []assistantInput
+	// lifecycle: it printed a command_lifecycle line, so it says what became of every message (Claude Code 2.1.322
+	// says queued within a millisecond of the write, measured); until it says it, a message may still be on its way in
+	// (workingLocked).
+	lifecycle bool
 
 	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
 	// one that started it.
@@ -154,8 +158,10 @@ type assistantProc struct {
 	// settled (assistant_round.go roundSettled). settleArmed: that look is on its way (settleSoon).
 	retire, settleArmed bool
 	// lastOut: when it last printed a line, as nanoseconds since born on the monotonic clock (readAssistant, printed):
-	// it has settled once it printed nothing for assistantSettle, not working (assistant_round.go quiet).
+	// it has settled once it printed nothing for assistantSettle, not working (assistant_round.go quiet). reading: the
+	// line reader is on a line now, so the lines behind it are not read yet (readAssistant).
 	lastOut atomic.Int64
+	reading atomic.Int32
 	// initSeen: it printed its system/init. Claude Code prints one as each turn starts (measured on 2.1.322): the first
 	// starts the turn of the message that started the process, already busy, and every later one starts a turn the
 	// node may not have asked for (readAssistant).
@@ -798,7 +804,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 	started := n
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for sc.Scan() {
+	// While a line is handled (a result's transcript refresh and pushes can take a while), the ones behind it wait in
+	// the pipe: the process is not quiet until the reader is back at the pipe (assistant_round.go quiet).
+	for ; sc.Scan(); p.lineRead() {
+		p.reading.Add(1)
 		n := p.ownerOr(started) // a resident node's next connection may have taken it over (assistant_keep.go)
 		line := sc.Bytes()
 		if len(line) == 0 || line[0] != '{' { // interactive zsh may print banners
