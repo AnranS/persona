@@ -70,6 +70,8 @@ func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
 	return s
 }
 
+const ownerSentenceEnds = ".!?;。！？；" // i18n-ignore: sentence punctuation for parser markers, not display copy
+
 // ownerNoAction reports a complete no-action predicate after an owner marker. The sentence or clause must end there:
 // "do nothing else but approve" is still an action, while an independent requirement after a period is handled by the
 // next marker occurrence rather than being swallowed with this one.
@@ -80,7 +82,8 @@ func ownerNoAction(rest string) bool {
 			continue
 		}
 		tail := strings.TrimSpace(rest[len(phrase):])
-		if tail == "" || strings.ContainsRune(".!?;", rune(tail[0])) {
+		terminator, _ := utf8.DecodeRuneInString(tail)
+		if tail == "" || strings.ContainsRune(ownerSentenceEnds, terminator) {
 			return true
 		}
 	}
@@ -100,12 +103,11 @@ func directOwnerMarker(lower, marker string) bool {
 		i += from
 		before := strings.TrimSpace(lower[:i])
 		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise")
-		for _, end := range []string{".", "!", "?", ";"} {
-			direct = direct || strings.HasSuffix(before, end)
-		}
+		terminator, _ := utf8.DecodeLastRuneInString(before)
+		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
 		if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
-			end := strings.LastIndexAny(clause, ".!?;")
+			end := strings.LastIndexAny(clause, ownerSentenceEnds)
 			conditional := strings.TrimSpace(clause[end+1:])
 			// Commas and colons introduce guidance without closing an "if" elsewhere in this sentence. Only a
 			// sentence boundary or an explicit "otherwise" clause makes the next requirement independent.
@@ -226,6 +228,32 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 	return false
 }
 
+// ownerChineseDirectMarker reports an unquoted, unnegated direct instruction. Quoting or negating one occurrence does
+// not hide a later genuine requirement, and a historical quoted instruction is not a new owner action (#5732).
+func ownerChineseDirectMarker(text, marker string, negations []string) bool {
+	for from := 0; from < len(text); {
+		i := strings.Index(text[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		prefix := text[:i]
+		negated := false
+		for _, n := range negations {
+			lead := strings.TrimSuffix(n, marker)
+			if lead != n && strings.HasSuffix(prefix, lead) {
+				negated = true
+				break
+			}
+		}
+		if !negated && !ownerMarkerQuoted(text, i) {
+			return true
+		}
+		from = i + len(marker)
+	}
+	return false
+}
+
 // ownerResolutionSuffix recognizes only an immediate explanation tied to this question, not any later "answered" or
 // "no action" words. A following comma/colon lets the explanation continue; "的是上一个问题" is another topic instead.
 func ownerResolutionSuffix(clause string) bool {
@@ -297,12 +325,7 @@ func ownerActionLine(text string) string {
 				}
 				continue
 			}
-			candidate := compact
-			for _, n := range p.negations {
-				candidate = strings.ReplaceAll(candidate, n, strings.Repeat(" ", len(n)))
-			}
-			// Negation is occurrence-local here too: masking its own phrase cannot hide a later direct requirement.
-			if strings.Contains(candidate, p.marker) {
+			if ownerChineseDirectMarker(compact, p.marker, p.negations) {
 				return line
 			}
 		}

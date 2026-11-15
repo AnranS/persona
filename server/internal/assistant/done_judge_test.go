@@ -143,6 +143,9 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"negated Chinese start does not hide a later direct one", "无需由你发起回滚；后续由你发起发布。", verdictNeedsUser, "由你发起"},
 		{"negated Chinese choice does not hide a later direct question", "不需要你决定要不要回滚；要不要继续发布？", verdictNeedsUser, "要不要继续发布"},
 		{"quoted and resolved Chinese choice", "我回答了用户“要不要继续？”；无需进一步操作。", verdictDone, ""},
+		{"quoted and resolved Chinese direct operation", "我回答了用户“需要你本人操作批准发布。”；无需进一步操作。", verdictDone, ""},
+		{"quoted and resolved Chinese direct start", "历史记录写着“由你发起发布。”；该事项已解决。", verdictDone, ""},
+		{"quoted Chinese direct operation does not hide a later requirement", "历史记录写着“需要你本人操作回滚。”；需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
 		{"straight-quoted and resolved Chinese choice", "我回答了用户\"要不要继续？\"；无需进一步操作。", verdictDone, ""},
 		{"resolved Chinese sentence does not hide a later direct question", "我回答了。要不要继续？", verdictNeedsUser, "要不要继续"},
 		{"resolved Chinese clause does not hide a later direct question", "我回答了上一个问题，要不要继续？", verdictNeedsUser, "要不要继续"},
@@ -163,6 +166,8 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"explicit no further action after delivery", "The work is live. You need to do nothing else.", verdictDone, ""},
 		{"explicit no action does not hide an independent requirement", "You need to do nothing else. Otherwise, you need to approve the release yourself.", verdictNeedsUser, "Otherwise"},
 		{"explicit no action with contraction", "You'll need to do nothing else.", verdictDone, ""},
+		{"explicit no action with a full-width terminator", "You need to do nothing else。", verdictDone, ""},
+		{"full-width no action does not hide an independent requirement", "You need to do nothing else。Otherwise, you need to approve the release yourself。", verdictNeedsUser, "Otherwise"},
 		{"English narrative about a choice", "The report evaluates whether you need to split the module and concludes no.", verdictDone, ""},
 		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
 	} {

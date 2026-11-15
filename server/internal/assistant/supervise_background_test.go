@@ -321,6 +321,35 @@ func TestNoBackgroundSupervisorIsAnnounced(t *testing.T) {
 	}
 }
 
+// The compatibility setting must describe the route ownSupervisor really selects: main for new work, with only
+// previously assigned notices left to an already configured background conversation (#5732).
+func TestMainSupervisesOwnTasksDescriptionMatchesCompatibilityRoute(t *testing.T) {
+	s, _, _ := newBackgroundService(t)
+	cfg := s.settings(context.Background())
+	off := false
+	cfg.MainSupervisesOwnTasks = &off
+	cfg.BackgroundSupervisor = "legacy-background"
+	if got := s.ownSupervisor(cfg); got != cfg.Main {
+		t.Fatalf("ownSupervisor() = %q, want main %q", got, cfg.Main)
+	}
+	about := ""
+	for _, setting := range s.ownSettings() {
+		if setting.Key == "assistant.main_supervises_own_tasks" {
+			about = setting.About
+		}
+	}
+	for _, stale := range []string{"one built-in Persona conversation made on first use", "follows up every supervised task"} {
+		if strings.Contains(about, stale) {
+			t.Fatalf("setting still promises a route that does not exist: %q", about)
+		}
+	}
+	for _, want := range []string{"main conversation supervises every new task", "previously assigned supervision notices", "no background conversation is created"} {
+		if !strings.Contains(about, want) {
+			t.Fatalf("setting description lacks %q: %q", want, about)
+		}
+	}
+}
+
 // main_supervises_own_tasks remains a readable setting, but it no longer creates a second route: both values leave
 // new signals with main and start no background conversation (#5732).
 func TestMainSupervisesOwnTasksSettingLeavesRouteWithMain(t *testing.T) {

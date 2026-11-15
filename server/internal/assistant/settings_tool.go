@@ -171,12 +171,10 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
 		{Setting: Setting{Key: "assistant.main_supervises_own_tasks", Title: "The main chat supervises its own tasks", Actions: getSet,
-			About: "off (the default): the background supervisor, one built-in Persona conversation made on first use, follows up " +
-				"every supervised task no leader supervises: their supervision messages go to it and it reviews them with task_review, " +
-				"so the main conversation stays free to answer the user. The main conversation still hears of failed starts and of " +
-				"what the background supervisor hands to the user, and may review any of these tasks itself. on: the main conversation " +
-				"gets these supervision messages itself, as before the background supervisor existed. Applies to signals raised from " +
-				"the change on (a supervision message already with the background supervisor is finished there); tasks keep running",
+			About: "compatibility only, whether off (the default) or on: the main conversation supervises every new task no leader " +
+				"supervises and receives its supervision messages. An already configured background conversation only finishes its " +
+				"previously assigned supervision notices; no background conversation is created or selected for new work. Failed starts " +
+				"and needs_user still go to main. Changing the setting does not move existing notices or stop tasks",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainSupervisesOwnTasks(ctx)), nil },
 			set: s.setMainSupervisesOwnTasks},

@@ -106,6 +106,12 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 				ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)):
 				st = "awaiting_review"
 			}
+			// The hub snapshot follows the same Accepted / Seen decision table as every client. In particular, reopening
+			// accepted work does not erase acceptance, and Seen files only an ordinary finished turn (#5707, #5732).
+			switch snapshotDoneRule(t, agents, ask, now, s.location(ctx)) {
+			case ruleAccepted, ruleSeen:
+				st = "done"
+			}
 		}
 		if t.DoneAt != nil && st == "followup" && time.Since(t.UpdatedAt) > 24*time.Hour {
 			continue
@@ -307,6 +313,21 @@ func taskState(t Todo, agents []proto.Session) string {
 		return "followup"
 	}
 	return "not_started"
+}
+
+// snapshotDoneRule reuses the clients' triage decision table for the two open-at-rest Done transitions the snapshot
+// needs: accepted and ordinarily Seen. Working, owner-wait, concern, open-PR and acceptance-required rows keep their
+// existing snapshot projection instead of getting a second, divergent copy of those rules here.
+func snapshotDoneRule(t Todo, agents []proto.Session, ask *todoAsk, now time.Time, loc *time.Location) string {
+	lookup := func(machine, session string) (proto.Session, bool) {
+		for _, c := range agents {
+			if c.MachineID == machine && c.SessionID == session {
+				return c, true
+			}
+		}
+		return proto.Session{}, false
+	}
+	return triageTodo(listedTodo{Todo: t, Ask: ask}, lookup, now, time.Time{}, loc, false).Rule
 }
 
 // deliveryAwaitsReview is the snapshot's unaccepted live state at rest. A new working stretch is still work in
