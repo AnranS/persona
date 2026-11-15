@@ -280,6 +280,14 @@ func (s *Service) ackSupervisePending(list []superviseSignal) {
 	})
 }
 
+const startUnknownDetail = "启动结果还没确认；待办会按 creation_id 补联，不要重复开 Agent" // i18n-ignore: legacy supervisor diagnostic
+
+// legacyStartUnknownMessage identifies only an unambiguous legacy provisional-start notice. A mixed rendered digest
+// has multiple task entries and cannot be withdrawn wholesale without risking a genuine later stop.
+func legacyStartUnknownMessage(text, todoID string) bool {
+	return strings.Contains(text, todoID) && strings.Contains(text, startUnknownDetail) && strings.Count(text, "任务「") <= 1 // i18n-ignore: legacy rendered entry marker
+}
+
 // startUnknownArmed reports whether any durable or in-memory form still needs retraction. The read-only check keeps
 // repeated sightings of an already-recognized done session from writing an empty acknowledgment on every sync.
 func (s *Service) startUnknownArmed(g superviseSignal) bool {
@@ -312,8 +320,8 @@ func (s *Service) startUnknownArmed(g superviseSignal) bool {
 	for _, queue := range r.st.Queue {
 		for _, msg := range queue {
 			if msg.Signals == nil {
-				// A legacy text queue has no structured key: dropQueuedSupervisionSignalAtomic matches its todo id.
-				armed = armed || strings.Contains(msg.Text, g.Todo)
+				// A legacy text queue has no structured key: only its unambiguous provisional-start text is retractable.
+				armed = armed || legacyStartUnknownMessage(msg.Text, g.Todo)
 				continue
 			}
 			for _, candidate := range *msg.Signals {
@@ -341,7 +349,7 @@ func (s *Service) startUnknownArmed(g superviseSignal) bool {
 
 // retractStartUnknown retires the provisional start result once its exact session has been linked. A newer unjudged
 // stop on the same task has another key and remains pending; queued mixed digests keep and regather their other signals.
-func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
+func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
 	g := superviseSignal{Todo: todoID, Kind: sigUnjudged, Key: "start-unknown@" + todoID}
 	b := &s.supervise
 	// sendDigest holds dedupMu through queueDigest. Confirmation therefore either precedes a new digest's snapshot or
@@ -349,7 +357,12 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	if !s.startUnknownArmed(g) {
-		return
+		return true
+	}
+	// Persist the exact ledger receipt before discarding every other durable form. A read/write failure leaves the
+	// outbox, queue and in-memory signal available for a later exact-session sync or watchTurn to retry.
+	if !s.turnsTold(ctx, []superviseSignal{g}) {
+		return false
 	}
 	b.mu.Lock()
 	b.init()
@@ -411,7 +424,7 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) {
 		s.scheduleDigestLocked(time.Now())
 	}
 	b.mu.Unlock()
-	s.turnsTold(ctx, []superviseSignal{g})
+	return true
 }
 
 // replaceSupervisePending atomically turns an undelivered leader signal into the escalation that replaces it.

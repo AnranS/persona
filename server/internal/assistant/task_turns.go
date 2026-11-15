@@ -332,13 +332,15 @@ func (s *Service) turnsLoadLocked(ctx context.Context, persistFresh bool) bool {
 	return true
 }
 
-// saveTurnsLocked writes the ledger; b.mu is held.
-func (s *Service) saveTurnsLocked(ctx context.Context) {
+// saveTurnsLocked writes the ledger; b.mu is held. False leaves the caller's in-memory change eligible for retry.
+func (s *Service) saveTurnsLocked(ctx context.Context) bool {
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, taskTurnsKey, s.tasks.turns.doc); err != nil {
 			s.logf("task turns: %v", err)
+			return false
 		}
 	}
+	return true
 }
 
 // pruneTurns takes the turns of todos closed or gone off the ledger (the sweep, each tick; a write only when there is
@@ -541,20 +543,23 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 // turnsTold keeps on the ledger that the turn signals in list need no telling any more: a supervision message carried
 // them (sent, or queued where a restart keeps it), said the same within the deduplication window, or they no longer
 // hold. A manager started again does not tell them a second time; until then it tells them from the ledger.
-func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
+func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) bool {
 	b := &s.tasks.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.turnsReadLocked(ctx) {
-		return
+		return false
 	}
 	changed := false
+	previous := map[string]*turnSignal{}
 	for _, g := range list {
 		if !turnSignalKind(g.Kind) {
 			continue
 		}
 		e, ok := b.doc.Turns[g.Todo]
 		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
+			old := *sig
+			previous[g.Todo] = &old
 			next, now := *sig, time.Now().UTC()
 			next.Told = &now
 			e.Signal = &next
@@ -562,9 +567,18 @@ func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
 			changed = true
 		}
 	}
-	if changed {
-		s.saveTurnsLocked(ctx)
+	if !changed {
+		return true
 	}
+	if s.saveTurnsLocked(ctx) {
+		return true
+	}
+	for id, sig := range previous {
+		e := b.doc.Turns[id]
+		e.Signal = sig // the write did not land: a later confirmation or watch must retry the told-mark
+		b.doc.Turns[id] = e
+	}
+	return false
 }
 
 // turnAgain: task t's stretch of work since since ended with turn e, which was taken up before. It gets no second
@@ -712,6 +726,14 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		skip = true
 	}
 	b.mu.Unlock()
+	if tell != nil && tell.Kind == sigUnjudged && tell.Key == "start-unknown@"+t.ID {
+		// The linked Agent is the exact confirmation. Retry an earlier incomplete retraction before gathering the ledger;
+		// a failed ledger read/write keeps this turn for the next sweep instead of replaying the confirmed start.
+		if !s.retractStartUnknown(ctx, t.ID) {
+			return
+		}
+		tell = nil
+	}
 	if tell != nil {
 		if t.Supervision.state(t) == reviewParked {
 			// Parking supersedes the old stop. Acknowledge its exact turn signal so this and every later sweep leave it

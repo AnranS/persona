@@ -829,7 +829,7 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, 
 		}
 	}
 	s.signal(superviseSignal{Todo: task.ID, Kind: sigUnjudged, Key: "start-unknown@" + task.ID,
-		Detail: "启动结果还没确认；待办会按 creation_id 补联，不要重复开 Agent"}) // i18n-ignore: supervisor diagnostic
+		Detail: startUnknownDetail})
 	return fmt.Sprintf("The agent may already be starting on %s in %s, but the machine did not answer within the wait, "+
 		"so the result is unknown. Task %s stays open for the node's creation-id confirmation. Do NOT start it again: "+
 		"check the app's Agents tab (or call agents_list) for a new session there, and only start again if no new session appears.%s",

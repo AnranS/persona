@@ -346,7 +346,12 @@ func (s *Service) dropQueuedSupervisionMatchingAtomic(conversation string, ids m
 					remaining = append(remaining, g)
 				}
 			}
-		} else if exact == nil {
+		} else if exact != nil {
+			if m.Signals == nil && legacyStartUnknownMessage(m.Text, exact.Todo) {
+				target = true
+				taken = append(taken, *exact)
+			}
+		} else {
 			for id := range ids {
 				target = target || strings.Contains(m.Text, id)
 			}

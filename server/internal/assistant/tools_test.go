@@ -215,6 +215,79 @@ func TestExactCreationConfirmationRetractsLedgerOnlyStartUnknownAfterRestart(t *
 	}
 }
 
+func TestAgentStartConfirmationRetriesIncompleteLedgerRetraction(t *testing.T) {
+	for _, mode := range []string{"read", "write"} {
+		t.Run(mode, func(t *testing.T) {
+			st := &turnsFailureStore{Store: &memStore{}}
+			s, _ := newQuietServiceOn(t, st)
+			ctx := context.Background()
+			todo, err := s.createTodo(ctx, "Retry incomplete start retraction", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.superviseTodo(ctx, todo.ID, "conv1", []string{"confirm the exact start"}, 30)
+			g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "provisional start", At: time.Now()}
+			markLeaderTurnSignalled(t, s, g)
+			s.signal(g)
+			simulateSupervisionRestart(t, s)
+			turns := &s.tasks.turns
+			turns.mu.Lock()
+			turns.loaded, turns.doc = false, taskTurnsDoc{}
+			turns.mu.Unlock()
+			if mode == "read" {
+				st.readFailure.Store(true)
+			} else {
+				st.writeFailure.Store(true)
+			}
+			session := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+				Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, StartedByPersona: true, Status: proto.StatusDone,
+				State: proto.StateUnread, UpdatedAt: time.Now()}
+			s.autoLinkTodos("box", []proto.Session{session})
+			if got := todoNow(s, todo.ID); len(got.Agents) != 1 {
+				t.Fatalf("the exact session link was not retained: %+v", got.Agents)
+			}
+			if got := storedSupervisePending(t, s)[g.id()]; got.Key != g.Key {
+				t.Errorf("an incomplete %s-failure retraction discarded the durable signal: %+v", mode, got)
+			}
+
+			st.readFailure.Store(false)
+			st.writeFailure.Store(false)
+			simulateSupervisionRestart(t, s)
+			turns.mu.Lock()
+			turns.loaded, turns.doc = false, taskTurnsDoc{}
+			turns.mu.Unlock()
+			s.watchTurn(ctx, todoNow(s, todo.ID), []proto.Session{session})
+			if got := storedSupervisePending(t, s)[g.id()]; got.Key == g.Key {
+				t.Errorf("the confirmed start-unknown replayed after the %s failure recovered", mode)
+			}
+			entry, ok := s.turnOf(ctx, todo.ID)
+			if !ok || entry.Signal == nil || entry.Signal.Told == nil {
+				t.Errorf("the recovered %s-failure retraction did not persist told: ok=%v entry=%+v", mode, ok, entry)
+			}
+		})
+	}
+}
+
+// turnsFailureStore injects a task-ledger failure only after the fixture has been persisted.
+type turnsFailureStore struct {
+	Store
+	readFailure, writeFailure atomic.Bool
+}
+
+func (s *turnsFailureStore) Setting(ctx context.Context, key string, v any) (bool, error) {
+	if key == taskTurnsKey && s.readFailure.Load() {
+		return false, errors.New("injected task-ledger read failure")
+	}
+	return s.Store.Setting(ctx, key, v)
+}
+
+func (s *turnsFailureStore) PutSetting(ctx context.Context, key string, v any) error {
+	if key == taskTurnsKey && s.writeFailure.Load() {
+		return errors.New("injected task-ledger write failure")
+	}
+	return s.Store.PutSetting(ctx, key, v)
+}
+
 func TestDelayedCreationRecognitionWithoutUnknownDoesNotWrite(t *testing.T) {
 	st := &relayWriteWatch{Store: &memStore{}}
 	s, _ := newQuietServiceOn(t, st)
@@ -493,6 +566,47 @@ func TestAgentStartConfirmationRetractsQueuedStartUnknown(t *testing.T) {
 	}
 	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
 	s.drainRelays("server", []proto.Session{idle})
+}
+
+// A pre-structured queue has only the provisional start's diagnostic text. Exact confirmation withdraws that
+// unambiguous legacy notice without touching another todo's still-live start result (#5732).
+func TestAgentStartConfirmationWithdrawsLegacyTextStartUnknown(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Withdraw legacy start text", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+	other, err := s.createTodo(ctx, "Unrelated start still unknown", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, other.ID, "conv1", nil, 0)
+	const diagnostic = "启动结果还没确认；待办会按 creation_id 补联，不要重复开 Agent" // i18n-ignore: legacy fixture
+	s.queueRelay("conv1", relayMsg{Tool: superviseTool, Text: diagnostic + " " + todo.ID, At: time.Now()})
+	s.queueRelay("conv1", relayMsg{Tool: superviseTool, Text: diagnostic + " " + other.ID, At: time.Now()})
+	if _, err := s.linkStartedAgentTask(ctx, todoNow(s, todo.ID), Device{ID: "box"}, "/code/app", "s-confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	if got := queuedRelays(s, "conv1"); len(got) != 1 || !strings.Contains(got[0].Text, other.ID) {
+		t.Errorf("exact confirmation retained the wrong legacy messages: %+v", got)
+	}
+	simulateSupervisionRestart(t, s)
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	s.drainRelays("server", []proto.Session{idle})
+	waitFor(t, "the unrelated legacy start-unknown to drain", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv1"), "\n"), other.ID)
+	})
+	text := strings.Join(f.noticesTo("conv1"), "\n")
+	if strings.Contains(text, todo.ID) {
+		t.Errorf("the confirmed legacy start-unknown was delivered: %s", text)
+	}
+	if !strings.Contains(text, other.ID) {
+		t.Errorf("the unrelated legacy start-unknown did not drain: %s", text)
+	}
 }
 
 // A send already in flight owns its original text. Once that try fails, however, the confirmed start must not be sent
