@@ -177,18 +177,34 @@ struct HeaderModeTests {
 
     // MARK: /permissions (#6513)
 
-    /// Offered where an agent's mode can be switched from here, with every mode (Plan Only too); never for the
-    /// assistant (its page has no "/" list), Codex, or an agent that isn't running.
+    /// Offered where a session's mode can be switched from here, with every mode (Plan Only too), Persona's own
+    /// conversations included (#7996 review: as on the web and Android); never for Codex or an agent that isn't running.
     @Test func permissionsIsOfferedWhereTheModeCanBeSwitched() throws {
         let s = try session(#","agent":"claude","permission_mode":"default""#)
         #expect(SessionModes.offersPermissionsCommand(s))
         #expect(Set(SessionModes.commandRows(s).map(\.option.id)) == ["default", "acceptEdits", "plan", "auto", "bypassPermissions"])
         #expect(!SessionModes.offersPermissionsCommand(try session(#","agent":"codex""#)))
         #expect(!SessionModes.offersPermissionsCommand(try session(#","agent":"claude""#, status: "offline")))
-        #expect(!SessionModes.offersPermissionsCommand(try session(#","assistant":true,"permission_mode":"default""#)))
+        let persona = try session(#","assistant":true,"permission_mode":"default""#)
+        #expect(SessionModes.offersPermissionsCommand(persona))
+        // A Persona conversation's list: all five modes, Allow Everything taking effect from the next message.
+        let rows = SessionModes.commandRows(persona)
+        #expect(Set(rows.map(\.option.id)) == ["default", "acceptEdits", "plan", "auto", "bypassPermissions"])
+        #expect(rows.first { $0.option.id == "bypassPermissions" }?.option.detail == String(localized: "Takes effect from the next message"))
+        let allEnabled = rows.allSatisfy { $0.enabled }
+        #expect(allEnabled)
         #expect(!SessionModes.offersPermissionsCommand(nil))
         #expect(SessionModes.isPermissionsCommand(" /Permissions\n"))
         #expect(!SessionModes.isPermissionsCommand("/permissions please"))
+    }
+
+    /// Sending `/permissions` opens the list only with nothing attached: a quoted context, a review comment, a photo or a
+    /// video makes it a message, so what was quoted or commented is never dropped (#7996 review).
+    @Test func permissionsWithSomethingAttachedIsSentAsAMessage() {
+        #expect(SessionModes.opensPermissions("/permissions", offered: true, attached: false))
+        #expect(!SessionModes.opensPermissions("/permissions", offered: true, attached: true))
+        #expect(!SessionModes.opensPermissions("/permissions", offered: false, attached: false))
+        #expect(!SessionModes.opensPermissions("/permissions now", offered: true, attached: false))
     }
 
     /// The "/" list's row (the composer's, main-actor bound).

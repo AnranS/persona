@@ -178,6 +178,14 @@ internal object SessionModes {
     fun showsInComposer(session: Session): Boolean = session.canChangeModes || showsInHeader(session)
 
     /**
+     * Whether `/permissions` is offered (#6513): only where the composer draws the picker it opens, Glass's mode button
+     * ([showsInComposer]) or Brief and Board's "Mode" sheet ([modeSheet]), and the mode can be changed. Elsewhere the words
+     * stay an ordinary message: never a cleared draft with nothing to open (#7996 review).
+     */
+    fun offersPermissions(session: Session?, glass: Boolean, modeSheet: Boolean): Boolean =
+        session != null && session.canChangeModes && if (glass) showsInComposer(session) else modeSheet
+
+    /**
      * Brief and Board's "Mode" sheet lists the launcher's own models (#8143): a model the node switches itself through
      * `POST …/modes` (capabilities.model: Paseo's providers, a runtime's, #6294), where Claude's /model can't be typed
      * into a pane. Glass picks it in the pill's panel instead.

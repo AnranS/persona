@@ -1151,7 +1151,7 @@ private fun ChatPage(
                                     onModel = if (claudeCommands && session?.canChangeModes == true) ({ openModes = true }) else null,
                                     // /permissions where the composer has the mode picker (Glass's button, the others' "Mode" sheet), the
                                     // web's `canPickPermissions`: Claude's sessions and Persona's while they can change it (#6513)
-                                    onPermissions = if (session?.canChangeModes == true) ({ openPermissions = true }) else null,
+                                    onPermissions = if (SessionModes.offersPermissions(session, glass, modeSheet)) ({ openPermissions = true }) else null,
                                     // (on Glass /model opens the pill's panel, where the model is picked)
                                     loop = claudeCommands)
                             }

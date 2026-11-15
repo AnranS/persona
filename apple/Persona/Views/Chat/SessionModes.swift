@@ -92,17 +92,25 @@ nonisolated enum SessionModes {
     static var pendingNote: String { String(localized: "The session restarts in Allow Everything once this turn ends") }
     static func pending(_ s: Session?) -> String? { s?.bypassPending == true ? pendingNote : nil }
 
-    /// `/permissions` in the composer's "/" list (the web's, #6476): where an agent's mode can be switched from here. It
-    /// opens the mode list with every mode, Plan Only included; nothing is sent to the agent.
+    /// `/permissions` in the composer's "/" list (the web's, #6476): where a session's mode can be switched from here,
+    /// Persona's own conversations included (all five modes, Allow Everything from the next message), as on the web and
+    /// Android. It opens the mode list with every mode, Plan Only included; nothing is sent to the agent.
     static let permissionsCommand = "/permissions"
     static func offersPermissionsCommand(_ s: Session?) -> Bool {
         guard let s else { return false }
-        return !s.assistant && s.canChangeModes && !s.setsEffortOnly
+        return s.canChangeModes && (s.assistant || !s.setsEffortOnly)
     }
 
     /// `/permissions` alone in the box, as the list fills it in or as typed.
     static func isPermissionsCommand(_ draft: String) -> Bool {
         draft.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == permissionsCommand
+    }
+
+    /// Whether sending `draft` opens the mode list instead of sending a message: `/permissions` alone, where it is
+    /// offered, with nothing attached (photos, videos, quoted contexts, review comments). With anything attached it is a
+    /// message like any other, so what was quoted or commented is never dropped (#7996 review).
+    static func opensPermissions(_ draft: String, offered: Bool, attached: Bool) -> Bool {
+        offered && !attached && isPermissionsCommand(draft)
     }
 
     /// The mode list `/permissions` opens: every mode the session can switch to, the current one too when it is not
@@ -745,18 +753,25 @@ struct NewSessionModePicker: View {
 /// why it can't be picked; a restart that waits is said at the bottom. A pick closes the sheet and goes through the page
 /// (`pick`, which asks first where `SessionModes.confirmation` says so). Nothing is sent to the agent.
 struct PermissionModeSheet: View {
-    var session: Session
+    /// The session is read from the model each time, never kept: a mode change or a queued restart that arrives while the
+    /// sheet is open redraws its check, rows, note and footer, and a pick goes by the mode it runs in then (#7996 review).
+    var key: SessionKey
     var pick: (String) -> Void
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        if let session = model.session(key) { sheet(session) } else { Color.clear.onAppear { dismiss() } }
+    }
+
+    private func sheet(_ session: Session) -> some View {
         let mode = session.permissionMode
-        NavigationStack {
+        return NavigationStack {
             Form {
                 Section {
                     ForEach(SessionModes.commandRows(session), id: \.option.id) { row in
                         Button {
-                            if row.option.id != mode { pick(row.option.id) }
+                            if row.option.id != model.session(key)?.permissionMode { pick(row.option.id) }
                             dismiss()
                         } label: {
                             PermissionModeRow(option: row.option, checked: row.option.id == mode)

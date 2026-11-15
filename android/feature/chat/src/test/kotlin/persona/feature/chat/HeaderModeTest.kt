@@ -139,6 +139,21 @@ class HeaderModeTest {
         assertNull(SessionModes.bypassNote(claude("bypassPermissions").copy(assistant = true)))
     }
 
+    /** /permissions only where the composer draws the picker it opens and the mode can change (#7996 review). */
+    @Test fun permissionsIsOfferedOnlyWhereItsPickerIs() {
+        val live = paned("default")
+        assertTrue(SessionModes.offersPermissions(live, glass = true, modeSheet = false))
+        assertTrue(SessionModes.offersPermissions(live, glass = false, modeSheet = true))
+        // Brief / Board without the "Mode" sheet: nothing to open
+        assertFalse(SessionModes.offersPermissions(live, glass = false, modeSheet = false))
+        // an agent that can't change its mode (offline, Codex) or no session: an ordinary message
+        assertFalse(SessionModes.offersPermissions(live.copy(status = "offline"), glass = true, modeSheet = false))
+        assertFalse(SessionModes.offersPermissions(paned().copy(agent = "codex"), glass = true, modeSheet = true))
+        assertFalse(SessionModes.offersPermissions(null, glass = true, modeSheet = true))
+        // a Persona conversation, where its mode can change
+        assertTrue(SessionModes.offersPermissions(claude("default").copy(assistant = true), glass = true, modeSheet = false))
+    }
+
     @Test fun bypassPendingIsReadOffTheSession() {
         val json = """{"machine_id":"m","session_id":"s","permission_mode":"auto","bypass_pending":true}"""
         assertTrue(JsonCodec.decodeFromString<Session>(json).bypassPending)

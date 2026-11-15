@@ -5396,8 +5396,11 @@ struct Composer: View, Equatable {
     /// `/model` only where typing it switches the model (`Session.takesModelCommand`): a runtime's session that takes a
     /// model through its menus would get the words as a message (#8144).
     private var slashRows: [SlashMenuRow] {
-        guard !shellChat, model.session(key)?.assistant != true, usesShellComposer || !AppStyle.current.usesBeautifulUI,
-              text.hasPrefix("/"), text != slashPicked else { return [] }
+        guard !shellChat, usesShellComposer || !AppStyle.current.usesBeautifulUI, text.hasPrefix("/"), text != slashPicked else { return [] }
+        // A Persona conversation lists only /permissions, as the web does: never an Agent's quick messages (#7996 review).
+        if model.session(key)?.assistant == true {
+            return canPickPermissions ? SlashMenuRow.matching(text, in: [.permissions]) : []
+        }
         let typesModel = model.session(key)?.takesModelCommand == true
         return SlashMenuRow.matching(text, in: SlashMenuRow.rows(model: typesModel, permissions: canPickPermissions, loop: canLoop, clear: canClear && !status.isActive && !clearing))
     }
@@ -5910,7 +5913,7 @@ struct Composer: View, Equatable {
             permissionsPick = nil
             pickMode?(mode)
         }) {
-            if let s = model.session(key) { PermissionModeSheet(session: s) { permissionsPick = $0 } }
+            PermissionModeSheet(key: key) { permissionsPick = $0 }
         }
         .onChange(of: showAssistantModel) { _, on in
             if on, assistantPanel == nil {
@@ -6026,7 +6029,7 @@ struct Composer: View, Equatable {
     @discardableResult
     private func sendText(_ raw: String) async -> Bool {
         // `/permissions` typed and sent opens the mode list, as picking it does; nothing goes to the agent (#6513).
-        if canPickPermissions, SessionModes.isPermissionsCommand(raw), images.isEmpty, videos.items.isEmpty {
+        if SessionModes.opensPermissions(raw, offered: canPickPermissions, attached: hasAttachments) {
             if raw == text { text = "" }
             showPermissions = true
             return true
