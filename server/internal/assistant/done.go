@@ -115,7 +115,8 @@ func directOwnerMarker(lower, marker string) bool {
 			openConditional := ownerConditionalOpen(conditional)
 			direct = !openConditional || strings.HasSuffix(clause, "otherwise,") || strings.HasSuffix(clause, "otherwise:")
 		}
-		if direct && !ownerNoAction(lower[i+len(marker):]) && !ownerMarkerQuoted(lower, i) {
+		rest := lower[i+len(marker):]
+		if direct && !ownerNoAction(rest) && !ownerTrailingConditional(rest) && !ownerMarkerQuoted(lower, i) {
 			return true
 		}
 		from = i + len(marker)
@@ -140,6 +141,39 @@ func ownerConditionalOpen(clause string) bool {
 			return true
 		}
 		from = i + 2
+	}
+	return false
+}
+
+// ownerTrailingConditional reports an if/only-if condition attached to the requirement in rest. Its scope ends at the
+// sentence boundary, so it cannot hide a later independent requirement. An if-question that is the requirement's own
+// object ("check if …") is not a condition, and "even if" leaves the requirement unconditional.
+func ownerTrailingConditional(rest string) bool {
+	if end := strings.IndexAny(rest, ownerSentenceEnds); end >= 0 {
+		rest = rest[:end]
+	}
+	const marker = " if "
+	for from := 0; from < len(rest); {
+		i := strings.Index(rest[from:], marker)
+		if i < 0 {
+			return false
+		}
+		i += from
+		predicate := strings.TrimSpace(rest[:i])
+		condition := strings.TrimSpace(rest[i+len(marker):])
+		if predicate != "" && condition != "" {
+			words := strings.Fields(predicate)
+			last := words[len(words)-1]
+			question := false
+			switch last {
+			case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess":
+				question = true
+			}
+			if last != "even" && !question {
+				return true
+			}
+		}
+		from = i + len(marker)
 	}
 	return false
 }
