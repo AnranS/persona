@@ -187,6 +187,37 @@ describe("To-dos grouped by 常驻", () => {
     expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
   });
 
+  it("labels a fresh closed concern Just finished, including a mixed Just finished section", async () => {
+    await initI18n("en");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const closed = todo("t-closed-concern", "Reported concern", { kind: "concern", done_at: hourAgo, done_by: "reported", updated_at: hourAgo });
+    const delivered = todo("t-live-delivery", "Live delivery", { delivery: { state: "live", at: hourAgo }, updated_at: hourAgo });
+    const header = () => host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=just_done] > button");
+    seed({ todos: [closed] });
+    await render();
+    expect(header()?.textContent).toContain("Just finished");
+    expect(header()?.textContent).not.toContain("Delivered · awaiting review");
+
+    // A mixed section keeps the ordinary name too; each related row still carries its own triage rule.
+    await act(async () => root.unmount());
+    seed({ todos: [closed, delivered] });
+    root = createRoot(host);
+    await render();
+    expect(header()?.textContent).toContain("Just finished");
+    expect(header()?.textContent).not.toContain("Delivered · awaiting review");
+  });
+
+  it("labels a wholly unaccepted live-delivery section Delivered awaiting review", async () => {
+    await initI18n("en");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const delivered = todo("t-live-delivery", "Live delivery", { delivery: { state: "live", at: hourAgo }, updated_at: hourAgo });
+    seed({ todos: [delivered] });
+    await render();
+    const header = host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=just_done] > button");
+    expect(header?.textContent).toContain("Delivered · awaiting review");
+    expect(header?.textContent).not.toContain("Just finished");
+  });
+
   it("puts closed work immediately in Done and an inactive one in its status section, counted as the header says", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     const hourAgo = new Date(Date.now() - 3_600_000).toISOString();

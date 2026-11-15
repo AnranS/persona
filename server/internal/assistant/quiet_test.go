@@ -86,9 +86,13 @@ func agentTurn(s *Service, f *fakeHub, status, text string, pending int) {
 
 type failingSupervisionStore struct {
 	*db.DB
+	onWrite func()
 }
 
-func (failingSupervisionStore) PutTodoSupervision(context.Context, db.TodoSupervisionRow) error {
+func (f failingSupervisionStore) PutTodoSupervision(context.Context, db.TodoSupervisionRow) error {
+	if f.onWrite != nil {
+		f.onWrite()
+	}
 	return errors.New("injected supervision write failure")
 }
 
@@ -108,6 +112,31 @@ func TestAgentStartStopsWhenSupervisionCannotBeStored(t *testing.T) {
 	todos := s.todosOf(context.Background(), "*")
 	if len(todos) != 1 || todos[0].DoneAt == nil || todos[0].Supervision != nil || len(todos[0].Agents) != 0 {
 		t.Fatalf("failed preparation left an unsupervised task: %+v", todos)
+	}
+}
+
+// The caller may disconnect exactly when the ledger write fails. The prepared card still has to close on real
+// Postgres; suppressing session.start alone would otherwise leave an open, unexplained card.
+func TestTaskPlanSupervisionFailureSurvivesCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	st := failingSupervisionStore{DB: todoTestDB(t), onWrite: cancel}
+	s, f := newQuietServiceOn(t, st)
+	raw, _ := json.Marshal(briefTask(nil))
+	res, err := s.runTool(ctx, "server", "conv1", "task_plan", raw)
+	if err != nil {
+		t.Fatalf("cancelled task_plan returned a tool error instead of the task's dispatch failure: %v", err)
+	}
+	if !strings.Contains(res, "dispatch failed") {
+		t.Fatalf("cancelled task_plan did not report the ledger failure: %q", res)
+	}
+	waitFor(t, "the cancelled task start reservation to settle", func() bool { return s.taskStarting.Load() == 0 })
+	if len(f.starts) != 0 {
+		t.Fatalf("session.start ran after caller cancellation and a supervision failure: %+v", f.starts)
+	}
+	todos := s.todosOf(context.Background(), "*")
+	if len(todos) != 1 || todos[0].DoneAt == nil || !strings.Contains(todos[0].StartError, "injected supervision write failure") ||
+		len(todos[0].Agents) != 0 {
+		t.Fatalf("caller cancellation lost the failed prepared card: %+v", todos)
 	}
 }
 

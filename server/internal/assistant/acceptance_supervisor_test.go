@@ -260,7 +260,8 @@ func acceptedAfterJudgeDelivery(t *testing.T, s *Service, f *fakeHub, todo strin
 	if todoNow(s, todo).DoneAt != nil {
 		t.Fatal("the judge closed the task")
 	}
-	reviewTask(t, s, todo, map[string]any{"verdict": "accepted", "note": "验收通过", "user_check": userCheck})
+	reviewTask(t, s, todo, map[string]any{"verdict": "accepted", "note": "验收通过", "user_check": userCheck,
+		"checks": completeReviewChecks(todoNow(s, todo))})
 	waitFor(t, "closed by main", func() bool { return todoNow(s, todo).DoneAt != nil })
 	waitFor(t, "its ask", func() bool { a := askOf(s, todo); return a != nil && !a.AskedAt.IsZero() })
 }

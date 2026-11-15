@@ -193,7 +193,8 @@ func TestJudgeLeavesAReopenedTaskToTheSupervisor(t *testing.T) {
 	sampleAt(t, s, 0)
 	finishTurn(t, s, f, judgeWithChecks("live", true, true))
 	waitFor(t, "the first review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "验收通过"})
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "验收通过",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if todoNow(s, todo.ID).DoneAt == nil {
 		t.Fatal("supervisor acceptance did not close the task")
 	}

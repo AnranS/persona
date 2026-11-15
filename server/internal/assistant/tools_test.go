@@ -531,6 +531,25 @@ func TestAgentStartDefiniteFailuresStayErrors(t *testing.T) {
 	}
 }
 
+// The same cancellation is an unknown result when the start answer never arrives: it stays neutral and open, not a
+// definite failure. This is the release-side control for the detached failure write above.
+func TestAgentStartCallerCancellationKeepsUnknownResultNeutral(t *testing.T) {
+	s, f := newQuietServiceOn(t, todoTestDB(t))
+	shortAgentStartTimeout(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.slowStart = true
+	f.onStart = func(*fakeHub, map[string]any) { cancel() }
+	res, err := s.runTool(ctx, "server", "conv1", "agent_start",
+		json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"check CI"}`))
+	if err != nil || !strings.Contains(res, "may already be starting") {
+		t.Fatalf("unknown start after caller cancellation = %q (%v)", res, err)
+	}
+	todo := onlyTodo(s)
+	if todo.DoneAt != nil || todo.StartError != "" || len(todo.Agents) != 0 {
+		t.Fatalf("unknown start was converted into a definite failure: %+v", todo)
+	}
+}
+
 // Which failures leave the start's outcome unknown, and which are definite.
 func TestStartResultUnknown(t *testing.T) {
 	for _, tc := range []struct {
