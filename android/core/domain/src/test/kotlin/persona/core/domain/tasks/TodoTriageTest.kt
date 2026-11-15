@@ -481,6 +481,23 @@ class TodoTriageTest {
     }
 
     @Test
+    fun anAcceptedTaskAtUsageLimitStaysAcceptedAtRest() {
+        val limitedSession = session("limited", "unread").copy(
+            turnError = "usage limit reached", turnErrorKind = "usage_limit",
+            turnErrorResetsAt = Instant.now().plusSeconds(300).toString(),
+        )
+        val limitedLookup = lookupOf(limitedSession)
+        val td = todo("t", agents = listOf(agent("limited")), reopenedAt = hoursAgo(4), supervision = acceptedReopened())
+        assertEquals(TriageStatus.UsageLimit, td.triageStatus(limitedLookup, now))
+        assertTrue(td.acceptedAtRest(limitedLookup))
+        assertFalse("working is not at rest", td.copy(agents = listOf(agent("run"))).acceptedAtRest(lookup))
+        assertFalse("needs-you is not at rest", td.copy(agents = listOf(agent("ask"))).acceptedAtRest(lookup))
+        val expiredLookup = lookupOf(limitedSession.copy(turnErrorResetsAt = Instant.ofEpochMilli(now - 11 * 60_000L).toString()))
+        assertEquals(TriageStatus.Interrupted, td.triageStatus(expiredLookup, now))
+        assertFalse("an expired reset is interrupted, not accepted at rest", td.acceptedAtRest(expiredLookup))
+    }
+
+    @Test
     fun aLiveDeliveryWaitsForReviewUntilAccepted() {
         val recent = todo("t", delivery = TodoDelivery(state = "live", at = hoursAgo(2)))
         assertEquals(TriageSection.JustDone, at(recent).section)
