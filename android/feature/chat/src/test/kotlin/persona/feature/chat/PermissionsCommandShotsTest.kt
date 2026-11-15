@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -32,6 +33,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -138,8 +140,15 @@ class PermissionsCommandShotsTest {
         save("slash", dark)
     }
 
+    /** The box focused, as when the user types: the mode button sits in the composer only while it is open (Glass). */
+    private fun focusBox() {
+        rule.onNode(hasSetTextAction()).requestFocus()
+        rule.waitForIdle()
+    }
+
     private fun menu(dark: Boolean) {
         show(agent("auto"), dark, draft = "/perm")
+        focusBox()
         rule.onNodeWithText("/permissions").performClick()
         rule.waitForIdle()
         // the five modes, the current one checked, Allow Everything offered with its restart note; nothing sent
@@ -160,6 +169,7 @@ class PermissionsCommandShotsTest {
 
     private fun pending(dark: Boolean) {
         show(agent("acceptEdits", pending = true), dark)
+        focusBox()
         // the button keeps the mode it runs in, and says the restart waits
         assertTrue(described("Permission mode: Auto-edit"))
         assertTrue(described(pendingNote))
