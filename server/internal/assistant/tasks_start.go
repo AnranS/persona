@@ -116,11 +116,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				if t.ReuseTodo == "" && sup != p.Conversation {
 					s.taskCard(ctx, sup, todo.ID, "")
 				}
-				s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+				if err := s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes); err != nil {
+					s.failPlanSupervision(ctx, todo, t, err)
+					continue
+				}
 			}
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
-			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			if err := s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes); err != nil {
+				s.failPlanSupervision(ctx, todo, t, err)
+			}
 			continue
 		}
 		if t.ReuseTodo != "" {
@@ -138,13 +143,24 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	}
 	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	for i := range p.Tasks {
-		if task := p.Tasks[i]; task.TodoID != "" {
+		if task := p.Tasks[i]; task.TodoID != "" && task.Error == "" {
 			s.startPlanTaskAsync(p.ID, p.Conversation, i, task, false, func() {
 				s.releaseTakenTodo(task.ReuseTodo) // linked or failed: the todo is no longer in the gap
 			})
 		}
 	}
 	return p, nil
+}
+
+// failPlanSupervision closes a prepared card whose required ledger could not be stored. Keeping TodoID preserves the
+// visible failed-start link; Error keeps the async dispatcher from starting an unsupervised Agent.
+func (s *Service) failPlanSupervision(ctx context.Context, todo Todo, t *PlanTask, cause error) {
+	reason := clip(oneLine(fmt.Sprintf("record supervision: %v", cause)), 200)
+	if err := s.failTodo(ctx, todo.ID, reason); err != nil {
+		s.logf("task %s: fail after supervision error: %v", todo.ID, err)
+	}
+	t.Error = reason
+	s.releaseTakenTodo(t.ReuseTodo)
 }
 
 // notReusable is the refusal of a todo_id: it says why, so the assistant can plan again without it.

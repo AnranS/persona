@@ -614,7 +614,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		failBeforeStart := func(reason string) {
 			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
 			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.
-			if ferr := s.failTodo(ctx, task.ID, clip(oneLine(reason), 200)); ferr != nil {
+			if ferr := s.failAgentStartTodo(ctx, task.ID, clip(oneLine(reason), 200)); ferr != nil {
 				s.logf("task %s: pre-start failure: %v", task.ID, ferr)
 			}
 		}
@@ -678,7 +678,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				// do not report failure (the model would start it again, duplicating the run).
 				return s.startedWithoutAnswer(ctx, am, picked, a.Cwd, note, expectID, knownIDs, task, told), nil
 			}
-			if ferr := s.failTodo(ctx, task.ID, clip(oneLine(err.Error()), 200)); ferr != nil {
+			if ferr := s.failAgentStartTodo(ctx, task.ID, clip(oneLine(err.Error()), 200)); ferr != nil {
 				s.logf("task %s: fail: %v", task.ID, ferr)
 			}
 			return "", err
@@ -708,6 +708,14 @@ var agentStartListTimeout = 15 * time.Second
 
 // agentStartAdoptRetry is the one wait before a second adoption list: the hub's held list can lag the node.
 var agentStartAdoptRetry = 200 * time.Millisecond
+
+// failAgentStartTodo records a definite no-start on its own bounded context. The caller may already be cancelled even
+// though the detached start has returned a definite refusal; only unknown outcomes take startedWithoutAnswer instead.
+func (s *Service) failAgentStartTodo(ctx context.Context, id, reason string) error {
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+	defer cancel()
+	return s.failTodo(fctx, id, reason)
+}
 
 // startResultUnknown: the answer to session.start never came back (the wait ran out or the link dropped while it
 // was out), though the node may already have built the session and launched the agent. An offline machine, a
