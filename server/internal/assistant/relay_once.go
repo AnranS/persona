@@ -153,6 +153,12 @@ func (s *Service) relayLanded(machine, to string, msg relayMsg) bool {
 	if !ok && !msg.DoubtedAt.IsZero() {
 		tried, ok = msg.DoubtedAt, true // the durable head survived a manager restart
 	}
+	if !ok && msg.Withdrawn && !msg.At.IsZero() {
+		// The original send may have landed just before a restart removed the process, after withdrawal but before the
+		// queue head was removed. No doubt was recorded for that acknowledged send; its original timestamp still bounds
+		// the transcript lookup, so an older identical line is not accepted as this delivery.
+		tried, ok = msg.At, true
+	}
 	if !ok || !s.relayArrived(machine, to, msg, tried) {
 		return false
 	}

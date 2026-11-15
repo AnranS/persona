@@ -151,20 +151,21 @@ func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creat
 		s.todos.writing.Unlock()
 		return false, false
 	}
-	if !eligible {
-		s.todos.writing.Unlock()
-		return true, false
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if !eligible {
+		s.todos.writing.Unlock()
+		s.retractStartUnknown(ctx, creationID)
+		return true, false
+	}
 	linked, err := s.writeDelayedDoneCreation(ctx, creationID, machine, c, startError, time.Now().UTC())
 	s.todos.writing.Unlock()
 	if err != nil {
 		s.logf("todos: delayed creation-id link %s on %s/%s: %v", creationID, machine, c.SessionID, err)
 	}
-	if linked {
-		s.retractStartUnknown(ctx, creationID)
-	}
+	// The exact done identity is confirmed on every handled path, not only after insertion. The provisional unknown
+	// result is stale even when membership was already present, dismissed, or guarded by a newer manual choice (#5732).
+	s.retractStartUnknown(ctx, creationID)
 	return true, linked
 }
 

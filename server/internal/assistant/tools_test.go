@@ -335,6 +335,51 @@ func TestAgentStartUnknownLinksDelayedCreationIDAfterTaskClosed(t *testing.T) {
 	requireStartUnknownState(t, s, todo.ID, false)
 }
 
+// Exact done creation identity retires the provisional result even when membership was already known or dismissed.
+// Neither path inserts or reactivates a link, and neither may leave start-unknown armed for a later replay (#5732).
+func TestDelayedCreationRecognitionRetractsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dismissed bool
+	}{
+		{name: "already linked"},
+		{name: "dismissed stays dismissed", dismissed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newQuietServiceOn(t, &memStore{})
+			todo, err := s.createTodo(context.Background(), "Recognize the done creation", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.linkTodoAgent(context.Background(), todo.ID, "box", "s-late", todo.Title, "/code/app", "claude"); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			key := [2]string{"box", "s-late"}
+			s.todos.mu.Lock()
+			current := s.todos.todos[todo.ID]
+			current.DoneAt = &now
+			if tc.dismissed {
+				current.Agents[0].DismissedAt = &now
+				delete(s.todos.activeBySession, key)
+			}
+			s.todos.mu.Unlock()
+			s.signal(superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "provisional start"})
+			requireStartUnknownState(t, s, todo.ID, true)
+
+			handled, linked := s.linkDelayedDoneCreation("box", proto.Session{SessionID: "s-late", MachineID: "box"}, todo.ID, "")
+			if !handled || linked {
+				t.Fatalf("linkDelayedDoneCreation() = handled %v, linked %v; want true, false", handled, linked)
+			}
+			requireStartUnknownState(t, s, todo.ID, false)
+			got := todoNow(s, todo.ID)
+			if len(got.Agents) != 1 || got.Agents[0].SessionID != "s-late" || (got.Agents[0].DismissedAt != nil) != tc.dismissed {
+				t.Fatalf("exact recognition changed membership: %+v", got.Agents)
+			}
+		})
+	}
+}
+
 // Queue admission is another durable form of the provisional result. A later exact confirmation must keep it from
 // replaying after a restart, not only clear the outbox and turn ledger (#5732).
 func TestAgentStartConfirmationRetractsQueuedStartUnknown(t *testing.T) {
