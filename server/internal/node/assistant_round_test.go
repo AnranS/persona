@@ -236,7 +236,7 @@ func idleRound(n *Node) *assistantProc {
 	if p != nil {
 		p.mu.Lock()
 		p.busy = false
-		p.lastOut.Store(time.Now().Add(-assistantSettle).UnixNano())
+		p.lastOut.Store(int64(time.Since(p.born) - assistantSettle)) // its last line a settle ago (printed)
 		p.mu.Unlock()
 	}
 	return p

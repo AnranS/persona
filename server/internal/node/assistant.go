@@ -153,8 +153,8 @@ type assistantProc struct {
 	// retire: a message that needs every tool went into this round's process while it worked; it is let go once it
 	// settled (assistant_round.go roundSettled). settleArmed: that look is on its way (settleSoon).
 	retire, settleArmed bool
-	// lastOut: when it last printed a line, in Unix nanoseconds (readAssistant): it has settled once it printed nothing
-	// for assistantSettle, not working (assistant_round.go).
+	// lastOut: when it last printed a line, as nanoseconds since born on the monotonic clock (readAssistant, printed):
+	// it has settled once it printed nothing for assistantSettle, not working (assistant_round.go quiet).
 	lastOut atomic.Int64
 	// initSeen: it printed its system/init. Claude Code prints one as each turn starts (measured on 2.1.322): the first
 	// starts the turn of the message that started the process, already busy, and every later one starts a turn the
@@ -804,7 +804,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		if bytes.Contains(line, []byte(`"persona_bridge"`)) && n.sdkBridgeEvent(p, line) {
 			continue
 		}
-		p.lastOut.Store(time.Now().UnixNano())
+		p.printed()
 		if p.round {
 			n.settleSoon(p) // its row says working until it settled (assistant_round.go); it starts with its init (below)
 		} else {

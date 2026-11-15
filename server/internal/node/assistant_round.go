@@ -204,9 +204,16 @@ func (p *assistantProc) settledLocked() bool {
 	return !p.workingLocked() && p.quiet() >= assistantSettle
 }
 
-// quiet is how long ago p printed its last line (readAssistant).
+// printed notes that p printed a line now (readAssistant).
+func (p *assistantProc) printed() {
+	p.lastOut.Store(int64(time.Since(p.born)))
+}
+
+// quiet is how long ago p printed its last line (printed), or was born when it printed none. Both are offsets from born
+// on the monotonic clock: a step of the wall clock (an NTP correction, a suspended machine's clock catching up) neither
+// takes a process for settled while it prints nor keeps one unsettled.
 func (p *assistantProc) quiet() time.Duration {
-	return time.Since(time.Unix(0, p.lastOut.Load()))
+	return time.Since(p.born) - time.Duration(p.lastOut.Load())
 }
 
 // stopSettled stops p, the conversation's process, once it settled, waiting up to assistantSettle for it; the caller
