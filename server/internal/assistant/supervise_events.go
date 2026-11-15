@@ -323,6 +323,7 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	delete(b.pending, t.ID+"|"+sigParkedDue)
 	s.forgetSupervisePending(t.ID+"|"+sigReview, t.ID+"|"+sigParkedDue)
 	b.mu.Unlock()
+	s.retractSupervisedIdle(t.ID)
 }
 
 // notifyTaskFailed pushes a failure notification to the user's phone when a task started from a side conversation

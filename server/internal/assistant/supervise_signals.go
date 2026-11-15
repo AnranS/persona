@@ -371,6 +371,14 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
 	if !s.turnsTold(ctx, []superviseSignal{g}) {
 		return false
 	}
+	s.retractSuperviseSignalLocked(g)
+	return true
+}
+
+// retractSuperviseSignalLocked removes exactly g from pending and queue-admitted supervision. The caller holds
+// dedupMu, so no new digest can be admitted between the key scan and the queue write.
+func (s *Service) retractSuperviseSignalLocked(g superviseSignal) {
+	b := &s.supervise
 	b.mu.Lock()
 	b.init()
 	ackSupervisePendingLocked(b.pending, []superviseSignal{g})
@@ -431,7 +439,56 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
 		s.scheduleDigestLocked(time.Now())
 	}
 	b.mu.Unlock()
-	return true
+}
+
+// retractSupervisedIdle retires every idle stretch that exists when an agent resumes. A later idle has a new key and
+// stays pending; mixed queue messages keep and regather their unrelated signals.
+func (s *Service) retractSupervisedIdle(todoID string) {
+	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	keys := map[string]struct{}{}
+	collect := func(g superviseSignal) {
+		if g.Todo == todoID && g.Kind == sigIdle {
+			keys[g.Key] = struct{}{}
+		}
+	}
+	b.mu.Lock()
+	if g, ok := b.pending[todoID+"|"+sigIdle]; ok {
+		collect(g)
+	}
+	for _, queue := range b.queued {
+		for _, g := range queue {
+			collect(g)
+		}
+	}
+	b.mu.Unlock()
+	r := &s.relays
+	r.mu.Lock()
+	if s.relayLocked(context.Background()) {
+		if g, ok := r.st.SupervisePending[todoID+"|"+sigIdle]; ok {
+			collect(g)
+		}
+		for _, queue := range r.st.Queue {
+			for _, msg := range queue {
+				if msg.Signals == nil {
+					continue
+				}
+				for _, g := range *msg.Signals {
+					collect(g)
+				}
+			}
+		}
+	}
+	r.mu.Unlock()
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	slices.Sort(ordered)
+	for _, key := range ordered {
+		s.retractSuperviseSignalLocked(superviseSignal{Todo: todoID, Kind: sigIdle, Key: key})
+	}
 }
 
 // retractConfirmedStartUnknowns reconciles every start whose exact outcome is already known before a session-list

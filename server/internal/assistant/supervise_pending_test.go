@@ -111,6 +111,142 @@ func TestNeedsUserPendingSurvivesRestartBeforeDigest(t *testing.T) {
 	}
 }
 
+// Resuming work retires the previous stretch's idle in memory and in the durable outbox. A genuinely newer idle after
+// that resume remains renderable and survives its own restart (#5732).
+func TestWorkingDropsStaleIdleAcrossRestart(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, _, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.State = reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "old-stop", Detail: "old stretch stopped", At: time.Now()}
+	s.signal(old)
+	if got := storedSupervisePending(t, s)[old.id()]; got.Key != old.Key {
+		t.Fatalf("the old idle was not persisted for the restart fixture: %+v", got)
+	}
+	if _, ok := s.digestEntry(ctx, old, testWeb); !ok {
+		t.Fatal("the old idle does not render before work resumes")
+	}
+	pendingHas := func(g superviseSignal) bool {
+		b := &s.supervise
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		_, ok := b.pending[g.id()]
+		return ok
+	}
+	pendingText := func() string {
+		b := &s.supervise
+		b.mu.Lock()
+		list := make([]superviseSignal, 0, len(b.pending))
+		for _, g := range b.pending {
+			list = append(list, g)
+		}
+		b.mu.Unlock()
+		var entries []prompts.SuperviseEntry
+		for _, g := range list {
+			if e, ok := s.digestEntry(ctx, g, testWeb); ok {
+				entries = append(entries, e)
+			}
+		}
+		return prompts.RenderSupervise(prompts.Supervise{Entries: entries})
+	}
+
+	s.supervisedWorking(ctx, todoNow(s, todo.ID))
+	simulateSupervisionRestart(t, s)
+	s.restoreSupervisePending(ctx)
+	if pendingHas(old) {
+		t.Error("the previous stretch's idle was restored into memory after work resumed")
+	}
+	if got := storedSupervisePending(t, s)[old.id()]; got.Key == old.Key {
+		t.Errorf("the previous stretch's idle stayed durable after work resumed: %+v", got)
+	}
+	if text := pendingText(); strings.Contains(text, old.Detail) {
+		t.Errorf("the restored supervision message still contains the previous stretch's idle:\n%s", text)
+	}
+
+	newer := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "new-stop", Detail: "new stretch stopped", At: time.Now()}
+	s.signal(newer)
+	if got := storedSupervisePending(t, s)[newer.id()]; got.Key != newer.Key {
+		t.Fatalf("the post-resume idle was not persisted: %+v", got)
+	}
+	if _, ok := s.digestEntry(ctx, newer, testWeb); !ok {
+		t.Fatal("the post-resume idle does not render")
+	}
+	simulateSupervisionRestart(t, s)
+	s.restoreSupervisePending(ctx)
+	if !pendingHas(newer) {
+		t.Error("the post-resume idle was not restored into memory")
+	}
+	if got := storedSupervisePending(t, s)[newer.id()]; got.Key != newer.Key {
+		t.Errorf("the post-resume idle did not stay durable: %+v", got)
+	}
+	if text := pendingText(); !strings.Contains(text, newer.Detail) {
+		t.Errorf("the restored supervision message lost the post-resume idle:\n%s", text)
+	}
+}
+
+// Queue admission is another durable form of the old idle. Resuming work withdraws exactly that signal, regathers a
+// mixed digest's other member, and leaves a genuinely newer post-resume idle deliverable (#5732).
+func TestWorkingRetractsQueuedIdleAcrossRestart(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.State = reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "queued-old-stop", Detail: "old queued idle", At: time.Now()}
+	other := superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "unrelated-stall", Detail: "unrelated stall", At: time.Now()}
+	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: old.Detail + "; " + other.Detail, At: time.Now()},
+		[]superviseSignal{old, other}, time.Now(), time.Time{}) {
+		t.Fatal("the old idle and its mixed-digest control were not admitted to the durable queue")
+	}
+	s.supervisedWorking(ctx, todoNow(s, todo.ID))
+	simulateSupervisionRestart(t, s)
+	for _, msg := range queuedRelays(s, "conv1") {
+		if strings.Contains(msg.Text, old.Detail) {
+			t.Errorf("the durable relay queue retained the previous stretch's idle: %+v", msg)
+		}
+	}
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	s.drainRelays("server", []proto.Session{idle})
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
+	s.sendDigest(ctx) // the withdrawn head's other member is regathered into pending before it can go out again
+	waitFor(t, "the mixed-digest control to drain", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv1"), "\n"), other.Detail)
+	})
+	got := strings.Join(f.noticesTo("conv1"), "\n")
+	if strings.Contains(got, old.Detail) {
+		t.Errorf("the drained supervision message contains the previous stretch's idle:\n%s", got)
+	}
+	if !strings.Contains(got, other.Detail) {
+		t.Errorf("withdrawing the old idle dropped the mixed digest's other member:\n%s", got)
+	}
+
+	newer := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "queued-new-stop", Detail: "new queued idle", At: time.Now()}
+	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: newer.Detail, At: time.Now()},
+		[]superviseSignal{newer}, time.Now(), time.Time{}) {
+		t.Fatal("the post-resume idle was not admitted to the durable queue")
+	}
+	s.drainRelays("server", []proto.Session{idle})
+	waitFor(t, "the post-resume idle to drain", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv1"), "\n"), newer.Detail)
+	})
+	if got := strings.Join(f.noticesTo("conv1"), "\n"); !strings.Contains(got, newer.Detail) {
+		t.Errorf("the post-resume idle was not deliverable:\n%s", got)
+	}
+}
+
 // A late acknowledgment for an older stretch cannot delete the newer one gathered under the same signal id.
 func TestPendingAckKeepsNewerStretch(t *testing.T) {
 	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
