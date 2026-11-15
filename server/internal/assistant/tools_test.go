@@ -343,6 +343,112 @@ func TestSessionsChangedRetractsToldStartUnknownBeforeRelayDrain(t *testing.T) {
 	}
 }
 
+// A failed first relay read cannot be treated as an empty queue: the drain's second read may succeed and expose the
+// stale head. The session-list entry must hold that drain until both relay and ledger reads succeed (#5732).
+func TestSessionsChangedDoesNotDrainAfterARelayReadFailure(t *testing.T) {
+	turns := &turnsFailureStore{Store: &memStore{}}
+	st := &relayFirstReadFailureStore{turnsFailureStore: turns}
+	s, f := newQuietServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Hold the drain after a relay read failure", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start", At: time.Now()}
+	markLeaderTurnSignalled(t, s, g)
+	if !s.queueDigest("conv1", relayMsg{Tool: superviseTool, Text: "stale unknown start " + todo.ID, At: time.Now()},
+		[]superviseSignal{g}, time.Now(), time.Time{}) {
+		t.Fatal("the unknown start was not admitted to the durable relay queue")
+	}
+	if !s.turnsTold(ctx, []superviseSignal{g}) {
+		t.Fatal("the crash-boundary fixture did not persist told")
+	}
+	simulateSupervisionRestart(t, s)
+	s.tasks.turns.mu.Lock()
+	s.tasks.turns.loaded, s.tasks.turns.doc = false, taskTurnsDoc{}
+	s.tasks.turns.mu.Unlock()
+	idle := proto.Session{SessionID: "conv1", MachineID: "box", Assistant: true, Status: proto.StatusIdle}
+	confirmed := proto.Session{SessionID: "s-confirmed", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, StartedByPersona: true, Status: proto.StatusDone, UpdatedAt: time.Now()}
+	d := DeviceSessions{MachineID: "box", Sessions: []proto.Session{idle, confirmed}}
+	hub := &stalledAssistantSendHub{fakeHub: f, started: make(chan struct{}), release: make(chan struct{}), attempts: make(chan string, 2)}
+	setHub(s, hub)
+
+	turns.readFailure.Store(true)
+	st.failRelayRead.Store(true)
+	s.relays.mu.Lock()
+	s.relays.loaded = false
+	s.relays.mu.Unlock()
+	s.SessionsChanged(ctx, d)
+	select {
+	case <-hub.started:
+		t.Error("the drain started after the first relay read failed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(hub.release)
+	turns.readFailure.Store(false)
+	s.SessionsChanged(ctx, d)
+	waitFor(t, "the confirmed queue head to be withdrawn", func() bool { return s.queuedFor("conv1") == 0 })
+	if text := strings.Join(f.noticesTo("conv1"), "\n"); strings.Contains(text, "stale unknown start") {
+		t.Fatalf("the drain's second relay read delivered the confirmed start-unknown: %s", text)
+	}
+}
+
+// An empty relay queue does not make a told outbox entry harmless: the next digest restores it before watchTurn runs.
+// Reconcile that durable form at the session-list boundary too, even without a current creation-id row (#5732).
+func TestSessionsChangedRetractsToldOutboxBeforeDigest(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	presenceTimes(t, 0, 0)
+	ownerTurnTimes(t, 0, 0)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Retract the outbox before its digest", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "stale unknown start", At: time.Now()}
+	markLeaderTurnSignalled(t, s, g)
+	s.signal(g)
+	if got := storedSupervisePending(t, s)[g.id()]; got.Key != g.Key {
+		t.Fatalf("the outbox fixture was not persisted: %+v", got)
+	}
+	if !s.turnsTold(ctx, []superviseSignal{g}) {
+		t.Fatal("the crash-boundary fixture did not persist told")
+	}
+	simulateSupervisionRestart(t, s)
+	s.tasks.turns.mu.Lock()
+	s.tasks.turns.loaded, s.tasks.turns.doc = false, taskTurnsDoc{}
+	s.tasks.turns.mu.Unlock()
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+
+	s.SessionsChanged(ctx, DeviceSessions{MachineID: "server", Sessions: []proto.Session{idle}})
+	s.supervise.mu.Lock()
+	pending := s.supervise.pending[g.id()]
+	s.supervise.mu.Unlock()
+	if pending.Key == g.Key {
+		t.Errorf("the confirmed signal remained in memory after session-list reconciliation: %+v", pending)
+	}
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
+	s.sendDigest(ctx)
+	s.drainRelays("server", []proto.Session{idle})
+	if got := storedSupervisePending(t, s)[g.id()]; got.Key == g.Key {
+		t.Error("the confirmed outbox entry survived the session-list reconciliation")
+	}
+	if text := strings.Join(f.noticesTo("conv1"), "\n"); strings.Contains(text, "stale unknown start") {
+		t.Fatalf("the empty-queue path let the digest deliver the confirmed start-unknown: %s", text)
+	}
+	for _, msg := range queuedRelays(s, "conv1") {
+		if strings.Contains(msg.Text, "stale unknown start") {
+			t.Fatalf("the empty-queue path let the digest queue the confirmed start-unknown: %+v", msg)
+		}
+	}
+}
+
 // turnsFailureStore injects a task-ledger failure only after the fixture has been persisted.
 type turnsFailureStore struct {
 	Store
@@ -361,6 +467,19 @@ func (s *turnsFailureStore) PutSetting(ctx context.Context, key string, v any) e
 		return errors.New("injected task-ledger write failure")
 	}
 	return s.Store.PutSetting(ctx, key, v)
+}
+
+// relayFirstReadFailureStore fails only the next relay-state read, leaving the drain's immediate second read healthy.
+type relayFirstReadFailureStore struct {
+	*turnsFailureStore
+	failRelayRead atomic.Bool
+}
+
+func (s *relayFirstReadFailureStore) Setting(ctx context.Context, key string, v any) (bool, error) {
+	if key == relayKey && s.failRelayRead.CompareAndSwap(true, false) {
+		return false, errors.New("injected first relay read failure")
+	}
+	return s.turnsFailureStore.Setting(ctx, key, v)
 }
 
 func TestDelayedCreationRecognitionWithoutUnknownDoesNotWrite(t *testing.T) {

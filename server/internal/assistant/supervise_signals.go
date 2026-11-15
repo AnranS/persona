@@ -357,12 +357,31 @@ func (s *Service) startUnknownArmed(g superviseSignal) bool {
 // retractStartUnknown retires the provisional start result once its exact session has been linked. A newer unjudged
 // stop on the same task has another key and remains pending; queued mixed digests keep and regather their other signals.
 func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
+	return s.retractStartUnknowns(ctx, []string{todoID})
+}
+
+// retractStartUnknowns serializes a whole confirmation batch with durable restoration and digest admission. Otherwise
+// restoreSupervisePending can snapshot the old outbox before cleanup and insert that snapshot after it, or a digest can
+// slip between two confirmed ids. pendingLoadMu precedes dedupMu, matching simulateSupervisionRestart.
+func (s *Service) retractStartUnknowns(ctx context.Context, todoIDs []string) bool {
+	b := &s.supervise
+	b.pendingLoadMu.Lock()
+	defer b.pendingLoadMu.Unlock()
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	for _, todoID := range todoIDs {
+		if !s.retractStartUnknownLocked(ctx, todoID) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) retractStartUnknownLocked(ctx context.Context, todoID string) bool {
 	g := superviseSignal{Todo: todoID, Kind: sigUnjudged, Key: "start-unknown@" + todoID}
 	b := &s.supervise
 	// sendDigest holds dedupMu through queueDigest. Confirmation therefore either precedes a new digest's snapshot or
 	// waits for its queue admission and retracts that message too; a post-confirmation queue cannot slip between them.
-	b.dedupMu.Lock()
-	defer b.dedupMu.Unlock()
 	if !s.startUnknownArmed(g) {
 		return true
 	}
@@ -435,17 +454,17 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
 }
 
 // retractConfirmedStartUnknowns reconciles every start whose exact outcome is already known before a session-list
-// drain can deliver an idle supervisor's old queue. A persisted told receipt is confirmation even when the task Agent
-// is listed by another computer; a non-offline creation id also confirms before the asynchronous auto-link write.
-// False holds the whole drain so an unreadable or unwritable ledger cannot let a stale start result escape first.
+// drain or digest can deliver an old signal. A persisted told receipt is confirmation even when the task Agent is
+// listed by another computer or no relay message is queued; a non-offline creation id also confirms before the
+// asynchronous auto-link write. False holds the drain so an unreadable relay or ledger cannot get a second chance to
+// deliver the stale start result before retraction.
 func (s *Service) retractConfirmedStartUnknowns(ctx context.Context, sessions []proto.Session) bool {
 	r := &s.relays
 	r.mu.Lock()
 	loaded := s.relayLocked(context.Background())
-	empty := len(r.st.Queue) == 0
 	r.mu.Unlock()
-	if !loaded || empty {
-		return true // drainRelays takes the same no-op path; no ledger scan is needed without a queued message.
+	if !loaded {
+		return false // drainRelays must not get a second, successful read before retraction.
 	}
 	confirmed := map[string]struct{}{}
 	turns := &s.tasks.turns
@@ -473,12 +492,7 @@ func (s *Service) retractConfirmedStartUnknowns(ctx context.Context, sessions []
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	for _, id := range ids {
-		if !s.retractStartUnknown(ctx, id) {
-			return false
-		}
-	}
-	return true
+	return s.retractStartUnknowns(ctx, ids)
 }
 
 // replaceSupervisePending atomically turns an undelivered leader signal into the escalation that replaces it.
