@@ -24,6 +24,7 @@ const (
 	sigInterrupted = "interrupted" // the model service cut its turn off
 	sigFailed      = "failed"      // its agent did not start
 	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
+	sigPRConflict  = "pr_conflict" // the task's current open PR has merge conflicts at this head
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -122,7 +123,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
 		sigParkDecided: // the owner answered: what they said is acted on soon
 		return true
@@ -379,7 +380,6 @@ func (s *Service) retractStartUnknowns(ctx context.Context, todoIDs []string) bo
 
 func (s *Service) retractStartUnknownLocked(ctx context.Context, todoID string) bool {
 	g := superviseSignal{Todo: todoID, Kind: sigUnjudged, Key: "start-unknown@" + todoID}
-	b := &s.supervise
 	// sendDigest holds dedupMu through queueDigest. Confirmation therefore either precedes a new digest's snapshot or
 	// waits for its queue admission and retracts that message too; a post-confirmation queue cannot slip between them.
 	if !s.startUnknownArmed(g) {

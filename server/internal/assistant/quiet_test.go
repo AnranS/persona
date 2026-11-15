@@ -154,7 +154,7 @@ func TestQuietTaskTellsTheMainConversation(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "修好了，提了 https://github.com/o/r/pull/901", 0)
 	waitFor(t, "the notice", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "）：已交付·待看：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
+	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "，signal=review）：已交付·待看：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notice lacks %q:\n%s", want, n)
 		}

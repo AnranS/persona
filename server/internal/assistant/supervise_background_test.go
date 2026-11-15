@@ -867,8 +867,13 @@ func TestGoldenBackgroundSupervisor(t *testing.T) {
 	s.noBackground = false
 	on := s.claudeMD(context.Background(), "server", false)
 	golden(t, "assistant_claude_md.background", on)
-	if !strings.Contains(off, "新任务统一由主对话督办、验收") || strings.Contains(off, "后台督办") {
-		t.Fatal("with the background supervisor off the CLAUDE.md changed")
+	for _, common := range []string{off, on} {
+		if !strings.Contains(common, "新任务统一由主对话督办") {
+			t.Fatal("shared CLAUDE.md lost the main-supervision rule")
+		}
+		if strings.Contains(common, "cost_of_waiting") || strings.Contains(common, "visibility: \"silent\"") {
+			t.Fatal("shared CLAUDE.md still contains detailed supervision handling")
+		}
 	}
 	if on != off {
 		t.Fatal("the legacy background supervisor setting changed the main supervision instructions")

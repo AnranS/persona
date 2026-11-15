@@ -16,6 +16,7 @@ import (
 func sideReviewFixture(t *testing.T) (*Service, *fakeHub, Todo) {
 	t.Helper()
 	s, f := newQuietService(t)
+	f.judge = `{"verdict":"done","reason":"PR 已合并"}`
 	f.known["side1"] = true
 	listSide(f, proto.StatusIdle)
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{

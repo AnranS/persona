@@ -287,7 +287,8 @@ export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
 export function todoRank(todo: Todo, status: TodoStatus): number {
-  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[shownStatus(todo, status)];
+  if (acceptedAtRest(todo, status)) return TODO_STATUS_RANK.done;
+  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
 }
 
 export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" | "green" | "amber" | "idle" | "off" }> = {
@@ -706,6 +707,8 @@ export interface TodoDecision {
   /** The newest decision that replaces this one; empty while it is in effect. */
   superseded_by: string;
   created_at: string;
+  /** Completion time for an outcome written by Persona, which may be recorded later. */
+  phase_completed_at?: string;
 }
 
 /** Where a decision came from, as the detail page says it: the agent that asked, by its title when known. */
