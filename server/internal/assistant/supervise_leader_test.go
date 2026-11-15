@@ -118,8 +118,8 @@ func TestLeaderConversationTaskIsSupervisedByMain(t *testing.T) {
 		t.Fatalf("owner decision = %+v", ask)
 	}
 
-	// Main closes it too; the origin and supervisor stay distinct.
-	res, err = review("conv1", "accepted", "用户选了只修 iPad，已合并", nil)
+	// Main closes it too, with the same complete evidence every acceptance now requires; origin and supervisor stay distinct.
+	res, err = review("conv1", "accepted", "用户选了只修 iPad，已合并", map[string]any{"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("main's accept: %s %v", res, err)
 	}

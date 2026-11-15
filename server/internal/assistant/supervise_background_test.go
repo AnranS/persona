@@ -86,7 +86,11 @@ func TestMainSupervisesWithoutStartingBackground(t *testing.T) {
 	}
 
 	review := func(self, verdict, note string) (string, error) {
-		return runJSON(t, s, self, "task_review", map[string]any{"todo_id": todo.ID, "verdict": verdict, "note": note})
+		args := map[string]any{"todo_id": todo.ID, "verdict": verdict, "note": note}
+		if verdict == reviewAccepted {
+			args["checks"] = completeReviewChecks(todoNow(s, todo.ID))
+		}
+		return runJSON(t, s, self, "task_review", args)
 	}
 	if _, err := review("conv2", "rework", "x"); err == nil {
 		t.Fatal("another side conversation reviewed the task")
@@ -163,7 +167,9 @@ func TestBackgroundReviewIsLimitedToLegacyNotices(t *testing.T) {
 	if len(conversationStarts(f)) != 0 {
 		t.Fatal("delivering an old notice started a replacement background supervisor")
 	}
-	if res, err := review(); err != nil || !strings.Contains(res, "accepted and closed") {
+	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "legacy closeout",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
+	if err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("the old background supervisor could not finish its notified task: %s %v", res, err)
 	}
 	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.Supervision.State != reviewAccepted {
@@ -190,7 +196,8 @@ func TestRehomeKeepsLegacyBackgroundCloseout(t *testing.T) {
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "bg1" {
 		t.Fatalf("rehome took the legacy background task to %q", got)
 	}
-	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "legacy closeout"})
+	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "legacy closeout",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("the rehomed legacy background task cannot close: %s %v", res, err)
 	}
@@ -222,7 +229,8 @@ func TestLegacyBackgroundNoticeSurvivesRestart(t *testing.T) {
 	s.relays.mu.Lock()
 	s.relays.loaded = false
 	s.relays.mu.Unlock()
-	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "after restart"})
+	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "after restart",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("a persisted legacy notice did not authorize closeout after restart: %s %v", res, err)
 	}
@@ -247,7 +255,8 @@ func TestLegacyBackgroundQueuedNoticeSurvivesRestart(t *testing.T) {
 	s.relays.mu.Lock()
 	s.relays.loaded = false
 	s.relays.mu.Unlock()
-	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "queued before upgrade"})
+	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "queued before upgrade",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("a queued pre-upgrade notice did not authorize closeout: %s %v", res, err)
 	}
@@ -272,7 +281,9 @@ func TestBackgroundCannotReviewLeaderWorkerWithoutLegacyNotice(t *testing.T) {
 		t.Fatalf("the unauthorized leader review closed the worker: %+v", got)
 	}
 	s.rememberLegacyBackground("bg1", []superviseSignal{{Todo: w.ID}})
-	if res, err := review(); err != nil || !strings.Contains(res, "accepted and closed") {
+	res, err := runJSON(t, s, "bg1", "task_review", map[string]any{"todo_id": w.ID, "verdict": "accepted", "note": "legacy leader closeout",
+		"checks": completeReviewChecks(todoNow(s, w.ID))})
+	if err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("the notified leader worker could not be closed out: %s %v", res, err)
 	}
 }
