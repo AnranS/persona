@@ -64,7 +64,8 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 			{SessionID: "side-2", Cwd: convDir, Title: "Side chat", UpdatedAt: now.Add(-time.Minute)}}
 	})
 	n.known["main-1"], n.known["side-2"] = true, true
-	connectTaskNode(t, h, "box")
+	taskNode := connectTaskNode(t, h, "box")
+	taskNode.nextID = "agent-old-1"
 	// Leave the legacy switch off: new side-chat work must still be supervised by main, never by a new background stream.
 	if err := store.PutSetting(ctx, "assistant", assistant.Settings{MachineID: "server", Main: "main-1", Timezone: "Asia/Shanghai"}); err != nil {
 		t.Fatal(err)
@@ -171,6 +172,8 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 	if d := digests("main-1")[0]; !strings.Contains(d, "已交付·待看") || !strings.Contains(d, "实现和验证均已交付") {
 		t.Fatalf("delivery digest:\n%s", d)
 	}
+	t.Logf("delivery: todo=%s done_at=%v state=%s main_digests=%d side_digests=%d", first.ID, first.DoneAt,
+		first.Supervision.State, len(digests("main-1")), len(digests("side-2")))
 
 	// A new stretch that only the owner can move waits on them and sends one visible push to main's conversation.
 	drainApp()
@@ -204,6 +207,7 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 	}
 
 pushChecked:
+	t.Logf("owner wait: todo=%s done_at=%v state=needs_user waits=present push=1 duplicate_push=0", first.ID, todoNow(h, first.ID).DoneAt)
 	// Cancellation is its own outcome in the API and in main's live snapshot.
 	mcp("main-1", "task_review", map[string]any{"todo_id": first.ID, "verdict": "cancelled", "note": "用户调整方案，不再按原计划发布"})
 	eventually(t, 10*time.Second, "the cancellation projection", func() bool {
@@ -237,9 +241,16 @@ pushChecked:
 	if text := snapshot(); !strings.Contains(text, "已取消") || !strings.Contains(text, "用户调整方案，不再按原计划发布") {
 		t.Fatalf("snapshot cancellation:\n%s", text)
 	}
+	t.Logf("cancel: todo=%s api_done_by=review stored_done_by=cancelled reason_and_snapshot=present", first.ID)
 
-	// A replacement is one linked history, not an unrelated card: the old points forward and the new points back.
-	plan("按新方案接手验证", first.ID)
+	// Adopting the closed card's Agent is the explicit card-replacement path. It creates one linked history: the old
+	// card points forward and the new card points back. task_plan.continues separately keeps follow-up work on the
+	// original to-do (#6820), so it is not the operation under test here.
+	sessionID := first.Agents[0].SessionID
+	h.byID["box"].setSessions([]proto.Session{{SessionID: sessionID, Cwd: "/code/app", Agent: "claude", Title: "按新方案接手验证",
+		Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()}})
+	mcp("main-1", "agent_supervise", map[string]any{"machine": "box", "session_id": sessionID,
+		"done_when": []string{"实现并验证"}, "expect_minutes": 10})
 	var second Todo
 	eventually(t, 10*time.Second, "the takeover and its agent", func() bool {
 		for _, todo := range taskTodos(h) {
@@ -250,7 +261,7 @@ pushChecked:
 		}
 		return false
 	})
-	if second.ID == first.ID || second.Origin != "side-2" || second.Supervision == nil || second.Supervision.Supervisor != "main-1" {
+	if second.ID == first.ID || second.Origin != "main-1" || second.Supervision == nil || second.Supervision.Supervisor != "main-1" {
 		t.Fatalf("takeover = %+v", second)
 	}
 	oldLineage, newLineage := todoNow(h, first.ID).Lineage, todoNow(h, second.ID).Lineage
@@ -273,4 +284,5 @@ pushChecked:
 	if !strings.Contains(text, "已由新卡 "+second.ID+" 接手") || !strings.Contains(text, "接手自 "+first.ID) {
 		t.Fatalf("snapshot lineage:\n%s", text)
 	}
+	t.Logf("takeover: old=%s new=%s old_superseded_by=%s new_continues=%s snapshot_bidirectional=true", first.ID, second.ID, second.ID, first.ID)
 }
