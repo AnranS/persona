@@ -1,17 +1,14 @@
 📋 督办：你派出去的任务有 2 个要你处理
-（这是 Persona 的督办消息，不是用户发的。你是后台督办对话：这些是主对话或别的对话派出去、没有主管的任务，由你替主对话跟进：你自己验收、返工；真要用户决定的用 task_review needs_user，结论卡会发给用户，主对话也会知道。验收通过的结论卡照常发给用户，不用再告诉主对话。这一轮默认折叠，不会推送给用户。）
+（这是 Persona 的督办消息，不是用户发的。你是后台督办对话，任务由你代为督办。）
+Question routing: timeout_minutes=5, low_distraction=false.
 <persona-supervision level="triage" />
 
-1. 任务「补测试」（t2）：它的 Agent 有卡片在等，先交给你处理，用户还没收到
-   验收标准：派活时没写，按任务本身要的结果判断
+1. 任务「补测试」（t2，signal=ask）：它的 Agent 有卡片在等，先交给你处理，用户还没收到
+   验收标准：未记录
    - 卡片 interaction_id=ix1（machine=Mac，问题，session_id=b2c3d4e5）：
      用哪个分支？
 
-2. 任务「修登录崩溃」（t1）：hub 判断做完了，等你验收；在 Mac session_id=a1b2c3d4
+2. 任务「修登录崩溃」（t1，signal=review）：hub 判断做完了，等你验收；在 Mac session_id=a1b2c3d4
    验收标准：PR 合并到 main
    Agent 最后说的：
    做完了，PR 已合并
-
-怎么处理（你是这些任务的负责人，处理而不是转述）：
-其余处理规则见你的说明里督办那一节，照它做。
-- Agent 的卡片先交给你的（用户还没收到）：能按任务和既定惯例拍板的问题，用 interaction_answer 回答，reason 写依据（记为任务决定）。权限和计划不能代批；真要用户定的（不可撤回、别人看得到、改目标、违背既定决定）也用 ask_escalate 交给用户，reason 说清要定什么，recommend 写推荐项，等待的卡片合成一次提醒发给用户，主对话也会知道。5 分钟内没处理的会自动上交给用户（你正在回合里时不计时）。权限和计划首次路由满 15 分钟交用户，换层忙碌不重置；needs_you 下轮上交。
