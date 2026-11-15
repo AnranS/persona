@@ -155,6 +155,7 @@ type setupEvidence struct {
 	health  func(conversation string) bool
 	// What is already granted: a kind tasks.trust holds or a scope a standing authorization covers is not counted.
 	trusted map[string]bool
+	homes   map[string]trustHome // the machines' homes, for a kind a remembered directory holds (trustCovers)
 	grants  StandingAuthorizations
 }
 
@@ -290,7 +291,7 @@ func setupCount(ev setupEvidence, since, now time.Time) map[string]setupNumber {
 		}
 		repeat := true
 		for k := range kinds {
-			repeat = repeat && started[k] && !dismissed[k] && !ev.trusted[k]
+			repeat = repeat && started[k] && !dismissed[k] && !trustCovers(ev.trusted, ev.homes, k)
 		}
 		if repeat && in(p.CreatedAt) {
 			add(setupTrust, 0)
@@ -391,6 +392,7 @@ func (s *Service) setupRead(ctx context.Context, now time.Time) (setupEvidence, 
 	if ev.trusted, err = s.trustedKindsErr(ctx); err != nil {
 		return ev, err
 	}
+	ev.homes = s.trustHomes(ctx)
 	if ev.grants, err = s.standingAuthorizations(ctx); err != nil {
 		return ev, err
 	}
