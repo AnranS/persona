@@ -7,7 +7,7 @@ import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
-import { putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { putTodo, refresh, refreshTodos, reset, upsertSession, getState } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -339,6 +339,24 @@ describe("Assistant Needs you / In progress trays", () => {
     const finished = host.querySelector("[data-task-slot]")!;
     expect(finished.getAttribute("data-counts-open")).toBe("false");
     expect(finished.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("done");
+    Object.assign(getState(), { features: ["todo_seen"] });
+    act(() => (finished as HTMLButtonElement).click());
+    expect(writes.some((path) => path.includes("/todos/tray-task/seen"))).toBe(true);
+    expect(host.querySelector("[data-progress-just-finished]")).toBeNull();
+  });
+
+  it("shows reopened accepted work as Done and files it when opened", () => {
+    act(() => entry("running").click());
+    act(() => upsertSession({ machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "done", state: "unread", updated_at: at }));
+    act(() => putTodo({ ...todo, done_at: undefined, supervision: { ...todo.supervision!, state: "accepted", reviews: [{ at, verdict: "accepted" }] } }));
+    const finished = host.querySelector("[data-task-slot]")!;
+    expect(host.querySelector("[data-progress-just-finished]")?.textContent).toBe(`${t("assistant-tasks.tray_just_finished")}1`);
+    expect(finished.querySelector("[data-task-status]")?.getAttribute("data-task-status")).toBe("accepted");
+    expect(finished.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("done");
+    Object.assign(getState(), { features: ["todo_seen"] });
+    act(() => (finished as HTMLButtonElement).click());
+    expect(writes.some((path) => path.includes("/todos/tray-task/seen"))).toBe(true);
+    expect(host.querySelector("[data-progress-just-finished]")).toBeNull();
   });
 
   it("reuses round-bound owner acceptance and deduplicates its supervision decision", async () => {

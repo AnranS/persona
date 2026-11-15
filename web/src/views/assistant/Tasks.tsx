@@ -52,7 +52,7 @@ import { Icon, type IconName } from "../../ui/icons";
 import { AcceptRow, BriefCard } from "./Brief";
 import { startFailureRowLine } from "../../lib/start-failure";
 import { setTodoSeen, todoSeenOn } from "../../lib/todo-seen";
-import { triage } from "../../lib/todo-triage";
+import { showsJustFinished, triage } from "../../lib/todo-triage";
 
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
@@ -67,7 +67,7 @@ const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";
-import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
+import { latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
 import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
@@ -767,7 +767,7 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, onOpen }: {
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
   const planned = card.plan_id !== undefined && card.index !== undefined ? plans[card.plan_id]?.tasks[card.index] : undefined;
   const title = todo?.title ?? planned?.title ?? t("assistant-tasks.task_fallback");
-  const accepted = !!todo?.done_at && todo.supervision?.state === "accepted";
+  const accepted = !!todo && reviewState(todo) === "accepted";
   let state = task?.status ?? (card.state === "followup" ? "follow_up" : card.state);
   if (todo && accepted) state = "accepted";
   else if (todo?.done_at && todo.supervision?.state === "cancelled") state = "cancelled";
@@ -1058,7 +1058,7 @@ function seeJustFinished(todo: Todo) {
   const s = getState();
   if (!todoSeenOn(s.features)) return;
   const tr = triage(todo, taskSessionLookup(s), Date.now());
-  if (tr.section === "just_done") void setTodoSeen(todo.id, true, tr.last).catch(() => undefined);
+  if (showsJustFinished(todo, tr, Date.now())) void setTodoSeen(todo.id, true, tr.last).catch(() => undefined);
 }
 
 /** An Agent that belongs to no task, working: one row of In progress that opens its page. */

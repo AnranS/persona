@@ -16,7 +16,7 @@ export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(TRIAGE_SECTIO
 
 /** No activity for this long, nothing of it running: shelved (SOP rule 11). */
 export const SHELVE_AFTER_MS = 48 * 3600_000;
-export const JUST_DONE_MS = 24 * 3600_000;
+const JUST_DONE_MS = 24 * 3600_000;
 
 /** Which SOP rule placed a to-do (for tests and the SOP's wording); the section follows from it. */
 export type TriageRule =
@@ -153,6 +153,15 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   if (finished && !concern) return at("done", "seen");
   if (shelvable(todo, now) && now - last >= SHELVE_AFTER_MS) return at("shelved", "stale");
   return at("other", "rest");
+}
+
+/** Whether a task belongs in the assistant's recent-finished tray. Closed/accepted work is immediately Done on the
+ *  to-do page (#5732), but this separate projection keeps it visible for 24 hours until opened (#8237). */
+export function showsJustFinished(todo: Todo, tr: Triage, now: number): boolean {
+  if (tr.section === "just_done") return true;
+  const completedAt = tr.rule === "closed" ? ms(todo.done_at) : tr.rule === "accepted" ? ms(latestReview(todo.supervision)?.at) : 0;
+  const seenAt = ms(todo.seen_at);
+  return completedAt > 0 && now - completedAt < JUST_DONE_MS && (seenAt === 0 || seenAt < completedAt);
 }
 
 /** Whether a to-do counts toward the header's open count: not closed, accepted or shelved. An unaccepted delivery
