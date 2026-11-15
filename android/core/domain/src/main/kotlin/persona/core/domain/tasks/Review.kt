@@ -61,7 +61,8 @@ fun Todo.waitsForOwner(): Boolean =
 fun Todo.deliveredAwaitingReview(lookup: (SessionKey) -> Session?): Boolean {
     if (isDone || waitsForOwner()) return false
     val atRest = triageStatus(lookup) in setOf(TriageStatus.FollowUp, TriageStatus.Unread, TriageStatus.NotStarted)
-    return atRest && (reviewState == "pending_review" || openAsk != null || delivery?.state == "live")
+    val reviewRequired = reviewState == "pending_review" || openAsk != null || (kind != "concern" && delivery?.state == "live")
+    return atRest && reviewRequired
 }
 
 /** The agent-state mark for the same effective delivery state ([state] for ordinary work). */

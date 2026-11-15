@@ -181,10 +181,10 @@ nonisolated enum TodoTriageLogic {
         return a
     }
 
-    /// Got It can file only an ordinary finished turn. Seen is not acceptance, so supervised / pending / live work must
-    /// not offer an action that claims it moved to Done (#5732).
+    /// Got It files a finished turn only when no acceptance is still required. An open concern goes to Other open rather
+    /// than Done after Seen and bypasses only the ordinary live-delivery restriction, never review or supervision (#5732, #3582).
     static func seenCanFile(_ todo: TodoItem) -> Bool {
-        todo.delivery?.state != "live" && todo.reviewState != .pendingReview && (todo.supervision?.supervisor ?? "").isEmpty
+        (todo.isConcern || todo.delivery?.state != "live") && todo.reviewState != .pendingReview && (todo.supervision?.supervisor ?? "").isEmpty
     }
 
     /// A to-do's section by the SOP's decision table, first match wins:

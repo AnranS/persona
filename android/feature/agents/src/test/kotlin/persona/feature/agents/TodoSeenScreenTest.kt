@@ -175,6 +175,17 @@ class TodoSeenScreenTest {
         assertTrue(feedback.failures.isEmpty())
     }
 
+    @Test fun openConcernGotItMovesToOtherOpenWithMatchingFeedback() {
+        val api = Api(listOf(notes.copy(kind = "concern")))
+        openList(api)
+        rule.onNodeWithText("Got it").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("notes" to true), api.sent)
+        assertEquals("Moved to Other open", feedback.notices.single().first)
+        assertTrue("the open concern left Just finished", sectionAbsent("Delivered · awaiting review"))
+        assertTrue("and joined Other open", !sectionAbsent("Other open"))
+    }
+
     @Test fun aRefusedWritePutsTheRowBackAndSaysWhy() {
         val api = Api(listOf(notes)).apply { failure = IllegalStateException("hub unavailable") }
         openList(api)

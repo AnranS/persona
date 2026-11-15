@@ -481,6 +481,39 @@ extension TodoTriageTests {
         #expect(deployed.section == .other && deployed.rule == .rest)
     }
 
+    @Test func liveConcernDoesNotUseOrdinaryDeliveryStatusOrAcceptance() {
+        let live = todo("live", kind: "concern") { $0.delivery = .init(state: "live", at: ago(2)) }
+        #expect(!live.deliveredAwaitingReview(.notStarted))
+        #expect(live.statusLabel(.notStarted) == String(localized: "Not started"))
+        #expect(live.shownState(.notStarted) == .notStarted)
+
+        let seen = todo("seen-live", agents: ["unseen"], kind: "concern") {
+            $0.delivery = .init(state: "live", at: ago(2))
+            $0.seenAt = ago(0.5)
+        }
+        #expect(at(seen).section == .other && at(seen).rule == .rest)
+        #expect(TodoTriageLogic.seenCanFile(seen))
+        #expect(!seen.deliveredAwaitingReview(.unread))
+    }
+
+    @Test func pendingReviewAndSupervisedConcernsStillRequireAcceptance() {
+        let pending = todo("pending", kind: "concern") {
+            $0.supervision = .init(supervisor: "main", state: "pending_review")
+            $0.seenAt = now
+        }
+        #expect(pending.deliveredAwaitingReview(.notStarted))
+        #expect(pending.statusLabel(.notStarted) == String(localized: "Delivered · Awaiting Review [To-do Sections]"))
+        #expect(!TodoTriageLogic.seenCanFile(pending))
+        #expect(at(pending).section == .justDone && at(pending).rule == .finishedUnseen)
+
+        let supervised = todo("supervised", agents: ["unseen"], kind: "concern") {
+            $0.supervision = .init(supervisor: "main", state: "reviewing")
+            $0.seenAt = now
+        }
+        #expect(!TodoTriageLogic.seenCanFile(supervised))
+        #expect(at(supervised).section == .justDone && at(supervised).rule == .finishedUnseen)
+    }
+
     @Test func r4ConcernKeepsFinishedUnseenAndPROpen() {
         let unseen = at(todo("unseen", agents: ["unseen"], kind: "concern"))
         #expect(unseen.section == .justDone && unseen.rule == .finishedUnseen)

@@ -689,6 +689,18 @@ describe("交付与等待处理的状态标签 (#5732)", () => {
     expect(shownStatus(live, "not_started")).toBe("unread");
   });
 
+  it("open concern 的 live 不冒用普通交付状态", () => {
+    const concern = { ...base, kind: "concern", delivery: { state: "live" as const, at: "2026-11-04T08:00:00Z" } };
+    expect(todoStatusLabel(concern, "not_started")).toBe("未开始");
+    expect(shownStatus(concern, "not_started")).toBe("not_started");
+  });
+
+  it("pending_review 的 open concern 仍显示已交付·待看", () => {
+    const concern = { ...base, kind: "concern", supervision: { supervisor: "main", state: "pending_review" as const } };
+    expect(todoStatusLabel(concern, "not_started")).toBe("已交付·待看");
+    expect(shownStatus(concern, "not_started")).toBe("unread");
+  });
+
   it("needs_user 显示等你处理，而不是普通的需要你", () => {
     const waiting = { ...base, supervision: { supervisor: "main", state: "needs_user" as const } };
     expect(todoStatusLabel(waiting, "follow_up")).toBe("等你处理");

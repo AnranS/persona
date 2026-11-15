@@ -257,6 +257,12 @@ struct TodosView: View {
             sectionView(.done, groups: done, count: done.reduce(0) { $0 + $1.members.count }, folded: folded)
                 .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
         }
+        let cancelled = TodoListLogic.sorted(result.groups(.cancelled), by: listSort, calendar: calendar)
+        if !cancelled.isEmpty {
+            let folded = TodoSection.cancelled.startsFolded && !isUnfolded(.cancelled)
+            sectionView(.cancelled, groups: cancelled, count: cancelled.reduce(0) { $0 + $1.members.count }, folded: folded)
+                .listSectionSpacing(folded ? .custom(Theme.Space.flush) : .compact)
+        }
     }
 
     /// By project (#7077, the web's grouping by project): a section per knowledge-base project with open to-dos, where its

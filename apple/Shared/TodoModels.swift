@@ -75,7 +75,8 @@ nonisolated extension TodoItem {
     func deliveredAwaitingReview(_ state: TaskState) -> Bool {
         guard doneAt == nil, !waitsForOwner else { return false }
         let atRest = state == .followup || state == .unread || state == .notStarted
-        return atRest && (reviewState == .pendingReview || openAsk != nil || delivery?.state == "live")
+        let reviewRequired = reviewState == .pendingReview || openAsk != nil || (!isConcern && delivery?.state == "live")
+        return atRest && reviewRequired
     }
 
     /// An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it

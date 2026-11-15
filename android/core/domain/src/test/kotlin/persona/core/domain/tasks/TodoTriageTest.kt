@@ -16,6 +16,7 @@ import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoDelivery
+import persona.core.contracts.TodoState
 
 // The same cases as web/src/lib/todo-triage.test.ts (docs/assistant/todo-status-sop.md, decision table), so the clients
 // cannot drift apart.
@@ -118,6 +119,33 @@ class TodoTriageTest {
         assertEquals(TriageSection.Other to TriageRule.Rest, accepted.section to accepted.rule)
         val deployed = at(todo("deployed", delivery = TodoDelivery(state = "live", at = hoursAgo(2))).withKind("concern"))
         assertEquals(TriageSection.Other to TriageRule.Rest, deployed.section to deployed.rule)
+    }
+
+    @Test
+    fun liveConcernDoesNotUseOrdinaryDeliveryStatusOrAcceptance() {
+        val live = todo("live", delivery = TodoDelivery(state = "live", at = hoursAgo(2))).withKind("concern")
+        assertFalse(live.deliveredAwaitingReview(lookup))
+        assertEquals(TodoState.NotStarted, live.shownState(lookup))
+
+        val seen = todo("seen-live", agents = listOf(agent("unseen")), delivery = TodoDelivery(state = "live", at = hoursAgo(2)))
+            .copy(seenAt = minutesAgo(30)).withKind("concern")
+        assertEquals(TriageSection.Other to TriageRule.Rest, at(seen).let { it.section to it.rule })
+        assertTrue(seen.seenCanFile)
+        assertFalse(seen.deliveredAwaitingReview(lookup))
+    }
+
+    @Test
+    fun pendingReviewAndSupervisedConcernsStillRequireAcceptance() {
+        val pending = todo("pending", supervision = Supervision(supervisor = "main", state = "pending_review"))
+            .copy(seenAt = Instant.ofEpochMilli(now).toString()).withKind("concern")
+        assertTrue(pending.deliveredAwaitingReview(lookup))
+        assertFalse(pending.seenCanFile)
+        assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, at(pending).let { it.section to it.rule })
+
+        val supervised = todo("supervised", agents = listOf(agent("unseen")), supervision = Supervision(supervisor = "main", state = "reviewing"))
+            .copy(seenAt = Instant.ofEpochMilli(now).toString()).withKind("concern")
+        assertFalse(supervised.seenCanFile)
+        assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, at(supervised).let { it.section to it.rule })
     }
 
     @Test

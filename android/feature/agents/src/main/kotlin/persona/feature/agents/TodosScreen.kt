@@ -245,7 +245,8 @@ fun TodosScreen(
                     catch (e: Exception) { seenFailed(e) }
                 }
             }
-            feedback?.notice(res.getString(R.string.agents_todo_seen_moved), undo)
+            val moved = if (todo.kind == "concern" && !todo.isDone) R.string.agents_todo_seen_moved_open else R.string.agents_todo_seen_moved
+            feedback?.notice(res.getString(moved), undo)
             try { store.setTodoSeen(todo.id, true, after) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { seenFailed(e) }
