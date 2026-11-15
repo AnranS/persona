@@ -158,6 +158,16 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 	if first.Origin != "side-2" || first.Supervision == nil || first.Supervision.Supervisor != "main-1" {
 		t.Fatalf("origin / supervisor = %+v", first)
 	}
+	snapshot := func() string {
+		if a, ok := testAssistants.Load(h); ok {
+			a.(*testAssistant).svc.ProfileChanged(context.Background())
+		}
+		res, err := h.asst().Context(context.Background(), assistant.ContextParams{SessionID: "main-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Text
+	}
 
 	agent(first, proto.StatusWorking, "")
 	agent(first, proto.StatusDone, "实现和验证均已完成")
@@ -172,7 +182,10 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 	if d := digests("main-1")[0]; !strings.Contains(d, "已交付·待看") || !strings.Contains(d, "实现和验证均已交付") {
 		t.Fatalf("delivery digest:\n%s", d)
 	}
-	t.Logf("delivery: todo=%s done_at=%v state=%s main_digests=%d side_digests=%d", first.ID, first.DoneAt,
+	if text := snapshot(); !strings.Contains(text, "已交付·待看") {
+		t.Fatalf("snapshot delivery:\n%s", text)
+	}
+	t.Logf("delivery: todo=%s done_at=%v state=%s main_digests=%d side_digests=%d snapshot_awaiting_review=true", first.ID, first.DoneAt,
 		first.Supervision.State, len(digests("main-1")), len(digests("side-2")))
 
 	// A new stretch that only the owner can move waits on them and sends one visible push to main's conversation.
@@ -207,7 +220,10 @@ func TestTaskDeliveryTrackingOverTheBus(t *testing.T) {
 	}
 
 pushChecked:
-	t.Logf("owner wait: todo=%s done_at=%v state=needs_user waits=present push=1 duplicate_push=0", first.ID, todoNow(h, first.ID).DoneAt)
+	if text := snapshot(); !strings.Contains(text, "等你处理") || !strings.Contains(text, first.ID) {
+		t.Fatalf("snapshot owner wait:\n%s", text)
+	}
+	t.Logf("owner wait: todo=%s done_at=%v state=needs_user waits=present push=1 duplicate_push=0 snapshot_waiting_for_you=true", first.ID, todoNow(h, first.ID).DoneAt)
 	// Cancellation is its own outcome in the API and in main's live snapshot.
 	mcp("main-1", "task_review", map[string]any{"todo_id": first.ID, "verdict": "cancelled", "note": "用户调整方案，不再按原计划发布"})
 	eventually(t, 10*time.Second, "the cancellation projection", func() bool {
@@ -227,16 +243,6 @@ pushChecked:
 	}
 	if !storedCancelled {
 		t.Fatalf("stored cancellation = %+v", stored)
-	}
-	snapshot := func() string {
-		if a, ok := testAssistants.Load(h); ok {
-			a.(*testAssistant).svc.ProfileChanged(context.Background())
-		}
-		res, err := h.asst().Context(context.Background(), assistant.ContextParams{SessionID: "main-1"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return res.Text
 	}
 	if text := snapshot(); !strings.Contains(text, "已取消") || !strings.Contains(text, "用户调整方案，不再按原计划发布") {
 		t.Fatalf("snapshot cancellation:\n%s", text)
