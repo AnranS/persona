@@ -296,7 +296,14 @@ func (n *Node) roundSettled(p *assistantProc) {
 	p.mu.Unlock()
 	if retire {
 		unlock := n.assistantLife.lock(p.id)
-		if n.stopSettled(context.Background(), p) {
+		// A send may have replaced p while this waited for the lock: stopSettled says true for p having exited then
+		// too, and the background tasks remembered for the conversation are its new process's (recoverAssistantTasks
+		// tells it of them after a node restart). Every process of the conversation starts under this lock, so p is
+		// still its process when stopSettled looks.
+		n.mu.Lock()
+		current := n.procs[p.id] == p
+		n.mu.Unlock()
+		if current && n.stopSettled(context.Background(), p) {
 			n.rememberTasks(p.id, nil) // settled: no background task
 			n.logf("assistant %s: the supervision round's process that took a message needing every tool settled: let go, the next message starts with every tool", short(p.id))
 		}

@@ -2,12 +2,14 @@ package node
 
 import (
 	"log"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// What the node does with a round's process (#7315, assistant_round.go) when it did not settle in time.
+// What the node does with a round's process (#7315, assistant_round.go) when it did not settle in time, or settled
+// while a send replaced it.
 
 // statusLine is a line Claude Code prints that is no work (a status update): it keeps a process from settling and makes
 // it no busier.
@@ -88,4 +90,53 @@ func TestARoundKeptAsBusyJoinsTheRoundProcess(t *testing.T) {
 			t.Fatal("the round went to a round's process")
 		}
 	})
+}
+
+// A round's process marked to retire settles, and while roundSettled waits for the conversation's lock a send replaces
+// it with a process that starts a background task. Letting the old one go then leaves the new process and the tasks
+// remembered for it alone: they are what the node tells the conversation about after a restart (recoverAssistantTasks).
+func TestLettingARetiredRoundProcessGoKeepsItsReplacementsTasks(t *testing.T) {
+	n, _, _ := roundTestNode(t, roundStarted("2.1.322", 1), false)
+	var logs syncBuffer
+	n.logger = log.New(&logs, "", 0)
+	round := roundThenIdle(t, n)
+	armed := func() bool {
+		round.mu.Lock()
+		defer round.mu.Unlock()
+		return round.settleArmed
+	}
+	waitFor(t, "the looks the round's lines armed to end", func() bool { return !armed() })
+	round.mu.Lock()
+	round.retire, round.settleArmed = true, true // a message joined it while it worked, and the look is on its way
+	round.mu.Unlock()
+
+	unlock := n.assistantLife.lock(roundConversation) // a send has the conversation
+	looked := make(chan struct{})
+	go func() {
+		defer close(looked)
+		n.roundSettled(round)
+	}()
+	waitFor(t, "the look to find the process settled", func() bool { return !armed() }) // it now waits for the lock
+	// The send replaces it with a plain process, which starts a background task.
+	n.stopAssistantProcess(roundConversation)
+	waitFor(t, "the round's process to end", func() bool { return !round.alive() })
+	st, _ := n.state.get(roundConversation)
+	next, err := n.spawnAssistant(roundConversation, st.Cwd, "claude", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := []string{"a background command"}
+	n.rememberTasks(roundConversation, tasks)
+	unlock()
+	<-looked
+
+	if st, _ := n.state.get(roundConversation); !slices.Equal(st.Tasks, tasks) {
+		t.Fatalf("the new process's background tasks remembered: %q", st.Tasks)
+	}
+	if roundProc(n) != next || !next.alive() {
+		t.Fatal("the new process was stopped")
+	}
+	if strings.Contains(logs.String(), "let go") {
+		t.Fatalf("the replaced process is logged as let go:\n%s", logs.String())
+	}
 }
