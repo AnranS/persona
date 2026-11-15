@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,6 +170,85 @@ func TestBackgroundReviewIsLimitedToLegacyNotices(t *testing.T) {
 	}
 	if res, err := review(); err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("the old background supervisor could not finish its notified task: %s %v", res, err)
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.Supervision.State != reviewAccepted {
+		t.Fatalf("the legacy task did not close: %+v", got)
+	}
+	settleService(t, s)
+}
+
+// visibleBackgroundSend makes the legacy notice visible before its send returns, exposing the closeout grant's
+// publication boundary without sleeping for a scheduler accident.
+type visibleBackgroundSend struct {
+	Hub
+	started, release chan struct{}
+	once             sync.Once
+}
+
+func (h *visibleBackgroundSend) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	res, err := h.Hub.DeviceCall(ctx, p)
+	if err != nil || p.Method != DeviceAssistantSend {
+		return res, err
+	}
+	var v struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(p.Params, &v); err != nil {
+		return nil, err
+	}
+	if v.SessionID == "bg1" {
+		h.once.Do(func() { close(h.started) })
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return res, nil
+}
+
+func TestLegacyBackgroundReviewWaitsForVisibleNoticeGrant(t *testing.T) {
+	s, f, todo := newBackgroundService(t)
+	f.known["bg1"] = true
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	h := &visibleBackgroundSend{Hub: f, started: make(chan struct{}), release: make(chan struct{})}
+	setHub(s, h)
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(h.release) }) }
+	defer unblock()
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "legacy-notice", To: "bg1", Minutes: 50, At: time.Now()})
+	select {
+	case <-h.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the legacy notice did not become visible")
+	}
+	args := map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "legacy closeout", "checks": completeReviewChecks(todoNow(s, todo.ID))}
+	result := make(chan error, 1)
+	go func() {
+		_, err := runJSON(t, s, "bg1", "task_review", args)
+		result <- err
+	}()
+	var err error
+	completed := false
+	select {
+	case err = <-result:
+		completed = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	if completed {
+		t.Fatalf("the visible notice's review completed before its send returned: %v", err)
+	}
+	unblock()
+	select {
+	case err = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the legacy review did not finish after the notice send returned")
+	}
+	if err != nil {
+		t.Fatalf("the visible legacy notice could not be accepted: %v", err)
 	}
 	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.Supervision.State != reviewAccepted {
 		t.Fatalf("the legacy task did not close: %+v", got)

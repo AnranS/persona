@@ -69,8 +69,12 @@ func (s *Service) backgroundSupervises(ctx context.Context, self string, t Todo)
 // legacyBackgroundNotice reports whether a real old notice reached this background conversation. The in-memory grant
 // covers the current turn; relayState keeps it across restarts and reconstructs it for pre-upgrade queued messages.
 func (s *Service) legacyBackgroundNotice(ctx context.Context, self, todoID string) bool {
-	key := self + "\x00" + todoID
 	b := &s.supervise
+	// deliverDigest publishes the grant after a visible send or queue admission, before sendDigest releases dedupMu.
+	// Serialize the check with that boundary so an immediate review cannot be rejected while its notice is in flight.
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	key := self + "\x00" + todoID
 	b.mu.Lock()
 	granted := b.legacyBackground[key]
 	b.mu.Unlock()
