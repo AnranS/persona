@@ -34,13 +34,21 @@ nonisolated enum TodoSection: String, CaseIterable, Sendable {
         switch self {
         case .waiting: String(localized: "Waiting for You [To-do Sections]")
         case .working: StateName.working.text
-        case .justDone: String(localized: "Delivered · Awaiting Review [To-do Sections]")
+        case .justDone: String(localized: "Just Finished")
         case .pr: String(localized: "PR to Merge")
         case .other: String(localized: "Other Open")
         case .shelved: String(localized: "Shelved")
         case .done: String(localized: "Done [To-do Sections]")
         case .cancelled: String(localized: "Canceled")
         }
+    }
+    /// Closed concerns and mixed sections keep the ordinary Just finished wording; only unaccepted deliveries awaiting
+    /// review use the more specific title, matching Android and the web (#5732).
+    func title(rules: [TodoTriageRule]) -> String {
+        if self == .justDone, !rules.isEmpty, rules.allSatisfy({ $0 == .finishedUnseen }) {
+            return String(localized: "Delivered · Awaiting Review [To-do Sections]")
+        }
+        return title
     }
 }
 
@@ -97,6 +105,9 @@ nonisolated struct TodoTriageResult: Sendable {
 nonisolated enum TodoTriageLogic {
     /// No activity for this long, nothing of it running: shelved.
     static let shelveAfter: TimeInterval = 48 * 3600
+
+    /// A fresh closed concern stays visible for this long unless its report has been seen.
+    static let justDoneAfter: TimeInterval = 24 * 3600
 
     /// How a to-do's linked agents stand, the way the web's `todoStatus` reads them: an open ask does not count here
     /// (rules 3 and 8 read it), unlike `TaskState(todo:agents:)`.
@@ -182,7 +193,7 @@ nonisolated enum TodoTriageLogic {
     ///  2. agentAsks      an agent asks (question, approval) or was cut off → Waiting on you
     ///  3. ownerDecides   review says needs_user, or a decision / "cannot" ask → Waiting on you
     ///  4. agentRunning   an agent is working or starting                   → Working
-    ///  5. closed         done_at set                                       → Done immediately
+    ///  5. closed         done_at set                                       → Just finished for a fresh unseen report, Done otherwise
     ///  6. accepted       the latest review accepted it (even reopened)     → Done immediately
     ///  7. finishedUnseen its delivery is live, not accepted                → Delivered · awaiting review, no timeout
     ///  8. finishedUnseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
@@ -198,7 +209,7 @@ nonisolated enum TodoTriageLogic {
         let last = lastActivity(todo, lookup: lookup, restoredAt: restoredAt)
         let status = agentsStatus(todo, lookup: lookup)
         // Seen files an unsupervised finished turn (#5707), never a task that still needs acceptance (#5732).
-        // Explicit closure and acceptance are already Done; Seen does not move them through awaiting review.
+        // Acceptance and ordinary closure are already Done; a fresh reported concern leaves Just finished once seen.
         let seen = { (at: Date) in todo.seenAt.map { $0 >= at } ?? false }
         let ask = openAsk(todo)
         let review = todo.reviewState
@@ -215,7 +226,14 @@ nonisolated enum TodoTriageLogic {
             return at(.waiting, .ownerDecides)
         }
         if status == .working || status == .waiting { return at(.working, .agentRunning) }
-        if todo.doneAt != nil { return at(.done, .closed) }
+        if let doneAt = todo.doneAt {
+            // Apple has no concern kind on the wire; done_by=reported is the hub's report-close marker. Match the web:
+            // an unseen report stays in Just finished for 24 h, but its rule remains Closed, not FinishedUnseen.
+            if todo.doneBy == "reported", now.timeIntervalSince(doneAt) < justDoneAfter, !seen(doneAt) {
+                return at(.justDone, .closed)
+            }
+            return at(.done, .closed)
+        }
         if todo.acceptanceStands {
             return at(.done, .accepted)
         }

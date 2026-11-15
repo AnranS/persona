@@ -303,6 +303,7 @@ struct TodosView: View {
     }
 
     @ViewBuilder private func sectionView(_ section: TodoSection, groups: [TodoTriageGroup], count: Int, folded: Bool) -> some View {
+        let title = section.title(rules: groups.flatMap { $0.triage.values.map(\.rule) })
         Section {
             if !folded {
                 if section == .shelved {
@@ -318,18 +319,18 @@ struct TodosView: View {
             // The Agents list's state header (#3712): the name, and the count in the state's color. Folding ones are a
             // FoldButton, spoken as "name, expanded / collapsed, N to-dos".
             if section.startsFolded {
-                FoldButton(title: section.title, folded: folded, detail: String(localized: "\(count) to-dos")) {
+                FoldButton(title: title, folded: folded, detail: String(localized: "\(count) to-dos")) {
                     withAnimation(Theme.Motion.state) {
                         if unfolded.contains(section) { unfolded.remove(section) } else { unfolded.insert(section) }
                     }
                 } label: {
-                    SectionHeader(title: section.title, count: count, tone: section.tone)
+                    SectionHeader(title: title, count: count, tone: section.tone)
                 }
                 .font(Theme.Font.sectionHeader)
                 .textCase(nil)
                 .accessibilityIdentifier("todos.section.\(section.rawValue)")
             } else {
-                SectionHeader(title: section.title, count: count, tone: section.tone)
+                SectionHeader(title: title, count: count, tone: section.tone)
                     .font(Theme.Font.sectionHeader)
                     .textCase(nil)
                     .accessibilityElement(children: .combine)

@@ -1,3 +1,4 @@
+import PersonaWire
 import XCTest
 @testable import Persona
 

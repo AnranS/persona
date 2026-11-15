@@ -80,6 +80,26 @@ struct TodoTriageTests {
         #expect(at(todo("t", updated: 30, done: 30)).section == .done)
     }
 
+    @Test func freshlyReportedConcernStaysJustFinished() {
+        let fresh = todo("concern", done: 1) { $0.doneBy = "reported" }
+        #expect(at(fresh).section == .justDone && at(fresh).rule == .closed)
+        let old = todo("concern", done: 30) { $0.doneBy = "reported" }
+        #expect(at(old).section == .done && at(old).rule == .closed)
+        let seen = todo("concern", done: 1) { $0.doneBy = "reported"; $0.seenAt = ago(0.5) }
+        #expect(at(seen).section == .done && at(seen).rule == .closed)
+        #expect(TodoSection.justDone.title == String(localized: "Just Finished"))
+    }
+
+    @Test func justFinishedTitleReservesAwaitingReviewForFinishedUnseen() {
+        let justFinished = String(localized: "Just Finished")
+        let awaiting = String(localized: "Delivered · Awaiting Review [To-do Sections]")
+        #expect(TodoSection.justDone.title(rules: [.finishedUnseen]) == awaiting)
+        #expect(TodoSection.justDone.title(rules: [.finishedUnseen, .finishedUnseen]) == awaiting)
+        #expect(TodoSection.justDone.title(rules: [.closed]) == justFinished)
+        #expect(TodoSection.justDone.title(rules: [.closed, .finishedUnseen]) == justFinished)
+        #expect(TodoSection.justDone.title(rules: []) == justFinished)
+    }
+
     @Test func acceptedTaskReopenedByMoreWorkIsFinishedNotFollowUp() {
         let td = todo("t", agents: ["idle"]) {
             $0.reopenedAt = ago(4)
