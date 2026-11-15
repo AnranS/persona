@@ -63,6 +63,7 @@ type treeRec struct {
 	reply        bool
 	system       bool
 	turnEnd      bool
+	succeeded    bool // the turn this turn_duration closes answered without a model error
 }
 
 // branchTree tracks the lines read so far (file order) and which of them lie on abandoned branches.
@@ -369,6 +370,9 @@ func (t *Tail) Line(meta *Meta, items []proto.Item) {
 		return
 	}
 	rec := tl.rec(items)
+	if rec.turnEnd {
+		rec.succeeded = meta.TurnSucceeded()
+	}
 	if (rec.prompt || rec.reply) && t.gone[rec.parent] && !t.gone[rec.uuid] {
 		// Claude went on from a line Rewound named: that rewind was not one (File.RewoundAt). The lines of its turn, as
 		// far back as the tail goes, stop being left out (another turn's stay out), and the tree is worked out again.
@@ -442,7 +446,8 @@ func (t *Tail) Skipped(line []byte) {
 // Settle puts into meta the agent's last words on the lines still in the conversation, when words on an abandoned
 // branch were among them (meta is left as it is otherwise). It says whether it changed them; LastText is "" then when
 // no words in the lines read are left. A turn error said on such a branch goes too: the conversation that is left did
-// not fail there, and nothing older comes back (the user went back to start over).
+// not fail there, and nothing older comes back (the user went back to start over). Turn success follows the latest
+// visible close for the same reason: a hidden turn's success cannot erase the visible branch's failure.
 func (t *Tail) Settle(meta *Meta) bool {
 	if meta.turnErrorLine != "" && t.tree.hidden[meta.turnErrorLine] {
 		meta.clearTurnError()
@@ -456,6 +461,17 @@ func (t *Tail) Settle(meta *Meta) bool {
 	}
 	if !dropped {
 		return false
+	}
+	// The close that proved success may be on the abandoned branch too. Restore the latest visible close's outcome
+	// instead of letting it clear the visible branch's failure; a newer visible tool-only success still counts.
+	meta.turnSucceeded = false
+	for i := len(t.tree.recs) - 1; i >= 0; i-- {
+		rec := t.tree.recs[i]
+		if t.tree.hidden[rec.uuid] || !rec.turnEnd {
+			continue
+		}
+		meta.turnSucceeded = rec.succeeded
+		break
 	}
 	meta.LastText, meta.LastTextAt = "", time.Time{}
 	for _, w := range t.words {
