@@ -185,6 +185,9 @@ func (h *Hub) fsWatchClients() []*client {
 // node connection forced a resend. A node from before this (no fs.watch) answers with an error that is only logged,
 // the panels then refresh by hand as they always did.
 func (h *Hub) fsWatchSync(m *Machine) {
+	if h.localMachine(m.cfg.ID) != m {
+		return // a removed instance has no union of its own to send any more
+	}
 	m.fswMu.Lock()
 	force := m.fswForce
 	m.fswForce = false
@@ -201,6 +204,17 @@ func (h *Hub) fsWatchSync(m *Machine) {
 		p.Dirs = []fsWatchDirParam{}
 	}
 	err := m.call(ctx, "fs.watch", p, nil)
+	if current := h.localMachine(m.cfg.ID); current != m {
+		if current != nil {
+			// The old in-flight call may still have landed on the recreated node. It cannot be unsent, so the current
+			// instance must replay the latest union last, even when that union is empty or the old call failed.
+			current.fswMu.Lock()
+			current.fswForce = true
+			current.fswMu.Unlock()
+			h.queueFSWatchSync(current)
+		}
+		return
+	}
 	m.fswMu.Lock()
 	defer m.fswMu.Unlock()
 	if err != nil {
