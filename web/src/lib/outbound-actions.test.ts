@@ -24,6 +24,13 @@ describe("outboundAction: push and remote writes", () => {
   it("reads a push inside a subshell or grouping", () => {
     expect(classify("Bash", { command: "(git push origin main)" })).toBe("push");
   });
+
+  it("tags a push whose -c option carries a separate name=value argument", () => {
+    expect(classify("Bash", { command: "git -c http.sslVerify=false push origin main" })).toBe("push");
+    expect(classify("Bash", { command: "git -c user.name=ci -c core.pager=cat push" })).toBe("push");
+    // a -c config read without a push stays local
+    expect(classify("Bash", { command: "git -c core.pager=cat status" })).toBeNull();
+  });
 });
 
 describe("outboundAction: deploy and publish", () => {
@@ -76,6 +83,42 @@ describe("outboundAction: messages and external actions sent as the user", () =>
     expect(classify("Bash", { command: "curl https://example.com/status" })).toBeNull();
     expect(classify("Read", { file_path: "/tmp/a.txt" })).toBeNull();
     expect(classify("Write", { file_path: "/tmp/a.txt", content: "x" })).toBeNull();
+  });
+});
+
+describe("outboundAction: remote-write API forms that must not stay quiet", () => {
+  it("tags HTTP clients performing a write, while plain GET stays local", () => {
+    expect(classify("Bash", { command: "curl -X POST https://api.example.com/v1/messages -d hello" })).toBe("send");
+    expect(classify("Bash", { command: "curl --request PUT https://api.example.com/v1/items/1" })).toBe("send");
+    expect(classify("Bash", { command: "curl https://api.example.com/notes -F note=hi" })).toBe("send");
+    expect(classify("Bash", { command: "wget --post-data 'a=b' https://example.com/submit" })).toBe("send");
+    // read-only HTTP, no write verb or body flag: confidently local
+    expect(classify("Bash", { command: "curl https://example.com/status" })).toBeNull();
+    expect(classify("Bash", { command: "curl -X GET https://example.com/status" })).toBeNull();
+  });
+
+  it("tags hosted-CLI api subcommands that write through the user's account", () => {
+    expect(classify("Bash", { command: "gh api -X POST /repos/o/r/issues/1/comments -f body=hello" })).toBe("send");
+    expect(classify("Bash", { command: "glab api --method DELETE /projects/1/issues/2" })).toBe("send");
+    expect(classify("Bash", { command: "gh api /repos/o/r/issues --field title=hi" })).toBe("send");
+    // a read-only api call with no write verb or field stays local
+    expect(classify("Bash", { command: "gh api /repos/o/r/issues" })).toBeNull();
+  });
+
+  it("tags httpie's explicit write verbs without flagging a plain URL", () => {
+    expect(classify("Bash", { command: "http POST https://api.example.com/notes title=hi" })).toBe("send");
+    expect(classify("Bash", { command: "httpie DELETE https://api.example.com/items/1" })).toBe("send");
+    // "http" inside an https URL is not the httpie command
+    expect(classify("Bash", { command: "curl https://example.com/status" })).toBeNull();
+  });
+
+  it("warns on code run inline by a language runtime instead of trusting the name", () => {
+    expect(classify("Bash", { command: 'python3 -c "import urllib.request; urllib.request.urlopen(\'https://example.com\', data=b\'x\')"' })).toBe("unknown");
+    expect(classify("Bash", { command: "node -e 'fetch(\"https://example.com\", { method: \"POST\" })'" })).toBe("unknown");
+    expect(classify("Bash", { command: "ruby -e 'puts Net::HTTP.post(URI(\"https://example.com\"), \"x\").body'" })).toBe("unknown");
+    // running a named script file is not inline code: still a readable, static command name
+    expect(classify("Bash", { command: "python3 scripts/build.py" })).toBeNull();
+    expect(classify("Bash", { command: "node index.js" })).toBeNull();
   });
 });
 

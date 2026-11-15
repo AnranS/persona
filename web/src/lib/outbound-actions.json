@@ -2,7 +2,7 @@
   "version": 1,
   "note": "Patterns that mark a permission request as an action that leaves the local machine. Each entry names the rule and the warning category. Patterns use ECMAScript regular expressions without flags. Entries are only ever added, never removed or narrowed.",
   "actions": [
-    { "id": "git-push", "kind": "push", "pattern": "\\bgit(?:\\s+(?:-C\\s+\\S+|--(?:git-dir|work-tree|namespace|super-prefix|config-env|attr-source)\\s+\\S+|-\\S+))*\\s+push\\b" },
+    { "id": "git-push", "kind": "push", "pattern": "\\bgit(?:\\s+(?:-C\\s+\\S+|-c\\s+\\S+|--(?:git-dir|work-tree|namespace|super-prefix|config-env|attr-source)\\s+\\S+|-\\S+))*\\s+push\\b" },
     { "id": "gh-pull-request-merge", "kind": "push", "pattern": "\\bgh\\s+pr\\s+merge\\b" },
     { "id": "glab-merge-request-merge", "kind": "push", "pattern": "\\bglab\\s+mr\\s+merge\\b" },
     { "id": "mcp-branch-write", "kind": "push", "pattern": "mcp__[A-Za-z0-9_-]*[Gg]it[A-Za-z0-9_-]*__[A-Za-z0-9_-]*(?:push_files|create_or_update_file|delete_file|create_pull_request|merge_pull_request|create_issue|create_pr)\\b" },
@@ -19,6 +19,9 @@
     { "id": "mcp-message-send", "kind": "send", "pattern": "mcp__[A-Za-z0-9_-]*(?:[Ss]lack|[Dd]iscord|[Tt]elegram|[Tt]eams|[Ww]hats[Aa]pp|[Ww]e[Cc]hat|[Mm]ail|[Gg]mail)[A-Za-z0-9_-]*__[A-Za-z0-9_-]*(?:send|post|reply|message|webhook|email)[A-Za-z0-9_]*" },
     { "id": "mcp-generic-send", "kind": "send", "pattern": "mcp__[A-Za-z0-9_-]*__[A-Za-z0-9_-]*(?:send_message|post_message|send_email|send_mail|create_message|add_comment|post_comment)\\b" },
     { "id": "mail-send", "kind": "send", "pattern": "\\b(?:sendmail|mailx|mutt|mail)\\s" },
+    { "id": "http-write", "kind": "send", "pattern": "\\b(?:curl|wget)\\b[^|;&\\n]*(?:(?:-X|--request)\\s+(?:POST|PUT|PATCH|DELETE)\\b|(?:-d\\b|--data\\b|--data-raw\\b|--data-binary\\b|--data-urlencode\\b|-F\\b|--form\\b|--form-string\\b|-T\\b|--upload-file\\b|--post-data\\b|--post-file\\b|--method=(?:POST|PUT|PATCH|DELETE)))" },
+    { "id": "hosted-cli-api-write", "kind": "send", "pattern": "\\b(?:gh|glab)\\s+api\\b[^|;&\\n]*(?:(?:-X|--method)\\s+(?:POST|PUT|PATCH|DELETE)\\b|-f\\b|-F\\b|--raw-field\\b|--field\\b|--input\\b)" },
+    { "id": "httpie-write", "kind": "send", "pattern": "\\bhttp(?:ie)?\\s+(?:POST|PUT|PATCH|DELETE)\\b" },
     { "id": "webhook-post", "kind": "send", "pattern": "\\b(?:curl|wget)\\b[^\\n]*(?:webhook|hooks\\.[a-z0-9-]+\\.(?:com|net|org|io|app|dev))" }
   ]
 }

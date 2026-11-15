@@ -30,6 +30,11 @@ const LOCAL_TOOLS = new Set([...SHELL_TOOLS, "Read", "Edit", "MultiEdit", "Write
 const WRAPPERS = new Set(["sudo", "env", "time", "nice", "nohup", "command", "xargs", "stdbuf", "runuser"]);
 /** Shell interpreters; only `sh -c <line>` carries the command in a later word. */
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish"]);
+/** Language runtimes that can execute code passed inline; the code text is not a static command the parser can read. */
+const INTERPRETERS = new Set(["python", "python2", "python3", "node", "nodejs", "deno", "bun", "ruby", "perl", "php", "lua", "Rscript", "r"]);
+/** The flag each runtime uses to take the code to run as the next argument (-c for Python, -e for the JS/Ruby/Perl
+ *  family, -r for PHP). */
+const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-r"]);
 /** Read-only inspection binaries that stay local even when invoked through a path. */
 const LOCAL_READONLY_BINARIES = new Set([
   "ls", "cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg",
@@ -148,6 +153,12 @@ function segmentName(segment: string, depth = 0): string | null {
     const arg = words[1] ? unquote(words[1]) : "";
     if (!arg || arg.startsWith("$") || arg.startsWith("`")) return null;
     return segmentName(arg, depth + 1);
+  }
+  if (INTERPRETERS.has(base)) {
+    // Code passed inline (`python3 -c '...'`, `node -e '...'`) can open sockets or write remotely and is not a static
+    // command the parser can read, so it cannot be proven local. Running a named script file still returns the runtime.
+    if (words.slice(1).some((w) => INLINE_CODE_FLAGS.has(unquote(w)))) return null;
+    return base;
   }
   if (WRAPPERS.has(base)) return segmentName(words.slice(1).join(" "), depth + 1);
   // An executable path or *.sh script may do anything; only known read-only binaries stay local.
