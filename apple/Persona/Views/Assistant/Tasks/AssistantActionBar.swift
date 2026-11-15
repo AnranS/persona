@@ -136,10 +136,13 @@ nonisolated enum AssistantEntries {
         return a
     }
 
-    /// It waits for the user's review while nothing of it runs or asks (the web's `awaitsReview`): rank 2.
+    /// The display state's rank (the web's `todoRank`): accepted is Done, an owner decision leads, and delivered work
+    /// awaiting review is rank 2 while nothing runs or asks.
     static func rank(_ todo: TodoItem, _ status: Status) -> Double {
-        let resting = status == .followUp || status == .unread || status == .notStarted
-        return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
+        if todo.acceptedAtRest(status.taskState) { return 8 }
+        if todo.waitsForOwner { return 0 }
+        if todo.deliveredAwaitingReview(status.taskState) { return 2 }
+        return status.rank
     }
 
     /// How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
@@ -263,7 +266,7 @@ nonisolated enum AssistantEntries {
             else if bucket == .open || supervisorReviewing(todo, now: now) { open.append((row, rank(todo, status), when)); listed() }
             else if bucket == .shelved { shelved.append((row, rank(todo, status), when)); listed() }
             // finished work handed out by a conversation (a failed start that a related to-do finished is history, not news)
-            else if triage.section == .justDone, status != .failed, !(todo.origin ?? "").isEmpty { finished.append((row, triage.last)) }
+            else if TodoTriageLogic.showsJustFinished(todo, triage, now: now), status != .failed, !(todo.origin ?? "").isEmpty { finished.append((row, triage.last)) }
         }
 
         // Agents that belong to no task, the main conversation's only: asking ones wait on the user, working ones run. The

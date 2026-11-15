@@ -285,10 +285,9 @@ export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
   return !todo.done_at && !acceptanceStands(todo) && !waitsForOwner(todo) && reviewRequired && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
-/** A task's place in the order: its underlying Agent status's rank, Awaiting review right after Needs you. Display-only
- *  owner/accepted labels do not reprioritize the row; this matches Android and Apple's shared entry ordering. */
+/** A task's place in the order: its display status's rank, Awaiting review right after Needs you. */
 export function todoRank(todo: Todo, status: TodoStatus): number {
-  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
+  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[shownStatus(todo, status)];
 }
 
 export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" | "green" | "amber" | "idle" | "off" }> = {

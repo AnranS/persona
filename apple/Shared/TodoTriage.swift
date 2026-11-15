@@ -252,6 +252,20 @@ nonisolated enum TodoTriageLogic {
         return at(.other, .rest)
     }
 
+    /// Whether a to-do belongs in the assistant's recent-finished tray. Closed/accepted work is immediately Done on the
+    /// to-do page, but this separate projection keeps it visible for 24 hours until opened (#8237, #5732).
+    static func showsJustFinished(_ todo: TodoItem, _ t: TodoTriage, now: Date) -> Bool {
+        if t.section == .justDone { return true }
+        let completedAt: Date?
+        switch t.rule {
+        case .closed: completedAt = todo.doneAt
+        case .accepted: completedAt = todo.supervision?.latestReview?.at
+        default: completedAt = nil
+        }
+        guard let completedAt, now.timeIntervalSince(completedAt) < justDoneAfter else { return false }
+        return todo.seenAt.map { $0 < completedAt } ?? true
+    }
+
     /// Whether a to-do counts toward the header's open count: not closed, accepted or shelved. An unaccepted delivery
     /// still counts after being seen; only an unsupervised finished turn can be filed by Seen (#5707, #5732).
     static func countsAsOpen(_ todo: TodoItem, _ t: TodoTriage) -> Bool {

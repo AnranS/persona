@@ -101,6 +101,7 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 	// Read the outbox once for the whole batch. Only real delivery or queue admission acknowledges a stretch. An exact
 	// outbox member under the fingerprint's Key may have crashed after reservation. A different Key retries only while
 	// that fingerprint's stretch is still one of its unacknowledged predecessors; a real predecessor ACK removes it.
+	// Permanent PR-conflict reservations are the exception: an already-seen task/PR/head is never delivered again.
 	r := &s.relays
 	r.mu.Lock()
 	if !s.relayLocked(ctx) {
@@ -113,7 +114,7 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 		key, hash := digestFingerprint(entry, signals[i])
 		current, undelivered := pending[signals[i].id()]
 		if seen, ok := next[key]; ok && seen.Hash == hash && (seen.Permanent || seen.Todo != "" || now.Sub(seen.At) < superviseDedupWindow) {
-			retry := undelivered && current.Key == signals[i].Key &&
+			retry := !seen.Permanent && undelivered && current.Key == signals[i].Key &&
 				(seen.Key == signals[i].Key || slices.Contains(current.PendingPredecessors, seen.Key))
 			if !retry {
 				continue

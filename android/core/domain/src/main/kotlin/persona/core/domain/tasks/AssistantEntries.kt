@@ -94,9 +94,12 @@ fun Todo.awaitsDecision(now: Long): Boolean {
 /** Nothing of the task runs or asks (the web's `awaitsReview` statuses). */
 private val RESTING = setOf(TriageStatus.FollowUp, TriageStatus.Unread, TriageStatus.NotStarted)
 
-/** The web's `todoRank` (what the user must act on first), on the triage status. */
+/** The web's `todoRank` (what the user must act on first), on the triage status and its display state. */
 private fun Todo.entryRank(status: TriageStatus): Int {
-    if ((supervision?.state == "pending_review" || openAsk != null) && status in RESTING) return 20
+    if (waitsForOwner()) return 0
+    if (kind != "concern" && !isDone && acceptanceStands && (status in RESTING || status == TriageStatus.UsageLimit)) return 80
+    val reviewRequired = supervision?.state == "pending_review" || openAsk != null || (kind != "concern" && delivery?.state == "live")
+    if (reviewRequired && status in RESTING) return 20
     return when (status) {
         TriageStatus.NeedsYou -> 0
         TriageStatus.Interrupted -> 10

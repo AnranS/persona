@@ -295,7 +295,7 @@ func TestPRFactsCannotReopenCompletedTasks(t *testing.T) {
 		open                         bool
 	}{
 		{"accepted", reviewAccepted, deliveryPR, "", false, ruleAccepted, false},
-		{"deployed", "", deliveryLive, "", false, ruleDeployed, false},
+		{"deployed", "", deliveryLive, "", false, ruleFinishedUnseen, true},
 		{"closed", "", deliveryPR, "", true, ruleClosed, false},
 		{"unfinished PR", "", deliveryPR, "", false, rulePROpen, true},
 		{"accepted concern", reviewAccepted, deliveryPR, db.KindConcern, false, "", true},

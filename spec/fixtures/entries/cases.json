@@ -566,7 +566,7 @@
     },
     {
       "name": "owner_decisions_stay_in_needs_you_during_a_fresh_review",
-      "description": "What is the owner's stays the owner's however young the review: a pending_review task whose agent asks something, one with an open ask (please verify), and a needs_user task are in Needs you; the fresh review next to them is in In progress.",
+      "description": "What is the owner's stays the owner's however young the review: a pending_review task whose agent asks something, one with an open ask (please verify), and a needs_user task are in Needs you; the direct needs_user decision ranks before the verification ask. The fresh review next to them is in In progress.",
       "source": [
         "web/src/lib/assistant-entries.ts assistantEntries",
         "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
@@ -730,8 +730,8 @@
       "expected": {
         "needs_you": [
           "task:t-asks",
-          "task:t-verify",
-          "task:t-user"
+          "task:t-user",
+          "task:t-verify"
         ],
         "running": [
           "task:t-fresh"
