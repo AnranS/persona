@@ -434,6 +434,53 @@ func (s *Service) retractStartUnknown(ctx context.Context, todoID string) bool {
 	return true
 }
 
+// retractConfirmedStartUnknowns reconciles every start whose exact outcome is already known before a session-list
+// drain can deliver an idle supervisor's old queue. A persisted told receipt is confirmation even when the task Agent
+// is listed by another computer; a non-offline creation id also confirms before the asynchronous auto-link write.
+// False holds the whole drain so an unreadable or unwritable ledger cannot let a stale start result escape first.
+func (s *Service) retractConfirmedStartUnknowns(ctx context.Context, sessions []proto.Session) bool {
+	r := &s.relays
+	r.mu.Lock()
+	loaded := s.relayLocked(context.Background())
+	empty := len(r.st.Queue) == 0
+	r.mu.Unlock()
+	if !loaded || empty {
+		return true // drainRelays takes the same no-op path; no ledger scan is needed without a queued message.
+	}
+	confirmed := map[string]struct{}{}
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	if !s.turnsReadLocked(ctx) {
+		turns.mu.Unlock()
+		return false
+	}
+	for id, entry := range turns.doc.Turns {
+		if sig := entry.Signal; sig != nil && sig.Kind == sigUnjudged && sig.Key == "start-unknown@"+id && sig.Told != nil {
+			confirmed[id] = struct{}{}
+		}
+	}
+	turns.mu.Unlock()
+	for _, session := range sessions {
+		if session.Status == proto.StatusOffline {
+			continue
+		}
+		if id := session.CreationID(); id != "" {
+			confirmed[id] = struct{}{}
+		}
+	}
+	ids := make([]string, 0, len(confirmed))
+	for id := range confirmed {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if !s.retractStartUnknown(ctx, id) {
+			return false
+		}
+	}
+	return true
+}
+
 // replaceSupervisePending atomically turns an undelivered leader signal into the escalation that replaces it.
 func (s *Service) replaceSupervisePending(old, next superviseSignal) {
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
