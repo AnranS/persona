@@ -328,8 +328,8 @@ func (s *Service) startUnknownArmed(g superviseSignal) bool {
 	turns := &s.tasks.turns
 	turns.mu.Lock()
 	defer turns.mu.Unlock()
-	if !s.turnsLocked(context.Background()) {
-		return true // an unreadable ledger cannot prove that retraction is a no-op
+	if !s.turnsReadLocked(context.Background()) {
+		return true // an unloaded or unreadable ledger cannot prove that retraction is a no-op
 	}
 	if entry, ok := turns.doc.Turns[g.Todo]; ok && entry.Signal != nil {
 		sig := entry.Signal

@@ -166,6 +166,55 @@ func requireStartUnknownState(t *testing.T, s *Service, todoID string, want bool
 	}
 }
 
+// Exact creation-id confirmation can arrive after the acknowledged outbox was cleared but before the first
+// post-restart ledger load. The ledger-only signal must be told without being gathered into a new outbox (#5732).
+func TestExactCreationConfirmationRetractsLedgerOnlyStartUnknownAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newQuietServiceOn(t, &memStore{})
+	todo, err := s.createTodo(ctx, "Ledger-only start confirmation", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", []string{"confirm the exact start"}, 30)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "provisional start", At: time.Now()}
+	markLeaderTurnSignalled(t, s, g)
+	s.signal(g)
+	s.ackSupervisePending([]superviseSignal{g}) // queue admission acknowledged the outbox before the crash
+	if got := storedSupervisePending(t, s)[g.id()]; got.Key != "" {
+		t.Fatalf("the acknowledged outbox fixture still contains the signal: %+v", got)
+	}
+
+	simulateSupervisionRestart(t, s)
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	turns.loaded, turns.doc = false, taskTurnsDoc{}
+	turns.mu.Unlock()
+	session := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, StartedByPersona: true, Status: proto.StatusDone,
+		State: proto.StateUnread, UpdatedAt: time.Now()}
+	s.autoLinkTodos("box", []proto.Session{session})
+
+	// Read the loaded memory without calling turnOf: watchTurn itself must perform the first post-restart ledger load.
+	turns.mu.Lock()
+	var confirmed *turnSignal
+	if sig := turns.doc.Turns[todo.ID].Signal; sig != nil {
+		copy := *sig
+		confirmed = &copy
+	}
+	turns.mu.Unlock()
+	s.watchTurn(ctx, todoNow(s, todo.ID), []proto.Session{session})
+	if confirmed == nil || confirmed.Told == nil {
+		t.Errorf("start-unknown survived exact creation-id confirmation in the turn ledger: %+v", confirmed)
+	}
+	if got := storedSupervisePending(t, s)[g.id()]; got.Key == g.Key {
+		t.Error("the confirmed start-unknown replayed into the durable supervision outbox")
+	}
+	entry, ok := s.turnOf(ctx, todo.ID)
+	if !ok || entry.Signal == nil || entry.Signal.Told == nil {
+		t.Errorf("the exact signal's told mark was not persisted: ok=%v entry=%+v", ok, entry)
+	}
+}
+
 func TestDelayedCreationRecognitionWithoutUnknownDoesNotWrite(t *testing.T) {
 	st := &relayWriteWatch{Store: &memStore{}}
 	s, _ := newQuietServiceOn(t, st)
@@ -190,56 +239,6 @@ func TestDelayedCreationRecognitionWithoutUnknownDoesNotWrite(t *testing.T) {
 	}
 	if got := len(st.writes); got != before {
 		t.Fatalf("recognition without start-unknown wrote relay %d time(s), want zero", got-before)
-	}
-}
-
-// After a crash, the durable outbox may be acknowledged while the independent turn-ledger signal is still untold.
-// Exact creation-id confirmation must load that ledger and retire it before watchTurn can gather it again (#5732).
-func TestDelayedCreationRecognitionRetractsLedgerOnlyUnknownAfterRestart(t *testing.T) {
-	s, _ := newQuietServiceOn(t, &memStore{})
-	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	ctx := context.Background()
-	todo, err := s.createTodo(ctx, "Ledger-only unknown after restart", "", "conv1", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.superviseTodo(ctx, todo.ID, "conv1", nil, 0); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	last := proto.Session{MachineID: "box", SessionID: "s-late", Status: proto.StatusDone, State: proto.StateUnread,
-		Rev: 7, UpdatedAt: now, Cwd: "/code/app", Agent: "claude", StartedByPersona: true}
-	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "provisional start", At: now}
-	if _, again := s.takeTurn(ctx, todo, last, nil, turnClose{Key: "turn-start-unknown"}, true, now.Add(-time.Hour), turnDone); again {
-		t.Fatal("the initial turn was already taken")
-	}
-	if s.turnSignalled(g) {
-		t.Fatal("the initial turn signal was already told")
-	}
-	s.signal(g)
-	s.ackSupervisePending([]superviseSignal{g})
-	if got := storedSupervisePending(t, s)[g.id()]; got.Key == g.Key {
-		t.Fatalf("the acknowledged signal stayed in the durable outbox: %+v", got)
-	}
-	s.todos.mu.Lock()
-	s.todos.todos[todo.ID].DoneAt = &now
-	s.todos.mu.Unlock()
-
-	// Only memory is lost. The store retains the untold turn signal, while the outbox and relay queue stay acknowledged.
-	simulateSupervisionRestart(t, s)
-	s.tasks.turns.mu.Lock()
-	s.tasks.turns.loaded, s.tasks.turns.doc = false, taskTurnsDoc{}
-	s.tasks.turns.mu.Unlock()
-	last.Hierarchy = &proto.SessionHierarchy{CreationID: todo.ID}
-	s.autoLinkTodos("box", []proto.Session{last})
-
-	entry, ok := s.turnOf(ctx, todo.ID)
-	if !ok || entry.Signal == nil || entry.Signal.Told == nil {
-		t.Errorf("start-unknown survived exact creation-id confirmation in the turn ledger: ok=%v signal=%+v", ok, entry.Signal)
-	}
-	s.watchTurn(ctx, todoNow(s, todo.ID), []proto.Session{last})
-	if got := storedSupervisePending(t, s)[g.id()]; got.Key == g.Key {
-		t.Errorf("the confirmed start-unknown replayed into the durable supervision outbox: %+v", got)
 	}
 }
 

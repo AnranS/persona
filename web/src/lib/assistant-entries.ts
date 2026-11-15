@@ -1,10 +1,10 @@
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
-import { reviewState } from "./supervision";
-import { supersededFailedStarts, triage } from "./todo-triage";
+import { latestReview, reviewState } from "./supervision";
+import { JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
 import { dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
-import { byTime } from "./times";
+import { byTime, timeMs } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
 
@@ -176,7 +176,12 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     else {
       // finished work a conversation handed out (a failed start a related to-do finished is history, not news)
       const tr = triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
-      if (tr.section === "just_done" && status !== "failed" && todo.origin) finished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: tr.last });
+      // Closed/accepted work is immediately Done on the to-do page (#5732), but remains in this separate recent-finished
+      // tray for 24 hours until opened (#8237). Keep the two projections distinct rather than reopening the task.
+      const completedAt = tr.rule === "closed" ? timeMs(todo.done_at) : tr.rule === "accepted" ? timeMs(latestReview(todo.supervision)?.at) : 0;
+      const seenAt = timeMs(todo.seen_at);
+      const recentDone = completedAt > 0 && now - completedAt < JUST_DONE_MS && (seenAt === 0 || seenAt < completedAt);
+      if ((tr.section === "just_done" || recentDone) && status !== "failed" && todo.origin) finished.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: tr.last });
       continue;
     }
     for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));

@@ -291,8 +291,18 @@ func turnRetryIn(n int) time.Duration {
 }
 
 // turnsLocked reads the ledger once; b.mu is held. False when the database could not be read: nothing is taken from
-// the ledger then, and completion goes on as it does without one.
+// the ledger then, and completion goes on as it does without one. A fresh ledger records its starting time immediately.
 func (s *Service) turnsLocked(ctx context.Context) bool {
+	return s.turnsLoadLocked(ctx, true)
+}
+
+// turnsReadLocked loads the ledger for a read-only decision without writing an empty fresh ledger. A later matching
+// state change still saves through saveTurnsLocked; no match means no unnecessary write.
+func (s *Service) turnsReadLocked(ctx context.Context) bool {
+	return s.turnsLoadLocked(ctx, false)
+}
+
+func (s *Service) turnsLoadLocked(ctx context.Context, persistFresh bool) bool {
 	b := &s.tasks.turns
 	if b.loaded {
 		return true
@@ -314,7 +324,7 @@ func (s *Service) turnsLocked(ctx context.Context) bool {
 		doc.Since = time.Now().UTC()
 	}
 	b.doc, b.loaded = doc, true
-	if fresh && st != nil { // since when it is kept must outlive this manager
+	if fresh && persistFresh && st != nil { // since when it is kept must outlive this manager
 		if err := st.PutSetting(ctx, taskTurnsKey, b.doc); err != nil {
 			s.logf("task turns: %v", err)
 		}
@@ -535,7 +545,7 @@ func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
 	b := &s.tasks.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !s.turnsLocked(ctx) {
+	if !s.turnsReadLocked(ctx) {
 		return
 	}
 	changed := false

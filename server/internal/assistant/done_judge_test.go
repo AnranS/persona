@@ -118,11 +118,11 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"quoted and resolved English offer", `I answered the user's question "Would you like me to proceed?"; no further action is needed.`, verdictDone, ""},
 		{"quoted English proceed question", `Earlier I asked, “Should I proceed with the implementation?” You already answered yes, and the work is complete.`, verdictDone, ""},
 		{"already answered English request", `The question "Do you want me to start the implementation?" was already answered; nothing remains.`, verdictDone, ""},
-		{"full-width boundary with inner ASCII question mark", `I answered the user's question "Would you like me to proceed?" 。 Would you like me to deploy?`, verdictNeedsUser, ""},                  // i18n-ignore: parser fixture
-		{"full-width boundary without inner ASCII question mark", `I answered the user's question "Would you like me to proceed" 。 Would you like me to deploy?`, verdictNeedsUser, ""},                // i18n-ignore: parser fixture
-		{"single resolved quoted offer without inner ASCII question mark", `I answered the user's question "Would you like me to proceed" 。 No further action is needed.`, verdictDone, ""},            // i18n-ignore: parser fixture
-		{"full-width boundary retains a genuine later requirement", `I answered the user's question "Would you like me to proceed" 。 You need to approve the release yourself.`, verdictNeedsUser, ""}, // i18n-ignore: parser fixture
 		{"resolved sentence does not hide a later English offer", `I answered. Would you like me to continue?`, verdictNeedsUser, "Would you like me to"},
+		{"full-width boundary after an inner ASCII question mark", `I answered the user's question "Would you like me to proceed?" 。 Would you like me to deploy?`, verdictNeedsUser, ""},
+		{"full-width boundary without an inner ASCII question mark", `I answered the user's question "Would you like me to proceed" 。 Would you like me to deploy?`, verdictNeedsUser, ""},
+		{"single resolved quoted offer with a full-width boundary", `I answered the user's question "Would you like me to proceed" 。 No further action is needed。`, verdictDone, ""},
+		{"full-width resolved quote does not hide a later requirement", `I answered the user's question "Would you like me to proceed" 。 You need to approve the release yourself。`, verdictNeedsUser, ""},
 		{"English direct owner operation", "The spec is ready. You need to deploy it yourself.", verdictNeedsUser, "You need to"},
 		{"English direct owner operation after a semicolon", "The spec is ready; you need to deploy it yourself.", verdictNeedsUser, "you need to"},
 		{"English direct requirement after a conditional", "If you need to roll back, use the backup. Otherwise, you need to approve the release yourself.", verdictNeedsUser, "you need to"},
