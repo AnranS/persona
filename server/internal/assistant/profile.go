@@ -534,8 +534,8 @@ type assistantView struct {
 	InboxSignals bool `json:"inbox_signals"`
 	// NextSuggestions is in effect, like DoneNeedsDelivery.
 	NextSuggestions bool `json:"next_suggestions"`
-	// MainSupervisesOwnTasks is in effect, like DoneNeedsDelivery: false means the background supervisor follows up
-	// the tasks no leader supervises.
+	// MainSupervisesOwnTasks is the legacy compatibility projection. Main supervises every new dispatch regardless;
+	// false only says a legacy background conversation may still drain its old assignments.
 	MainSupervisesOwnTasks bool `json:"main_supervises_own_tasks"`
 }
 
@@ -700,7 +700,7 @@ func (s *Service) warm(launcher string) {
 	if err != nil {
 		return
 	}
-	params := map[string]any{"cwd": cwd, "launcher": launcher}
+	params := map[string]any{"cwd": cwd, "launcher": launcher, "is_main": true}
 	if picked {
 		err = s.applyPick(ctx, params, pick)
 	} else {
@@ -710,7 +710,16 @@ func (s *Service) warm(launcher string) {
 		s.logf("warm model: %v", err)
 		return
 	}
-	if err := s.call(ctx, machine, DeviceAssistantWarm, params, nil); err != nil {
+	// The spare is adopted only by a new conversation in the same profile (node/assistant_spare.go), and a new one is
+	// started in the main chat's, on a carried pick too (startMain, startOn).
+	profiled := s.withNewConversationProfile(ctx, machine, "assistant", params)
+	ctx = context.WithValue(ctx, supervisionStartup{}, true)
+	err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
+	if profiled && (nodeOutdated(err) || profileRefused(err)) { // as startOn: an old node, or another agent than Claude Code
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
+	}
+	if err != nil {
 		s.logf("warm assistant: %v", err)
 	}
 }

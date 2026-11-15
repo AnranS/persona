@@ -76,7 +76,7 @@ func TestMainSupervisesWithoutStartingBackground(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
 	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
 	n := f.noticesTo("conv1")[0]
-	for _, want := range []string{"📋 督办", "hub 判断做完了，等你验收", "pull/7"} {
+	for _, want := range []string{"📋 督办", "signal=review", "已交付·待看：hub 判断做完了，等你验收", "pull/7"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("main's message lacks %q:\n%s", want, n)
 		}
@@ -646,8 +646,10 @@ func TestAsksOfMainSupervisedTasksUseMainLadder(t *testing.T) {
 
 	e.raise(askPermission("ix1", "worker-1"))
 	n := e.noticeWith("conv1", "interaction_id=ix1")
-	if !strings.Contains(n, "先交给你处理") {
-		t.Fatalf("main's card message:\n%s", n)
+	for _, want := range []string{"先交给你处理", "signal=ask", "interaction_id=ix1", "machine=Mac", "session_id=worker-1"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("main's card message lacks %q:\n%s", want, n)
+		}
 	}
 	e.settle()
 	if got := e.pushesOf("ix1"); got != 0 {
@@ -872,6 +874,11 @@ func TestGoldenBackgroundSupervisor(t *testing.T) {
 	}
 	if on != off {
 		t.Fatal("the legacy background supervisor setting changed the main supervision instructions")
+	}
+	for _, common := range []string{off, on} {
+		if strings.Contains(common, "cost_of_waiting") || strings.Contains(common, "visibility: \"silent\"") {
+			t.Fatal("shared CLAUDE.md still contains detailed supervision handling")
+		}
 	}
 	yes := true
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })

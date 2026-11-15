@@ -70,7 +70,7 @@ func TestLeaderConversationTaskIsSupervisedByMain(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
 	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
 	n := f.noticesTo("conv1")[0]
-	for _, want := range []string{"📋 督办", "hub 判断做完了，等你验收", "pull/7"} {
+	for _, want := range []string{"📋 督办", "signal=review", "已交付·待看：hub 判断做完了，等你验收", "pull/7"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the leader's message lacks %q:\n%s", want, n)
 		}
@@ -161,7 +161,7 @@ func TestDigestGoesToMainWithoutAnExplicitLeader(t *testing.T) {
 	}
 	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "1", Detail: "做完了"})
 	waitFor(t, "the main message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, "📋 督办") {
+	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, "📋 督办") || !strings.Contains(n, "signal=review") {
 		t.Fatalf("main's supervision message:\n%s", n)
 	}
 	s.supervise.dedupMu.Lock()
