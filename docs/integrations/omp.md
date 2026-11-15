@@ -85,11 +85,14 @@ When an omp exits, its extension's row goes with it. The node lists omp's recent
 - **Which files.** Modified within the last 7 days, newest first, at most 80. The same session in two directories is listed once,
   from its newest file.
 - **How often.** A list within 15 seconds of the last scan reuses it. A file is read again only when its modification time or size
-  changes. A scan that takes longer than 3 seconds keeps the previous result.
+  changes. A scan that takes longer than 3 seconds keeps the previous list but remembers the files it read, so the next scans
+  go on from there until one finishes.
 - **Live rows win.** A running session's own row hides its file. A running omp the node knows only by its fallback id (no
   extension, no herdr omp integration) may be writing any file of its directory, so it hides that directory's stopped sessions
-  rather than offer one that is still running. Directories are compared as physical paths, so a pane opened through a symlink
-  counts. A pi pane never hides them: pi writes its own agent directory, not omp's.
+  rather than offer one that is still running. A pane whose session id was reported and then went missing again (its extension
+  reconnecting) still hides the session it last reported; a pane that switches to another session counts as new from then on.
+  Directories are compared as physical paths, so a pane opened through a symlink counts. A pi pane never hides them: pi writes
+  its own agent directory, not omp's.
 
 A stopped row shows a notice in place of its chat. A send to it is refused with `omp_resume_unknown` and nothing is typed; resume
 it on the computer with `omp --resume`. The hub puts both into the reader's language (`hub-transcript_text.omp_stopped`,
@@ -123,4 +126,5 @@ live text, and the host's record of where a session last ran (`integrations/pi/l
 - Node, with fake herdr and fake runtimes: `server/internal/node/omp_row_test.go` covers the family's rows, the missing extension
   and the fallback row; `server/internal/node/omp_alias_test.go` covers the wait for a session id and the alias;
   `server/internal/node/ompdisk_test.go` covers the stopped sessions: the scan and its cache, bad lines, the cap, the offline row
-  and its refused send, and a live omp pane hiding its directory (also through a symlink) while a pi pane does not.
+  and its refused send, a slow scan going on where it stopped, and a live omp pane hiding its directory (also through a symlink,
+  and after its session id went missing again) while a pi pane does not.

@@ -210,3 +210,79 @@ func TestOmpDiskHidesALivePane(t *testing.T) {
 		t.Fatal("a live pane's file was taken as resumable")
 	}
 }
+
+// A scan that runs out of time keeps the heads it read, so the next scan reads only the files it has not seen: a slow
+// disk gets through them in a few scans instead of stopping at the same file every time.
+func TestOmpDiskSlowScanGoesOn(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	old := ompDiskTimeout
+	ompDiskTimeout = time.Nanosecond // every scan runs out of time after its first read
+	t.Cleanup(func() { ompDiskTimeout = old })
+	n, _, home := herdrNode(t)
+	now := time.Now()
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("01a10000-0000-7000-8000-00000000002%d", i)
+		writeOmpSession(t, ompSessionsDir(home), fmt.Sprintf("-w-slow%d", i), id, "slow", "/w/slow", now.Add(-time.Duration(i)*time.Minute))
+	}
+	var rows []ompDiskSession
+	for scan := 0; scan < 3 && len(rows) == 0; scan++ {
+		n.omps().at = time.Time{}
+		rows = n.ompSessions()
+	}
+	if len(rows) != 3 {
+		t.Fatalf("three scans of a slow disk listed %d sessions, want 3", len(rows))
+	}
+	if r := n.omps().reads; r != 3 {
+		t.Fatalf("read %d heads for 3 files", r)
+	}
+}
+
+// An omp whose session id went missing again (its extension reconnecting, herdr's report gone) is back on its fallback
+// id, but the node still knows which session that pane runs: its file is not listed as stopped.
+func TestOmpDiskKeepsAPaneWhoseIDWentMissing(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, f, home := herdrNode(t)
+	cwd := t.TempDir()
+	id := "01a10000-0000-7000-8000-000000000031"
+	file := writeOmpSession(t, ompSessionsDir(home), "-w-back", id, "live", cwd, time.Now().Add(-time.Minute))
+	seedAgents(t, n, f)                                  // the node's first pass: no panes yet
+	seedAgents(t, n, f, ompPaneAgent("w1:p31", cwd, "")) // the pane appears, listed by its fallback id
+	seedAgents(t, n, f, ompPaneAgent("w1:p31", cwd, file))
+	onlyRow(t, listSessions(t, n), id) // its session reported: the live row
+	seedAgents(t, n, f, ompPaneAgent("w1:p31", cwd, ""))
+	for _, s := range listSessions(t, n) {
+		if s.SessionID == id {
+			t.Fatalf("the file a live pane runs was listed as stopped once its id went missing: %+v", s)
+		}
+	}
+	if _, ok := n.ompSession(id); ok {
+		t.Fatal("the file a live pane runs was taken as stopped once its id went missing")
+	}
+}
+
+// A pane that was there when the node started hides its directory's rows while nothing says what it runs. Once it
+// reports one session and then another, it was first seen then: the directory's older stopped sessions are listed
+// again when its id goes missing, and the session it runs stays hidden.
+func TestOmpDiskPaneOnAnotherSessionShowsTheOlderOnes(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, f, home := herdrNode(t)
+	cwd := t.TempDir()
+	sessions, old := ompSessionsDir(home), time.Now().Add(-time.Minute)
+	stopped := "01a10000-0000-7000-8000-000000000041"
+	first := "01a10000-0000-7000-8000-000000000042"
+	second := "01a10000-0000-7000-8000-000000000043"
+	writeOmpSession(t, sessions, "-w-s1", stopped, "stopped", cwd, old)
+	f1 := writeOmpSession(t, sessions, "-w-s2", first, "first", cwd, old)
+	f2 := writeOmpSession(t, sessions, "-w-s3", second, "second", cwd, old)
+	seedAgents(t, n, f, ompPaneAgent("w1:p41", cwd, f1)) // there when the node started
+	seedAgents(t, n, f, ompPaneAgent("w1:p41", cwd, f2)) // resumed another session in the same pane
+	seedAgents(t, n, f, ompPaneAgent("w1:p41", cwd, ""))
+	list := listSessions(t, n)
+	onlyRow(t, list, stopped)
+	onlyRow(t, list, first)
+	for _, s := range list {
+		if s.SessionID == second {
+			t.Fatalf("the session the pane runs was listed as stopped: %+v", s)
+		}
+	}
+}

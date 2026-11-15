@@ -407,14 +407,14 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.notePanes(unknown)
 	n.mu.Unlock()
-	var fallbacks []host.Agent
+	var omps []familyNote
 	for _, a := range family {
 		id := n.piSession(a)
+		if a.Agent == ompAgent && a.PaneID != "" {
+			omps = append(omps, familyNote{pane: a.PaneID, session: id}) // the panes that may write a file ompdisk.go lists
+		}
 		if id == "" {
 			id = otherSession(a) // nothing reported its session yet: the pane is the row, terminal only (pi.go)
-			if id != "" && a.Agent == ompAgent {
-				fallbacks = append(fallbacks, a) // the panes that may be writing a file ompdisk.go lists
-			}
 		}
 		if id != "" {
 			if _, taken := m[id]; !taken {
@@ -422,7 +422,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			}
 		}
 	}
-	n.noteFamilyPanes(fallbacks)
+	n.noteFamilyPanes(omps)
 	for _, a := range opencode {
 		id := n.opencodeSession(a)
 		if id == "" {

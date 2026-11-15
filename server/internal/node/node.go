@@ -199,7 +199,7 @@ type Node struct {
 	share atomic.Pointer[switchShare]
 
 	// The pi family's panes listed by their fallback id, and omp's stopped sessions (pifamily.go, ompdisk.go).
-	familySeen map[string]time.Time // fallback-listed pane -> first seen (zero: there when the node started)
+	familySeen map[string]familySeenPane // omp pane -> first seen (zero: there when the node started), last session
 	ompDisk    *ompDiskState
 
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired

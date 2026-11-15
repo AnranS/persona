@@ -20,12 +20,15 @@ import (
 )
 
 const (
-	ompDiskEvery   = 15 * time.Second // a list this soon after the last scan reuses it
-	ompDiskTimeout = 3 * time.Second  // one scan's reading; a slower disk keeps the last result
-	ompDiskDays    = 7                // how old a session file may be
-	ompDiskMax     = 80               // the most rows listed
-	ompDiskHead    = 8 << 10          // the head read for the title and the session line (over-long lines skipped)
+	ompDiskEvery = 15 * time.Second // a list this soon after the last scan reuses it
+	ompDiskDays  = 7                // how old a session file may be
+	ompDiskMax   = 80               // the most rows listed
+	ompDiskHead  = 8 << 10          // the head read for the title and the session line (over-long lines skipped)
 )
+
+// ompDiskTimeout is one scan's reading. A slower disk keeps the last list and what this scan read, so the next scan
+// goes on from there (a var for tests).
+var ompDiskTimeout = 3 * time.Second
 
 // ompDiskSession is one stopped session as its file tells it.
 type ompDiskSession struct {
@@ -125,9 +128,10 @@ func (n *Node) ompSession(id string) (ompDiskSession, bool) {
 
 // ompDiskWrittenByLivePane: an omp pane the node knows only by its fallback id runs in the session's directory, so its
 // file may be the one that omp is still writing (no extension, no herdr integration: nothing says which session).
-// A pane seen since the file was last written hides it; a pane from before this node started hides the directory's
-// rows, and getting them back when the pane goes beats resuming into a second omp. Directories are compared as
-// physical paths, so a pane opened through a symlink still matches the file's directory.
+// The session the pane last reported (before its id went missing again) is hidden; so is a file written since the
+// pane was first seen; a pane from before this node started hides the directory's rows, and getting them back when
+// the pane goes beats resuming into a second omp. Directories are compared as physical paths, so a pane opened
+// through a symlink still matches the file's directory.
 func (n *Node) ompDiskWrittenByLivePane(s ompDiskSession) bool {
 	if s.Cwd == "" {
 		return false
@@ -138,7 +142,10 @@ func (n *Node) ompDiskWrittenByLivePane(s ompDiskSession) bool {
 	}
 	cwd := realPath(filepath.Clean(s.Cwd))
 	for _, p := range panes {
-		if p.cwd != "" && realPath(filepath.Clean(p.cwd)) == cwd && (p.seen.IsZero() || !s.Modified.Before(p.seen.Add(-2*time.Second))) {
+		if p.cwd == "" || realPath(filepath.Clean(p.cwd)) != cwd {
+			continue
+		}
+		if s.ID == p.session || p.seen.IsZero() || !s.Modified.Before(p.seen.Add(-2*time.Second)) {
 			return true
 		}
 	}
@@ -188,31 +195,37 @@ func (d *ompDiskState) scanLocked() {
 	seen := map[string]bool{}
 	var order []ompDiskSession
 	deadline := time.Now().Add(ompDiskTimeout)
-	full := true
+	full, read := true, 0
 	for _, c := range cands {
-		if time.Now().After(deadline) {
-			full = false // a slow disk: the last result stands, the rest next time
-			break
-		}
 		var s ompDiskSession
 		if e, ok := d.files[c.path]; ok && e.mtime.Equal(c.st.ModTime()) && e.size == c.st.Size() {
 			s = e.s
 		} else {
+			if read > 0 && time.Now().After(deadline) {
+				full = false // a slow disk: the rest next time, from what this scan read
+				break
+			}
+			read++
 			d.reads++
 			s = readOmpSession(c.path)
 			s.Modified = c.st.ModTime()
 		}
-		if s.ID == "" {
-			continue
-		}
 		kept[c.path] = ompDiskEntry{mtime: c.st.ModTime(), size: c.st.Size(), s: s}
-		if seen[s.ID] {
-			continue // the same session in two directories: the newest file is the one above
+		if s.ID == "" || seen[s.ID] {
+			continue // no session, or the same session in two directories: the newest file is the one above
 		}
 		seen[s.ID] = true
 		order = append(order, s)
 	}
-	if !full && d.files != nil {
+	if !full {
+		// The last list stands until a scan finishes; the heads read here are kept, so each scan reads only files it
+		// has not seen and a slow disk still gets through them.
+		if d.files == nil {
+			d.files = map[string]ompDiskEntry{}
+		}
+		for p, e := range kept {
+			d.files[p] = e
+		}
 		return
 	}
 	d.files = kept

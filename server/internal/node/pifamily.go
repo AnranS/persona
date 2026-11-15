@@ -1,10 +1,6 @@
 package node
 
-import (
-	"time"
-
-	"github.com/nwverse/persona/server/internal/host"
-)
+import "time"
 
 // The agents Persona reads as pi (pi.go): pi itself, and omp (Oh My Pi), a pi fork whose extension API, session files and
 // conversation model are pi's (docs/integrations/omp.md). A pane and its keys are the host's; the conversation and the
@@ -32,24 +28,46 @@ func piFamilyNoExtension(agent string) string {
 // code is pi_no_extension, unchanged).
 func piFamilyCode(agent string) string { return agent + "_no_extension" }
 
-// noteFamilyPanes remembers when each omp pane listed only by its fallback id (omp-w1-p2) was first seen, and forgets
-// the panes gone. Claude's own first-seen map is paneSeen (panes_bind.go); this one is omp's, so a stopped session's
-// file can be told from the one a live omp is writing (ompdisk.go).
-func (n *Node) noteFamilyPanes(fallbacks []host.Agent) {
+// familyNote is an omp pane in this pass and the session it reports, empty while it is listed by its fallback id.
+type familyNote struct {
+	pane    string
+	session string
+}
+
+// familySeenPane is what the node remembers of an omp pane: when it was first seen (zero: it was there when the node
+// started) and the last session it reported.
+type familySeenPane struct {
+	seen    time.Time
+	session string
+}
+
+// noteFamilyPanes remembers each omp pane, whether it is listed by its fallback id (omp-w1-p2) or by its session, and
+// forgets the panes gone. Claude's own first-seen map is paneSeen (panes_bind.go); this one is omp's, so a stopped
+// session's file can be told from the one a live omp is writing (ompdisk.go), also when a pane's session id goes
+// missing again after it was reported. A pane that reports another session than before was first seen now: what its
+// directory had before is not its file.
+func (n *Node) noteFamilyPanes(notes []familyNote) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	first := n.familySeen == nil
 	if first {
-		n.familySeen = map[string]time.Time{}
+		n.familySeen = map[string]familySeenPane{}
 	}
-	now, here := time.Now(), make(map[string]bool, len(fallbacks))
-	for _, a := range fallbacks {
-		here[a.PaneID] = true
-		if _, ok := n.familySeen[a.PaneID]; !ok && !first {
-			n.familySeen[a.PaneID] = now
-		} else if !ok {
-			n.familySeen[a.PaneID] = time.Time{}
+	now, here := time.Now(), make(map[string]bool, len(notes))
+	for _, a := range notes {
+		here[a.pane] = true
+		e, ok := n.familySeen[a.pane]
+		switch {
+		case !ok && first:
+			e = familySeenPane{session: a.session}
+		case !ok:
+			e = familySeenPane{seen: now, session: a.session}
+		case a.session != "" && e.session != "" && a.session != e.session:
+			e = familySeenPane{seen: now, session: a.session}
+		case a.session != "":
+			e.session = a.session
 		}
+		n.familySeen[a.pane] = e
 	}
 	for p := range n.familySeen {
 		if !here[p] {
@@ -58,11 +76,12 @@ func (n *Node) noteFamilyPanes(fallbacks []host.Agent) {
 	}
 }
 
-// familyPane is a live omp pane the node knows only by its fallback id: where it runs, and when the pane was first
-// seen (zero: it was there before this node started).
+// familyPane is a live omp pane the node knows only by its fallback id: where it runs, when the pane was first seen
+// (zero: it was there before this node started) and the session it last reported, if it ever did.
 type familyPane struct {
-	cwd  string
-	seen time.Time
+	cwd     string
+	seen    time.Time
+	session string
 }
 
 // ompFallbackPanes are those panes now. A pi pane is never one: pi writes its sessions under its own agent directory,
@@ -75,7 +94,8 @@ func (n *Node) ompFallbackPanes() []familyPane {
 		if a.PaneID == "" || a.Agent != ompAgent || validID(id) {
 			continue // a real session: its row is the session's, not the pane's
 		}
-		out = append(out, familyPane{cwd: a.Cwd, seen: n.familySeen[a.PaneID]})
+		e := n.familySeen[a.PaneID]
+		out = append(out, familyPane{cwd: a.Cwd, seen: e.seen, session: e.session})
 	}
 	return out
 }
