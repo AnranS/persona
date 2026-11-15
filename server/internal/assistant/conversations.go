@@ -248,6 +248,10 @@ type relayBook struct {
 	// queued message waits, whatever its rank: the owner's own message always goes before the queue. A restart falls
 	// back on the persisted Spoke presence window (relay_presence.go).
 	ownerTurns map[string]ownerTurn
+	// replacing: the background supervisors being replaced (supervise_round.go backgroundOutgrown), in memory: nothing
+	// starts going into one, and what would go in straight queues, until what waits for it moved to its replacement or
+	// the replacement did not start.
+	replacing map[string]bool
 }
 
 // ownerTurn is one conversation's owner-turn gate (#6394).
@@ -278,7 +282,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 		rs.Spawned = map[string]spawnedConv{}
 	}
 	b.st, b.loaded = rs, true
-	b.sent, b.draining, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]*time.Timer{}
+	b.sent, b.draining, b.replacing, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]bool{}, map[string]*time.Timer{}
 	b.stuck = map[string]relayMsg{}
 	b.ownerTurns = map[string]ownerTurn{}
 	return true
@@ -544,7 +548,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	held := map[string]time.Duration{}
 	now := time.Now()
 	for _, c := range list {
-		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] {
+		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
 			i, wait := b.pickLocked(c.SessionID, now)
 			if i < 0 {
 				held[c.SessionID] = wait

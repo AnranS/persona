@@ -170,7 +170,11 @@ func (s *Service) superviseRoundAnswered(to string, res superviseRoundReply) {
 // backgroundOutgrown is why background supervisor id, which is there, is to be replaced now ("" when it is not): a
 // round's answer said it cannot start from its first turn or its transcript is too large, rounds start fresh (the
 // switch is off), no replacement was tried within backgroundRetry, and it is idle (nothing of it is lost: no turn
-// running, nothing going in). background.mu is held.
+// running, nothing going in). It is then reserved for the replacement (relays.replacing), in one step with the look
+// that nothing goes in: from then on no queued message starts going into it, and none goes in straight, until what
+// waits for it moved to its replacement (backgroundLost) or the replacement did not start (releaseBackground). A
+// message that went in meanwhile would run in an archived conversation that is no longer the background supervisor,
+// its task_review refused. background.mu is held.
 func (s *Service) backgroundOutgrown(ctx context.Context, cfg Settings, id string) string {
 	if backgroundKeepsContext(cfg) {
 		return ""
@@ -183,23 +187,42 @@ func (s *Service) backgroundOutgrown(ctx context.Context, cfg Settings, id strin
 	if why == "" || recent {
 		return ""
 	}
-	c, ok := s.session(ctx, cfg.MachineID, id)
-	if !ok || c.Status == proto.StatusWorking || c.Starting {
-		return ""
-	}
 	rl := &s.relays
 	rl.mu.Lock()
-	draining := rl.draining[id]
+	// The queue must be readable: what waits there moves to the replacement.
+	reserved := s.relayLocked(ctx) && !rl.draining[id]
+	if reserved {
+		rl.replacing[id] = true
+	}
 	rl.mu.Unlock()
-	if draining {
+	if !reserved {
+		return ""
+	}
+	// Looked at once reserved: a message that went in just before shows it working.
+	if c, ok := s.session(ctx, cfg.MachineID, id); !ok || c.Status == proto.StatusWorking || c.Starting {
+		s.releaseBackground(ctx, cfg.MachineID, id)
 		return ""
 	}
 	return why
 }
 
+// releaseBackground lets background supervisor id, reserved for a replacement that is not happening
+// (backgroundOutgrown), take messages again, and has what waits for it go in now that may: a drain passed it by
+// meanwhile.
+func (s *Service) releaseBackground(ctx context.Context, machine, id string) {
+	rl := &s.relays
+	rl.mu.Lock()
+	delete(rl.replacing, id)
+	rl.mu.Unlock()
+	if c, ok := s.session(ctx, machine, id); ok {
+		s.drainRelays(machine, []proto.Session{c})
+	}
+}
+
 // replaceBackground starts a background supervisor in place of old, which outgrew its first turn (why), and puts old
 // away. The new one's id, or old's when it could not start (old goes on as it is: its rounds keep the context, and the
-// next try is after backgroundRetry). background.mu is held.
+// next try is after backgroundRetry). background.mu is held, and old is reserved (backgroundOutgrown): the caller
+// moves what waits for it (backgroundLost), which ends the reservation.
 func (s *Service) replaceBackground(ctx context.Context, cfg Settings, old, why string) string {
 	r := &s.background.rounds
 	r.mu.Lock()
@@ -209,6 +232,7 @@ func (s *Service) replaceBackground(ctx context.Context, cfg Settings, old, why 
 	id, err := s.startBackground(ctx)
 	if err != nil {
 		s.logf("supervise: the background supervisor's replacement did not start: %v; %s goes on as it is", err, short(old))
+		s.releaseBackground(ctx, cfg.MachineID, old)
 		return old
 	}
 	r.mu.Lock()
