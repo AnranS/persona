@@ -29,7 +29,7 @@ export function riskText(risk: OutboundRisk): string {
 
 export function OutboundWarning({ risk }: { risk: OutboundRisk }) {
   return (
-    <div data-outbound-warning role="note" className="mt-2 flex items-start gap-2 rounded-control bg-orange-tint px-2.5 py-2 text-[12px] leading-snug text-orange shadow-hairline">
+    <div data-outbound-warning role="note" className="mt-2 flex items-start gap-2 rounded-control bg-orange-tint px-2.5 py-2 text-xs leading-snug text-orange shadow-hairline">
       <Icon name="warning" size={13} stroke={2.2} className="mt-px shrink-0" />
       <span className="min-w-0">{riskText(risk)}</span>
     </div>
@@ -38,7 +38,7 @@ export function OutboundWarning({ risk }: { risk: OutboundRisk }) {
 
 /** The one-line explanation under the warning while the second confirmation step is open. */
 export function OutboundConfirmStep() {
-  return <p data-outbound-confirm-step className="mt-1.5 text-[12px] leading-snug text-orange">{t("outbound-confirm.outbound_confirm_hint")}</p>;
+  return <p data-outbound-confirm-step className="mt-1.5 text-xs leading-snug text-orange">{t("outbound-confirm.outbound_confirm_hint")}</p>;
 }
 
 export interface OutboundConfirmFooterProps {
