@@ -302,7 +302,7 @@ func TestRoundProcessWorkingKeepsSupervisionQueued(t *testing.T) {
 		}},
 		{"the user's compaction", func(t *testing.T, n *Node, round *assistantProc) {
 			feedAssistant(n, round, turnResult)
-			if err := n.assistantCompact(context.Background(), roundConversation); err != nil {
+			if err := n.assistantCompact(context.Background(), roundConversation, false); err != nil {
 				t.Fatal(err)
 			}
 		}, func(t *testing.T, n *Node, round *assistantProc) {
@@ -444,7 +444,7 @@ func TestAStartedTurnIsNotCut(t *testing.T) {
 func TestRoundProcessIsNotReplacedWhileTheUserCompacts(t *testing.T) {
 	n, argv, input := roundTestNode(t, roundStarted("2.1.322", 1), false)
 	round := roundThenIdle(t, n)
-	if err := n.assistantCompact(context.Background(), roundConversation); err != nil {
+	if err := n.assistantCompact(context.Background(), roundConversation, false); err != nil {
 		t.Fatal(err)
 	}
 	if out := sendRound(t, n, "once-during"); out["context"] != roundKept || out["why"] != roundWhyBusy {

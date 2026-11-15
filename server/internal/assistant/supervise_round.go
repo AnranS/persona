@@ -15,17 +15,18 @@ import (
 
 // Each round of the background supervisor starts clean (#7315, docs/assistant/unified-entry.md "Each round starts
 // clean"). It was one conversation that every wake went on with: every round reread every earlier one, and the
-// rules and tools of every kind of signal, though a round needs its own signals and what the tasks' ledgers keep. It
+// tools of every kind of work, though a round needs its own signals and what the tasks' ledgers keep. It
 // is still one conversation, because the clients' row, its rights over the tasks (backgroundSupervises), the
 // announcement's receipt and the persisted relay queue all key on its id; but each round of it resumes at the end of
 // its first turn (the node restarts its idle process with --resume-session-at, node/assistant_round.go), so a round
-// reads the start brief, the whole snapshot and its own supervision message. That message is rendered Fresh: only the
-// rules of its entries' kinds, a line saying what crosses rounds is on the tasks, the round marker and each entry's
-// last review (prompts.Supervise.Fresh). The round's process lists only the tools supervision uses (roundToolNames,
+// reads the start brief, the whole snapshot and its own supervision message; the handling rules are the static
+// supervision instructions its process starts with (supervision_instructions.go), as every supervisor's. That message
+// is rendered Fresh: a line saying what crosses rounds is on the tasks, the round marker and each entry's last review
+// (prompts.Supervise.Fresh). The round's process lists only the tools supervision uses (roundToolNames,
 // through mcp.tools' tool_set).
 //
 // assistant.background_supervisor_keeps_context (off by default) brings back the one long conversation from its next
-// round: no round is asked for, the message is rendered whole, and a message that asks for no round needs every tool,
+// round: no round is asked for, the message is rendered as before (not Fresh), and a message that asks for no round needs every tool,
 // so the node replaces a round's process, once it is idle, by a plain resume with every tool (node/assistant_round.go).
 //
 // The node says how each round went (superviseRoundAnswered). A round it could not start from the first turn because

@@ -27,7 +27,7 @@ import (
 // no task naming a conversation that does not exist. Who gets a task's signals is decided when they are sent
 // (ownSupervisor), and what the background supervisor may do to a task follows the same rule (backgroundSupervises).
 //
-// Each of its rounds starts from its first turn, with only that round's rules and tools (#7315, supervise_round.go),
+// Each of its rounds starts from its first turn, with only that round's facts and tools (#7315, supervise_round.go),
 // unless assistant.background_supervisor_keeps_context is on.
 
 // purposeSupervise is the model purpose the background supervisor runs under; it inherits the main chat's.
@@ -288,6 +288,7 @@ func (s *Service) backgroundFresh(cfg Settings, id string) bool {
 func (s *Service) startBackground(ctx context.Context) (string, error) {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 100*time.Second)
 	defer cancel()
+	sctx = context.WithValue(sctx, supervisionStartup{}, true)
 	c, err := s.startConversation(sctx, startParams{Text: prompts.RenderSupervisorStart(prompts.SupervisorStart{Owner: s.owner(ctx)}),
 		Purpose: purposeSupervise, Origin: OriginTask, Source: &proto.MessageSource{Kind: proto.SourceSupervision}})
 	if err != nil {

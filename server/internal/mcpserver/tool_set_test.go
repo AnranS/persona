@@ -19,8 +19,8 @@ func TestListToolsSendsToolSet(t *testing.T) {
 	t.Setenv("PERSONA_SESSION_ID", "11111111-2222-3333-4444-555555555555")
 
 	t.Setenv("PERSONA_TOOL_SET", "supervise")
-	tools, err := listToolsOnce(context.Background())
-	if err != nil || len(tools) != 1 {
+	tools, err := listToolsOnce(context.Background(), toolSnapshot{})
+	if err != nil || len(tools.Tools) != 1 {
 		t.Fatalf("tools %v, %v", tools, err)
 	}
 	if asked["kind"] != "mcp.tools" || asked["tool_set"] != "supervise" || asked["assistant"] != true {
@@ -28,7 +28,7 @@ func TestListToolsSendsToolSet(t *testing.T) {
 	}
 
 	t.Setenv("PERSONA_TOOL_SET", "")
-	if _, err := listToolsOnce(context.Background()); err != nil {
+	if _, err := listToolsOnce(context.Background(), toolSnapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, set := asked["tool_set"]; set {

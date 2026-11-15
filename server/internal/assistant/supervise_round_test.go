@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,11 +19,13 @@ import (
 )
 
 // The background supervisor's rounds start clean (#7315, supervise_round.go). i18n-ignore: the supervision message's
-// own words (prompts/assistant/supervise.md).
+// own words (prompts/assistant/supervise.md); an entry names its signal, the rules for it being the static supervision
+// instructions (supervision_instructions.go).
 const (
-	roundHeader   = "这一轮通常从干净的上下文开始"
-	roundStopped  = "- 停下没做完 / 在等回答的："
-	roundReviewed = "- 等你验收的："
+	roundHeader     = "这一轮通常从干净的上下文开始"
+	roundHeaderLine = roundHeader + "：之前几轮的对话不一定在你眼前，跨轮要记的都在任务台账里（简报、范围调整、已定的事、上次结论），需要时用 todo_get 看。"
+	roundIdle       = "signal=" + sigIdle
+	roundReview     = "signal=" + sigReview
 )
 
 // newRoundService is newBackgroundService with a database in memory: putting the old background supervisor away
@@ -118,23 +122,41 @@ func outgrownOf(s *Service, id string) string {
 	return r.outgrown[id]
 }
 
-// The rounds' messages as goldens: an idle-only round and a review with a closeout, both with a last review.
+// A round's message is the background supervisor's golden message (supervise.background, TestGoldenBackgroundSupervisor)
+// with three lines more: the header after the role line, the marker after the level tag and the task's last review
+// after its criteria. It is pinned against that golden rather than as a golden of its own: the supervision events'
+// size ratchet (prompt_size_ratchet_test.go) counts every supervise.* golden, and a round adds no event text but these
+// lines.
 func TestGoldenBackgroundSupervisorFresh(t *testing.T) {
-	golden(t, "supervise.background_fresh_idle", prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Fresh: true,
+	whole, err := os.ReadFile(filepath.Join("testdata", "prompts", "supervise.background.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Asked: true, AskMinutes: 5, Fresh: true,
 		Entries: sortEntries([]prompts.SuperviseEntry{
-			{ID: "t1", Title: "修登录崩溃", Kind: sigIdle, DoneWhen: []string{"PR 合并到 main"}, Last: "改到一半，等 CI",
+			{ID: "t1", Title: "修登录崩溃", Kind: sigReview, Machine: "Mac", Session: "a1b2c3d4", DoneWhen: []string{"PR 合并到 main"}, Last: "做完了，PR 已合并",
 				LastReview: &prompts.SuperviseLastReview{Verdict: reviewRework, At: "11-14 10:20", Note: "补深色截图"}},
-		})}))
-	golden(t, "supervise.background_fresh_review", prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Fresh: true,
-		Entries: sortEntries([]prompts.SuperviseEntry{
-			{ID: "t1", Title: "修登录崩溃", Kind: sigReview, DoneWhen: []string{"PR 合并到 main"}, Last: "做完了，PR 已合并",
-				Closeout:   &prompts.SuperviseCloseout{Status: "done"},
-				LastReview: &prompts.SuperviseLastReview{Verdict: reviewRework, At: "11-14 10:20", Note: "补深色截图"}},
-		})}))
+			{ID: "t2", Title: "补测试", Kind: sigAsk, Asks: []prompts.SuperviseAsk{{ID: "ix1", Kind: proto.IxQuestion, Machine: "Mac", Session: "b2c3d4e5", Text: "用哪个分支？"}}},
+		})})
+	var want []string
+	for _, line := range strings.Split(string(whole), "\n") {
+		want = append(want, line)
+		switch {
+		case strings.HasPrefix(line, "（这是 Persona 的督办消息"):
+			want = append(want, roundHeaderLine)
+		case strings.HasPrefix(line, "<persona-supervision level="):
+			want = append(want, prompts.SuperviseRoundMarker)
+		case line == "   验收标准：PR 合并到 main":
+			want = append(want, "   上次结论（11-14 10:20）：rework，补深色截图")
+		}
+	}
+	if w := strings.Join(want, "\n"); got != w {
+		t.Fatalf("the round's message:\n%s\n--- want ---\n%s", got, w)
+	}
 }
 
-// By default each supervision message to the background supervisor is a round: rendered Fresh (only its kinds' rules,
-// the header, the marker) and sent with supervise_round. Its start is not, and neither is anything to the main
+// By default each supervision message to the background supervisor is a round: rendered Fresh (the header, the
+// marker) and sent with supervise_round. Its start is not, and neither is anything to the main
 // conversation or a leader, nor another kind of message to the background supervisor. The task's last review comes
 // along in the next round.
 func TestBackgroundRoundStartsFresh(t *testing.T) {
@@ -153,8 +175,8 @@ func TestBackgroundRoundStartsFresh(t *testing.T) {
 	if send[superviseRoundParam] != true || !prompts.IsSuperviseRound(text) || !strings.Contains(text, roundHeader) {
 		t.Fatalf("the round: %v\n%s", send[superviseRoundParam], text)
 	}
-	if !strings.Contains(text, roundReviewed) || strings.Contains(text, roundStopped) || strings.Contains(text, "上次结论（") {
-		t.Fatalf("a review's round carries other rules, or a review it never had:\n%s", text)
+	if !strings.Contains(text, roundReview) || strings.Contains(text, roundIdle) || strings.Contains(text, "怎么处理") || strings.Contains(text, "上次结论（") {
+		t.Fatalf("a review's round names another signal, carries rules, or a review it never had:\n%s", text)
 	}
 	for _, a := range conversationStarts(f) {
 		if _, set := a[superviseRoundParam]; set {
@@ -189,7 +211,7 @@ func TestBackgroundRoundStartsFresh(t *testing.T) {
 	waitFor(t, "the next round", func() bool { return len(f.noticesTo(bg)) == 3 })
 	next := f.noticesTo(bg)[2]
 	at := time.Now().In(s.location(ctx)).Format("01-02")
-	if !strings.Contains(next, "上次结论（"+at) || !strings.Contains(next, "）：rework，补深色截图") || !strings.Contains(next, roundStopped) || strings.Contains(next, roundReviewed) {
+	if !strings.Contains(next, "上次结论（"+at) || !strings.Contains(next, "）：rework，补深色截图") || !strings.Contains(next, roundIdle) || strings.Contains(next, roundReview) {
 		t.Fatalf("the next round:\n%s", next)
 	}
 }
@@ -215,7 +237,7 @@ func TestBackgroundWakeWhileARoundRuns(t *testing.T) {
 	if len(sends) != 1 || sends[0][superviseRoundParam] != true || !prompts.IsSuperviseRound(text) {
 		t.Fatalf("sent %d: %v", len(sends), sends[0])
 	}
-	for _, want := range []string{"50 分钟没有进展", "停在提问上", "被模型服务出错打断了", "- 没有进展的：", roundStopped, "- 被打断的："} {
+	for _, want := range []string{"50 分钟没有进展", "停在提问上", "被模型服务出错打断了", "signal=" + sigStalled, roundIdle, "signal=" + sigInterrupted} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the merged round lacks %q:\n%s", want, text)
 		}
@@ -586,7 +608,7 @@ func TestBackgroundKeepsContextSetting(t *testing.T) {
 		waitFor(t, "the message", func() bool { return len(f.noticesTo(bg)) == 1 })
 		a := assistantSendsTo(f, bg)[0]
 		text, _ := a["text"].(string)
-		if a[superviseRoundParam] != nil || prompts.IsSuperviseRound(text) || strings.Contains(text, roundHeader) || !strings.Contains(text, roundStopped) {
+		if a[superviseRoundParam] != nil || prompts.IsSuperviseRound(text) || strings.Contains(text, roundHeader) || !strings.Contains(text, "signal=") {
 			t.Fatalf("with the switch on: %v\n%s", a[superviseRoundParam], text)
 		}
 		s.superviseRoundAnswered(bg, superviseRoundReply{Context: "kept", Why: "no_anchor"})
