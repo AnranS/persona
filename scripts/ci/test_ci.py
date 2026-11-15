@@ -327,6 +327,9 @@ class DesktopWorkflowTests(unittest.TestCase):
             self.assertEqual(smoke['if'], first_run)
             checks = next(step for step in steps if step.get('name') == 'Desktop checks')
             self.assertEqual(checks['if'], first_run)
+            install = next(step for step in steps if step.get('name') == 'Install desktop dependencies for isolated first-run')
+            self.assertEqual(install['if'], "${{ inputs.acceptance == 'first-run' }}")
+            self.assertEqual(install['run'], 'npm --prefix desktop ci --ignore-scripts')
             if platform != 'linux':
                 download = next(step for step in steps if step.get('uses') == 'actions/download-artifact@v4')
                 self.assertEqual(download['if'], '${{ !cancelled() }}')
