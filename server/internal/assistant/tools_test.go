@@ -268,6 +268,37 @@ func TestAgentStartConfirmationRetriesIncompleteLedgerRetraction(t *testing.T) {
 	}
 }
 
+func TestAgentStartConfirmationCleansOutboxWhenToldPredatesRestart(t *testing.T) {
+	s, _ := newQuietServiceOn(t, &memStore{})
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Told before the cleanup crash", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", []string{"confirm the exact start"}, 30)
+	g := superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "start-unknown@" + todo.ID, Detail: "provisional start", At: time.Now()}
+	markLeaderTurnSignalled(t, s, g)
+	s.signal(g)
+	if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", todo.Title, "/code/app", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.turnsTold(ctx, []superviseSignal{g}) {
+		t.Fatal("the crash-boundary fixture did not persist told")
+	}
+	// The process stopped after the ledger receipt but before the outbox cleanup. The exact link remains confirmed.
+	simulateSupervisionRestart(t, s)
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	turns.loaded, turns.doc = false, taskTurnsDoc{}
+	turns.mu.Unlock()
+	session := proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
+		State: proto.StateUnread, UpdatedAt: time.Now()}
+	s.watchTurn(ctx, todoNow(s, todo.ID), []proto.Session{session})
+	if got := storedSupervisePending(t, s)[g.id()]; got.Key == g.Key {
+		t.Fatal("the already-told confirmation left a deliverable outbox entry after restart")
+	}
+}
+
 // turnsFailureStore injects a task-ledger failure only after the fixture has been persisted.
 type turnsFailureStore struct {
 	Store
