@@ -564,6 +564,12 @@ func CodexStart(args []string) error {
 		return errors.New(codexStartError + " no command")
 	}
 	path, err := exec.LookPath(words[0])
+	if err != nil && words[0] == "codex" && runtime.GOOS != "windows" {
+		// A native launcher may exist only as an rc function or on the rc-provided PATH.
+		if _, shellErr := exec.LookPath(codexStartShellProgram()); shellErr == nil {
+			path, err = words[0], nil
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("%s %s not found in PATH", codexStartError, words[0])
 	}
