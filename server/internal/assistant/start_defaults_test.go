@@ -317,8 +317,8 @@ func TestStartDefaultsGoalRefusedStartsWithoutIt(t *testing.T) {
 	}
 }
 
-// The facts a start gives say who follows the task up, so a source can tell a leader's worker from the main
-// conversation's own task; read-only and the task's role ride along.
+// The facts a start gives say which conversation actually follows the task up, not which one planned it. New work
+// planned by a leader, or carrying the legacy supervisor input, is still main-supervised; read-only and role ride along.
 func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	s, f := newQuietService(t)
 	f.devices = []Device{{ID: "box", Name: "box", Home: "/home/me", Online: true, Reachable: true}}
@@ -333,7 +333,7 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 		task["machine"], task["cwd"], task["why"] = "box", "/code/app", "the repo is on box"
 		args := map[string]any{"tasks": []map[string]any{task}}
 		if supervisor != "" {
-			args["supervisor"] = supervisor // the whole plan goes to a leader conversation
+			args["supervisor"] = supervisor // legacy input; the new task is still supervised by main
 		}
 		raw, _ := json.Marshal(args)
 		res, err := s.toolTaskPlan(ctx, conversation, raw)
@@ -362,14 +362,14 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	planWait(3)
 	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	got := seen()
-	if a := got[0]; a.Supervisor != dispatchClassLeader || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
-		t.Fatalf("leader's task: %+v", a)
+	if a := got[0]; a.Supervisor != dispatchClassMain || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
+		t.Fatalf("task planned by the leader: %+v", a)
 	}
 	if b := got[1]; b.Supervisor != dispatchClassMain || !b.Readonly {
 		t.Fatalf("main's own task: %+v", b)
 	}
-	if c := got[2]; c.Supervisor != dispatchClassLeader {
-		t.Fatalf("task handed to the leader: %+v", c)
+	if c := got[2]; c.Supervisor != dispatchClassMain {
+		t.Fatalf("task with the legacy supervisor input: %+v", c)
 	}
 }
 
@@ -389,8 +389,8 @@ func putStartDefaults(t *testing.T, s *Service, role, ext, body string) (int, st
 	return rec.Code, rec.Body.String()
 }
 
-// A policy whose rule picks the tasks a leader conversation follows up: those start with the defaults, the main
-// conversation's own task starts exactly as it would without the policy, and a read-only task is left alone too. The
+// A policy matches the actual supervisor, not the planning conversation. A leader-only rule leaves new work alone even
+// when a leader planned it; replacing it with a main rule fills writable starts, while read-only stays untouched. The
 // policy is the one an extension wrote through the route.
 func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 	s, f := newQuietService(t)
@@ -430,16 +430,34 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 		return startsOf(f)[before]
 	}
 	led := start("lead1", false)
-	if led["ultracode"] != true || led["effort"] != "max" || led["goal"] == nil {
-		t.Fatalf("a leader's worker started without the defaults: %v", led)
+	if led["ultracode"] != nil || led["goal"] != nil || led["effort"] == "max" {
+		t.Fatalf("the leader-only rule reached main-supervised work: %v", led)
 	}
 	own := start("conv1", false)
 	if own["ultracode"] != nil || own["goal"] != nil || own["effort"] == "max" {
-		t.Fatalf("the main conversation's own task got the defaults: %v", own)
+		t.Fatalf("the main conversation's own task got the leader-only defaults: %v", own)
 	}
 	ro := start("lead1", true)
 	if ro["ultracode"] != nil || ro["goal"] != nil || ro["effort"] == "max" {
-		t.Fatalf("a read-only task got the defaults: %v", ro)
+		t.Fatalf("a read-only task got the leader-only defaults: %v", ro)
+	}
+
+	code, body = putStartDefaults(t, s, roleExtension, "kit", `{"start_defaults":{"expires_at":"`+expires+`","rules":[
+		{"when":{"supervisor":["main"],"readonly":false},"then":{"effort":"max","ultracode":true,"goal":"done_when"}}]}}`)
+	if code != http.StatusOK {
+		t.Fatalf("put main rule: %d %s", code, body)
+	}
+	led = start("lead1", false)
+	if led["ultracode"] != true || led["effort"] != "max" || led["goal"] == nil {
+		t.Fatalf("main-supervised work planned by the leader missed the defaults: %v", led)
+	}
+	own = start("conv1", false)
+	if own["ultracode"] != true || own["effort"] != "max" || own["goal"] == nil {
+		t.Fatalf("the main conversation's own task missed the defaults: %v", own)
+	}
+	ro = start("lead1", true)
+	if ro["ultracode"] != nil || ro["goal"] != nil || ro["effort"] == "max" {
+		t.Fatalf("a read-only task got the main defaults: %v", ro)
 	}
 	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 }
