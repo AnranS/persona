@@ -4,6 +4,8 @@
 // are the chat card's (views/chat/Interactions.tsx sends them through the same resolve).
 import { t } from "../i18n";
 import type { Resolution } from "./answered";
+import { outboundConfirmEnabled } from "./outbound-confirm";
+import { outboundAction } from "./outbound-actions";
 import { isSecretHandoff, isSecretRun } from "./tool-detail";
 import type { Interaction } from "./types";
 
@@ -33,6 +35,8 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
   switch (ix.kind) {
     case "permission": {
       if (needsFieldValues(ix)) return null;
+      // An outward-facing action is confirmed on its own card, never from an overview row's one-tap Allow.
+      if (outboundConfirmEnabled() && outboundAction(ix.tool_name, ix.tool_input)) return null;
       return [
         { key: "allow", label: t("chat-interactions.allow"), body: allowBody(), primary: true },
         { key: "deny", label: t("chat-interactions.deny"), body: denyBody() },

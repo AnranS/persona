@@ -354,6 +354,15 @@ describe("已在需要你时又来一张卡（#4058）", () => {
       expect(shown).toEqual([]);
       expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
     });
+
+    it("对外操作的授权卡：通知不带允许/拒绝按钮，只打开对话去卡片上二次确认", async () => {
+      const push = { ...perm, id: "p-push", tool_input: { command: "git push origin main" } };
+      await show([session("a", "working")]);
+      await show([session("a", "needs_you")], [push]);
+      await act(async () => {});
+      expect(shown).toEqual([]);
+      expect(posted.map((p) => p.title)).toEqual(["a 需要你授权"]);
+    });
   });
 });
 

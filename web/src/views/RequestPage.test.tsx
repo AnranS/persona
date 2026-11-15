@@ -50,7 +50,13 @@ it("renders, answers and shows the receipt through the real store and API", asyn
   expect(host.querySelector("fieldset[disabled]")).toBeNull();
   const allow = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "允许");
   expect(allow).toBeDefined();
+  // this request cannot be read as local-only: the first Allow only arms the second confirmation, nothing is sent
   act(() => allow!.click());
+  await flush();
+  expect(writes).toEqual([]);
+  const confirm = [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "确认并允许");
+  expect(confirm).toBeDefined();
+  act(() => confirm!.click());
   await flush();
   expect(writes).toEqual([{ url: "/api/v1/interactions/script-request/resolve", body: { allow: true } }]);
   expect(getState().interactions).toEqual([]);

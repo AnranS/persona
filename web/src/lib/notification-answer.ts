@@ -8,6 +8,8 @@ import { stripBase } from "./base";
 import { answerCard } from "./card-answer";
 import { postNotification } from "./notify";
 import { allowBody, denyBody, needsFieldValues } from "./quick-answers";
+import { outboundConfirmEnabled } from "./outbound-confirm";
+import { outboundAction } from "./outbound-actions";
 import { href, navigate } from "./router";
 import { getState } from "./store";
 import type { Resolution } from "./answered";
@@ -52,6 +54,8 @@ export function planClick(m: unknown, interactions: readonly Interaction[], now:
   const ix = interactions.find((x) => x.id === m.ix);
   if (ix?.kind !== "permission" || needsFieldValues(ix) || answering.has(ix.id)) return undefined;
   const allow = m.action === "allow";
+  // An outward-facing Allow is confirmed on the card itself: leave it to the worker to open the conversation.
+  if (allow && outboundConfirmEnabled() && outboundAction(ix.tool_name, ix.tool_input)) return undefined;
   return { ix, allow, body: allow ? allowBody() : denyBody() };
 }
 

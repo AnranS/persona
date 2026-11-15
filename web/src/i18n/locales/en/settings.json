@@ -158,5 +158,7 @@
   "search_no_results": "No matching settings",
   "search_placeholder_settings": "Search settings",
   "search_key_words": "API key, secret key",
-  "device_tokens": "Device tokens"
+  "device_tokens": "Device tokens",
+  "outbound_confirm": "Confirm outward-facing actions",
+  "outbound_confirm_hint": "Ask one extra confirmation before allowing pushes, deploys, or messages sent as you."
 }

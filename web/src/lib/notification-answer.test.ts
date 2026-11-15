@@ -63,6 +63,18 @@ describe("哪张卡、发什么", () => {
     expect(planClick({ type: "other", action: "allow", ix: "p1", at: now }, interactions, now)).toBeUndefined();
   });
 
+  it("对外操作的允许不在通知里一键答：交给 worker 打开对话；拒绝仍然接；关闭开关后允许恢复", () => {
+    const now = Date.now();
+    const push = { ...perm, id: "p2", tool_input: { command: "git push origin main" } };
+    interactions = [push];
+    expect(planClick(note("allow", "p2"), interactions, now)).toBeUndefined();
+    expect(planClick(note("deny", "p2"), interactions, now)).toEqual({ ix: push, allow: false, body: denyBody() });
+    localStorage.setItem("persona.outboundConfirm", "0");
+    expect(planClick(note("allow", "p2"), interactions, now)).toEqual({ ix: push, allow: true, body: allowBody() });
+    localStorage.removeItem("persona.outboundConfirm");
+    interactions = [perm, ask];
+  });
+
   it("点通知本身：只转到本站的地址", () => {
     expect(planClick(note("open"), interactions, Date.now())).toEqual({ open: "/s/m/a" });
     expect(planClick(note("open", "p1", { url: "https://example.com/x" }), interactions, Date.now())).toBeUndefined();
@@ -104,12 +116,16 @@ describe("页面收到 worker 的消息", () => {
     expect(toasts).toEqual([]);
   });
 
-  it("answers a sessionless notification and keeps a failed answer linked to its request", async () => {
+  it("a sessionless request's allow opens its request page, and a failed deny stays linked to the request", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const script = { ...perm, id: "script-request", session_id: "", tool_name: "personad_ask" };
     interactions = [script];
-    expect(deliver(note("allow", script.id)).postMessage).toHaveBeenCalledWith(true);
-    expect(answerCard).toHaveBeenCalledWith(script, { allow: true });
+    // an unparsed, possibly outward-facing request is never allowed from the notification: the worker opens its page
+    expect(deliver(note("allow", script.id)).postMessage).toHaveBeenCalledWith(false);
+    expect(answerCard).not.toHaveBeenCalled();
+    // deny stays one tap, and its failure notification still links to the request page
+    expect(deliver(note("deny", script.id)).postMessage).toHaveBeenCalledWith(true);
+    expect(answerCard).toHaveBeenCalledWith(script, denyBody());
     answers[0]!({ ok: false, error: "Example connection failure" });
     await settle();
     expect(posted).toEqual([expect.objectContaining({ url: "/requests/script-request" })]);

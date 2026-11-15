@@ -107,5 +107,12 @@
   "secret_handoff_note": "Persona and the assistant never see the values.",
   "secret_handoff_always_scope": "Always allow {scope}.",
   "secret_handoff_card_only": "Approve it on its card in the chat.",
+  "outbound_warning_push": "This pushes code where others can see it.",
+  "outbound_warning_deploy": "This changes a deployed environment.",
+  "outbound_warning_send": "This sends a message or external action as you.",
+  "outbound_warning_unknown": "This could reach outside this machine and cannot be read as local-only.",
+  "outbound_confirm_hint": "Tap the confirmation button to send it anyway, or deny it.",
+  "outbound_confirm_allow": "Confirm and allow",
+  "outbound_cancel": "Back",
   "show_card": "Show the whole request"
 }

@@ -15,6 +15,8 @@ import { isMuted } from "./session-actions";
 import { href, navigate } from "./router";
 import { stripBase } from "./base";
 import { needsFieldValues } from "./quick-answers";
+import { outboundAction } from "./outbound-actions";
+import { outboundConfirmEnabled } from "./outbound-confirm";
 import { t } from "../i18n";
 import { requestRoute } from "./card-focus";
 import type { AgentState, Interaction, Session } from "./types";
@@ -224,8 +226,9 @@ function notify(s: Session | undefined, kind: "needs" | "finished", card?: Inter
   const route = card ? requestRoute(card) : { name: "session", mid: s!.machine_id, sid: s!.session_id } as const;
   const icon = document.querySelector<HTMLLinkElement>(ICONS)?.dataset.original ?? document.querySelector<HTMLLinkElement>(ICONS)?.href;
   // a permission card's gets Allow / Deny (#4464), when the session can be answered from here and nothing has to be
-  // filled in first (fields: as the hub's push and the overview's quick answers); the rest need the conversation
-  const ix = waiting.ix?.kind === "permission" && !needsFieldValues(waiting.ix) && interactionCanAnswer(waiting.ix, s) ? waiting.ix.id : undefined;
+  // filled in first (fields: as the hub's push and the overview's quick answers); an outward-facing one only opens the
+  // conversation, so its second confirmation stays on the card; the rest need the conversation
+  const ix = waiting.ix?.kind === "permission" && !needsFieldValues(waiting.ix) && !(outboundConfirmEnabled() && outboundAction(waiting.ix.tool_name, waiting.ix.tool_input)) && interactionCanAnswer(waiting.ix, s) ? waiting.ix.id : undefined;
   // inside quiet hours a "Needs you" one comes without a sound (a finished one doesn't come at all: wants)
   postNotification({ title, body, tag, url: href(route), icon, ix, silent: inQuietHours(notifyPrefs()) }, () => navigate(route));
   return { about: waiting.ix?.id };

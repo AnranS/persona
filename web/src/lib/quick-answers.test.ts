@@ -13,6 +13,12 @@ describe("quickAnswers (#4090, as iOS's 需要你 cards)", () => {
     expect(q[1].body).toEqual({ allow: false, message: "用户拒绝了" });
   });
 
+  it("leaves an outward-facing permission to its chat card while the confirm setting is on", () => {
+    // the setting defaults on (and this node-environment file has no localStorage, where the default still holds)
+    expect(quickAnswers(ix({ tool_name: "Bash", tool_input: { command: "git push origin main" } }))).toBeNull();
+    expect(quickAnswers(ix({ tool_name: "Bash", tool_input: { command: "npm publish" } }))).toBeNull();
+  });
+
   it("leaves a permission with fields to fill in to its chat", () => {
     expect(quickAnswers(ix({ fields: [{ key: "password", label: "授权码", secret: true }] }))).toBeNull();
   });

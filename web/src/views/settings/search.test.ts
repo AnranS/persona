@@ -15,6 +15,7 @@ const PAGES = [
   "./TranslationSettings.tsx",
   "./AgentOpenSetting.tsx",
   "./TerminalModeSetting.tsx",
+  "./OutboundConfirmSetting.tsx",
   "./SidebarPages.tsx",
   "./AssistantSettings.tsx",
   "./AgentAutoNaming.tsx",

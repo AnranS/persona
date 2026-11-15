@@ -48,6 +48,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // General › Agents
   { tab: "general", group: t("settings.agent_preferences"), hint: words(t("terminal-full.mode_group"), t("settings.sidebar_terminals")), anchor: "agent-preferences" },
   { tab: "general", group: t("settings-agentopen.label"), hint: words(t("settings-agentopen.panel"), t("settings-agentopen.page")), anchor: "agent-open" },
+  { tab: "general", group: t("settings.outbound_confirm"), hint: t("settings.outbound_confirm_hint"), anchor: "outbound-confirm" },
   { tab: "general", group: t("context.details"), anchor: "agent-details" },
   { tab: "general", group: t("context.as_used"), anchor: "context-as-used" },
   // General › hubs, this browser, about

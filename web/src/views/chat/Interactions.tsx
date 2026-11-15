@@ -1,5 +1,5 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
@@ -32,9 +32,12 @@ import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { alwaysScope, offersAlways } from "../../lib/always-scope";
+import { outboundAction } from "../../lib/outbound-actions";
+import { useOutboundConfirm } from "../../lib/outbound-confirm";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
+import { OutboundWarning } from "./OutboundConfirm";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
 export async function resolve(ix: Interaction, body: Record<string, unknown>) {
@@ -506,19 +509,36 @@ function PlanCard({ ix }: { ix: Interaction }) {
 
 function PermissionCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState(false);
+  // The extra confirmation an outward-facing Allow goes through, and which answer it confirms (Allow or Always allow).
+  const [confirming, setConfirming] = useState(false);
+  const pending = useRef<"allow" | "always">("allow");
+  const confirmOn = useOutboundConfirm();
+  const risk = useMemo(() => outboundAction(ix.tool_name, ix.tool_input), [ix.tool_name, ix.tool_input]);
+  const gated = confirmOn && risk !== null;
+  useEffect(() => setConfirming(false), [ix.id]);
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);
     await resolve(ix, body);
     setBusy(false);
   };
   // Enter allows (the Allow button). Deny is never a key away: it stays an explicit press of its button — or Enter
-  // while that button is focused, which is the button's own activation, not the card's main action
+  // while that button is focused, which is the button's own activation, not the card's main action. With the outbound
+  // gate on, the first Enter only arms the second confirmation step; a second Enter sends the Allow.
   const keys = useCardKeys({
     enter: () => {
       if (busy) return false;
+      if (gated && !confirming) {
+        pending.current = "allow";
+        setConfirming(true);
+        return;
+      }
       void go(allowBody());
     },
   });
+  const arm = (which: "allow" | "always") => {
+    pending.current = which;
+    setConfirming(true);
+  };
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
@@ -527,26 +547,50 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       onDismiss={() => go({ dismiss: true })}
       busy={busy}
       footer={
-        <>
-          <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
-            {t("chat-interactions.deny")}
-          </Button>
-          <span className="flex gap-1.5">
-            {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
-            {offersAlways(ix) && (
-              <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
-                {t("chat-interactions.always_allow")}
-              </Button>
-            )}
-            <Button tone="primary" busy={busy} onClick={() => go(allowBody())}>
-              {t("chat-interactions.allow")}
-              {keys.focused && <Kbd>Enter</Kbd>}
+        gated && confirming ? (
+          <>
+            {/* Deny stays one tap even while the second step is open */}
+            <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
+              {t("chat-interactions.deny")}
             </Button>
-          </span>
-        </>
+            <span className="flex gap-1.5">
+              <Button tone="quiet" disabled={busy} onClick={() => setConfirming(false)}>
+                {t("chat-interactions.outbound_cancel")}
+              </Button>
+              <Button tone="danger" busy={busy} onClick={() => go(pending.current === "always" ? { allow: true, always: true } : allowBody())}>
+                {t("chat-interactions.outbound_confirm_allow")}
+                {keys.focused && <Kbd>Enter</Kbd>}
+              </Button>
+            </span>
+          </>
+        ) : (
+          <>
+            <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
+              {t("chat-interactions.deny")}
+            </Button>
+            <span className="flex gap-1.5">
+              {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
+              {offersAlways(ix) && (
+                <Button tone="secondary" disabled={busy} onClick={() => (gated ? arm("always") : go({ allow: true, always: true }))}>
+                  {t("chat-interactions.always_allow")}
+                </Button>
+              )}
+              <Button tone="primary" busy={busy} onClick={() => (gated ? arm("allow") : go(allowBody()))}>
+                {t("chat-interactions.allow")}
+                {keys.focused && <Kbd>Enter</Kbd>}
+              </Button>
+            </span>
+          </>
+        )
       }
     >
       <PermissionBody ix={ix} />
+      {gated && risk && (
+        <>
+          <OutboundWarning risk={risk} />
+          {confirming && <p data-outbound-confirm-step className="mt-1.5 text-[12px] leading-snug text-orange">{t("chat-interactions.outbound_confirm_hint")}</p>}
+        </>
+      )}
       {alwaysScope(ix) && <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
     </Card>
   );

@@ -155,5 +155,7 @@
   "search_no_results": "一致する設定がありません",
   "search_placeholder_settings": "設定を検索",
   "search_key_words": "API キー、シークレットキー",
-  "device_tokens": "デバイスのトークン"
+  "device_tokens": "デバイスのトークン",
+  "outbound_confirm": "外部への操作を確認",
+  "outbound_confirm_hint": "プッシュ、デプロイ、あなたとしてのメッセージ送信を許可する前に、もう一度確認します。"
 }

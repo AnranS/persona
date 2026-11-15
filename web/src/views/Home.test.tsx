@@ -402,10 +402,11 @@ describe("tasks in progress", () => {
   });
 });
 
-it("opens an explicitly sessionless request and offers its quick answers", () => {
+it("opens an explicitly sessionless request on its page instead of offering a one-tap allow", () => {
+  // a request whose action cannot be read as local-only is confirmed on the card, not from the overview row
   const html = render([], [{ id: "script-request", machine_id: "mac", session_id: "", kind: "permission", tool_name: "personad_ask", summary: "Publish the draft?" }]);
   expect(html).toContain('href="/requests/script-request"');
-  expect(buttonLabels(html)).toContain("允许");
+  expect(buttonLabels(html)).not.toContain("允许");
   expect(html).not.toContain('href="/s/mac/"');
 });
 
