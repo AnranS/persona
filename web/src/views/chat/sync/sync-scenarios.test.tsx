@@ -51,6 +51,10 @@ const { PersonaAssistant } = await import("../../PersonaAssistant");
 const { navigate, useRoute } = await import("../../../lib/router");
 const { resetOutboxClaimsForTests } = await import("../../../lib/outbox");
 const { resetStalePullsForTests } = await import("../useTranscript");
+// The permission card's risk read comes from its lazy OutboundConfirm chunk; under jsdom it never loads on its own, so
+// every local-only Bash "ls" would sit behind the pending "unknown" gate. Preload it (which also registers the real
+// classifier); the settle() helper flushes the card's effect so the one-tap Allow the scenarios assert still sends.
+await import("../OutboundConfirm");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtures/sync/*.json", { eager: true, import: "default" });

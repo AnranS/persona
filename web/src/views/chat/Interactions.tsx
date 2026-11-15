@@ -8,6 +8,7 @@ import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } 
 import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
 import { allowBody, denyBody } from "../../lib/quick-answers";
+import { outboundAction } from "../../lib/outbound-facade";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import type { Interaction } from "../../lib/types";
@@ -34,19 +35,16 @@ import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { alwaysScope, offersAlways } from "../../lib/always-scope";
-import { preloadAtIdle } from "../../lib/lazy-page";
-import { outboundConfirmEnabled } from "../../lib/quick-answers";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
 import { useChatCardTapGuard, useChatTapGuardView } from "./card-tap-guard";
 
-// The single loader for the outward-confirm lazy chunk (classifier plus warning/confirm UI). The chunk registers the
-// real classifier on the first-screen facade as a side effect of loading. Registered at idle so a real approval card
-// normally has it ready; the idle runner skips it under Data Saver, and the card still loads it on mount.
+// The single loader for the outward-confirm lazy chunk (classifier plus warning/confirm UI). The chunk installs the
+// setting-aware classifier on the first-screen facade as a side effect of loading. A permission card loads it on mount;
+// until then the facade's fail-toward-warning "unknown" bucket is in effect.
 const loadOutboundConfirm = (): Promise<typeof import("./OutboundConfirm")> => import("./OutboundConfirm");
 type LazyOutboundConfirm = Awaited<ReturnType<typeof loadOutboundConfirm>>;
-preloadAtIdle(loadOutboundConfirm);
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
 export async function resolve(ix: Interaction, body: Record<string, unknown>) {
@@ -528,16 +526,18 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   // The extra confirmation an outward-facing Allow goes through, and which answer it confirms (Allow or Always allow).
   const [confirming, setConfirming] = useState(false);
   const pending = useRef<"allow" | "always">("allow");
-  const confirmOn = outboundConfirmEnabled();
   // The warning/confirm chunk (with the classifier it imports) loads on mount and at idle; until it is in, every
-  // request reads as the "unknown" warning bucket, so a pending chunk gates instead of quietly allowing.
+  // request reads as the "unknown" warning bucket, so a pending chunk gates instead of quietly allowing. The chunk
+  // registers a setting-aware classifier, so a turned-off gate makes risk null and the one-tap Allow returns.
   const [confirmUi, setConfirmUi] = useState<LazyOutboundConfirm | null>(null);
   // A setConfirmUi after the card unmounted is a harmless no-op, so the effect needs no live flag.
   useEffect(() => {
     void loadOutboundConfirm().then(setConfirmUi, () => {});
   }, []);
-  const risk = confirmUi ? confirmUi.outboundRisk(ix.tool_name, ix.tool_input) : { kind: "unknown" as const };
-  const gated = confirmOn && risk !== null;
+  // The facade is the single risk source: the lazy chunk's setting-aware classifier once it registers, otherwise the
+  // fail-toward-warning "unknown" bucket. confirmUi only gates the lazy warning/confirm components and the arm guard.
+  const risk = outboundAction(ix.tool_name, ix.tool_input);
+  const gated = risk !== null;
   useEffect(() => setConfirming(false), [ix.id]);
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);

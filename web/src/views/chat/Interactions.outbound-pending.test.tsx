@@ -16,10 +16,9 @@ vi.mock("../../lib/ops", () => ({
     return {};
   }),
 }));
-// Stands in for the lazy chunk while it cannot yet answer: the warning bucket for every request, and the warning and
-// confirm-step markers the card renders from it.
+// Stands in for the lazy chunk while it cannot yet answer: it never registers a classifier, so the first-screen facade
+// keeps its fail-toward-warning "unknown" bucket; the warning and confirm-step markers the card renders are stubbed.
 vi.mock("./OutboundConfirm", () => ({
-  outboundRisk: () => ({ kind: "unknown" as const }),
   OutboundWarning: () => <div data-outbound-warning />,
   OutboundConfirmStep: () => <div data-outbound-confirm-step />,
   OutboundConfirmFooter: ({ onDeny }: { onDeny: () => void }) => (
@@ -28,7 +27,6 @@ vi.mock("./OutboundConfirm", () => ({
 }));
 import { InteractionCard } from "./Interactions";
 import { getState, reset, upsertSession } from "../../lib/store";
-import { setOutboundConfirmEnabled } from "../../lib/quick-answers";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
 
@@ -64,7 +62,6 @@ const render = async (ix: Interaction) => {
 beforeEach(() => {
   localStorage.clear();
   calls.length = 0;
-  setOutboundConfirmEnabled(true);
   upsertSession({ machine_id: "m", session_id: "s", title: "Demo", state: "needs_you" } as Session);
   Object.assign(getState(), { interactions: [], answered: {} });
   host = document.createElement("div");

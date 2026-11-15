@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { quickAnswers, withHeld, type HeldRow } from "./quick-answers";
-import { setOutboundClassifier } from "./quick-answers";
+import { setOutboundClassifier } from "./outbound-facade";
 import { outboundAction } from "./outbound-actions.classifier";
 import type { Interaction } from "./types";
 

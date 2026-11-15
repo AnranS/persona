@@ -2,7 +2,7 @@
 // registers it, so the synchronous getter must answer "unknown" for every request — a confidently local one included
 // — and no gated call site can take the quiet single-Allow path.
 import { describe, expect, it } from "vitest";
-import { outboundAction } from "./quick-answers";
+import { outboundAction } from "./outbound-facade";
 
 describe("outboundAction facade before its classifier is registered", () => {
   it("answers the warning bucket for rule matches, local commands, file tools and missing input", () => {

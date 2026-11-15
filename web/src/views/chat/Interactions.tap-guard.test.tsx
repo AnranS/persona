@@ -21,7 +21,13 @@ import { InteractionCard } from "./Interactions";
 import { getState } from "../../lib/store";
 import { resetChatTapGuardForTest } from "./card-tap-guard";
 import { TAP_GUARD_ATTR } from "../../lib/tap-guard";
+import { setOutboundClassifier } from "../../lib/outbound-facade";
+import { outboundAction } from "../../lib/outbound-actions.classifier";
 import type { Interaction, Session } from "../../lib/types";
+
+// The confirm chunk cannot settle on the test's faked clock; register the real classifier so the local-only "npm test"
+// card reads ungated and its keyboard Allow sends, independent of the lazy chunk.
+setOutboundClassifier(outboundAction);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

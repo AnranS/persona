@@ -3,45 +3,13 @@
 // a terminal dialog's plain options (one to four, read by the hub too). Every other card opens its chat. The bodies
 // are the chat card's (views/chat/Interactions.tsx sends them through the same resolve).
 //
-// This module also owns the "Confirm outward-facing actions" setting and the gate the overview rows, system
-// notifications and attention signals use. The classifier itself lives in the dependency-free ./outbound-facade (the
-// lazy chunk views/chat/OutboundConfirm registers it there), so this module and the lazy chunk share the registry
-// without the lazy chunk importing the large App chunk.
+// The outward-facing gate reads the dependency-free ./outbound-facade, whose pending answer is the warning bucket. Its
+// real classifier and on/off setting both live in lazy chunks, so none of that storage is on the cold first screen.
 import { t } from "../i18n";
 import type { Resolution } from "./answered";
 import { isSecretHandoff, isSecretRun } from "./tool-detail";
 import type { Interaction } from "./types";
 import { outboundAction } from "./outbound-facade";
-
-export { outboundAction, setOutboundClassifier, type OutboundRisk } from "./outbound-facade";
-
-const OUTBOUND_KEY = "persona.outboundConfirm";
-
-/** Whether the extra confirmation is on (the default; only an explicit "0" turns it off). */
-export function outboundConfirmEnabled(): boolean {
-  try {
-    return localStorage.getItem(OUTBOUND_KEY) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-export function setOutboundConfirmEnabled(on: boolean): void {
-  try {
-    if (on) localStorage.removeItem(OUTBOUND_KEY);
-    else localStorage.setItem(OUTBOUND_KEY, "0");
-  } catch {
-    // storage unavailable: nothing is kept, the default (on) stays
-  }
-}
-
-/**
- * Whether an allow of this tool input is blocked right now: the setting is on and the classifier, or its pending
- * "unknown" fallback, reads the request as outward-facing.
- */
-export function outboundBlocked(tool: string | undefined, input: Record<string, unknown> | undefined): boolean {
-  return outboundConfirmEnabled() && outboundAction(tool, input) !== null;
-}
 
 /** A permission card only its own form can allow: it has fields to fill in (#4987), it is a password card (#1137),
  *  answered only with the password typed on it, or a hand-off card (#3962), approved only on the card. Its quick paths
@@ -54,7 +22,7 @@ export function needsFieldValues(ix: Interaction): boolean {
  *  a hand-off card (#3962), or the outward-confirm gate reads it as leaving the machine. The overview rows, system
  *  notifications and attention signals share this one predicate. */
 export function onlyOnCard(ix: Interaction): boolean {
-  return ix.kind === "permission" && (needsFieldValues(ix) || outboundBlocked(ix.tool_name, ix.tool_input));
+  return ix.kind === "permission" && (needsFieldValues(ix) || outboundAction(ix.tool_name, ix.tool_input) !== null);
 }
 
 /** What a permission card's "Allow" sends. */

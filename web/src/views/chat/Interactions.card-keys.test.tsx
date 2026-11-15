@@ -21,6 +21,11 @@ import { InteractionCard } from "./Interactions";
 import { getState } from "../../lib/store";
 import type { Interaction, Session } from "../../lib/types";
 
+// The card's risk read comes from its lazy OutboundConfirm chunk; under jsdom that chunk never loads on its own, so the
+// card would sit in the pending "unknown" gate. Preload it (which also registers the real classifier) so the local-only
+// permission keeps its one-tap Enter answer, matching the loaded app path.
+await import("./OutboundConfirm");
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 beforeAll(() => {
@@ -76,6 +81,11 @@ afterEach(() => {
 describe("a card answering from the keyboard", () => {
   it("Enter allows a permission: the main action, never a deny", async () => {
     act(() => root.render(<InteractionCard ix={permission} />));
+    // Settle the preloaded confirm chunk on real timers (a fixed microtask flush can run before the card's effect
+    // commits under a fully parallel suite) so the local-only Allow is one tap.
+    for (let i = 0; i < 20; i++) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+    }
     act(() => cardRoot().focus());
     await press("Enter");
     await flush();

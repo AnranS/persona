@@ -3,7 +3,7 @@
 // The row owns its switch state; the flag itself is read straight from storage wherever a card needs it.
 import { useState } from "react";
 import { t } from "../../i18n";
-import { outboundConfirmEnabled, setOutboundConfirmEnabled } from "../../lib/quick-answers";
+import { outboundConfirmEnabled, setOutboundConfirmEnabled } from "../../lib/outbound-setting";
 import { Row, Switch } from "./SettingsParts";
 
 export function OutboundConfirmRow() {

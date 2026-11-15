@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { OutboundConfirmRow } from "./OutboundConfirmSetting";
-import { outboundConfirmEnabled, setOutboundConfirmEnabled } from "../../lib/quick-answers";
+import { outboundConfirmEnabled, setOutboundConfirmEnabled } from "../../lib/outbound-setting";
 import { t } from "../../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

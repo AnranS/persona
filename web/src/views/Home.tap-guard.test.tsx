@@ -46,6 +46,11 @@ vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null }));
 const { Home, resetOverviewTapGuardForTest } = await import("./Home");
 const { getState } = await import("../lib/store");
 const { setTapGuardClockForTest, TAP_GUARD_ATTR, TAP_GUARD_MS } = await import("../lib/tap-guard");
+// The lazy confirm chunk never loads under jsdom; register the real classifier so the local-only "npm test" row keeps
+// its one-tap quick answer instead of being routed into the card by the fail-toward-warning gate.
+const { setOutboundClassifier } = await import("../lib/outbound-facade");
+const { outboundAction } = await import("../lib/outbound-actions.classifier");
+setOutboundClassifier(outboundAction);
 import type { Interaction, Session } from "../lib/types";
 
 const session = { machine_id: "mac", session_id: "s1", title: "agent 1", cwd: "/code", status: "idle", state: "needs_you" } as Session;

@@ -17,7 +17,7 @@ vi.mock("../../lib/ops", () => ({
 }));
 import { InteractionCard } from "./Interactions";
 import { getState, reset, upsertSession } from "../../lib/store";
-import { setOutboundConfirmEnabled } from "../../lib/quick-answers";
+import { setOutboundConfirmEnabled } from "../../lib/outbound-setting";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
 

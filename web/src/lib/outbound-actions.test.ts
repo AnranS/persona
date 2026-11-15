@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { outboundAction } from "./outbound-actions.classifier";
-import { outboundAction as facade, setOutboundClassifier } from "./quick-answers";
+import { outboundAction as facade, setOutboundClassifier } from "./outbound-facade";
 const classify = (tool: string, input: Record<string, unknown>) => outboundAction(tool, input)?.kind ?? null;
 
 describe("outboundAction: push and remote writes", () => {

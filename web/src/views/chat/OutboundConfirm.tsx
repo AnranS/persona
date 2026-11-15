@@ -1,26 +1,17 @@
 // The plain-language warning and the second confirmation step an outward-facing permission card carries (#8166).
 // This whole module is a lazy chunk: it loads off the cold first screen (Interactions.tsx imports it dynamically,
-// after the rest of the catalog is in), so its words live in the non-startup outbound-confirm namespace. The gate that
-// decides whether to show them stays on the first screen in lib/outbound-confirm.ts, whose pending answer is to warn.
+// after the rest of the catalog is in), so its words live in the non-startup outbound-confirm namespace. The tiny gate
+// the first screen keeps is the dependency-free lib/outbound-facade, whose pending answer is to warn.
 import { t } from "../../i18n";
 import { Icon } from "../../ui/icons";
 import { Button, Kbd } from "../../ui/atoms";
-import { setOutboundClassifier } from "../../lib/outbound-facade";
-import { outboundAction } from "../../lib/outbound-actions.classifier";
+import { applyOutboundSetting } from "../../lib/outbound-setting";
 import type { OutboundRisk } from "../../lib/outbound-facade";
 
-// On first evaluation this chunk hands the real classifier to the first-screen facade, whose synchronous answer until
-// then is the fail-toward-warning "unknown" bucket.
-setOutboundClassifier(outboundAction);
-
-/**
- * The card's classifier answer. This whole module is a lazy chunk and imports the classifier statically, so the
- * answer exists whenever the module does; the first-screen card treats the time before that as the "unknown" warning
- * bucket, the same fail-toward-warning answer the classifier gives input it cannot parse.
- */
-export function outboundRisk(tool: string | undefined, input: Record<string, unknown> | undefined): OutboundRisk | null {
-  return outboundAction(tool, input);
-}
+// On first evaluation this chunk installs the classifier matching the stored setting: the real one while the gate is on,
+// a no-op ("local-only" for everything) when it is off. Until then the first-screen facade's fail-toward-warning
+// "unknown" bucket is in effect.
+applyOutboundSetting();
 
 /** The risk line for a category, including the fail-toward-warning bucket. */
 export function riskText(risk: OutboundRisk): string {

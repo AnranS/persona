@@ -7,6 +7,11 @@ import { getState, refresh, reset } from "../lib/store";
 import { RequestPage } from "./RequestPage";
 import type { Interaction } from "../lib/types";
 
+// The card's two-step confirm lives in a lazy chunk; preload it so its confirm step is ready once the first Allow arms,
+// instead of racing the module load inside the test's microtask flush. The personad_ask request still classifies as the
+// warning bucket, so the two-step gate this test asserts is unchanged.
+await import("./chat/OutboundConfirm");
+
 let cards: Interaction[];
 let writes: { url: string; body: unknown }[];
 let root: ReturnType<typeof createRoot>;

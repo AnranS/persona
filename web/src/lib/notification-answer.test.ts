@@ -22,8 +22,9 @@ const worker = await import("./sw-click");
 const { allowBody, denyBody } = await import("./quick-answers");
 // The classifier is a lazy chunk in the app; register it so these tests see its real answers instead of the pending
 // "unknown" fallback.
-const { setOutboundClassifier } = await import("./quick-answers");
+const { setOutboundClassifier } = await import("./outbound-facade");
 const { outboundAction } = await import("./outbound-actions.classifier");
+const { setOutboundConfirmEnabled } = await import("./outbound-setting");
 setOutboundClassifier(outboundAction);
 
 const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "go test ./..." } };
@@ -74,9 +75,9 @@ describe("哪张卡、发什么", () => {
     interactions = [push];
     expect(planClick(note("allow", "p2"), interactions, now)).toBeUndefined();
     expect(planClick(note("deny", "p2"), interactions, now)).toEqual({ ix: push, allow: false, body: denyBody() });
-    localStorage.setItem("persona.outboundConfirm", "0");
+    setOutboundConfirmEnabled(false); // writes the setting and swaps the facade classifier for the local-only no-op
     expect(planClick(note("allow", "p2"), interactions, now)).toEqual({ ix: push, allow: true, body: allowBody() });
-    localStorage.removeItem("persona.outboundConfirm");
+    setOutboundConfirmEnabled(true);
     interactions = [perm, ask];
   });
 

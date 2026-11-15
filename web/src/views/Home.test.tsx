@@ -37,7 +37,13 @@ vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<type
 const { Home, offlineLine, rowTags } = await import("./Home");
 const { answerCard } = await import("../lib/card-answer");
 const { allowBody } = await import("../lib/quick-answers");
+const { setOutboundClassifier } = await import("../lib/outbound-facade");
+const { outboundAction } = await import("../lib/outbound-actions.classifier");
 const { t } = await import("../i18n");
+
+// The lazy confirm chunk never loads under jsdom; register the real classifier so local-only rows keep their one-tap
+// Allow button instead of being hidden by the fail-toward-warning gate.
+setOutboundClassifier(outboundAction);
 
 const mac: Machine = { id: "mac", name: "Mac", online: true };
 let n = 0;

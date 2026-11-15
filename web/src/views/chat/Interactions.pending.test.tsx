@@ -20,6 +20,11 @@ import { getState, reset, upsertSession } from "../../lib/store";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
 
+// The card's risk read comes from its lazy OutboundConfirm chunk; under jsdom it never loads on its own, leaving the
+// card in the pending "unknown" gate. Preload it (which also registers the real classifier) so the local-only
+// "npm test" card keeps its normal one-tap answer, matching the loaded app path.
+await import("./OutboundConfirm");
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const permission = { id: "p_1", machine_id: "m", session_id: "s", kind: "permission", tool_name: "Bash", tool_input: { command: "npm test" } } as Interaction;
@@ -51,6 +56,7 @@ afterEach(() => {
 describe("an answer on its way", () => {
   it("keeps the card's answers disabled across a remount and says which answer waits to go", async () => {
     act(() => root.render(<InteractionCard ix={permission} />));
+    await flush(); // let the preloaded confirm chunk register on this card so Allow sends in one tap
     expect(buttons().some(locked)).toBe(false);
     expect(host.querySelector("[data-card-pending]")).toBeNull();
     act(() => button(t("chat-interactions.allow")).click());
@@ -71,9 +77,14 @@ describe("an answer on its way", () => {
   });
 
   it("with the hub connected, says it only once the answer takes a moment: one delivered at once shows no line", async () => {
-    vi.useFakeTimers();
     Object.assign(getState(), { conn: "online" });
     act(() => root.render(<InteractionCard ix={permission} />));
+    // Register the preloaded confirm chunk on real timers first; a fixed microtask flush under the faked clock can run
+    // before the card's effect commits, which would leave the first Allow arming instead of sending.
+    for (let i = 0; i < 20; i++) {
+      await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+    }
+    vi.useFakeTimers();
     act(() => button(t("chat-interactions.allow")).click());
     expect(locked(button(t("chat-interactions.deny")))).toBe(true);
     expect(host.querySelector("[data-card-pending]")).toBeNull();
