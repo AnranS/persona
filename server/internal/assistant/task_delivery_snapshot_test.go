@@ -8,6 +8,24 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 )
 
+func TestSnapshotLiveConcernDoesNotAwaitReview(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kind string
+		want bool
+	}{
+		{name: "open concern", kind: db.KindConcern, want: false},
+		{name: "ordinary live delivery", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			todo := Todo{Kind: tc.kind, Delivery: &TodoDelivery{State: deliveryLive, At: time.Now()}}
+			if got := deliveryAwaitsReview(todo, nil); got != tc.want {
+				t.Fatalf("deliveryAwaitsReview() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // The real snapshot projection, not a hand-built template value: delivered work and owner waits use the same words as
 // the to-do pages, including a task with no attached Agent. Accepted work is completed, not awaiting review (#5732).
 func TestSnapshotTasksUseDeliveryAndOwnerWaitStates(t *testing.T) {

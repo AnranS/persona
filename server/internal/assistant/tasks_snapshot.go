@@ -310,8 +310,8 @@ func taskState(t Todo, agents []proto.Session) string {
 }
 
 // deliveryAwaitsReview is the snapshot's unaccepted live state at rest. A new working stretch is still work in
-// progress, not a second delivery; taskHealth uses the same predicate so State and Health cannot disagree (#5732).
-// An open concern waits for its own report rather than ordinary live-delivery acceptance (#3582).
+// progress, not a second delivery; an open concern instead waits for its own report (#3582). taskHealth uses the same
+// predicate so State and Health cannot disagree (#5732).
 func deliveryAwaitsReview(t Todo, agents []proto.Session) bool {
 	if t.DoneAt != nil || t.Kind == db.KindConcern || t.Delivery == nil || t.Delivery.State != deliveryLive {
 		return false

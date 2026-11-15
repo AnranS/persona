@@ -163,20 +163,13 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(todo("t", { agents: [agent("unseen")], seen_at: "not a time" })).section).toBe("just_done");
   });
 
-  it("allows a live concern to file Seen", () => {
-    expect(seenCanFile(todo("concern", { kind: "concern", delivery: { state: "live", at: hoursAgo(2) } }))).toBe(true);
-  });
-
-  it("still rejects an ordinary live delivery", () => {
-    expect(seenCanFile(todo("ordinary", { delivery: { state: "live", at: hoursAgo(2) } }))).toBe(false);
-  });
-
-  it("still rejects a concern with pending review", () => {
-    expect(seenCanFile(todo("pending", { kind: "concern", delivery: { state: "live", at: hoursAgo(2) }, supervision: { supervisor: "main", state: "pending_review" } }))).toBe(false);
-  });
-
-  it("still rejects a supervised concern", () => {
-    expect(seenCanFile(todo("supervised", { kind: "concern", delivery: { state: "live", at: hoursAgo(2) }, supervision: { supervisor: "main" } }))).toBe(false);
+  it.each([
+    ["allows a live concern", todo("concern", { kind: "concern", delivery: { state: "live", at: hoursAgo(2) } }), true],
+    ["still rejects an ordinary live delivery", todo("ordinary", { delivery: { state: "live", at: hoursAgo(2) } }), false],
+    ["still rejects pending review", todo("review", { kind: "concern", delivery: { state: "live", at: hoursAgo(2) }, supervision: { supervisor: "", state: "pending_review" } }), false],
+    ["still rejects supervision", todo("supervised", { kind: "concern", delivery: { state: "live", at: hoursAgo(2) }, supervision: { supervisor: "main" } }), false],
+  ])("%s", (_name, row, want) => {
+    expect(seenCanFile(row)).toBe(want);
   });
 
   it("a finished turn seen since it last moved is Done, unless its PR is open", () => {

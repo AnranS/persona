@@ -310,6 +310,27 @@ func TestWithdrawnRelayReplayRequiresRemovingSameHead(t *testing.T) {
 	}
 }
 
+// A manager can stop after the original send lands but before it removes a withdrawn durable head. That head has no
+// in-doubt marker, yet its original line is already in the conversation: the remaining signals must not be replayed.
+func TestWithdrawnRelayLandedBeforeRestartDoesNotReplayWithoutDoubt(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	start := superviseSignal{Todo: "todo-b", Kind: sigUnjudged, Key: "start-unknown@todo-b", At: time.Now()}
+	other := superviseSignal{Todo: "todo-c", Kind: sigStalled, Key: "already-delivered", At: time.Now()}
+	signals := []superviseSignal{start, other}
+	msg := relayMsg{Tool: superviseTool, Text: "mixed supervision", At: time.Now(), Withdrawn: true, Signals: &signals}
+	if s.queueRelay("conv1", msg) != 1 {
+		t.Fatal("the withdrawn head was not queued")
+	}
+	f.mu.Lock()
+	f.items = append(f.items, proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: msg.Text, TS: time.Now()})
+	f.mu.Unlock()
+	s.drainRelays("server", []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}})
+	waitFor(t, "the landed withdrawn head to leave the queue", func() bool { return s.queuedFor("conv1") == 0 })
+	if got := storedSupervisePending(t, s); len(got) != 0 {
+		t.Fatalf("the landed original left signals for a duplicate after restart: %+v", got)
+	}
+}
+
 // Selective /stop owns the same doubtful-head boundary as start confirmation. If the original mixed text did not land,
 // its stopped task must not be sent again; the remaining task is replayed without the old text (#5732).
 func TestStopDoubtfulMixedDigestDoesNotResendStoppedTask(t *testing.T) {
