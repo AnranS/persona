@@ -726,9 +726,9 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		skip = true
 	}
 	b.mu.Unlock()
-	if tell != nil && tell.Kind == sigUnjudged && tell.Key == "start-unknown@"+t.ID {
-		// The linked Agent is the exact confirmation. Retry an earlier incomplete retraction before gathering the ledger;
-		// a failed ledger read/write keeps this turn for the next sweep instead of replaying the confirmed start.
+	if known && e.Signal != nil && e.Signal.Kind == sigUnjudged && e.Signal.Key == "start-unknown@"+t.ID {
+		// The linked Agent is the exact confirmation. Retry retraction even when told already landed: a crash between that
+		// receipt and queue/outbox cleanup must not restore the confirmed signal. Failed ledger I/O waits for the next sweep.
 		if !s.retractStartUnknown(ctx, t.ID) {
 			return
 		}
