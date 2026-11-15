@@ -110,9 +110,6 @@ export function defaultLabel(d: LauncherDefault | null | undefined, fallback = "
   return parts.length ? t("lib-launcher-models.default_named", { name: parts.join(" · ") }) : t("lib-launcher-models.default");
 }
 
-/** What a launcher picked over the default is marked with: it applies to this start / conversation only. */
-export const oneOff = () => t("lib-launcher-models.one_off");
-
 // The hub gives a model list 70 s (assistant/models_launchers.go): the node may have to start the CLI to ask its /model.
 const MODELS_HUB_MS = 70_000;
 
@@ -152,7 +149,8 @@ export function customModel(models: AgentModel[], query: string): string {
 
 /** The agent takes a model ID typed by hand (#1644): Claude Code's `--model` / `/model` and Codex's `--model` take any
  *  string; the hub remembers typed IDs for these two only. Other agents' lists are empty (no model row). */
-export const takesTypedModel = (agent: string) => agent === "claude" || agent === "codex";
+export const takesTypedModel = (agent: string) =>
+  agent === "claude" || agent === "codex" || agent === "pi" || agent === "cursor" || agent === "agy";
 
 /** A typed ID can reach the agent: Claude Code or Codex, and the launcher doesn't pass its own --model. */
 export const typedModelOffered = (agent: string, list: LauncherModels | null | undefined) => takesTypedModel(agent) && !list?.locked;
@@ -192,6 +190,14 @@ export function launcherAgent(name: string, launchers: Launcher[], list?: Launch
   if (list?.agent) return list.agent;
   const l = launchers.find((x) => x.name === name);
   return l?.agent_type || l?.agent || "claude";
+}
+
+/** A known terminal-compatible CLI takes text with creation. Pin its alias and host together with its kind;
+ * attachments, unknown launchers and runtime/desktop starts keep their existing negotiation. */
+export function inlineTextStart(launcher: Launcher | undefined, host: string, text: string, attachments: number) {
+  if (!launcher || launcher.source || (launcher.agent_type || launcher.agent) !== "traex"
+    || (host !== "herdr" && host !== "herdr-core") || !text.trim() || attachments !== 0) return undefined;
+  return { launcher: launcher.name, host, agentType: "traex", inlinePrompt: true } as const;
 }
 
 /** Claude Code and Antigravity start with a thinking effort and permission mode; Codex and the rest keep their own. */
