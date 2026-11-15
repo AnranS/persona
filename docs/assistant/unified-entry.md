@@ -213,7 +213,7 @@ rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
-the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; receipts, reviews and reports are not drawn at all on iOS since #8237 ("Receipts" below); Android's Glass style still draws them, with Persona's hand-offs, message cards and the hub's notice lines, as iOS did before (`docs/plans/android-ios-alignment/chats.md` C13).
+the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; receipts, reviews and reports are not drawn at all since #8237 (Android: #8312; "Receipts" below). Persona's hand-offs, message cards and the hub's notice lines stay in the conversation (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -316,7 +316,7 @@ interruption bookkeeping below and the trays' order still read them. How a task 
   manager, so the MacBook's Agents are the default page's), with `MOCK_TASKS_NO_ASKS=1` for a chat no question card
   covers; `QuietReceiptsUITests` checks and shoots them.
 
-What follows is what the hub writes and how the clients drew receipts before #8237 (Android still does, #8312):
+What follows is what the hub writes and how the clients drew receipts before #8237:
 
 - When a task finishes (an attached Agent ends a turn with no pending interaction), append a green receipt at the bottom: task name, what was done (summary of the Agent's final text block),
   number of changed files, tests, PR, and next actions below: review changes, merge, tell the person who asked, etc.
@@ -355,7 +355,7 @@ keeps one outage from filling the chat:
   receipt in `group`. The first receipt carries `batch` (`total`, `pending`, `resolved`, `machine` when all ran on one
   computer, and `tasks` with each task's resolution), recomputed on every read; a page read with `since` after the first
   receipt still brings it along.
-- **Drawing** (`interruptLook`; Android only: iOS and the web draw no receipt since #8237, "Receipts" above): a receipt that names another in `group` is not drawn; a batch is one card,
+- **Drawing** (`interruptLook`; no client draws a receipt in an assistant conversation since #8237, Android #8312, "Receipts" above): a receipt that names another in `group` is not drawn; a batch is one card,
   "<computer> <cause>, N tasks interrupted → handled a / pending b", opening to each task with its result, each opening the
   task; a handled single receipt is a grey line "“<title>” was interrupted · <result>" that opens the task; a pending one is
   the red card as before. Only a batch with something pending, or a pending receipt, uses the danger color. In the main chat,
@@ -690,7 +690,7 @@ Since #5732 the main conversation supervises every new assistant-dispatched task
 - **Pushes**: its turns are held from the pushes as any supervision round is (a normal finish is not pushed; a failed turn is). It counts as an assistant conversation everywhere else: not triaged, not in the dock's agents, no badge; a round of it shows as "assistant answering" on the Live Activity, as a supervision round in the main chat does.
 - **Its reviews say so**: the `review` entry of a review the legacy background supervisor wrote carries `by: "background"` (`reviewFeedBody.By`, #5084); ordinary planning-chat, leader and main-chat reviews have no `by`. Such a review took no turn of the chat that planned the task, so a client may keep the entry in that chat as the only record of it there. Historical sampled judge reviews remain readable but no new ones are written (#5732).
 - **In the clients today**: it has `origin: "task"` with no `origin_ref`, so the apps list it where they list the scheduled tasks' conversations, titled "Background supervisor" (zh 后台督办, ja バックグラウンド監督). The web (#5082, `docs/web/web.md` "Background supervisor") marks the conversation built in with a menu that only copies its id, has the switch in Settings › Assistant, lists the model purpose after Main chat in Model settings, and drew each `review` entry marked `by: "background"` as one line in the main chat until #8237 (a review is no line in the chat since: the task's row says how it went). So do the Apple apps for the setting and the model (#5083, `docs/apple/ios.md` "Background supervisor"): the switch in Settings › Assistant, the model use in Settings › Models, and no Archive, Pin or End on the conversation's row; and Android, as the next entry says.
-- **On Android** (#5084, `docs/android/android.md` "The background supervisor (#5084)"): the same rule, in that app's drawer: it has no group of its own for scheduled tasks' conversations, they are under All chats with every other conversation Persona opened itself, and so is this one; never under 常驻 or Recent, named by the app and without Pin, Archive or End chat. Settings › Assistant has the switch for `main_supervises_own_tasks` and a row for the `assistant.supervise` model, which Settings › Model configuration lists too. A `review` entry marked `by: "background"` is one line in the conversation that opens the task; in Brief and Board the others stay in the background record as before, and Glass draws every review (`docs/plans/android-ios-alignment/chats.md` C13).
+- **On Android** (#5084, `docs/android/android.md` "The background supervisor (#5084)"): the same rule, in that app's drawer: it has no group of its own for scheduled tasks' conversations, they are under All chats with every other conversation Persona opened itself, and so is this one; never under 常驻 or Recent, named by the app and without Pin, Archive or End chat. Settings › Assistant retains the legacy switch for `main_supervises_own_tasks` and a row for the `assistant.supervise` model, which Settings › Model configuration lists too. Every new task remains main-supervised; the switch only chooses where previously assigned background notices finish. No review entry is drawn in the conversation since #8312; historical reviews remain in the task and background records (`docs/plans/android-ios-alignment/chats.md` C13).
 
 ### Task leaders (#3656)
 
@@ -860,11 +860,10 @@ the owner turns on by making a leader. Code: `server/internal/assistant/ask_rout
   (not `ask_user`, not a form or a password card), a tool permission or a plan. Terminal dialogs read off the screen
   and the conversations' own cards stay the user's. The card is shown on the apps marked `delegating` (an answer given
   there still wins) and rings nothing: no push, no bot card, no Persona Link notification.
-- **Who gets it**: the task's supervisor as an `ask` entry in its "📋 督办" message (its leader; for a task no leader
-  supervises the background supervisor, or the main chat while `main_supervises_own_tasks` is on or there is no
-  background supervisor yet; the main chat when the leader's conversation is gone), with the card's `interaction_id`, what it asks and the
-  task's decisions in effect. Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent
-  while its card is on its way up.
+- **Who gets it**: the task's supervisor as an `ask` entry in its "📋 督办" message (its explicit leader; main for every
+  new assistant-dispatched task; an existing legacy background conversation only for its old assignments; main when the
+  leader's conversation is gone), with the card's `interaction_id`, what it asks and the task's decisions in effect.
+  Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent while its card is on its way up.
 - **What the supervisor does**: answers a question that is the agent's own call with `interaction_answer` (with
   `reason`); the answer is kept as the task's decision (`source: agent`, the supervisor's conversation). What the user
   must decide — a permission or a plan (no conversation approves them, "No answering approvals on the user's behalf"),

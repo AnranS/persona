@@ -1370,9 +1370,9 @@ nonisolated struct APIClient: Sendable {
         /// conversations"), in the hub's order; nil when there are none or from an older hub. The sidebar shows them as
         /// the Directions group, under the names `assistantLeaders()` gives.
         var leaders: [String]?
-        /// The Main Chat Supervises Its Own Tasks (#4927, docs/assistant/unified-entry.md "Background supervisor"): the
-        /// value in effect. Off (the default) means the built-in background supervisor follows up the tasks no leader
-        /// supervises; nil from a hub without the background supervisor, which hides the switch.
+        /// Legacy background routing (#4927, docs/assistant/unified-entry.md "Background supervisor"): every new task
+        /// stays with main; this only chooses where previously assigned background notices finish. Nil from a hub
+        /// without the background supervisor, which hides the switch.
         var mainSupervisesOwnTasks: Bool?
         /// Suggest the next message after replies in open chats (#4696). Off by default; nil from a hub without the
         /// setting, which hides the switch.

@@ -619,8 +619,8 @@ func (s *Service) setMainSupervisesOwnTasks(ctx context.Context, v json.RawMessa
 	return s.setBoolSetting(ctx, v, s.mainSupervisesOwnTasks, "assistant.main_supervises_own_tasks is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_main_supervises_own_tasks", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainSupervisesOwnTasks },
-		"assistant.main_supervises_own_tasks is %v for the signals raised from now on (open tasks keep running; what the "+
-			"background supervisor was already sent it finishes).")
+		"assistant.main_supervises_own_tasks is %v for legacy background work only; every new assistant-dispatched "+
+			"task remains supervised by main.")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

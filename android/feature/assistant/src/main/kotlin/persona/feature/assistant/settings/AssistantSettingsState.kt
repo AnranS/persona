@@ -315,8 +315,8 @@ internal class AssistantSettingsState(
     }
 
     /**
-     * "The main chat supervises its own tasks" (#4927): off, the background supervisor follows them up. Moves at once;
-     * a failure puts it back and says so.
+     * Legacy background routing (#4927): new tasks always stay with main; this only chooses where old notices finish.
+     * Moves at once; a failure puts it back and says so.
      */
     suspend fun setMainSupervisesOwnTasks(on: Boolean) {
         val config = state.value.config ?: return

@@ -1,5 +1,5 @@
-// The background supervisor (#4927, #5082, docs/assistant/unified-entry.md "Background supervisor"): the hub's built-in
-// conversation that follows up the tasks no leader supervises. The hub names it in GET /api/v1/assistant
+// The legacy background supervisor (#4927, #5082, docs/assistant/unified-entry.md "Background supervisor"): the
+// built-in conversation that finishes its old assignments while main supervises every new task (#5732). The hub names it
 // (`background_supervisor`, its session id once it was made); it is listed with the scheduled tasks' conversations,
 // never as a direction or among the user's recent chats, and it is not renamed, archived, ended or made a direction.
 // Pure functions, tested without a DOM.
@@ -32,9 +32,9 @@ export function reviewedInBackground(item: Pick<FeedItem, "kind" | "body">): boo
 
 /** The conversations in `list` (a machine's sessions as pushed) that may be a background supervisor the held assistant
  *  answer does not name yet: an assistant conversation of origin `task` with no `origin_ref` (a scheduled task's has
- *  its task there) that is neither the one named nor among the listed conversations. The hub makes the background
- *  supervisor on first use, and replaces one that is gone, while the page is open: the page learns its id only by
- *  reading the assistant again (lib/store.ts does, once for each such conversation). */
+ *  its task there) that is neither the one named nor among the listed conversations. An existing legacy conversation can
+ *  appear while the page is open: the page learns its id only by reading the assistant again (lib/store.ts does, once
+ *  for each such conversation). */
 export function unnamedTaskConversations(assistant: Pick<AssistantInfo, "background_supervisor" | "conversations">, list: readonly Pick<Session, "session_id" | "assistant" | "origin" | "origin_ref">[]): string[] {
   return list
     .filter((s) => s.assistant && s.origin === "task" && !s.origin_ref && s.session_id !== assistant.background_supervisor && !assistant.conversations?.some((c) => c.session_id === s.session_id))

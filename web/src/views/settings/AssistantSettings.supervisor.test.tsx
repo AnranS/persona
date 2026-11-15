@@ -58,11 +58,12 @@ afterEach(async () => { act(() => root.unmount()); host.remove(); vi.unstubAllGl
 async function render() { await act(async () => root.render(<AssistantSettings />)); await flush(); }
 async function click(node: HTMLElement) { await act(async () => { node.click(); }); await flush(); }
 
-it("shows the hub's value, off by default, with the sentence saying what it does", async () => {
+it("shows the legacy value and says every new task stays with the main chat", async () => {
   await render();
   expect(row()!.getAttribute("aria-checked")).toBe("false");
-  expect(host.textContent).toContain("Off by default: a built-in background supervisor follows up and reviews the tasks Persona hands out");
-  expect(host.textContent).toContain("turn this on and the main chat does that itself");
+  expect(host.textContent).toContain("every new assistant-dispatched task is supervised by the main chat");
+  expect(host.textContent).toContain("previously assigned background notices");
+  expect(host.textContent).not.toContain("follows up and reviews the tasks Persona hands out");
   expect(modelLink()?.getAttribute("href")).toContain("assistant.supervise");
 });
 

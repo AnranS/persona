@@ -70,9 +70,8 @@ interface AssistantState extends AgentAutoNamingState {
   /** "Tell supervisors about new messages" (#4293, docs/assistant/unified-entry.md "Supervision (#3124)"): off
    *  by default; unset from a hub before it. */
   inbox_signals?: boolean;
-  /** "The main chat supervises its own tasks" (#4927, #5082, docs/assistant/unified-entry.md "Background supervisor"):
-   *  off by default, which means the built-in background supervisor follows up the tasks no leader supervises; unset
-   *  from a hub before it. */
+  /** Legacy background routing (#4927, #5082): new tasks always stay with main; this only chooses where previously
+   *  assigned background notices finish. Unset from a hub before it. */
   main_supervises_own_tasks?: boolean;
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
    *  archive themselves"): 0 is never, at most 3650; unset from a hub before it. */

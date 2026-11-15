@@ -146,6 +146,6 @@
   "idle_close_hint": "它的终端会保留。0 表示不自动停止。",
   "idle_close_unit": "小时",
   "main_supervises": "主对话自己督办它派出的任务",
-  "main_supervises_hint": "默认关闭：Persona 派出的任务由内置的后台督办对话跟进和验收，主对话随时能回你；开启后改回由主对话自己跟进和验收",
+  "main_supervises_hint": "仅控制旧后台督办的收尾路由：新派出的任务一律由主对话督办；此开关决定已交给后台的旧通知继续在那里处理，还是转回主对话",
   "background_supervisor_model": "后台督办的模型"
 }

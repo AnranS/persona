@@ -136,7 +136,7 @@
     <string name="assistant_settings_next_suggestions_caption">After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.</string>
     <string name="assistant_settings_supervise_header">Task follow-up</string>
     <string name="assistant_settings_supervise_own">Main chat supervises its own tasks</string>
-    <string name="assistant_settings_supervise_caption">When off, a background supervisor follows up the tasks the main chat hands out, so the main chat answers you first; turn it on to have the main chat follow them up itself.</string>
+    <string name="assistant_settings_supervise_caption">New tasks are always supervised by the main chat. This legacy switch only chooses where previously assigned background notices finish.</string>
     <string name="assistant_settings_supervise_model">Background supervisor model</string>
     <string name="assistant_settings_unavailable">Assistant settings aren\'t available</string>
     <string name="assistant_settings_unavailable_detail">Pair with a hub first, or leave the demo.</string>

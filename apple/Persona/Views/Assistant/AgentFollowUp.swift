@@ -347,7 +347,7 @@ struct AgentFollowUpView: View {
             } header: {
                 Text("Follow-up [Agent Follow-Up]")
             } footer: {
-                Text("Both off by default. While the first is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first. The second also follows up Agents started outside the main chat, and uses extra model calls.")
+                Text("Both off by default. New tasks are always supervised by the main chat; the first switch only controls where previously assigned background notices finish. The second also follows up Agents started outside the main chat, and uses extra model calls.")
             }
         }
     }

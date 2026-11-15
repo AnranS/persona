@@ -28684,25 +28684,25 @@
         }
       }
     },
-    "Both off by default. While the first is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first. The second also follows up Agents started outside the main chat, and uses extra model calls." : {
+    "Both off by default. New tasks are always supervised by the main chat; the first switch only controls where previously assigned background notices finish. The second also follows up Agents started outside the main chat, and uses extra model calls." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Both off by default. While the first is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first. The second also follows up Agents started outside the main chat, and uses extra model calls."
+            "value" : "Both off by default. New tasks are always supervised by the main chat; the first switch only controls where previously assigned background notices finish. The second also follows up Agents started outside the main chat, and uses extra model calls."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "どちらも既定でオフです。1 つ目がオフのあいだは、Persona が任せたタスクをバックグラウンド監督がフォローし、メインチャットはあなたへの返信を優先します。2 つ目はメインチャット以外から開始したエージェントもフォローし、モデルの呼び出しが増えます。"
+            "value" : "どちらも既定でオフです。新しいタスクはすべてメインチャットが監督し、1 つ目のスイッチは割り当て済みの旧通知の処理先だけを選びます。2 つ目はメインチャット以外から開始したエージェントもフォローし、モデルの呼び出しが増えます。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "两项默认都关闭。第一项关着时，Persona 派出的任务由后台督办跟进，主对话优先回复你。第二项让不是从主对话派出的 Agent 也有人跟进，会多花一些模型调用。"
+            "value" : "两项默认都关闭。新任务一律由主对话督办，第一项只决定已交给后台的旧通知在哪里收尾。第二项让不是从主对话派出的 Agent 也有人跟进，会多花一些模型调用。"
           }
         }
       }
@@ -37782,6 +37782,29 @@
       },
       "extractionState" : "manual"
     },
+    "Clear context" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear context"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキストをクリア"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理上下文"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Clear context and start a new session" : {
       "localizations" : {
         "en" : {
@@ -46045,6 +46068,29 @@
           }
         }
       }
+    },
+    "Couldn't clear the context: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't clear the context: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンテキストをクリアできませんでした：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能清理上下文：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Couldn't clear: %@" : {
       "localizations" : {
