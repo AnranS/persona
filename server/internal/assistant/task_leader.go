@@ -41,10 +41,6 @@ const (
 	leaderWorkersMost = 8
 )
 
-// leaderListWait bounds how long a tool list asked for by an agent that is no task's yet waits for a task leader being
-// started: its agent asks for its tools before the start returns and it is linked.
-var leaderListWait = 8 * time.Second
-
 func (a TodoAgent) active() bool { return a.ReleasedAt == nil && a.DismissedAt == nil }
 
 // linkSource is the todo_agents source and via the agent of plan task t is linked with.
@@ -206,22 +202,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
 		return leaderToolList()
 	}
-	// An agent asks for its tools as it starts, before the start that made it returns and it is linked: with a leader
-	// being started, an agent that is no task's yet waits for it (bounded), so a leader is not left without its tool
-	// for the whole session. A worker, or an agent in any other task, is known and does not wait.
-	if _, ok := s.taskOf(ctx, s.canonical(machine), session); ok {
-		return nil
-	}
-	for deadline := time.Now().Add(leaderListWait); s.leaderStarts.Load() > 0 && time.Now().Before(deadline); {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(100 * time.Millisecond):
-		}
-		if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-			return leaderToolList()
-		}
-	}
+	// Linking later wakes MCP discovery; no startup timing assumption grants rights.
 	return nil
 }
 
@@ -593,7 +574,13 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		}
 	}
 	verdict, note, over := a.Verdict, clip(a.Note, 2000), false
+	var criteriaErr error
 	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		if verdict == reviewAccepted {
+			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
+				return false
+			}
+		}
 		if verdict == reviewRework && v.Round >= maxReworkRounds {
 			verdict, over = reviewNeedsUser, true
 		}
@@ -611,6 +598,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	})
 	if err != nil {
 		return "", err
+	}
+	if criteriaErr != nil {
+		return "", criteriaErr
 	}
 	if verdict == reviewNeedsUser && up == "" {
 		up = s.settings(ctx).Main // reworked too often with nobody above the leader: the main conversation

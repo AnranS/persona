@@ -228,7 +228,8 @@ nonisolated enum SessionModes {
         guard let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let raw = Fmt.model(model) else { return nil }
         if let gpt = gptModelName(raw) { return gpt }
-        let lower = raw.lowercased()
+        // A context-window suffix ("[1m]") is not part of the version; the name keeps no 1M marker.
+        let lower = raw.lowercased().replacingOccurrences(of: #"\[[^\]]*\]$"#, with: "", options: .regularExpression)
         for family in ["fable", "opus", "sonnet", "haiku"] {
             guard let r = lower.range(of: family) else { continue }
             // The version follows the family in today's ids; a date (8 digits) and older ids' leading version do not.
@@ -423,7 +424,15 @@ struct SessionModesMenu: View {
                 // It names the next message's effective model, the one source the composer title uses (#6911 M7).
                 Button(action: assistantPick) {
                     Label {
-                        Text(assistantModelName ?? SessionModes.modelName(session?.model) ?? String(localized: "Unknown model"))
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                            Text("Change Model…")
+                                .font(Theme.Font.heading)
+                                .lineLimit(1)
+                            Text(assistantModelName ?? SessionModes.modelName(session?.model) ?? String(localized: "Unknown model"))
+                                .font(Theme.Font.label)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     } icon: {
                         ThemedIcon(Theme.Icon.agentChat)
                     }
