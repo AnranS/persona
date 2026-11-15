@@ -168,6 +168,9 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"explicit no action with contraction", "You'll need to do nothing else.", verdictDone, ""},
 		{"explicit no action with a full-width terminator", "You need to do nothing else。", verdictDone, ""},
 		{"full-width no action does not hide an independent requirement", "You need to do nothing else。Otherwise, you need to approve the release yourself。", verdictNeedsUser, "Otherwise"},
+		{"full-width no action does not hide a direct requirement", "You need to do nothing else。You need to approve the release yourself。", verdictNeedsUser, "You need to"}, // i18n-ignore: parser fixture
+		{"full-width genuine directive", "You need to approve the release yourself。", verdictNeedsUser, "You need to"},                                                        // i18n-ignore: parser fixture
+		{"Chinese resolved full-width control", "要不要继续？这个问题已回答。", verdictDone, ""},                                                                                            // i18n-ignore: parser fixture
 		{"English narrative about a choice", "The report evaluates whether you need to split the module and concludes no.", verdictDone, ""},
 		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
 	} {

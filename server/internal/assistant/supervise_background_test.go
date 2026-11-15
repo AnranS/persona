@@ -324,7 +324,7 @@ func TestNoBackgroundSupervisorIsAnnounced(t *testing.T) {
 // The compatibility setting must describe the route ownSupervisor really selects: main for new work, with only
 // previously assigned notices left to an already configured background conversation (#5732).
 func TestMainSupervisesOwnTasksDescriptionMatchesCompatibilityRoute(t *testing.T) {
-	s, _, _ := newBackgroundService(t)
+	s, f, todo := newBackgroundService(t)
 	cfg := s.settings(context.Background())
 	off := false
 	cfg.MainSupervisesOwnTasks = &off
@@ -347,6 +347,24 @@ func TestMainSupervisesOwnTasksDescriptionMatchesCompatibilityRoute(t *testing.T
 		if !strings.Contains(about, want) {
 			t.Fatalf("setting description lacks %q: %q", want, about)
 		}
+	}
+
+	// The compatibility description must not erase the old closeout path: a real previously assigned notice still drains.
+	f.known["legacy-background"] = true
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "legacy-background", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) {
+		v.MainSupervisesOwnTasks = &off
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "legacy-background", "server"
+	})
+	tellLegacyBackground(t, s, f, todo.ID, "legacy-background")
+	res, err := runJSON(t, s, "legacy-background", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "finish the old notice", "checks": completeReviewChecks(todoNow(s, todo.ID))})
+	if err != nil || !strings.Contains(res, "accepted and closed") {
+		t.Fatalf("legacy background drain: %s %v", res, err)
+	}
+	if len(conversationStarts(f)) != 0 {
+		t.Fatal("draining an old notice created a new background conversation")
 	}
 }
 

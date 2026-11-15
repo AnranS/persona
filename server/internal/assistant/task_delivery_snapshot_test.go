@@ -90,13 +90,54 @@ func TestDeliveryAwaitsReviewExcludesLiveConcern(t *testing.T) {
 	}
 }
 
+// An open concern never files Done merely because an accepted supervision review is still stored. Only its
+// secretary report closes it; the ordinary reopened-accepted rule must not override that boundary (#3582, #5732).
+func TestSnapshotAcceptedOpenConcernDoesNotComplete(t *testing.T) {
+	s, _ := newQuietService(t)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Accepted but still open concern", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(ctx, todo.ID, "conv1", nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.State = reviewAccepted
+		v.Reviews = []TaskReview{{Verdict: reviewAccepted, At: time.Now()}}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryLive, At: time.Now()})
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Kind = db.KindConcern
+	s.todos.mu.Unlock()
+	if !acceptanceStands(todoNow(s, todo.ID)) {
+		t.Fatal("the accepted open-concern fixture does not have standing acceptance")
+	}
+	for _, task := range s.snapshotTasks(ctx, "") {
+		if task.ID == todo.ID {
+			if task.State != "还没开始" || task.Health != "正常" {
+				t.Fatalf("accepted open concern projection = %+v, want State 还没开始 and Health 正常", task)
+			}
+			return
+		}
+	}
+	t.Fatal("accepted open concern is missing from the real snapshot")
+}
+
 // Acceptance still stands after the owner reopens a task until a newer review changes it. Live delivery must not send
 // that accepted work back to awaiting review in either State or Health (#5732).
 func TestSnapshotReopenedAcceptedLiveDoesNotAwaitReview(t *testing.T) {
-	s, _ := newQuietService(t)
+	s, f := newQuietService(t)
 	ctx := context.Background()
 	accepted, err := s.createTodo(ctx, "Accepted then reopened", "", "conv1", "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusDone, State: proto.StateUnread, UpdatedAt: time.Now()})
+	if err := s.linkTodoAgent(ctx, accepted.ID, "box", "s1", accepted.Title, "/code/app", "claude"); err != nil {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, accepted.ID, "conv1", []string{"result verified"}, 30)
@@ -129,6 +170,23 @@ func TestSnapshotReopenedAcceptedLiveDoesNotAwaitReview(t *testing.T) {
 	if got[ordinary.ID].State != "已交付·待看" || got[ordinary.ID].Health != "已交付·待看" {
 		t.Fatalf("ordinary unaccepted live control = %+v", got[ordinary.ID])
 	}
+
+	// Acceptance files only work at rest; a new working stretch stays active.
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
+	if got := snapshotStatesForTest(s, ctx)[accepted.ID]; got.State != "在做" || got.Health != "正常" {
+		t.Fatalf("reopened accepted working control = %+v", got)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusDone, State: proto.StateUnread, UpdatedAt: time.Now()})
+
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": accepted.ID, "verdict": "rework", "note": "new evidence needs work"}); err != nil {
+		t.Fatal(err)
+	}
+	if acceptanceStands(todoNow(s, accepted.ID)) {
+		t.Fatal("a newer review left the old acceptance standing")
+	}
+	if got := snapshotStatesForTest(s, ctx)[accepted.ID]; got.State != "已交付·待看" || got.Health != "已交付·待看" {
+		t.Fatalf("newer-review live control = %+v", got)
+	}
 }
 
 // Seen files only an ordinary finished turn. Pending review, supervision and the otherwise identical unseen turn stay
@@ -151,22 +209,29 @@ func TestSnapshotOrdinarySeenFinishedTurnIsDone(t *testing.T) {
 	unseen := makeTask("Ordinary unseen", "s-unseen")
 	pending := makeTask("Pending review seen", "s-pending")
 	supervised := makeTask("Supervised seen", "s-supervised")
+	stale := makeTask("Seen before later activity", "s-stale")
+	live := makeTask("Unaccepted live seen", "s-live")
 	for _, todo := range []Todo{pending, supervised} {
 		s.superviseTodo(ctx, todo.ID, "conv1", []string{"result verified"}, 30)
 	}
 	if _, _, err := s.updateSupervision(ctx, pending.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
 		t.Fatal(err)
 	}
-	for _, todo := range []Todo{seen, pending, supervised} {
+	s.setTaskDelivery(ctx, live.ID, TodoDelivery{State: deliveryLive, At: time.Now()})
+	for _, todo := range []Todo{seen, pending, supervised, stale, live} {
 		if _, err := s.seeTodo(ctx, todo.ID, true); err != nil {
 			t.Fatal(err)
 		}
 	}
 	moved := time.Now().Add(-time.Hour)
-	sessions := make([]proto.Session, 0, 4)
-	for _, sid := range []string{"s-seen", "s-unseen", "s-pending", "s-supervised"} {
+	sessions := make([]proto.Session, 0, 6)
+	for _, sid := range []string{"s-seen", "s-unseen", "s-pending", "s-supervised", "s-stale", "s-live"} {
+		at := moved
+		if sid == "s-stale" {
+			at = time.Now().Add(time.Minute)
+		}
 		sessions = append(sessions, proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude",
-			Status: proto.StatusDone, State: proto.StateUnread, LastText: "finished", StateSince: moved, UpdatedAt: moved})
+			Status: proto.StatusDone, State: proto.StateUnread, LastText: "finished", StateSince: at, UpdatedAt: at})
 	}
 	f.setSessions("box", sessions...)
 
@@ -174,7 +239,7 @@ func TestSnapshotOrdinarySeenFinishedTurnIsDone(t *testing.T) {
 	if got[seen.ID].State != "已完成" || got[seen.ID].Health != "" {
 		t.Fatalf("ordinary Seen projection = %+v, want completed", got[seen.ID])
 	}
-	for _, todo := range []Todo{unseen, pending, supervised} {
+	for _, todo := range []Todo{unseen, pending, supervised, stale, live} {
 		if got[todo.ID].State != "已交付·待看" {
 			t.Fatalf("%s control = %+v, want awaiting review", todo.Title, got[todo.ID])
 		}
