@@ -231,6 +231,28 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 	return false
 }
 
+// ownerChineseConditionalPrefix reports whether the current clause is still conditional. A full stop or semicolon
+// starts a new clause; an independent instruction there is not hidden by an earlier condition (#5732).
+func ownerChineseConditionalPrefix(prefix string) bool {
+	start := 0
+	for i, r := range prefix {
+		if strings.ContainsRune("。！？；!?\n", r) { // i18n-ignore: parser punctuation
+			start = i + utf8.RuneLen(r)
+		}
+	}
+	clause := prefix[start:]
+	for _, word := range []string{"如果", "假如", "倘若", "若"} { // i18n-ignore: parser markers, not display copy
+		if i := strings.LastIndex(clause, word); i >= 0 {
+			lead := strings.TrimSpace(clause[:i])
+			if lead == "" || strings.HasSuffix(lead, "：") || strings.HasSuffix(lead, ":") ||
+				strings.HasSuffix(lead, "，") || strings.HasSuffix(lead, ",") { // i18n-ignore: parser punctuation
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ownerChineseDirectMarker reports an unquoted, unnegated direct instruction. Quoting or negating one occurrence does
 // not hide a later genuine requirement, and a historical quoted instruction is not a new owner action (#5732).
 func ownerChineseDirectMarker(text, marker string, negations []string) bool {
@@ -249,7 +271,7 @@ func ownerChineseDirectMarker(text, marker string, negations []string) bool {
 				break
 			}
 		}
-		if !negated && !ownerMarkerQuoted(text, i) {
+		if !negated && !strings.HasSuffix(prefix, "是否") && !ownerChineseConditionalPrefix(prefix) && !ownerMarkerQuoted(text, i) { // i18n-ignore: parser marker, not display copy
 			return true
 		}
 		from = i + len(marker)
@@ -796,6 +818,11 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		}
 		if !worked {
 			work = t.CreatedAt
+		}
+		if c.Verdict == verdictNeedsUser && !s.noteOwnerWait(ctx, t, work, c.Reason) {
+			// Do not mark the turn judged before its owner wait exists: recovery must apply this same work again after
+			// the supervision store returns. A successful write makes the second note below idempotent, push included.
+			return
 		}
 		s.turnJudged(ctx, t.ID, c, err, "")     // on the turn's ledger before its signal: judged once, told once (task_turns.go)
 		s.superviseJudged(ctx, t, work, c, err) // never closed here: its supervisor reviews it (supervise.go)
