@@ -481,6 +481,15 @@ class TodoTriageTest {
     }
 
     @Test
+    fun anAcceptedTaskAtItsUsageLimitKeepsTheAcceptedDetailState() {
+        val td = todo("t", agents = listOf(agent("limited")), supervision = acceptedReopened())
+        val limited = lookupOf(session("limited", "unread").copy(turnError = "usage limit reached", turnErrorKind = "usage_limit"))
+        assertEquals(TriageStatus.UsageLimit, td.triageStatus(limited, now))
+        assertTrue(td.acceptedAtRest(limited))
+        assertEquals(TodoState.Done, td.shownState(limited))
+    }
+
+    @Test
     fun aLiveDeliveryWaitsForReviewUntilAccepted() {
         val recent = todo("t", delivery = TodoDelivery(state = "live", at = hoursAgo(2)))
         assertEquals(TriageSection.JustDone, at(recent).section)

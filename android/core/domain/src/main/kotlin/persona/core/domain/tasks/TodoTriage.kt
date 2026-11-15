@@ -226,7 +226,7 @@ fun Todo.checksAsOpen(t: Triage?): Boolean =
  * An open concern still waits for its report, so neither Accepted nor its done styling applies (#3582). */
 fun Todo.acceptedAtRest(lookup: (SessionKey) -> Session?): Boolean =
     kind != "concern" && !isDone && acceptanceStands && triageStatus(lookup).let {
-        it == TriageStatus.FollowUp || it == TriageStatus.Unread || it == TriageStatus.NotStarted
+        it == TriageStatus.FollowUp || it == TriageStatus.Unread || it == TriageStatus.NotStarted || it == TriageStatus.UsageLimit
     }
 
 // ── Related to-dos ────────────────────────────────────────────
