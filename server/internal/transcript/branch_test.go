@@ -713,15 +713,19 @@ func TestTailSkippedLineIsTheSameInTheTree(t *testing.T) {
 		{`{"type":"user","uuid":"u","parentUuid":"p","isCompactSummary":true,"timestamp":"2026-11-05T10:00:00Z","message":{"role":"user","content":"` + big + `"}}`, false},
 	} {
 		var whole, skipped Tail
-		var m Meta
-		whole.Line(&m, ParseLine(0, []byte(c.line), &m))
-		skipped.Skipped([]byte(c.line))
-		if len(skipped.tree.recs) != 1 {
-			t.Fatalf("%.80s…: skipped %+v, want one record", c.line, skipped.tree.recs)
+		var wm, sm Meta
+		for i, line := range []string{prompt("seed", "go"), replyLine, turnEndLine} {
+			whole.Line(&wm, ParseLine(i, []byte(line), &wm))
+			skipped.Line(&sm, ParseLine(i, []byte(line), &sm))
 		}
-		got, want := skipped.tree.recs[0], whole.tree.recs[0]
+		whole.Line(&wm, ParseLine(3, []byte(c.line), &wm))
+		skipped.Skipped([]byte(c.line))
+		if len(skipped.tree.recs) != 4 {
+			t.Fatalf("%.80s…: skipped %+v, want the seed and one record", c.line, skipped.tree.recs)
+		}
+		got, want := skipped.tree.recs[3], whole.tree.recs[3]
 		if got.uuid != want.uuid || got.parent != want.parent || got.prompt != want.prompt || got.reply != want.reply ||
-			got.system != want.system || got.turnEnd != want.turnEnd || got.prompt != c.prompt || got.outcomeChanged {
+			got.system != want.system || got.turnEnd != want.turnEnd || got.prompt != c.prompt || got.outcomeChanged || got.turnStart {
 			t.Fatalf("%.80s…: skipped %+v, whole %+v; a skipped line must keep only the tree shape, not new outcome evidence", c.line, got, want)
 		}
 	}

@@ -249,6 +249,8 @@ func TestTailSettleRestoresVisibleTurnState(t *testing.T) {
 			drop: []string{prompt("ub", "B"), bReply}, last: "done", closed: true, succeeded: true},
 		{name: "visible wake", base: []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine},
 			middle: []string{wake("w1")}, drop: []string{prompt("ub", "B"), bReply, bEnd}, open: true},
+		{name: "visible same-state prompt after hidden prompt", base: []string{prompt("u1", "A"), apiErrorLine(t, "e1", failure, map[string]any{"error": "server_error"}), turnEndLine},
+			drop: []string{prompt("ub", "B"), prompt("uc", "C")}, open: true},
 		{name: "visible local command", base: []string{prompt("u1", "A"), replyLine, turnEndLine},
 			middle: []string{prompt("u3", "<command-name>/usage</command-name>"), localOut},
 			drop:   []string{prompt("ub", "B"), bReply, bEnd}, closed: true, succeeded: true},
@@ -393,8 +395,9 @@ func TestTailSettlesARewoundTurnError(t *testing.T) {
 		t.Fatalf("before the rewind: %q, resumes %v", m.TurnError, m.TurnErrorResumes)
 	}
 	recap := `{"type":"system","subtype":"away_summary","uuid":"s1","parentUuid":"t1","timestamp":"2026-01-01T12:13:00Z","content":"recap"}`
-	if m := read(append(lines, recap)); m.TurnError != "" || m.TurnErrorKind != "" || !m.TurnErrorResetsAt.IsZero() || m.TurnErrorResumes || m.LastText != "answer one" {
-		t.Fatalf("after the rewind: %q %q %v resumes %v, last text %q", m.TurnError, m.TurnErrorKind, m.TurnErrorResetsAt, m.TurnErrorResumes, m.LastText)
+	if m := read(append(lines, recap)); m.TurnError != "" || m.TurnErrorKind != "" || !m.TurnErrorResetsAt.IsZero() || m.TurnErrorResumes ||
+		!m.TurnSucceeded() || m.LastText != "answer one" {
+		t.Fatalf("after the rewind: %q %q %v resumes %v, succeeded %v, last text %q", m.TurnError, m.TurnErrorKind, m.TurnErrorResetsAt, m.TurnErrorResumes, m.TurnSucceeded(), m.LastText)
 	}
 }
 
