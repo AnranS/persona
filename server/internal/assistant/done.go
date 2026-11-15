@@ -90,7 +90,7 @@ func ownerNoAction(rest string) bool {
 	return false
 }
 
-// directOwnerMarker reports whether any occurrence of marker starts a direct requirement at the line or a
+// directOwnerMarker reports whether any unquoted occurrence of marker starts a direct requirement at the line or a
 // sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
 // skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
 // its conditional scope; a new sentence or an independent "otherwise" clause does (#5732).
@@ -103,7 +103,8 @@ func directOwnerMarker(lower, marker string) bool {
 		i += from
 		before := strings.TrimSpace(lower[:i])
 		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise")
-		terminator, _ := utf8.DecodeLastRuneInString(before)
+		terminatorBefore := strings.TrimRight(before, "\"”") // a closing quote does not hide the sentence's own terminator
+		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
 		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
 		if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
@@ -114,7 +115,7 @@ func directOwnerMarker(lower, marker string) bool {
 			openConditional := ownerConditionalOpen(conditional)
 			direct = !openConditional || strings.HasSuffix(clause, "otherwise,") || strings.HasSuffix(clause, "otherwise:")
 		}
-		if direct && !ownerNoAction(lower[i+len(marker):]) {
+		if direct && !ownerNoAction(lower[i+len(marker):]) && !ownerMarkerQuoted(lower, i) {
 			return true
 		}
 		from = i + len(marker)
@@ -122,9 +123,10 @@ func directOwnerMarker(lower, marker string) bool {
 	return false
 }
 
-// ownerConditionalOpen reports a clause-level "if" whose condition still owns the requirement. An introductory colon
-// may precede it; a narrative verb's nested if-question ("checks if") may not suppress the following direct clause.
-// "Even if" is different: its main clause applies regardless of the condition, so a later owner requirement stays direct.
+// ownerConditionalOpen reports a clause-level "if" or "only if" whose condition still owns the requirement. An
+// introductory colon may precede it; a narrative verb's nested if-question ("checks if", "checks only if") may not
+// suppress the following direct clause. "Even if" is different: its main clause applies regardless of the condition,
+// so a later owner requirement stays direct.
 func ownerConditionalOpen(clause string) bool {
 	for from := 0; from < len(clause); {
 		i := strings.Index(clause[from:], "if ")
@@ -133,7 +135,7 @@ func ownerConditionalOpen(clause string) bool {
 		}
 		i += from
 		prefix := strings.TrimSpace(clause[:i])
-		boundary := prefix == "" || strings.HasSuffix(prefix, ":")
+		boundary := prefix == "" || prefix == "only" || strings.HasSuffix(prefix, ":") || strings.HasSuffix(prefix, ": only")
 		if boundary && !strings.HasSuffix(prefix, "even") {
 			return true
 		}

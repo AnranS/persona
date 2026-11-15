@@ -449,7 +449,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		s.turnsTold(ctx, holds) // already covered by the deduplication history
 		return false
 	}
-	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), list, holds)
+	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), list, kept, holds)
 	if err != nil {
 		var escalated leaderEscalated
 		if errors.As(err, &escalated) {
@@ -492,14 +492,15 @@ type leaderEscalated struct{ err error }
 func (e leaderEscalated) Error() string { return e.err.Error() }
 func (e leaderEscalated) Unwrap() error { return e.err }
 
-// sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. Its bool is true
+// sendToLeader sends text, the supervision message for signals sent, into the leader agent's session. Its bool is true
 // when delivery or its retry continues in the background: a closed agent's resume, or a stopped agent's escalation.
 // Neither is delivery yet. A failed resume and a node refusal with agent_stopped escalate and retry
 // (escalateLeaderMessage): another digest would only be refused again (#8518). A session its computer does not list, or
 // a failed online send for any other reason, is a leaderUnreachable for the caller, which puts the signals back for the
 // next digest. After real delivery, all acknowledges the original batch too: its filtered members no longer hold and
-// must not return after a restart (#5732).
-func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, kept []superviseSignal) (bool, error) {
+// must not return after a restart (#5732). receipts includes those dedup-filtered members for turn receipts, while sent
+// alone determines who may be escalated and which parked_due entries the text actually carried.
+func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, sent, receipts []superviseSignal) (bool, error) {
 	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !ok {
 		return false, leaderUnreachable{errors.New("the leader's session is not listed")}
@@ -508,13 +509,13 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 		go func() {
 			if err := s.sendToLeaderNow(context.Background(), lead, text); err != nil {
 				s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
-				s.escalateLeaderMessage(lead, all, kept, text)
+				s.escalateLeaderMessage(lead, all, sent, receipts, text)
 				return
 			}
 			// A resumed leader is acknowledged only after the real send, never when the goroutine was merely started.
 			s.ackSupervisePending(all)
-			s.parkedDueTold(context.Background(), kept)
-			s.turnsTold(context.Background(), kept)
+			s.parkedDueTold(context.Background(), sent)
+			s.turnsTold(context.Background(), receipts)
 		}()
 		return true, nil
 	}
@@ -523,7 +524,7 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
 		if refusedWith(err, proto.CodeAgentStopped) {
 			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
-			s.escalateLeaderMessage(lead, all, kept, text)
+			s.escalateLeaderMessage(lead, all, sent, receipts, text)
 			return true, leaderEscalated{err}
 		}
 		return false, leaderUnreachable{err}
@@ -539,15 +540,16 @@ func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text stri
 	return s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil)
 }
 
-// escalateLeaderMessage handles supervision message text for signals kept that could not be put into the leader's
-// session (a closed agent's resume failed, or the node refused it because the agent has stopped). Each worker's signal
-// becomes a decision for the conversation above the leader, naming the worker (so that conversation can review it) and
-// saying the leader could not be reached; and in any case, with or without a conversation above, the message is tried
+// escalateLeaderMessage handles supervision message text for signals sent that could not be put into the leader's
+// session (a closed agent's resume failed, or the node refused it because the agent has stopped). Only those actually
+// rendered into the text become decisions for the conversation above the leader, naming the worker (so that
+// conversation can review it) and saying the leader could not be reached; receipts additionally acknowledges members
+// suppressed by dedup once a retry really lands. In any case, with or without a conversation above, the message is tried
 // again on the leader itself with a growing wait, until it is taken or the leader's task is closed (its workers are then
 // rehomed). The retry runs on its own context: it must outlive the call that started it.
-func (s *Service) escalateLeaderMessage(lead TodoAgent, all, kept []superviseSignal, text string) {
+func (s *Service) escalateLeaderMessage(lead TodoAgent, all, sent, receipts []superviseSignal, text string) {
 	ctx := context.Background()
-	for _, g := range kept {
+	for _, g := range sent {
 		if w, ok := s.todoNow(g.Todo); ok {
 			if esc := s.escalateLeaderSignal(ctx, g); esc.Todo != "" {
 				s.signalReplacing(&g, esc)
@@ -566,8 +568,8 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, all, kept []superviseSig
 			s.logf("task leader %s: trying the undelivered supervision message again", short(lead.SessionID))
 			if err := s.sendToLeaderNow(ctx, lead, text); err == nil {
 				s.ackSupervisePending(all)
-				s.parkedDueTold(ctx, kept)
-				s.turnsTold(ctx, kept)
+				s.parkedDueTold(ctx, sent)
+				s.turnsTold(ctx, receipts)
 				return
 			}
 			wait = leaderRetryBackoff(wait)

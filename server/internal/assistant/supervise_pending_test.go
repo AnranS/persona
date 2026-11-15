@@ -405,7 +405,7 @@ func TestLeaderRetrySuccessAcknowledgesPending(t *testing.T) {
 	})
 	s.leaderResume = time.Millisecond
 	lead := TodoAgent{MachineID: "box", SessionID: "s1"}
-	s.escalateLeaderMessage(lead, []superviseSignal{g}, []superviseSignal{g}, "worker supervision")
+	s.escalateLeaderMessage(lead, []superviseSignal{g}, []superviseSignal{g}, []superviseSignal{g}, "worker supervision")
 	waitFor(t, "the successful leader retry's acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
 	requireLeaderTurnToldAfterRestart(t, s, g)
 }
