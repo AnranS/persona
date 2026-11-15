@@ -33,6 +33,13 @@ struct AssistantActionBarTests {
         return decode(s)
     }
 
+    private func errorSession(_ id: String, kind: String? = nil) -> Session {
+        var s = session(id, "idle")
+        s.turnError = "model failed"
+        s.turnErrorKind = kind
+        return s
+    }
+
     private func ask(_ id: String, session: String, at: Double = 3) -> Interaction {
         decode(["id": id, "machine_id": "mac", "session_id": session, "kind": "question", "created_at": iso(at),
                 "questions": [["question": "Which one?", "options": [["label": "A"], ["label": "B"]]]]])
@@ -162,6 +169,28 @@ struct AssistantActionBarTests {
         #expect(content.count(.running) == 0)
         // another conversation lists only the finished work it handed out
         #expect(ids(split([newer], [session("b", "idle")], conversation: "side").justFinished).isEmpty)
+    }
+
+    /// Interruptions keep their own urgency even on an accepted or review-pending task; usage limits remain at rest for
+    /// acceptance, but do not masquerade as an ordinary awaiting-review follow-up (#5732).
+    @Test func activeErrorsKeepTheirRankAcrossReviewStates() {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted")
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        let pending = todo("pending", agent: "p", supervision: "pending_review")
+        let interruptedA = errorSession("a"), interruptedP = errorSession("p")
+        let limitedA = errorSession("a", kind: "usage_limit"), limitedP = errorSession("p", kind: "usage_limit")
+        let interruptedAccepted = AssistantEntries.todoStatus(accepted, lookup: { _, _ in interruptedA })
+        #expect(interruptedAccepted == .interrupted)
+        #expect(AssistantEntries.rank(accepted, interruptedAccepted) == 1)
+        let interruptedPending = AssistantEntries.todoStatus(pending, lookup: { _, _ in interruptedP })
+        #expect(interruptedPending == .interrupted)
+        #expect(AssistantEntries.rank(pending, interruptedPending) == 1)
+        let limitedAccepted = AssistantEntries.todoStatus(accepted, lookup: { _, _ in limitedA })
+        #expect(limitedAccepted == .usageLimit)
+        #expect(AssistantEntries.rank(accepted, limitedAccepted) == 8)
+        let limitedPending = AssistantEntries.todoStatus(pending, lookup: { _, _ in limitedP })
+        #expect(limitedPending == .usageLimit)
+        #expect(AssistantEntries.rank(pending, limitedPending) == 1.5)
     }
 
     private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: Double) -> TaskPlan {

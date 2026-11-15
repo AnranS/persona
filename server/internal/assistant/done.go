@@ -241,7 +241,7 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 func ownerChineseConditionalPrefix(prefix string) bool {
 	start := 0
 	for i, r := range prefix {
-		if strings.ContainsRune("。！？；!?\n", r) { // i18n-ignore: parser punctuation
+		if r == '\n' || strings.ContainsRune(ownerSentenceEnds, r) {
 			start = i + utf8.RuneLen(r)
 		}
 	}

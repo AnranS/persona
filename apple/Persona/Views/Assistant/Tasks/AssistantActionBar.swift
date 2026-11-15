@@ -139,9 +139,12 @@ nonisolated enum AssistantEntries {
     /// The display state's rank (the web's `todoRank`): accepted is Done, an owner decision leads, and delivered work
     /// awaiting review is rank 2 while nothing runs or asks.
     static func rank(_ todo: TodoItem, _ status: Status) -> Double {
-        if todo.acceptedAtRest(status.taskState) { return 8 }
+        // TaskState has no interrupted / usage-limit cases: keep the raw status's rest semantics instead of letting
+        // their display-only follow-up mapping reclassify an active error as accepted or awaiting review (#5732).
+        let resting = status == .followUp || status == .unread || status == .notStarted
+        if resting || status == .usageLimit, todo.acceptedAtRest(status.taskState) { return 8 }
         if todo.waitsForOwner { return 0 }
-        if todo.deliveredAwaitingReview(status.taskState) { return 2 }
+        if resting, todo.deliveredAwaitingReview(status.taskState) { return 2 }
         return status.rank
     }
 
