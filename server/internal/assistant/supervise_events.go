@@ -323,7 +323,9 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	delete(b.pending, t.ID+"|"+sigParkedDue)
 	s.forgetSupervisePending(t.ID+"|"+sigReview, t.ID+"|"+sigParkedDue)
 	b.mu.Unlock()
-	s.retractSupervisedIdle(t.ID)
+	if !s.retractSupervisedIdle(ctx, t.ID) {
+		s.logf("task %s: could not retire the previous stretch's idle; its durable forms stay for retry", t.ID)
+	}
 }
 
 // notifyTaskFailed pushes a failure notification to the user's phone when a task started from a side conversation

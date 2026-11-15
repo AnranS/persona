@@ -441,9 +441,11 @@ func (s *Service) retractSuperviseSignalLocked(g superviseSignal) {
 	b.mu.Unlock()
 }
 
-// retractSupervisedIdle retires every idle stretch that exists when an agent resumes. A later idle has a new key and
-// stays pending; mixed queue messages keep and regather their unrelated signals.
-func (s *Service) retractSupervisedIdle(todoID string) {
+// retractSupervisedIdle retires every idle stretch that exists when an agent resumes. The turn-ledger receipt lands
+// before any other durable form is discarded, so a restart cannot replay an idle that was only recorded there. A later
+// idle has a new key and stays pending; mixed queue messages keep and regather their unrelated signals. False leaves
+// every durable form available for retry when the ledger cannot be read or written.
+func (s *Service) retractSupervisedIdle(ctx context.Context, todoID string) bool {
 	b := &s.supervise
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
@@ -481,14 +483,33 @@ func (s *Service) retractSupervisedIdle(todoID string) {
 		}
 	}
 	r.mu.Unlock()
+	turns := &s.tasks.turns
+	turns.mu.Lock()
+	if !s.turnsReadLocked(ctx) {
+		turns.mu.Unlock()
+		return false
+	}
+	if entry, ok := turns.doc.Turns[todoID]; ok && entry.Signal != nil {
+		sig := entry.Signal
+		collect(superviseSignal{Todo: todoID, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine})
+	}
+	turns.mu.Unlock()
 	ordered := make([]string, 0, len(keys))
 	for key := range keys {
 		ordered = append(ordered, key)
 	}
 	slices.Sort(ordered)
+	old := make([]superviseSignal, 0, len(ordered))
 	for _, key := range ordered {
-		s.retractSuperviseSignalLocked(superviseSignal{Todo: todoID, Kind: sigIdle, Key: key})
+		old = append(old, superviseSignal{Todo: todoID, Kind: sigIdle, Key: key})
 	}
+	if !s.turnsTold(ctx, old) {
+		return false
+	}
+	for _, g := range old {
+		s.retractSuperviseSignalLocked(g)
+	}
+	return true
 }
 
 // retractConfirmedStartUnknowns reconciles every start whose exact outcome is already known before a session-list
