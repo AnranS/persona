@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 const root = join(import.meta.dirname, "..", "..");
@@ -60,7 +61,7 @@ async function run(name) {
     process.stdout.write(JSON.stringify({events: electron.events, unhandled: electron.scenario.unhandled, updates: (await import("./fixtures/lifecycle-store.mjs")).updates, windows: electron.windows.map(window => ({title: window.options.title, url: window.url, destroyed: window.destroyed, partition: window.options.webPreferences.partition}))}));
     process.exit(0);
   `;
-  const child = spawn(process.execPath, ["--import", loader, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), env: { ...process.env, PERSONA_TEST_MAIN: `file://${main}`, PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", pathToFileURL(loader).href, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), env: { ...process.env, PERSONA_TEST_MAIN: pathToFileURL(main).href, PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1" }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });

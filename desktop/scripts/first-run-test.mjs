@@ -31,6 +31,7 @@ const desktop = join(root, "desktop");
 const requestedOutput = resolve(process.argv[2] ?? join(desktop, "release", "first-run"));
 const output = join(requestedOutput, randomUUID());
 await mkdir(output, { recursive: true });
+const webDist = resolve(process.env.PERSONA_DESKTOP_SMOKE_WEB ?? join(root, "web", "dist"));
 const platform = process.platform;
 const npm = platform === "win32" ? "npm.cmd" : "npm";
 const owned = new Set();
@@ -125,15 +126,23 @@ async function startHub() {
   }, 90000);
   return { port, token, text: () => text };
 }
+async function ensureWebClient() {
+  if (existsSync(join(webDist, "index.html"))) return;
+  need("the configured web client exists", false, webDist);
+}
 async function build() {
   need("compile the production app", (await run(npm, ["--prefix", "desktop", "run", "build"], { quiet: true })).code === 0);
+  if (!process.env.PERSONA_DESKTOP_TEST_PACKAGE && !existsSync(join(webDist, "index.html"))) {
+    if (process.env.PERSONA_DESKTOP_SMOKE_WEB) {
+      need("the downloaded web client is present at the explicit path", false, webDist);
+    }
+    need("install the web client for the local hub", (await run(npm, ["--prefix", "web", "ci"], { seconds: 900, quiet: true })).code === 0);
+    need("build the web client for the local hub", (await run(npm, ["--prefix", "web", "run", "build"], { seconds: 1200, quiet: true })).code === 0);
+  }
+  await ensureWebClient();
   if (process.env.PERSONA_DESKTOP_TEST_PACKAGE) {
     need("the preceding package step produced the explicit test artifact", existsSync(resolve(process.env.PERSONA_DESKTOP_TEST_PACKAGE)), process.env.PERSONA_DESKTOP_TEST_PACKAGE);
     return;
-  }
-  if (!existsSync(join(root, "web", "dist", "index.html"))) {
-    need("install the web client for the local hub", (await run(npm, ["--prefix", "web", "ci"], { seconds: 900, quiet: true })).code === 0);
-    need("build the web client for the local hub", (await run(npm, ["--prefix", "web", "run", "build"], { seconds: 1200, quiet: true })).code === 0);
   }
   const target = platform === "win32" ? ["--win", "dir", "--x64"] : platform === "darwin" ? ["--mac", "--universal"] : ["--linux", "dir", "--x64"];
   const result = await run(process.execPath, [join(desktop, "node_modules", "electron-builder", "cli.js"), "--projectDir", desktop, "--config", buildConfiguration, ...target, "--publish", "never"], {
@@ -408,7 +417,7 @@ async function main() {
   await fuseCheck(file);
   await packageCheck(file);
   hub = await startHub();
-  gateway = await startGateway({ dist: join(root, "web", "dist"), mockPort: hub.port });
+  gateway = await startGateway({ dist: webDist, mockPort: hub.port });
   await absentScenario(file);
   await pairedScenario(file);
   return { installed: installed ? "temporary test directory" : "unpacked directory", evidence: `${platform}/${process.arch}` };

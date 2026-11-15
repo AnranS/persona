@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 test("retiring a hub window closes its own notifications even after IPC ownership moved", async () => {
@@ -20,7 +21,7 @@ test("retiring a hub window closes its own notifications even after IPC ownershi
     if (JSON.stringify(opened) !== JSON.stringify(["closed-first"])) throw new Error(JSON.stringify(opened));
     process.exit(0);
   `;
-  const child = spawn(process.execPath, ["--import", join(root, "desktop", "test", "fixtures", "lifecycle-register.mjs"), "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", pathToFileURL(join(root, "desktop", "test", "fixtures", "lifecycle-register.mjs")).href, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", chunk => { stderr += chunk; });
   assert.equal(await new Promise(done => child.once("close", done)), 0, stderr);

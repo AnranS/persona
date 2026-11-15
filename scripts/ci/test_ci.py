@@ -344,6 +344,8 @@ class DesktopWorkflowTests(unittest.TestCase):
             first = next(step for step in steps if 'first-run acceptance' in step.get('name', '') or 'packaged setup' in step.get('name', ''))
             self.assertEqual(first['if'], '${{ !cancelled() }}')
             self.assertNotIn('PERSONA_DESKTOP_TEST_PACKAGE', first.get('env', {}))
+            if platform != 'linux':
+                self.assertEqual(first['env']['PERSONA_DESKTOP_SMOKE_WEB'], 'web/dist')
         text = (root / '.github/workflows/desktop-test.yml').read_text()
         self.assertNotIn('inputs.signed', text)
         self.assertNotIn('CSC_LINK', text)

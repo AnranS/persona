@@ -99,6 +99,8 @@ jobs:
         run: scripts/ci/desktop-package.sh mac
       - name: Unsigned macOS packaged setup; hub acceptance requires a valid signature
         if: ${{ !cancelled() }}
+        env:
+          PERSONA_DESKTOP_SMOKE_WEB: web/dist
         run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
@@ -160,6 +162,8 @@ jobs:
       - name: Packaged Windows app first-run acceptance
         if: ${{ !cancelled() }}
         shell: bash
+        env:
+          PERSONA_DESKTOP_SMOKE_WEB: web/dist
         run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
