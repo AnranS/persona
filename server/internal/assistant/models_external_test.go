@@ -390,6 +390,258 @@ func TestExternalModelReadbackFollowsTheConfirmedMainComputer(t *testing.T) {
 	}
 }
 
+func TestExternalColdInventoryRestoresPersistedMainPick(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pick := pickExternal(t, s, l, "vendor/model-two")
+	again := newServiceOn(t, f, s.store())
+	var requests []map[string]any
+	f.answerNode(DeviceLaunchersList, func(machine string, raw json.RawMessage) (any, error) {
+		var params map[string]any
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		requests = append(requests, params)
+		if machine != pick.MachineID {
+			t.Errorf("inventory read on %q, want %q", machine, pick.MachineID)
+		}
+		if params["refresh"] == true {
+			return launcherListing{Launchers: []proto.Launcher{l}}, nil
+		}
+		return launcherListing{Launchers: []proto.Launcher{{Name: "claude"}}}, nil
+	})
+	params, err := send(t, again, "main", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalExecutionOf(t, params, l)
+	if params["launcher"] != pick.Launcher || params["model"] != pick.Model {
+		t.Fatalf("cold inventory changed the selected target or raw model: %v", params)
+	}
+	if kept, ok := again.modelPickOf(t.Context(), pick.MachineID, "main"); !ok || kept != pick {
+		t.Fatalf("cold inventory changed the persisted pick: %+v %v", kept, ok)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(requests) != 2 || len(requests[0]) != 0 || !reflect.DeepEqual(requests[1], map[string]any{"refresh": true}) {
+		t.Fatalf("cold inventory calls: %v", requests)
+	}
+}
+
+func TestExternalColdInventoryValidatesExplicitPick(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	var refreshes int
+	f.answerNode(DeviceLaunchersList, func(_ string, raw json.RawMessage) (any, error) {
+		var params struct {
+			Refresh bool `json:"refresh"`
+		}
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		if params.Refresh {
+			refreshes++
+		}
+		if refreshes > 0 {
+			return launcherListing{Launchers: []proto.Launcher{l}}, nil
+		}
+		return launcherListing{}, nil
+	})
+	pick := pickExternal(t, s, l, "")
+	if pick.Model != "vendor/model-one" {
+		t.Fatalf("cold default did not persist the exact raw model: %+v", pick)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if refreshes != 1 {
+		t.Fatalf("explicit pick refreshes=%d, want 1", refreshes)
+	}
+}
+
+func TestExternalColdInventoryFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name, suffix string
+		change       func(*proto.Launcher)
+		missing      bool
+		refreshErr   error
+	}{
+		{name: "refresh failed", suffix: "target_not_found", refreshErr: errors.New("inventory unavailable")},
+		{name: "target still missing", suffix: "target_not_found", missing: true},
+		{name: "forged identity", suffix: "target_not_found", change: func(l *proto.Launcher) { l.External.ID = "another-target" }},
+		{name: "wrong source", suffix: "target_not_found", change: func(l *proto.Launcher) { l.Source = "path" }},
+		{name: "missing revision", suffix: "target_not_found", change: func(l *proto.Launcher) { l.External.Revision = "" }},
+		{name: "context changed", suffix: "purpose_unsupported", change: func(l *proto.Launcher) { l.External.Capabilities.Contexts = []string{"coding"} }},
+		{name: "runtime changed", suffix: "runtime_unsupported", change: func(l *proto.Launcher) { l.External.Capabilities.Runtimes = []string{"agentsdk"} }},
+		{name: "platform changed", suffix: "platform_unsupported", change: func(l *proto.Launcher) { l.External.Capabilities.Platforms = []string{"windows"} }},
+		{name: "credentials removed", suffix: "credentials_missing", change: func(l *proto.Launcher) { l.External.CredentialState = "missing" }},
+		{name: "raw model removed", suffix: "model_not_found", change: func(l *proto.Launcher) { l.External.Models = l.External.Models[:1] }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, l := externalPickFixture(t)
+			pick := pickExternal(t, s, l, "vendor/model-two")
+			changed := externalTestLauncher()
+			if tc.change != nil {
+				tc.change(&changed)
+			}
+			var refreshes int
+			f.answerNode(DeviceLaunchersList, func(_ string, raw json.RawMessage) (any, error) {
+				var params struct {
+					Refresh bool `json:"refresh"`
+				}
+				if err := json.Unmarshal(raw, &params); err != nil {
+					return nil, err
+				}
+				if !params.Refresh {
+					return launcherListing{}, nil
+				}
+				refreshes++
+				if tc.refreshErr != nil {
+					return nil, tc.refreshErr
+				}
+				if tc.missing {
+					return launcherListing{}, nil
+				}
+				return launcherListing{Launchers: []proto.Launcher{changed}}, nil
+			})
+			before, puts := profileStoreSnapshot(s.store().(*memStore))
+			params := map[string]any{}
+			requireExternalError(t, s.sendModel(t.Context(), pick.MachineID, "main", params, i18n.En), tc.suffix)
+			if params["launcher"] != nil || params["external"] != nil {
+				t.Fatalf("refused cold pick changed the connection: %v", params)
+			}
+			if kept, _ := s.modelPickOf(t.Context(), pick.MachineID, "main"); kept != pick {
+				t.Fatalf("refused refresh changed the pick: %+v", kept)
+			}
+			requireProfileStoreUnchanged(t, s.store().(*memStore), before, puts)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if refreshes != 1 || len(f.sends) != 0 || len(f.starts) != 0 || len(f.checked) != 0 {
+				t.Fatalf("refused cold pick executed or retried: refreshes=%d sends=%v starts=%v checks=%v", refreshes, f.sends, f.starts, f.checked)
+			}
+		})
+	}
+}
+
+type externalInventoryContextHub struct {
+	Hub
+	list func(context.Context, DeviceCall) (json.RawMessage, error)
+}
+
+func (h externalInventoryContextHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceLaunchersList {
+		return h.list(ctx, p)
+	}
+	return h.Hub.DeviceCall(ctx, p)
+}
+
+func TestExternalColdInventoryRefreshKeepsCallerContextAndBound(t *testing.T) {
+	for _, shorterDeadline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shorterDeadline=%v", shorterDeadline), func(t *testing.T) {
+			s, f, l := externalPickFixture(t)
+			pickExternal(t, s, l, "vendor/model-one")
+			type contextKey struct{}
+			parent := context.WithValue(t.Context(), contextKey{}, "caller")
+			var cancel context.CancelFunc
+			if shorterDeadline {
+				parent, cancel = context.WithTimeout(parent, time.Second)
+			} else {
+				parent, cancel = context.WithCancel(parent)
+			}
+			defer cancel()
+			calls := 0
+			s.hub = externalInventoryContextHub{Hub: f, list: func(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+				calls++
+				if string(p.Params) != `{"refresh":true}` {
+					return json.Marshal(launcherListing{})
+				}
+				if ctx.Value(contextKey{}) != "caller" {
+					t.Error("refresh discarded caller context")
+				}
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > launcherSyncTimeout {
+					t.Error("refresh has no bounded deadline")
+				}
+				if parentDeadline, ok := parent.Deadline(); ok && deadline.After(parentDeadline) {
+					t.Error("refresh extended caller deadline")
+				}
+				cancel()
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}}
+			requireExternalError(t, s.sendModel(parent, "server", "main", map[string]any{}, i18n.En), "target_not_found")
+			if calls != 2 {
+				t.Fatalf("canceled inventory calls=%d, want 2", calls)
+			}
+		})
+	}
+}
+
+func TestExternalColdInventoryDoesNotGrantAnotherMachineScope(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	pick := pickExternal(t, s, l, "vendor/model-one")
+	f.mu.Lock()
+	f.sessions["other"] = nil
+	f.mu.Unlock()
+	var calls int
+	f.answerNode(DeviceLaunchersList, func(_ string, _ json.RawMessage) (any, error) {
+		calls++
+		return launcherListing{Launchers: []proto.Launcher{l}}, nil
+	})
+	_, err := s.externalPickContext(t.Context(), "other", "main", pick)
+	requireExternalError(t, err, "scope_required")
+	forged := pick
+	forged.MachineID = "other"
+	_, err = s.resolveExternalPick(t.Context(), "main", forged)
+	requireExternalError(t, err, "scope_required")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("out-of-scope pick queried inventory %d times", calls)
+	}
+}
+
+func TestExternalHotInventoryAndOrdinaryListsDoNotRefresh(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		t.Run(fmt.Sprintf("invalid=%v", invalid), func(t *testing.T) {
+			s, f, l := externalPickFixture(t)
+			pickExternal(t, s, l, "vendor/model-one")
+			if invalid {
+				l.External.Capabilities.Contexts = []string{"coding"}
+			}
+			var calls int
+			f.answerNode(DeviceLaunchersList, func(_ string, raw json.RawMessage) (any, error) {
+				calls++
+				var params map[string]any
+				if err := json.Unmarshal(raw, &params); err != nil {
+					return nil, err
+				}
+				if len(params) != 0 {
+					t.Errorf("hot/ordinary list changed params: %s", raw)
+				}
+				return launcherListing{Launchers: []proto.Launcher{l}}, nil
+			})
+			err := s.sendModel(t.Context(), "server", "main", map[string]any{}, i18n.En)
+			if invalid {
+				requireExternalError(t, err, "purpose_unsupported")
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.listLaunchers(t.Context(), Device{ID: "server", Online: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.listLaunchers(t.Context(), Device{ID: "server", Online: true}, false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.machineLaunchers(t.Context(), "server"); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if calls != 4 {
+				t.Fatalf("hot inventory or ordinary lists made extra calls: %d", calls)
+			}
+		})
+	}
+}
+
 func TestExternalUnavailableCodesAreSanitized(t *testing.T) {
 	for _, suffix := range []string{"config_conflict", "credentials_missing", "runtime_unsupported", "platform_unsupported", "revision_mismatch", "timeout"} {
 		requireExternalError(t, externalUnavailableError("adapter_"+suffix), suffix)

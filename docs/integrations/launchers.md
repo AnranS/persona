@@ -86,7 +86,10 @@ Inventory reads have a five-second deadline and a one-MiB stdout limit, at most 
 are independent of the shell's launcher cache. A cold read returns immediately while inventory loads; a changed
 snapshot emits `launchers.changed` so the manager refreshes in the background. Failed refreshes keep the previous
 snapshot marked stale and do not fail the other launcher sources. An explicit model refresh can wait for the
-bounded inventory read.
+bounded inventory read. When validating a specific saved pick that is missing from a cold snapshot, the manager
+retries `launchers.list` once with `refresh:true`; ordinary directory reads remain nonblocking. Execution admission
+also joins a bounded load before rejecting a cache miss, including after resident-node handover. The loaded target
+must still pass the existing identity, scope, capability and revision checks; refreshing never grants authority.
 
 ### Native bootstrap and credentials
 

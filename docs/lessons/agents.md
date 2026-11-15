@@ -11,6 +11,11 @@ field must never become a shell command. Keep the latest directory revision sepa
 binding so a refresh cannot interrupt a turn or silently change a model. Materialize an external default selection
 into its exact model ID when it is saved; otherwise a remote default change becomes an unintended conversation edit.
 
+A freshly loaded registry is not evidence that a saved target was deleted. Ordinary directory reads may remain
+nonblocking, but validation of a specific persisted pick must join one bounded inventory load on a miss and then
+repeat identity, scope and capability checks. Cover a completely cold registry and resident connection handover
+with an already-running process; fixtures that always prewarm inventory hide both failures.
+
 Pin connection environment in one final settings file while preserving Persona's hooks, MCP and permission fields;
 process environment alone does not establish the intended precedence, and appending a second `--settings` can drop
 the first. Let the node own the private output directory so group termination still removes credential files when

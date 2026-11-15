@@ -92,6 +92,14 @@ func (s *Service) externalTarget(ctx context.Context, machine, name string) (*pr
 	if err != nil {
 		return nil, i18n.Err("external-adapter.target_not_found")
 	}
+	if proto.IsExternalLauncher(name) && !slices.ContainsFunc(res.Launchers, func(l proto.Launcher) bool { return l.Name == name }) {
+		// A new node can answer with an empty external snapshot while its first inventory loads.
+		// Wait once for this specific selection, bounded by listLaunchers and the caller's context.
+		res, err = s.listLaunchers(ctx, d, true)
+		if err != nil {
+			return nil, i18n.Err("external-adapter.target_not_found")
+		}
+	}
 	for _, l := range res.Launchers {
 		if l.Name == name {
 			if err := s.externalLauncherRefusal(ctx, l); err != nil {

@@ -1072,7 +1072,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		shell, rcFile := launcherShell()
 		if n.external != nil {
-			if external := n.external.launchers(ctx, false); len(external) > 0 {
+			if external := n.external.launchers(ctx, p.Refresh); len(external) > 0 {
 				ls, err = append(ls, external...), nil // local adapters do not depend on a working login shell
 			}
 		}

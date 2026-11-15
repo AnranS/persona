@@ -25,14 +25,19 @@ type launcherListing struct {
 }
 
 // listLaunchers asks one machine for its list, giving it launcherSyncTimeout; an offline machine is not asked.
-func (s *Service) listLaunchers(ctx context.Context, d Device) (launcherListing, error) {
+// Only an explicit refresh waits for external sources; ordinary lists keep their nonblocking snapshot behavior.
+func (s *Service) listLaunchers(ctx context.Context, d Device, refresh ...bool) (launcherListing, error) {
 	var res launcherListing
 	if !d.Online {
 		return res, apierr.ErrOffline
 	}
 	cctx, cancel := context.WithTimeout(ctx, launcherSyncTimeout)
 	defer cancel()
-	err := s.call(cctx, d.ID, DeviceLaunchersList, map[string]any{}, &res)
+	params := map[string]any{}
+	if len(refresh) > 0 && refresh[0] {
+		params["refresh"] = true
+	}
+	err := s.call(cctx, d.ID, DeviceLaunchersList, params, &res)
 	if err != nil && cctx.Err() != nil && ctx.Err() == nil {
 		err = context.DeadlineExceeded
 	}

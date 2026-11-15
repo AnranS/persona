@@ -85,6 +85,14 @@ func (n *Node) checkExternalAssistant(ctx context.Context, id, launcher string, 
 		return externalRefusal(ctx, "adapter_disabled")
 	}
 	target, ok := n.external.lookup(launcher)
+	if !ok {
+		// An execution can arrive before any directory read on a new resident
+		// connection. Join one bounded inventory load, then validate the result.
+		if err := n.external.refresh(ctx, true); err != nil {
+			return externalAdapterError(ctx, err)
+		}
+		target, ok = n.external.lookup(launcher)
+	}
 	if !ok || binding.AdapterID != target.AdapterID || binding.TargetID != target.ID ||
 		proto.ExternalLauncherName(binding.AdapterID, binding.TargetID) != launcher {
 		return externalRefusal(ctx, "adapter_target_not_found")

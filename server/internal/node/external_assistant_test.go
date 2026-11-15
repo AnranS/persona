@@ -56,7 +56,7 @@ case "$operation" in
 esac
 `
 
-func externalAssistantFixture(t *testing.T) (*sdkFixture, string, modelExecution, func(string)) {
+func externalAssistantFixture(t *testing.T, warm ...bool) (*sdkFixture, string, modelExecution, func(string)) {
 	t.Helper()
 	f := sdkTest(t)
 	t.Setenv(agentSandboxEnv, "off")
@@ -106,9 +106,12 @@ func externalAssistantFixture(t *testing.T) (*sdkFixture, string, modelExecution
 		t.Fatal(err)
 	}
 	t.Cleanup(f.n.external.Close)
-	launchers := f.n.external.launchers(context.Background(), true)
-	if len(launchers) != 1 {
-		t.Fatalf("external inventory: %+v", launchers)
+	launcher := proto.ExternalLauncherName("example", target.ID)
+	if len(warm) == 0 || warm[0] {
+		launchers := f.n.external.launchers(context.Background(), true)
+		if len(launchers) != 1 || launchers[0].Name != launcher {
+			t.Fatalf("external inventory: %+v", launchers)
+		}
 	}
 	id := "11111111-2222-4333-8444-555555555555"
 	execution := modelExecution{
@@ -116,7 +119,7 @@ func externalAssistantFixture(t *testing.T) (*sdkFixture, string, modelExecution
 		External: &proto.ExternalExecution{Scope: proto.ExternalMainChatScope, SessionID: id,
 			AdapterID: "example", TargetID: target.ID, Revision: revision},
 	}
-	return f, launchers[0].Name, execution, writeInventory
+	return f, launcher, execution, writeInventory
 }
 
 func requireExternalCode(t *testing.T, err error, code string) {
@@ -128,6 +131,121 @@ func requireExternalCode(t *testing.T, err error, code string) {
 	var detail map[string]any
 	if err := json.Unmarshal(wire.Data, &detail); err != nil || detail["delivered"] != "none" {
 		t.Fatalf("pre-execution refusal lost delivery state: %s", wire.Data)
+	}
+}
+
+func TestExternalAdapterPersistedPickLoadsColdInventory(t *testing.T) {
+	f, launcher, execution, _ := externalAssistantFixture(t, false)
+	id := execution.External.SessionID
+	if _, ok := f.n.external.lookup(launcher); ok {
+		t.Fatal("fixture warmed the inventory before the persisted pick")
+	}
+	cwd := t.TempDir()
+	f.n.state.put(id, sessionState{Launcher: launcher, Cwd: cwd, Model: execution.Model, IsMain: true})
+	if _, err := f.n.assistantSend(t.Context(), id, cwd, launcher, "cold main-chat pick", nil, "default", "", execution); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	p := f.proc(id)
+	if p == nil || p.model.External == nil || *p.model.External != *execution.External {
+		t.Fatal("cold initialization changed the persisted target or revision")
+	}
+	if !strings.Contains(f.file("external-stdin"), "cold main-chat pick") {
+		t.Fatal("cold persisted pick did not reach the native CLI")
+	}
+}
+
+func TestExternalAdapterResidentHandoverLoadsColdInventory(t *testing.T) {
+	f, launcher, execution, update := externalAssistantFixture(t)
+	id, cwd := execution.External.SessionID, t.TempDir()
+	if _, err := f.n.assistantSend(t.Context(), id, cwd, launcher, "before handover", nil, "default", "", execution); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	p := f.proc(id)
+	pid := p.cmd.Process.Pid
+	state, _ := f.n.state.get(id)
+	keeper := newAssistantKeeper()
+	f.n.keeper = keeper
+	f.n.handOverAssistants()
+	f.n.external.Close()
+	t.Cleanup(keeper.stopAll)
+	update("sha256:" + strings.Repeat("2", 64))
+	binding := *execution.External
+	binding.Revision = "sha256:" + strings.Repeat("2", 64)
+	execution.External = &binding
+
+	next := codexTestNode(t)
+	next.home, next.dir, next.bin = f.n.home, f.n.dir, f.n.bin
+	next.keeper = keeper
+	next.state.put(id, state)
+	withFakeHub(t, next)
+	var err error
+	next.external, err = loadExternalAdapterRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(next.external.Close)
+	t.Cleanup(func() { next.stopAssistant(id) })
+	if _, ok := next.external.lookup(launcher); ok {
+		t.Fatal("new resident connection unexpectedly inherited the old registry cache")
+	}
+	if adopted := keeper.adopt(next); len(adopted) != 1 || adopted[0] != p || p.ownerOr(f.n) != next {
+		t.Fatal("resident handover did not adopt the existing process")
+	}
+	if _, err := next.assistantSend(t.Context(), id, cwd, launcher, "after handover", nil, "default", "", execution); err != nil {
+		t.Fatal(err)
+	}
+	g := &sdkFixture{n: next, dir: f.dir}
+	g.idle(t, id)
+	if current := g.proc(id); current != p || current.cmd.Process.Pid != pid || current.model.External.Revision == binding.Revision {
+		t.Fatal("cold registry initialization restarted the resident conversation or changed its actual binding")
+	}
+	if !strings.Contains(f.file("external-stdin"), "after handover") {
+		t.Fatal("resident conversation did not receive the next message")
+	}
+}
+
+func TestExternalAdapterColdInventoryStillValidatesTarget(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*proto.ExternalInventory)
+		code string
+	}{
+		{"missing_target", func(inventory *proto.ExternalInventory) { inventory.Targets = []proto.ExternalTarget{} }, "adapter_target_not_found"},
+		{"changed_identity", func(inventory *proto.ExternalInventory) { inventory.Targets[0].ID += "-other" }, "adapter_target_not_found"},
+		{"changed_capability", func(inventory *proto.ExternalInventory) {
+			inventory.Targets[0].Capabilities.Runtimes = []string{"agentsdk"}
+		}, "adapter_runtime_unsupported"},
+		{"changed_revision", func(inventory *proto.ExternalInventory) {
+			inventory.Targets[0].Revision = "sha256:" + strings.Repeat("2", 64)
+		}, "adapter_revision_mismatch"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f, launcher, execution, _ := externalAssistantFixture(t, false)
+			path := filepath.Join(f.dir, "external-inventory.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var inventory proto.ExternalInventory
+			if err := json.Unmarshal(data, &inventory); err != nil {
+				t.Fatal(err)
+			}
+			test.edit(&inventory)
+			data, err = json.Marshal(inventory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.n.assistantSend(t.Context(), execution.External.SessionID, t.TempDir(), launcher, "must not be delivered", nil, "default", "", execution)
+			requireExternalCode(t, err, test.code)
+			if f.file("external-argv") != "" {
+				t.Fatal("a refused cold binding started the native CLI")
+			}
+		})
 	}
 }
 
