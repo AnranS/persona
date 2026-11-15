@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 const root = join(import.meta.dirname, "..", "..");
-const built = spawnSync("npm", ["--prefix", join(root, "desktop"), "run", "build"], { encoding: "utf8", timeout: 120000 });
+const built = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["--prefix", join(root, "desktop"), "run", "build"], { encoding: "utf8", timeout: 120000, shell: process.platform === "win32" });
 assert.equal(built.status, 0, `${built.stdout}\n${built.stderr}`);
 cpSync(join(root, "desktop", "dist"), join(root, "desktop", "dist-test", "src"), { recursive: true });
 const main = join(root, "desktop", "dist-test", "src", "main.js");

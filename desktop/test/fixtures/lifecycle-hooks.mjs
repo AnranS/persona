@@ -1,5 +1,4 @@
-import { pathToFileURL } from "node:url";
-const fixture = name => pathToFileURL(new URL(name, import.meta.url).pathname).href;
+const fixture = name => new URL(name, import.meta.url).href;
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "electron") return { url: fixture("./electron-lifecycle.mjs"), format: "module", shortCircuit: true };
   if (specifier === "electron-updater") return { url: fixture("./lifecycle-updater.mjs"), format: "module", shortCircuit: true };

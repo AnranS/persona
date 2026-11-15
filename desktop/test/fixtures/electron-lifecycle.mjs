@@ -113,5 +113,9 @@ export async function settle() { await new Promise(resolve => setTimeout(resolve
 export async function importMain() {
   await import(process.env.PERSONA_TEST_MAIN);
   if (ready) await ready;
+  // The real module registers its async startup continuation from whenReady(). Let that continuation begin before
+  // tests issue a deep link; macOS and Windows schedule these microtasks differently from the original Linux probe.
+  await settle();
+  if (ready) await ready;
   await settle();
 }
