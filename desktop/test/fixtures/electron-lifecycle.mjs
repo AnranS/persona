@@ -111,11 +111,8 @@ export class BrowserWindow extends EventEmitter {
 
 export async function settle() { await new Promise(resolve => setTimeout(resolve, 30)); }
 export async function importMain() {
-  await import(process.env.PERSONA_TEST_MAIN);
+  const startup = import(process.env.PERSONA_TEST_MAIN);
   if (ready) await ready;
-  // The real module registers its async startup continuation from whenReady(). Let that continuation begin before
-  // tests issue a deep link; macOS and Windows schedule these microtasks differently from the original Linux probe.
-  await settle();
-  if (ready) await ready;
+  await startup;
   await settle();
 }

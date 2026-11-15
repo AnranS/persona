@@ -325,6 +325,11 @@ class DesktopWorkflowTests(unittest.TestCase):
             steps = workflow['jobs'][platform]['steps']
             smoke = next(step for step in steps if ' Electron acceptance smoke' in step.get('name', ''))
             self.assertEqual(smoke['if'], first_run)
+            checks = next(step for step in steps if step.get('name') == 'Desktop checks')
+            self.assertEqual(checks['if'], first_run)
+            if platform != 'linux':
+                download = next(step for step in steps if step.get('uses') == 'actions/download-artifact@v4')
+                self.assertEqual(download['if'], '${{ !cancelled() }}')
             upload = next(step for step in steps if step.get('with', {}).get('name') == f'persona-desktop-{platform}-smoke')
             self.assertEqual(upload['if'], smoke_upload)
             evidence = next(step for step in steps if step.get('with', {}).get('name') == f'persona-desktop-{platform}-first-run')
