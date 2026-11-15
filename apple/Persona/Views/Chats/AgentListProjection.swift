@@ -15,6 +15,10 @@ nonisolated enum AgentSearchScope: String, CaseIterable, Identifiable, Sendable 
     func applied(query: String, searching: Bool) -> Self {
         !query.isEmpty || (searching && self == .errors) ? self : .all
     }
+
+    /// Whether an applied scope with this query is a search: something typed, or a scope that lists on its own (Errors,
+    /// while searching). An empty list is then a search with no results, never the first-run screen.
+    func isSearch(query: String) -> Bool { !query.isEmpty || self != .all }
 }
 
 nonisolated struct AgentEvidenceSnippet: Equatable, Sendable {

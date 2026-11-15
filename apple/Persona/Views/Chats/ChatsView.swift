@@ -880,13 +880,18 @@ private struct AgentsList: View {
     }
     private func session(_ key: SessionKey) -> Session? { lookup.sessions[key] }
 
+    /// The scope the list applies. The Sidebar layout's field (chats and Agents) names no scope: Full Text there
+    /// (`AgentsListMenu`).
+    private var appliedScope: AgentSearchScope {
+        unified == nil ? searchScope.applied(query: query, searching: searching) : .all
+    }
+
     /// Small value inputs, not a fingerprint of the inventory. Paging counts and preferences remain partitioned.
     private func projectionSettings() -> AgentListProjection.Settings {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
-                     // The Sidebar layout's field (chats and Agents) names no scope: Full Text there (`AgentsListMenu`).
-                     searchScope: unified == nil ? searchScope.applied(query: query, searching: searching) : .all,
+                     searchScope: appliedScope,
                      searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
                      pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
@@ -1220,6 +1225,14 @@ private struct AgentsList: View {
                 Section {
                     EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(query)”"),
                                    message: String(localized: "You can search space, tab and session titles and content. Try another word."))
+                }
+                .listRowBackground(Color.clear)
+            } else if !hasSearchResults, appliedScope.isSearch(query: query) {
+                // An open search under Errors with nothing typed and no Agent with an error: the same, not the first-run screen.
+                Section {
+                    EmptyStateView(symbol: Theme.Icon.success, title: String(localized: "No Agents with Errors"),
+                                   message: String(localized: "Agents that stop with an error show up here."),
+                                   action: (String(localized: "Show All"), { searchScope = .all }))
                 }
                 .listRowBackground(Color.clear)
             } else if !hasSearchResults, machineFilter.isEmpty, machines.isEmpty, model.canAddComputer {

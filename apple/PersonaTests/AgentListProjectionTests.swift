@@ -515,6 +515,20 @@ import PersonaWire
         #expect(AgentListProjection.build(input([failed, fine], settings: settings)).base.map(\.sessionID) == ["failed"])
     }
 
+    /// An open Errors search with nothing typed and only healthy Agents lists nothing, and it is a search: the list
+    /// says No Agents with Errors, not Start Your First Session.
+    @Test func anOpenErrorsSearchWithNoErrorsIsASearchNotTheFirstRun() throws {
+        let fine = try session("fine")
+        let applied = AgentSearchScope.errors.applied(query: "", searching: true)
+        var settings = AgentListProjection.Settings()
+        settings.searchScope = applied
+        #expect(!AgentListProjection.build(input([fine], settings: settings)).hasSearchResults)
+        #expect(applied.isSearch(query: ""))
+        #expect(!AgentSearchScope.errors.applied(query: "", searching: false).isSearch(query: ""))
+        #expect(!AgentSearchScope.title.applied(query: "", searching: true).isSearch(query: ""))
+        #expect(AgentSearchScope.all.isSearch(query: "x"))
+    }
+
     /// By Repository: a worktree with no Agent is found by its name or path under Full Text only; under Title it is
     /// not a result (it has no title), and with nothing searched the list is as before.
     @Test func aWorktreeWithoutAnAgentIsAFullTextResultOnly() {
