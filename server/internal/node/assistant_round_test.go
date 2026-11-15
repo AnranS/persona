@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -147,6 +148,13 @@ const roundRefusal = `{"type":"result","subtype":"error_during_execution","durat
 // --resume-session-at as Claude Code does an anchor it cannot find (roundRefusal).
 func roundTestNode(t *testing.T, lines *roundLines, failRound bool) (n *Node, argv, input string) {
 	t.Helper()
+	n, argv, input, _ = roundTestHub(t, lines, failRound)
+	return n, argv, input
+}
+
+// roundTestHub is roundTestNode with the hub the node pushes its rows to (fakeHub.rows).
+func roundTestHub(t *testing.T, lines *roundLines, failRound bool) (n *Node, argv, input string, hub *fakeHub) {
+	t.Helper()
 	dir := t.TempDir()
 	argv, input = filepath.Join(dir, "argv"), filepath.Join(dir, "input")
 	refuse := ""
@@ -158,11 +166,11 @@ func roundTestNode(t *testing.T, lines *roundLines, failRound bool) (n *Node, ar
 		"first=1\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> "+input+"\n"+
 		"  if [ $first = 1 ]; then echo '{\"type\":\"system\",\"subtype\":\"init\"}'; first=0; fi\ndone\nsleep 30\n")
 	n = kindTestNode(t)
-	withFakeHub(t, n)
+	hub = withFakeHub(t, n)
 	lines.write(t, filepath.Join(n.home, ".claude", "projects", "-assistant", roundConversation+".jsonl"))
 	n.state.put(roundConversation, sessionState{Launcher: "claude", Cwd: t.TempDir()})
 	t.Cleanup(func() { n.stopAssistant(roundConversation) })
-	return n, argv, input
+	return n, argv, input, hub
 }
 
 // roundStarts are the argument lists of each process the fake claude was started as.
@@ -220,7 +228,7 @@ func sendRound(t *testing.T, n *Node, onceID string) map[string]any {
 	return out.(map[string]any)
 }
 
-// idleRound makes the conversation's process idle, as after its turn's result.
+// idleRound makes the conversation's process idle, as a while after its turn's result: settled (stopSettled).
 func idleRound(n *Node) *assistantProc {
 	n.mu.Lock()
 	p := n.procs[roundConversation]
@@ -228,6 +236,7 @@ func idleRound(n *Node) *assistantProc {
 	if p != nil {
 		p.mu.Lock()
 		p.busy = false
+		p.lastOut.Store(time.Now().Add(-assistantSettle).UnixNano())
 		p.mu.Unlock()
 	}
 	return p

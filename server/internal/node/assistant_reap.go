@@ -67,21 +67,12 @@ func (n *Node) takeAssistant(id string) *assistantProc {
 // process leads its own group, so nothing else takes them down with the node: a node the manager killed left them
 // running beside the processes the next node started for the same conversations, the old ones refused the
 // assistant's tools by that node (mcpSession) and their background tasks reported lost while still running (#4259).
-// What they were running is still remembered (rememberTasks), so the next node tells each conversation. Messages held
-// for a round's process (assistant_round.go) end with it, as Claude Code's own queue does: delivered on its exit, they
-// would start a process beside the next node's.
+// What they were running is still remembered (rememberTasks), so the next node tells each conversation.
 func (n *Node) stopAtConnectionEnd(ids []string, spare *assistantProc) {
 	var procs []*assistantProc
 	for _, id := range ids {
 		n.cancelAssistantRecovery(id)
 		if p := n.takeAssistant(id); p != nil {
-			p.mu.Lock()
-			dropped := len(p.held)
-			p.held = nil
-			p.mu.Unlock()
-			if dropped > 0 {
-				n.logger.Printf("assistant %s: the connection ended: %d messages held for its supervision round's process end with it", short(id), dropped)
-			}
 			procs = append(procs, p)
 		}
 	}

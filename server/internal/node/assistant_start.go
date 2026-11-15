@@ -511,7 +511,6 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		}
 		n.emitDelta(id, "")
 		n.notifySessions()
-		n.deliverHeldWhenIdle(p) // messages it held go to the next process (assistant_round.go)
 	}()
 	return p, nil
 }

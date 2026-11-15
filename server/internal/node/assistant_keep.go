@@ -19,15 +19,14 @@ import (
 // liveAssistants is every headless assistant this process runs, whichever Node it reports to (AssistantsBusy).
 var liveAssistants sync.Map // *assistantProc -> struct{}
 
-// AssistantsBusy: a conversation is answering, waiting on its background tasks or monitors, or holding messages for
-// when it is idle (assistant_round.go); a resident node asked to restart (SIGHUP, a deploy) waits until none is
-// (cmd/personad runResident). Idle ones resume on the next message.
+// AssistantsBusy: a conversation is answering or waiting on its background tasks or monitors; a resident node asked
+// to restart (SIGHUP, a deploy) waits until none is (cmd/personad runResident). Idle ones resume on the next message.
 func AssistantsBusy() bool {
 	busy := false
 	liveAssistants.Range(func(k, _ any) bool {
 		p := k.(*assistantProc)
 		p.mu.Lock()
-		busy = p.alive() && (p.busy || p.compacting || len(p.tasks) > 0 || len(p.held) > 0)
+		busy = p.alive() && (p.busy || p.compacting || len(p.tasks) > 0)
 		p.mu.Unlock()
 		return !busy
 	})
@@ -316,7 +315,6 @@ func (n *Node) resumeAssistants(adopted []*assistantProc) {
 		if busy && text != "" {
 			n.emitDelta(p.id, text)
 		}
-		n.deliverHeldWhenIdle(p) // what it holds, left by the last connection's Node (assistant_round.go)
 	}
 	if len(adopted) > 0 {
 		n.logger.Printf("took over %d running conversations from the last hub connection", len(adopted))
