@@ -115,8 +115,8 @@ func directOwnerMarker(lower, marker string) bool {
 			openConditional := ownerConditionalOpen(conditional)
 			direct = !openConditional || strings.HasSuffix(clause, "otherwise,") || strings.HasSuffix(clause, "otherwise:")
 		}
-		rest := lower[i+len(marker):]
-		if direct && !ownerNoAction(rest) && !ownerTrailingConditional(rest) && !ownerMarkerQuoted(lower, i) {
+		rest := i + len(marker)
+		if direct && !ownerNoAction(lower[rest:]) && !ownerTrailingConditional(lower, rest) && !ownerMarkerQuoted(lower, i) {
 			return true
 		}
 		from = i + len(marker)
@@ -145,33 +145,35 @@ func ownerConditionalOpen(clause string) bool {
 	return false
 }
 
-// ownerTrailingConditional reports an if/only-if condition attached to the requirement in rest. Its scope ends at the
-// sentence boundary, so it cannot hide a later independent requirement. An if-question that is the requirement's own
-// object ("check if …") is not a condition, and "even if" leaves the requirement unconditional.
-func ownerTrailingConditional(rest string) bool {
-	if end := strings.IndexAny(rest, ownerSentenceEnds); end >= 0 {
-		rest = rest[:end]
+// ownerTrailingConditional reports an if/only-if condition attached to the requirement starting at at. Its scope ends
+// at the sentence boundary, so it cannot hide a later independent requirement. An if-question that is the
+// requirement's own object ("check if …") is not a condition, and "even if" leaves the requirement unconditional;
+// either owns later coordinated if-clauses. Quoted if-clauses are history, not conditions on an unquoted requirement.
+func ownerTrailingConditional(lower string, at int) bool {
+	end := len(lower)
+	if i := strings.IndexAny(lower[at:], ownerSentenceEnds); i >= 0 {
+		end = at + i
 	}
 	const marker = " if "
-	for from := 0; from < len(rest); {
-		i := strings.Index(rest[from:], marker)
+	for from := at; from < end; {
+		i := strings.Index(lower[from:end], marker)
 		if i < 0 {
 			return false
 		}
 		i += from
-		predicate := strings.TrimSpace(rest[:i])
-		condition := strings.TrimSpace(rest[i+len(marker):])
-		if predicate != "" && condition != "" {
+		predicate := strings.TrimSpace(lower[at:i])
+		condition := strings.TrimSpace(lower[i+len(marker) : end])
+		if predicate != "" && condition != "" && !ownerMarkerQuoted(lower, i) {
 			words := strings.Fields(predicate)
 			last := words[len(words)-1]
-			question := false
+			if last == "even" {
+				return false
+			}
 			switch last {
 			case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess":
-				question = true
+				return false
 			}
-			if last != "even" && !question {
-				return true
-			}
+			return true
 		}
 		from = i + len(marker)
 	}
