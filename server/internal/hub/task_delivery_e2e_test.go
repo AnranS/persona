@@ -249,10 +249,53 @@ pushChecked:
 	}
 	t.Logf("cancel: todo=%s api_done_by=review stored_done_by=cancelled reason_and_snapshot=present", first.ID)
 
-	// Adopting the closed card's Agent is the explicit card-replacement path. It creates one linked history: the old
-	// card points forward and the new card points back. task_plan.continues separately keeps follow-up work on the
-	// original to-do (#6820), so it is not the operation under test here.
-	sessionID := first.Agents[0].SessionID
+	// task_plan.continues keeps the cancelled work on its original to-do (#6820), releases the predecessor and links
+	// exactly one replacement Agent. It neither creates a successor nor renames the preserved brief's card.
+	taskNode.nextID = "agent-new-1"
+	plan("按新方案接手验证", first.ID)
+	activeAgents := func(todo Todo) (out []assistant.TodoAgent) {
+		for _, a := range todo.Agents {
+			if a.ReleasedAt == nil {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	var continued Todo
+	eventually(t, 10*time.Second, "the same-card continuation and its replacement agent", func() bool {
+		cur := todoNow(h, first.ID)
+		active := activeAgents(cur)
+		if cur.DoneAt == nil && len(active) == 1 && active[0].SessionID == "agent-new-1" {
+			continued = cur
+			return true
+		}
+		return false
+	})
+	if continued.ID != first.ID || continued.Title != first.Title || continued.Origin != "side-2" ||
+		continued.Supervision == nil || continued.Supervision.Supervisor != "main-1" || len(continued.Agents) != 2 {
+		t.Fatalf("same-card continuation = %+v", continued)
+	}
+	predecessorReleased := false
+	for _, a := range continued.Agents {
+		if a.SessionID == first.Agents[0].SessionID && a.ReleasedAt != nil {
+			predecessorReleased = true
+		}
+	}
+	if !predecessorReleased {
+		t.Fatalf("continuation predecessor = %+v", continued.Agents)
+	}
+	if got := len(taskTodos(h)); got != 1 {
+		t.Fatalf("continuation created a successor: %d todos", got)
+	}
+	t.Logf("continuation: todo=%s same_card=true predecessor_released=true active_agents=1 successor_todos=0", continued.ID)
+	sessionID := activeAgents(continued)[0].SessionID
+
+	// Adopting the closed card's replacement Agent is the explicit card-replacement path. It creates one linked
+	// history: the old card points forward and the new card points back.
+	mcp("main-1", "task_review", map[string]any{"todo_id": first.ID, "verdict": "cancelled", "note": "改为独立新卡接手"})
+	eventually(t, 10*time.Second, "the second cancellation before card replacement", func() bool {
+		return todoNow(h, first.ID).DoneAt != nil
+	})
 	h.byID["box"].setSessions([]proto.Session{{SessionID: sessionID, Cwd: "/code/app", Agent: "claude", Title: "按新方案接手验证",
 		Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()}})
 	mcp("main-1", "agent_supervise", map[string]any{"machine": "box", "session_id": sessionID,
