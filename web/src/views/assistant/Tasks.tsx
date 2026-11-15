@@ -37,7 +37,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { workflowCounts } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { acceptedAtRest, dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
@@ -67,7 +67,7 @@ const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";
-import { latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
+import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
 import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
@@ -767,7 +767,7 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, onOpen }: {
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
   const planned = card.plan_id !== undefined && card.index !== undefined ? plans[card.plan_id]?.tasks[card.index] : undefined;
   const title = todo?.title ?? planned?.title ?? t("assistant-tasks.task_fallback");
-  const accepted = !!todo && reviewState(todo) === "accepted";
+  const accepted = !!todo && ((!!todo.done_at && todo.supervision?.state === "accepted") || acceptedAtRest(todo, task?.status ?? "not_started"));
   let state = task?.status ?? (card.state === "followup" ? "follow_up" : card.state);
   if (todo && accepted) state = "accepted";
   else if (todo?.done_at && todo.supervision?.state === "cancelled") state = "cancelled";

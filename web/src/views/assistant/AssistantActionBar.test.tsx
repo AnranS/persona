@@ -359,6 +359,23 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector("[data-progress-just-finished]")).toBeNull();
   });
 
+  it("keeps reopened accepted work Working while its Agent runs again", () => {
+    act(() => entry("running").click());
+    act(() => putTodo({ ...todo, done_at: undefined, supervision: { ...todo.supervision!, state: "accepted", reviews: [{ at, verdict: "accepted" }] } }));
+    const running = host.querySelector("[data-task-slot]")!;
+    expect(host.querySelector("[data-progress-just-finished]")).toBeNull();
+    expect(running.querySelector("[data-task-status]")?.getAttribute("data-task-status")).toBe("working");
+    expect(running.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("working");
+  });
+
+  it("keeps an accepted concern open instead of drawing it as Done", () => {
+    act(() => entry("running").click());
+    act(() => putTodo({ ...todo, kind: "concern", agents: [], done_at: undefined, supervision: { ...todo.supervision!, state: "accepted", reviews: [{ at, verdict: "accepted" }] } }));
+    const concern = host.querySelector("[data-task-slot]")!;
+    expect(concern.querySelector("[data-task-status]")?.getAttribute("data-task-status")).toBe("not_started");
+    expect(concern.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("not_started");
+  });
+
   it("reuses round-bound owner acceptance and deduplicates its supervision decision", async () => {
     const firstRound = { outcome: "decide" as const, verdict: "Choose the rollout", recommend: "Use the demo rollout", asked_at: at };
     todo = { ...todo, ask: firstRound, supervision: { ...todo.supervision!, state: "needs_user" } };
