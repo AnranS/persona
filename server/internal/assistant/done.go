@@ -169,8 +169,7 @@ func ownerTrailingConditional(lower string, at int) bool {
 			if last == "even" {
 				return false
 			}
-			switch last {
-			case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess":
+			if ownerIfQuestionPredicate(predicate) {
 				return false
 			}
 			return true
@@ -178,6 +177,29 @@ func ownerTrailingConditional(lower string, at int) bool {
 		from = i + len(marker)
 	}
 	return false
+}
+
+// ownerIfQuestionPredicate reports a predicate made only of interrogative verbs and their modifiers. The final word
+// must be a verb whose if-clause is its object; an object noun ("add a test", "check the test") is not such a verb.
+func ownerIfQuestionPredicate(predicate string) bool {
+	words := strings.Fields(predicate)
+	if len(words) == 0 {
+		return false
+	}
+	switch words[len(words)-1] {
+	case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess":
+	default:
+		return false
+	}
+	for _, word := range words {
+		switch word {
+		case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess",
+			"and", "or", "also", "carefully", "quickly", "first", "then", "now", "just", "please", "again", "manually", "explicitly", "thoroughly", "immediately":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ownerOfferMarker reports an unquoted, unresolved occurrence of an English offer/question. Resolved narration is
