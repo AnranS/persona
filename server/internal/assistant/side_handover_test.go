@@ -10,8 +10,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// sideReviewFixture is a task side conversation side1 handed out, finished by its agent: it waits for side1's review,
-// and side1 got the supervision message for it. conv1 is the main conversation; both are idle.
+// sideReviewFixture is a legacy task side conversation side1 handed out: its ledger still names side1 and its old
+// review notice is already there. New task_plan work is main-supervised (#5732), so the legacy state is explicit.
 func sideReviewFixture(t *testing.T) (*Service, *fakeHub, Todo) {
 	t.Helper()
 	s, f := newQuietService(t)
@@ -26,12 +26,18 @@ func sideReviewFixture(t *testing.T) (*Service, *fakeHub, Todo) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
-	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
 	todo := onlyTodo(s)
-	waitFor(t, "the side conversation's supervision message", func() bool { return reviewsTold(f, "side1", todo.ID) == 1 })
+	if _, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
+		v.Supervisor, v.State = "side1", reviewPending
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.sends = append(f.sends, map[string]any{"session_id": "side1", "text": "📋 督办 legacy review " + todo.ID})
+	f.mu.Unlock()
 	if v := todoNow(s, todo.ID).Supervision; v == nil || v.Supervisor != "side1" || v.State != reviewPending {
-		t.Fatalf("ledger = %+v, want side1's task waiting for review", v)
+		t.Fatalf("ledger = %+v, want side1's legacy task waiting for review", v)
 	}
 	return s, f, todoNow(s, todo.ID)
 }
@@ -107,29 +113,29 @@ func TestReviewLeftWaitingByASideConversationGoesToTheMainConversation(t *testin
 	waitFor(t, "the side conversation's end notice", func() bool { return len(endNotices(f, "side1")) == 1 })
 }
 
-// With the background supervisor on, as it is by default, the handed-over review goes to it and not to the main
-// conversation: the ledger names the main conversation, whose own tasks the background supervisor follows up.
-func TestReviewLeftWaitingByASideConversationGoesToTheBackgroundSupervisor(t *testing.T) {
+// An existing legacy background does not take a newly handed-over review: after #5732 every new task signal,
+// including this compatibility handover, goes to main.
+func TestReviewLeftWaitingByASideConversationStaysWithMainWhenLegacyBackgroundExists(t *testing.T) {
 	s, f, todo := sideReviewFixture(t)
 	ctx := context.Background()
 	s.noBackground = false
-	f.mu.Lock()
-	f.made = 100 // the conversations the fake starts get ids from s101 on, not the agent's
-	f.mu.Unlock()
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "side1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 
 	s.superviseWatch(ctx, time.Now().Add(time.Hour))
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "conv1" {
 		t.Fatalf("the ledger names %q, want the main conversation", got)
 	}
-	id := backgroundID(t, s)
-	listBackground(t, s, f, id)
-	waitFor(t, "the review told to the background supervisor", func() bool { return reviewsTold(f, id, todo.ID) == 1 })
-	if n := reviewsTold(f, "conv1", todo.ID); n != 0 {
-		t.Fatalf("the main conversation got %d supervision message(s) for a task the background supervisor follows up", n)
+	waitFor(t, "the review told to the main conversation", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
+	if n := reviewsTold(f, "bg1", todo.ID); n != 0 {
+		t.Fatalf("the legacy background got %d new handover message(s), want none", n)
 	}
-	if _, err := runJSON(t, s, id, "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "PR 已合并",
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "PR 已合并",
 		"checks": []map[string]any{{"criterion": "PR 合并到 main", "met": true, "evidence": "pull/7"}}}); err != nil {
-		t.Fatalf("the background supervisor cannot review the task handed to it: %v", err)
+		t.Fatalf("the main conversation cannot review the task handed to it: %v", err)
 	}
 	waitFor(t, "the task closed", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
 }
@@ -166,9 +172,10 @@ func TestReviewOfASideConversationThatIsGoneIsHandedOver(t *testing.T) {
 	waitFor(t, "the review told to the main conversation", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
 }
 
-// A leader conversation keeps the reviews of its tasks however long they wait: the ledger's supervisor is what places
-// a task in its direction, so handing the review over would take the task out of the direction the owner set up.
-func TestReviewLeftWaitingByALeaderStaysWithIt(t *testing.T) {
+// The compatibility handover does not rewrite a legacy leader's ledger. Its newly emitted signal still follows the
+// current #5732 topology: ordinary assistant-chat leader work is main-supervised; only an explicitly assigned manual
+// Agent keeps the leader route.
+func TestReviewLeftWaitingByALegacyLeaderKeepsItsLedgerButSignalsMain(t *testing.T) {
 	s, f, todo := sideReviewFixture(t)
 	ctx := context.Background()
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"side1"} })
@@ -178,7 +185,7 @@ func TestReviewLeftWaitingByALeaderStaysWithIt(t *testing.T) {
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "side1" {
 		t.Fatalf("a leader's review was handed to %q", got)
 	}
-	if n := reviewsTold(f, "conv1", todo.ID); n != 0 {
-		t.Fatalf("the main conversation got %d supervision message(s) for a leader's task", n)
+	if n := reviewsTold(f, "conv1", todo.ID); n != 1 {
+		t.Fatalf("the main conversation got %d supervision message(s) for a legacy leader's task, want one", n)
 	}
 }
