@@ -392,6 +392,14 @@ func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
 	if pending && g.Key == key || told || listedAsk(t, s, todo.ID) == nil {
 		t.Fatalf("the lookup failure ended the decision: %+v", g)
 	}
+	f.sessionsFail["box"] = 0
+	result, err = s.chooseOption(context.Background(), todo.ID, "", "直接全量")
+	if err != nil || !result.taken || result.undelivered != nil {
+		t.Fatalf("the recovered lookup did not deliver the choice: result=%+v err=%v", result, err)
+	}
+	if listedAsk(t, s, todo.ID) != nil {
+		t.Fatal("the recovered choice is still waiting")
+	}
 }
 
 // A decision on priority has a default and a date without the review setting any: after a day unanswered the
