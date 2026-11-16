@@ -78,4 +78,10 @@ internal object NativeBridge {
 
     /** Projects the Agents list from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectSort(input: String): String
+
+    /** Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectTurns(input: String): String
+
+    /** Splits streamed text into finished blocks and an unfinished tail. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectStreamChunks(input: String): String
 }
