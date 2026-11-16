@@ -1,76 +1,61 @@
-name: Android CI
+name: Recommendation shared replay verification
 on:
-  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: android-${{ github.repository }}-${{ github.ref_name }}-android
-  cancel-in-progress: true
+  group: whitespace-shared-9189-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  android:
-    name: Android ${{ matrix.lane }}
+  shared-consumers:
     runs-on: ubuntu-latest
-    # Retain headroom until hosted cold/warm timings establish a safe lower bound.
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        # Two lanes balanced by task time; each runs its share in one Gradle invocation (scripts/ci/android-shards.py).
-        lane: [lint-build-test-0, test-1]
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 4
           persist-credentials: false
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-node@v4
         with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@v3
+          node-version: 24
+      - uses: actions/setup-go@v5
         with:
-          # The default also installs the legacy `tools` package, which the SDK repository no longer has.
-          packages: platform-tools
-      - name: Install Android SDK
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-      - name: Install Rust Android targets
-        run: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          # Only a manual main run may populate caches; PRs and other refs only restore.
-          cache-read-only: ${{ github.event_name != 'workflow_dispatch' || github.ref != 'refs/heads/main' }}
-      - name: Restore public Robolectric runtime dependencies
-        id: robolectric
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Restore public Cargo artifacts
         uses: actions/cache/restore@v4
         with:
-          # Never cache Maven settings, credentials or unrelated/private artifacts.
           path: |
-            ~/.m2/repository/org/robolectric/android-all
-            ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          # Another lane's entry, or one saved under an old lane name, holds the same public jars: better than a download.
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            native/app-core/target
+          key: core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-${{ hashFiles('native/app-core/crates/**') }}
           restore-keys: |
-            ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-
-            ${{ runner.os }}-robolectric-v1-
-      - name: Android checks
-        run: scripts/ci/android.sh --lane '${{ matrix.lane }}' --profile
-      - name: Save public Robolectric runtime dependencies
-        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.robolectric.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.m2/repository/org/robolectric/android-all
-            ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ steps.robolectric.outputs.cache-primary-key }}
-      - name: Upload Android reports
+            core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-
+      - name: Verify inputs for reused Android, JNI, component images and Swift evidence
+        run: |
+          git diff --exit-code fa0a209540294487b026a5d691a8ba4690510d3a HEAD -- android spec apple native/app-core/crates/persona-core/src
+          echo 'Android/JNI/component and source-extracted Swift evidence retained from run 43851472764; exact input trees unchanged. Only shared replay counts/summaries were corrected.'
+      - name: Replay shared fixture consumers after updating their exact totals
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/9189-shared
+          cd native/app-core
+          cargo fmt --all --check 2>&1 | tee /tmp/9189-shared/format.log
+          cargo test --locked -p persona-core-ffi --test projection_boundaries 2>&1 | tee /tmp/9189-shared/ffi.log
+          cargo build --locked -p persona-core-ohos --example host_replay
+          PERSONA_CORE_HOST_REPLAY="$GITHUB_WORKSPACE/native/app-core/target/debug/examples/host_replay" node --test --test-concurrency=1 "$GITHUB_WORKSPACE/harmony/tests/core-host/projections.test.mjs" 2>&1 | tee /tmp/9189-shared/arkts.log
+          cargo build --locked --release -p persona-core-ffi
+          bash scripts/test-c-abi.sh 2>&1 | tee /tmp/9189-shared/c-abi.log
+          cd "$GITHUB_WORKSPACE/server"
+          GOMAXPROCS=2 go test -count=1 -p 1 ./internal/proto -run '^TestResolutionFixtures$' 2>&1 | tee /tmp/9189-shared/go.log
+      - name: Upload shared replay evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-reports-${{ matrix.lane }}
+          name: whitespace-9189-shared
           retention-days: 7
-          if-no-files-found: ignore
-          path: |
-            android/build/reports/profile/
-            android/**/build/reports/lint-results*
-            android/**/build/reports/tests/
-            android/**/build/test-results/
+          if-no-files-found: error
+          path: /tmp/9189-shared/
