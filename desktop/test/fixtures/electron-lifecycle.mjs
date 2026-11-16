@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 export const events = [];
 export const windows = [];
 export const controls = new Map();
-export const scenario = { failNew: false, failNext: false, unhandled: [], oldPending: true, oldSucceeds: false, holdNew: false };
+export const scenario = { failNew: false, failNext: false, unhandled: [], oldPending: true, oldSucceeds: false, holdNew: false, hub: "" };
 process.on("unhandledRejection", error => { scenario.unhandled.push(String(error)); });
 export let connect;
 export let hubGet;
@@ -24,7 +24,12 @@ export const app = new class extends EventEmitter {
   }
   isDefaultProtocolClient() { return true; }
   setAsDefaultProtocolClient() {}
-  quit() { events.push("app.quit"); }
+  async quit() {
+    // Electron emits before-quit before closing windows. Model that order rather than calling close() directly.
+    this.emit("before-quit");
+    events.push("app.quit");
+    for (const window of [...windows]) if (!window.destroyed) window.destroy();
+  }
   async * [Symbol.asyncIterator]() { yield this; }
 }();
 export const protocol = { registerSchemesAsPrivileged() {}, handle() {} };
@@ -106,10 +111,10 @@ export class BrowserWindow extends EventEmitter {
       await oldLoad;
     }
     if (this.destroyed) throw new Error("ERR_ABORTED: intentionally destroyed stale load");
-    if (url === "https://new.example/" && scenario.failNew) throw new Error("synthetic hub connection failure");
     if (url === "https://new.example/" && scenario.holdNew) {
       await new Promise(done => { controls.set("release-new", () => { scenario.holdNew = false; done(); }); });
     }
+    if (url === "https://new.example/" && scenario.failNew) throw new Error("synthetic hub connection failure");
     if (this.destroyed) throw new Error("ERR_ABORTED: destroyed while the new hub load was pending");
     if (scenario.failNext) {
       scenario.failNext = false;

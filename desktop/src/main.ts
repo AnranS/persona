@@ -253,6 +253,7 @@ async function showSetup(): Promise<void> {
   const setupHub = hub;
   let connectQueue: Promise<unknown> = Promise.resolve();
   const recoverSetupAfterClose = () => {
+    if (quitting) return;
     hubWindow.replace();
     if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
   };
@@ -271,6 +272,8 @@ async function showSetup(): Promise<void> {
   setup.once("closed", () => {
     removeIPC();
     if (setupWindow === setup) setupWindow = undefined;
+    // Quitting closes setup too; opening another window here would cancel the quit (#9458).
+    if (quitting) return;
     // A close after a failed connection returns to an empty local setup, not to the hub whose load failed.
     if (!mainWindow && !hubWindow.pending) recoverSetupAfterClose();
   });
@@ -287,7 +290,7 @@ async function showSetup(): Promise<void> {
           hub = next;
           const loadedWindow = await showMain();
           // An obsolete or destroyed load cannot persist or close setup.
-          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
+          if (quitting || generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
               !loadedWindow || loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
             if (setup.isDestroyed()) {
               discardFailedConnection(next);
@@ -310,7 +313,7 @@ async function showSetup(): Promise<void> {
             if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
             return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
           }
-          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
+          if (quitting || generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
               loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
             if (setup.isDestroyed()) {
               discardFailedConnection(next);

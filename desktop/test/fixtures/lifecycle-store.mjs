@@ -1,4 +1,5 @@
 export const scenario = { hub: "https://old.example/old/", failWindowSave: false };
+export { scenario as storeScenario };
 export const updates = [];
 export const currentHub = async () => scenario.hub;
 export class JSONStore {

@@ -112,6 +112,26 @@ async function run(name) {
       setup.close();
       const recovered = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the setup after an ordinary close");
       if ((await electron.hubGet({sender: recovered.webContents, senderFrame: recovered.webContents})).address !== "https://old.example/old/") throw new Error("ordinary setup close erased the saved hub");
+    ` : name === "quit-no-hub" ? `
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the initial setup window without a hub");
+      await electron.app.quit();
+      if (electron.windows.some(window => !window.destroyed)) throw new Error("Quit left a live window behind");
+    ` : name === "quit-pending-success" || name === "quit-pending-failure" ? `
+      electron.scenario.holdNew = true;
+      electron.scenario.failNew = ${name === "quit-pending-failure" ? "true" : "false"};
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
+      await electron.app.emit("second-instance", {}, ["persona://link"]);
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the setup window before quitting");
+      const connecting = electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://new.example/");
+      await electron.waitFor(() => electron.events.some(event => event.loading && event.url === "https://new.example/"), "the pending load before quitting");
+      await electron.app.quit();
+      electron.controls.get("release-new")();
+      const response = await connecting;
+      if (response.ok) throw new Error("a pending connection completed successfully after Quit");
+      await electron.settle();
+      if (electron.windows.some(window => !window.destroyed)) throw new Error("a late connection reopened a window after Quit");
+      const updates = (await import("./fixtures/lifecycle-store.mjs")).updates;
+      if (updates.some(update => update.hub === "https://new.example/")) throw new Error("a late connection persisted after Quit");
     ` : `
       await electron.importMain();
       await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
@@ -121,7 +141,7 @@ async function run(name) {
     process.stdout.write(JSON.stringify({events: electron.events, unhandled: electron.scenario.unhandled, updates: (await import("./fixtures/lifecycle-store.mjs")).updates, windows: electron.windows.map(window => ({title: window.options.title, url: window.url, destroyed: window.destroyed, partition: window.options.webPreferences.partition}))}));
     process.exit(0);
   `;
-  const child = spawn(process.execPath, ["--import", pathToFileURL(loader).href, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), env: { ...process.env, PERSONA_TEST_MAIN: pathToFileURL(main).href, PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", pathToFileURL(loader).href, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), env: { ...process.env, PERSONA_TEST_MAIN: pathToFileURL(main).href, PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1", ...(name === "quit-no-hub" ? { PERSONA_HUB_URL: "not a hub" } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });
@@ -186,6 +206,21 @@ test("a closed pending successful connection cannot persist or install its hub",
   assert.equal(updates.some(update => update.hub === "https://new.example/"), false);
   assert.equal(windows.some(window => !window.destroyed && window.url === "https://new.example/"), false);
 });
+
+test("quitting with no hub does not reopen setup", async () => {
+  const { windows, events } = await run("quit-no-hub");
+  assert.equal(windows.some(window => !window.destroyed), false, JSON.stringify(events));
+  assert.equal(events.filter(event => event.created).length, 1, JSON.stringify(events));
+});
+
+for (const name of ["quit-pending-success", "quit-pending-failure"]) {
+  test(`${name}: a late connection cannot reopen setup or persist after Quit`, async () => {
+    const { windows, events, updates, unhandled } = await run(name);
+    assert.deepEqual(unhandled, []);
+    assert.equal(windows.some(window => !window.destroyed), false, JSON.stringify(events));
+    assert.equal(updates.some(update => update.hub === "https://new.example/"), false, JSON.stringify(events));
+  });
+}
 
 test("ordinary setup close preserves the saved hub for a later retry", async () => {
   const { windows, events } = await run("saved-setup-close");
