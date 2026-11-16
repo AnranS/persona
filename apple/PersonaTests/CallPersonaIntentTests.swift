@@ -24,6 +24,25 @@ struct CallPersonaIntentTests {
         #expect(PersonaShortcuts.appShortcuts.count == 10)
     }
 
+    /// Siri's, Shortcuts' or Recents' call with the shell's Settings sheet up (#9290): the sheet closes first, since the
+    /// call page and a refusal's alert go over the app's root, which presents nothing over a sheet (as a notification's
+    /// chat closes it, #3818). The page under it stays as it was.
+    @MainActor @Test func siriClosesTheSettingsSheetForTheCallPage() async {
+        let model = AppModel()
+        model.selectedTab = .assistant
+        let shell = ShellState()
+        shell.attach(to: model)
+        defer { shell.detach(from: model) }
+        shell.select(1)
+        model.selectedTab = .settings
+        #expect(model.shellSettings)
+        await PersonaCalls.clearTheWay(model)
+        #expect(!model.shellSettings)
+        #expect(shell.page == 1, "the page under Settings changed")
+        await PersonaCalls.clearTheWay(model) // nothing up: nothing changes
+        #expect(!model.shellSettings && shell.page == 1)
+    }
+
     @Test func siriSaysItIsCalling() {
         #expect(CallPersonaIntent.calling == String(localized: "Calling Persona"))
         #expect(CallPersonaIntent.calling != CarPlayTalk.notConnected.sentence)

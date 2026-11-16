@@ -64,6 +64,11 @@ struct CarPlayWiringSourceTests {
         let place = try #require(phone.range(of: "CallPersonaIntent.place()"))
         #expect(foreground.upperBound < place.lowerBound, "in front before the call's Start")
         #expect(!phone.contains("CarPlayVoiceSession"))
+        // The decision is `talkNow`'s, which asks the audio route when Persona has no scene (a car showing Maps, or Siri
+        // having just launched the app, is a car): Persona's scene alone is not whether a car is there.
+        let decided = try #require(perform.range(of: "let talk = await CarPlayVoicePresence.talkNow()"))
+        #expect(perform.range(of: "if talk.callsOnThePhone").map { decided.upperBound < $0.lowerBound } == true)
+        #expect(!perform.contains("MainActor.run { CarPlayVoicePresence.talk }"))
         let car = try #require(perform.range(of: "guard talk == .start else"))
         #expect(perform.range(of: "if talk.callsOnThePhone").map { $0.upperBound < car.lowerBound } == true)
         let start = try #require(Self.body(perform.components(separatedBy: "\n"), "Task { @MainActor in"))
@@ -82,6 +87,32 @@ struct CarPlayWiringSourceTests {
         #expect(intent.contains("PersonaCalls.shared.callPersona(origin: .siri)"))
         let place = try #require(Self.body(try Self.code("Persona/Calls/OwnerCall.swift"), "func place("))
         #expect(place.contains("if origin != .app { await Self.waitUntilActive() }"))
+    }
+
+    /// Without Persona's scene the route is read off the main actor (a system service, docs/apple/performance.md P1):
+    /// `talkNow` is `@concurrent`, and the route is asked only when there is no scene.
+    @Test func theCarsRouteIsReadOffTheMainActor() throws {
+        let lines = try Self.code("Persona/CarPlay/CarPlayVoiceScreen.swift")
+        let talkNow = try #require(lines.first { $0.contains("static func talkNow(") })
+        #expect(talkNow.contains("@concurrent nonisolated static func talkNow(car: @Sendable () -> Bool = soundGoesToACar)"))
+        let body = try #require(Self.body(lines, "static func talkNow("))
+        #expect(body.contains("carOnRoute: !connected && car()"))
+        let onMain = try #require(Self.body(body.components(separatedBy: "\n"), "MainActor.run {"))
+        #expect(!onMain.contains("car()"), "the route asked on the main actor")
+    }
+
+    /// Siri, Shortcuts and Recents close the shell's Settings sheet before the call's page (#9290): the page and a
+    /// refusal's alert go over the app's root, which presents nothing over a sheet. Before a live call is shown too, and
+    /// not for the app's own Call (from the main conversation, nothing is over it).
+    @Test func siriCallsClearSettingsBeforeTheCallPage() throws {
+        let lines = try Self.code("Persona/Calls/OwnerCall.swift")
+        let call = try #require(Self.body(lines, "func callPersona("))
+        let clear = try #require(call.range(of: "if origin != .app { await Self.clearTheWay(model) }"))
+        let shown = try #require(call.range(of: "presented = true"))
+        #expect(clear.upperBound < shown.lowerBound, "Settings closes before the page is asked for")
+        let clearing = try #require(Self.body(lines, "static func clearTheWay("))
+        #expect(clearing.contains("model.shellSettings = false"))
+        #expect(clearing.contains("where rootPresents"), "the page waits for the sheet to have gone")
     }
 
     /// CarPlay ignores state switches before the template is on screen: `show` never switches directly.

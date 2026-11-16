@@ -14,11 +14,12 @@ extension PersonaCalls {
     /// instead. Refused with the page's note (and the page goes); when the system will not place the call, a voice chat
     /// in the app instead, with a line that says why.
     func callPersona(group: String? = nil, origin: CallOrigin = .app) async {
+        let model = AppModel.shared
+        if origin != .app { await Self.clearTheWay(model) }
         if let live = ownerCall, live.phase.isLive {
             presented = true
             return
         }
-        let model = AppModel.shared
         // Feedback first, before anything slow.
         let call = add(kind: .owner(group: group ?? model.hub?.group ?? ""), direction: .outgoing)
         presented = true
@@ -166,6 +167,25 @@ extension PersonaCalls {
     }
 
     // MARK: Waiting
+
+    /// From Siri, Shortcuts or Recents the app comes to the front on whatever page it was left on. The call's page and a
+    /// refusal's alert go over the app's root (`personaCallCover`), which presents nothing while the shell's Settings
+    /// sheet is up: that sheet closes, as it does for a notification's chat (#3818), and the page waits for it to have
+    /// gone (at most a second). Any other page stays under the call: Minimise goes back to it, with the bar to the call.
+    static func clearTheWay(_ model: AppModel) async {
+        guard model.shellSettings else { return }
+        model.shellSettings = false
+        for _ in 0..<20 where rootPresents {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// Something is still up over the app's root (the closing sheet until its animation ends).
+    private static var rootPresents: Bool {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .filter { $0.session.role == .windowApplication }
+            .contains { ($0.keyWindow ?? $0.windows.first)?.rootViewController?.presentedViewController != nil }
+    }
 
     /// A launch from Recents: the hubs read and the main conversation known (at most 8 s), so the call goes to them.
     private static func waitForHub(_ group: String?) async {

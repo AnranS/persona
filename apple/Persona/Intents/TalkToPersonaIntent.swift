@@ -4,8 +4,8 @@ import Foundation
 /// "Talk to Persona": the hands-free voice conversation on the CarPlay screen when Persona's voice screen is in the car
 /// (`VoiceConversation(surface: .carPlay)` via `VoiceCalls`, in the background as before). With no car connected it is a
 /// call to Persona on the phone (#9290), as Call Persona (`CallPersonaIntent`) places it: the app comes to the front for
-/// it. CarPlay connected but Persona not on the car's screen still says to open it there: a call that needs the phone
-/// unlocked is the wrong answer while driving.
+/// it. CarPlay connected but Persona not on the car's screen (another app there, or Persona not opened there since it
+/// launched) still says to open it there: a call that needs the phone unlocked is the wrong answer while driving.
 struct TalkToPersonaIntent: AppIntent {
     nonisolated static let title: LocalizedStringResource = "Talk to Persona"
     // App Intent metadata says "this device", never "iPhone": App Store Connect rejects it (90626, #6471).
@@ -25,8 +25,9 @@ struct TalkToPersonaIntent: AppIntent {
 
     #if os(iOS)
     nonisolated func perform() async throws -> some IntentResult & ProvidesDialog {
-        // Connected is not enough: the voice screen must be the one in the car while the microphone is on.
-        let talk = await MainActor.run { CarPlayVoicePresence.talk }
+        // Connected is not enough: the voice screen must be the one in the car while the microphone is on. And no scene of
+        // Persona's is not no car: the audio route says whether the phone is in one (`talkNow`).
+        let talk = await CarPlayVoicePresence.talkNow()
         if talk.callsOnThePhone {
             // The system takes a call's Start only from an app in front; the call's page shows there.
             try await continueInForeground(alwaysConfirm: false)
