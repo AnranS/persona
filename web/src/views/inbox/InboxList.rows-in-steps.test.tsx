@@ -42,9 +42,19 @@ let root: Root;
 const flush = async () => {
   for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
 };
+// The page's idle moments come only when a test says so. jsdom has no requestIdleCallback, and whenIdle's 50 ms timer in
+// its place fired in the middle of a flush on a loaded machine, mounting a step early (111 rows for 91).
+const idleRuns = new Map<number, () => void>();
+let idleIds = 0;
 // the idle steps: each one mounts the next rows
 const idle = async (steps: number) => {
-  for (let i = 0; i < steps; i++) await act(async () => { await new Promise((done) => setTimeout(done, 60)); });
+  for (let i = 0; i < steps; i++) {
+    await act(async () => {
+      const due = [...idleRuns.values()];
+      idleRuns.clear();
+      due.forEach((run) => run());
+    });
+  }
 };
 const rows = () => host.querySelectorAll("[data-item]").length;
 // the section bar opens on Needs you (#9053); these mails are FYI
@@ -56,6 +66,12 @@ beforeEach(() => {
   resetInboxForTests();
   resetMailForTests();
   vi.stubGlobal("CSS", { escape: (v: string) => v });
+  idleRuns.clear();
+  vi.stubGlobal("requestIdleCallback", (run: () => void) => {
+    idleRuns.set(++idleIds, run);
+    return idleIds;
+  });
+  vi.stubGlobal("cancelIdleCallback", (id: number) => idleRuns.delete(id));
   Element.prototype.scrollIntoView = vi.fn();
   host = document.createElement("div");
   document.body.append(host);
