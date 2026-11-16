@@ -281,36 +281,6 @@ export function Kbd({ children }: { children: React.ReactNode }) {
   return <kbd className="inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-[5px] bg-surface px-1 font-sans text-[10px] text-ink-3 shadow-hairline">{children}</kbd>;
 }
 
-export type CountTone = "needs" | "neutral" | "accent";
-const COUNT_TONE: Record<CountTone, string> = {
-  needs: "bg-field text-needs-ink",
-  neutral: "bg-field text-ink-2",
-  accent: "bg-accent-ink text-surface",
-};
-
-/** How many (#4538): `needs` counts what waits for the user, `neutral` a passive
- *  total, `accent` the selected item's count or a mention. Nothing at zero, "99+" past 99. `dense`: 16 px for a dense row,
- *  else 18. `label`: what a screen reader hears in place of the digits (by default the number, exact past 99); `false`
- *  where the host control's own label already says it. */
-export function CountBadge({ count, tone = "needs", dense = false, label, className, ...rest }: { count: number; tone?: CountTone; dense?: boolean; label?: string | false; className?: string } & Omit<React.HTMLAttributes<HTMLSpanElement>, "children">) {
-  if (!(count > 0)) return null;
-  const capped = count > 99;
-  const spoken = label === false ? undefined : (label ?? (capped ? String(count) : undefined));
-  return (
-    <>
-      <span
-        {...rest}
-        data-count-badge={tone}
-        aria-hidden={label === false || spoken ? true : undefined}
-        className={cx("flex shrink-0 items-center justify-center whitespace-nowrap rounded-full px-1 font-semibold tabular-nums", dense ? "h-4 min-w-4 text-[10px]" : "h-4.5 min-w-4.5 text-[10.5px]", COUNT_TONE[tone], className)}
-      >
-        {capped ? "99+" : count}
-      </span>
-      {spoken && <span className="sr-only">{spoken}</span>}
-    </>
-  );
-}
-
 // Height-animating disclosure (grid 0fr → 1fr), the expand grammar every Beautiful UI trace uses.
 /** Folds its children up and down: the grid's row runs between 0fr and 1fr in CSS (no heights measured in JS), with
  *  a fade. `lazy`: the children mount when it opens and stay while it closes, so they go down with the height instead of

@@ -375,6 +375,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // pages as its own folding section (lib/sidebar-pages.ts arrangeSections, views/Sidebar.tsx PageGroup), and the
 // arrangement goes to and from the hub with the start page (lib/start-page.ts). The editor is in the Settings chunk.
 // Main's room is kept on top.
+// #9053: the Inbox section bar takes 121 B of that room in each language, measured in one environment against main
+// 094253763d (ja 481,844 B to 481,965 B; en 478,710 B to 478,831 B, zh-Hans 479,540 B to 479,661 B): the grouping mark
+// in the icon set, IconButton saying it opens a menu, --needs and --needs-ink in the token table, and the edge fade's
+// widths shared with the bar. CountBadge, which only the Inbox page draws so far, is a module of its own (ui/CountBadge.tsx):
+// in atoms it took another 131 B (252 B in all, 6 B of room left). The budget stays.
 export const FIRST_SCREEN_BUDGET = 482_102;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

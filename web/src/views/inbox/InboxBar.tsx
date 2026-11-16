@@ -9,7 +9,8 @@ import { t } from "../../i18n";
 import { TIERS } from "../../lib/inbox";
 import { type BarChoice, type BarEntry } from "../../lib/inbox-bar";
 import type { Grouping } from "../../lib/inbox-groups";
-import { CountBadge, cx, IconButton, Menu, useMenu } from "../../ui/atoms";
+import { cx, IconButton, Menu, useMenu } from "../../ui/atoms";
+import { CountBadge } from "../../ui/CountBadge";
 import { nextTab } from "../../ui/roving";
 import { FADE } from "../chat/edge-fade";
 
