@@ -11,7 +11,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.Supervision
+import persona.core.contracts.TaskReview
 import persona.core.contracts.Todo
+import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoDelivery
 import persona.core.contracts.TodoLineageStep
 import persona.core.designsystem.PersonaTheme
@@ -99,6 +101,22 @@ class TodoCancellationLineageTest {
         }
         rule.onNodeWithText("Not started").assertDoesNotExist()
         rule.onNodeWithText("Delivered · awaiting review").assertExists()
+    }
+
+    @Test fun acceptedOwnerDecisionReadsWaitingForYou() {
+        val waiting = Todo(
+            "waiting-accepted", title = "Owner action after reopening",
+            supervision = Supervision(supervisor = "main", state = "accepted",
+                reviews = listOf(TaskReview(at = "2026-11-12T07:00:00Z", verdict = "accepted"))),
+            ask = TodoAsk(outcome = "decide", verdict = "Choose the release scope", askedAt = "2026-11-12T08:00:00Z"),
+        )
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                TodoDetailScreen("waiting-accepted", listOf(waiting), emptyList(), emptyList(), null,
+                    onBack = {}, onOpenSession = {}, onHandOff = {})
+            }
+        }
+        rule.onNodeWithText("Waiting for you").assertExists()
     }
 
     @Test fun ownerWaitReadsWaitingForYou() {

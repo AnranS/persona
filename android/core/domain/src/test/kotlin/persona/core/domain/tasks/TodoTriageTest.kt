@@ -478,6 +478,20 @@ class TodoTriageTest {
     }
 
     @Test
+    fun anOwnerDecisionOutranksAcceptedAtRest() {
+        val accepted = todo("t", agents = listOf(agent("idle")), reopenedAt = hoursAgo(4), supervision = acceptedReopened())
+        assertTrue(accepted.acceptedAtRest(lookup, now))
+        assertEquals(TodoState.Done, accepted.shownState(lookup, now))
+        for (outcome in listOf("decide", "cannot")) {
+            val waiting = accepted.copy(ask = TodoAsk(outcome = outcome, verdict = "needs_user", askedAt = hoursAgo(1)))
+            assertTrue(waiting.waitsForOwner())
+            assertEquals(TriageRule.OwnerDecides, at(waiting).rule)
+            assertFalse("accepted must not hide an owner decision ($outcome)", waiting.acceptedAtRest(lookup, now))
+            assertEquals(TodoState.NeedsYou, waiting.shownState(lookup, now))
+        }
+    }
+
+    @Test
     fun anAcceptedTaskWhoseAgentRunsAgainIsWorking() {
         val td = todo("t", agents = listOf(agent("run")), supervision = acceptedReopened())
         assertEquals(TriageSection.Working, at(td).section)

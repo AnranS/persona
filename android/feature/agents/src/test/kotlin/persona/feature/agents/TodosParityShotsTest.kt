@@ -26,8 +26,10 @@ import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
 import persona.core.contracts.Supervision
+import persona.core.contracts.TaskReview
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
+import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoDelivery
 import persona.core.contracts.TodoLineageStep
 import persona.core.contracts.TodoPRStatus
@@ -85,6 +87,13 @@ class TodosParityShotsTest {
         ),
     )
 
+    private val acceptedOwner = Todo(
+        "accepted-owner", title = "决定重新打开后的发布范围", createdAt = ago(90), updatedAt = ago(5), origin = "conv", spaces = emptyList(),
+        supervision = Supervision(supervisor = "main", state = "accepted",
+            reviews = listOf(TaskReview(at = ago(10), verdict = "accepted"))),
+        ask = TodoAsk(outcome = "decide", verdict = "选择发布范围", askedAt = ago(5), question = "这次发布包含哪些改动？"),
+    )
+
     /** Agents that never started (#3713): one waits on the owner; the other's work finished in a to-do of its plan. */
     private val failed = todos + listOf(
         Todo("f1", title = "部署自托管面板", createdAt = ago(200), updatedAt = ago(60), doneAt = ago(60), origin = "conv",
@@ -114,6 +123,9 @@ class TodosParityShotsTest {
                         "detail" -> TodoDetailScreen("t1", todos, machines, sessions, null, onBack = {}, onOpenSession = {}, onHandOff = {}, now = now)
                         "cancelled-list" -> TodosScreen(listOf(cancelled), sessions, null, onBack = {}, onOpenTodo = {}, now = now)
                         "lineage" -> TodoDetailScreen("new", listOf(cancelled), machines, sessions, null, onBack = {}, onOpenSession = {}, onHandOff = {}, now = now)
+                        "accepted-owner-list" -> TodosScreen(listOf(acceptedOwner), emptyList(), null, onBack = {}, onOpenTodo = {}, now = now)
+                        "accepted-owner-detail" -> TodoDetailScreen("accepted-owner", listOf(acceptedOwner), machines, emptyList(), null,
+                            onBack = {}, onOpenSession = {}, onHandOff = {}, now = now)
                         "picker" -> TodoPickerSheet(todos, { k -> sessions.firstOrNull { it.key == k } }, onDismiss = {}, onPick = {},
                             onCreate = {}, unlink = "移出待办" to {})
                     }
@@ -191,6 +203,20 @@ class TodosParityShotsTest {
 
     @Test @Config(fontScale = 1.3f)
     fun cancelledListLargeFontDark() = shot("cancelled-list", AppStyle.Glass, true, "取消原因：需求调整，按新方案重新验证", suffix = "-large")
+
+    @Test fun acceptedOwnerListGlass() = shot("accepted-owner-list", AppStyle.Glass, false, "等你处理")
+    @Test fun acceptedOwnerListGlassDark() = shot("accepted-owner-list", AppStyle.Glass, true, "等你处理")
+    @Test fun acceptedOwnerListBrief() = shot("accepted-owner-list", AppStyle.Brief, false, "等你处理")
+    @Test fun acceptedOwnerListBriefDark() = shot("accepted-owner-list", AppStyle.Brief, true, "等你处理")
+    @Test fun acceptedOwnerListBoard() = shot("accepted-owner-list", AppStyle.Board, false, "等你处理")
+    @Test fun acceptedOwnerListBoardDark() = shot("accepted-owner-list", AppStyle.Board, true, "等你处理")
+
+    @Test fun acceptedOwnerDetailGlass() = shot("accepted-owner-detail", AppStyle.Glass, false, "等你处理")
+    @Test fun acceptedOwnerDetailGlassDark() = shot("accepted-owner-detail", AppStyle.Glass, true, "等你处理")
+    @Test fun acceptedOwnerDetailBrief() = shot("accepted-owner-detail", AppStyle.Brief, false, "等你处理")
+    @Test fun acceptedOwnerDetailBriefDark() = shot("accepted-owner-detail", AppStyle.Brief, true, "等你处理")
+    @Test fun acceptedOwnerDetailBoard() = shot("accepted-owner-detail", AppStyle.Board, false, "等你处理")
+    @Test fun acceptedOwnerDetailBoardDark() = shot("accepted-owner-detail", AppStyle.Board, true, "等你处理")
 
     @Test fun pickerGlass() = shot("picker", AppStyle.Glass, false, "创建并挂上")
     @Test fun pickerGlassDark() = shot("picker", AppStyle.Glass, true, "创建并挂上")
