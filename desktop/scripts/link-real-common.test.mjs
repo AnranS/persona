@@ -241,6 +241,11 @@ test("independent review path counterexamples stay private without swallowing ev
   assert.equal(sanitize("/tmp/run/file (/tmp/private/file)", "/tmp/run"), "<run>/file (<path>)");
   assert.equal(sanitize("/tmp/run/file stdout=/tmp/run/good stderr=/tmp/private/file", "/tmp/run"), "<run>/file stdout=<run>/good stderr=<path>");
   assert.equal(sanitize("/tmp/run/file, /tmp/private/file", "/tmp/run"), "<run>/file, <path>");
+  assert.equal(sanitize("/tmp/run/file {/tmp/private/file}", "/tmp/run"), "<run>/file {<path>}");
+  assert.equal(sanitize("cwd=/tmp/run/file {/tmp/private/file}", "/tmp/run"), "cwd=<run>/file {<path>}");
+  assert.equal(sanitize("C:\\Temp\\run\\file {C:\\Other\\private\\file}", "C:\\Temp\\run"), "<run>/file {<path>}");
+  assert.equal(sanitize("/tmp/run/file</tmp/private/file>", "/tmp/run"), "<run>/file<<path>>");
+  assert.equal(sanitize("C:\\Temp\\run\\file<C:\\Other\\private\\file>", "C:\\Temp\\run"), "<run>/file<<path>>");
   assert.equal(sanitize("open /tmp/run/private;secret-next-token/child detail=keep", "/tmp/run"), "open <path> detail=keep");
 });
 

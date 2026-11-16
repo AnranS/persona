@@ -2,7 +2,7 @@ export function browserFaviconEvidence(scenario, outside, gatewayURL, external =
   // A metadata-free favicon is allowed only for an off-prefix URL that Electron actually handed to the system browser
   // during this scenario. The driver separately proves the hub window never left its prefix. A root 404 is not proof.
   const origin = gatewayURL.match(/^http:\/\/127\.0\.0\.1:\d+/)?.[0];
-  const handedOff = external.some(url => origin && url.startsWith(origin) && !url.startsWith(gatewayURL));
+  const handedOff = external.some(url => origin && (url === `${origin}/` || (url.startsWith(origin) && !url.startsWith(gatewayURL))));
   return (scenario === "subpath" || scenario === "hub-prefix-parent") && handedOff
     && outside.length > 0 && outside.every(entry => entry === "GET / (request)");
 }
