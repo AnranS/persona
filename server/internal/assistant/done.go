@@ -107,15 +107,15 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 			before := strings.Fields(lower[at:i])
 			if len(before) > 0 {
 				switch before[len(before)-1] {
-				case "nothing", "anything", "everything", "something", "everyone", "anyone", "someone", "all", "both":
-					exception = true // "nothing/everyone … but …" means except, not a new clause
+				case "nothing", "anything", "everything", "something":
+					exception = true // "nothing … but …" means except, not a new clause
 				}
 			}
 			after := strings.Fields(lower[i+3 : end])
-			if len(after) > 0 {
+			if len(after) == 2 {
 				switch after[0] {
 				case "the", "a", "an", "this", "that", "these", "those":
-					exception = true // a determiner starts a noun phrase, not a contrasted clause
+					exception = true // a determiner plus one noun is a noun phrase, not a finite clause
 				}
 			}
 		}
@@ -131,6 +131,30 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 func ownerMarkerAfterContrast(lower string, at int) bool {
 	contrasts := ownerContrastOffsets(lower, 0, at)
 	return len(contrasts) > 0 && strings.TrimSpace(lower[contrasts[len(contrasts)-1]+3:at]) == ""
+}
+
+// ownerWithoutQuotes blanks quoted text while preserving unquoted punctuation and condition words.
+func ownerWithoutQuotes(text string) string {
+	straight, curly := false, 0
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '"':
+			straight = !straight
+			return ' '
+		case '“':
+			curly++
+			return ' '
+		case '”':
+			if curly > 0 {
+				curly--
+			}
+			return ' '
+		}
+		if straight || curly > 0 {
+			return ' '
+		}
+		return r
+	}, text)
 }
 
 // directOwnerMarker reports whether any unquoted occurrence of marker starts a direct requirement at the line or a
@@ -154,7 +178,7 @@ func directOwnerMarker(lower, marker string) bool {
 			end := strings.LastIndexAny(before, ownerSentenceEnds)
 			// A contrast does not close a leading if-sentence. A trailing condition, by contrast, owns only its own
 			// clause, so the marker after its `but` remains an independent requirement.
-			direct = !ownerConditionalOpen(strings.TrimSpace(before[end+1:]))
+			direct = !ownerConditionalOpen(ownerWithoutQuotes(strings.TrimSpace(before[end+1:])))
 		} else if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
 			end := strings.LastIndexAny(clause, ownerSentenceEnds)
