@@ -20,7 +20,14 @@ test("an explicit hub change closes the old window before making its own session
   assert.equal(sameHubWindow(hub, "https://example.test/"), false);
   assert.match(change, /const closed = new Promise<void>\(done => previous\.once\("closed", done\)\);/);
   assert.ok(change.indexOf("await closed;") < change.indexOf("mainWindow = undefined;"));
-  assert.match(main, /await replaceMainWindow\(next\);\s+hub = next;\s+hubWindow\.replace\(\);[\s\S]+await showMain\(\);\s+await store\(\)\.update\(\{ hub: next\.url\.href \}\);\s+setup\.close\(\);/);
+  const connect = main.slice(main.indexOf("connect: async"), main.indexOf("await setup.loadURL"));
+  assert.ok(connect.indexOf("const generation = hubWindow.generation") < connect.indexOf("await showMain()"));
+  assert.ok(connect.indexOf("await showMain()") < connect.indexOf("await store().update({ hub: next.url.href })"));
+  assert.ok(connect.indexOf("await store().update({ hub: next.url.href })") < connect.indexOf("setup.close()"));
+  assert.match(connect, /generation !== hubWindow\.generation \|\| hub\?\.url\.href !== next\.url\.href/);
+  assert.match(connect, /Could not save the hub connection/);
+  assert.match(connect, /failedWindow\.destroy\(\)/);
+  assert.match(main, /hubWindow\.replace\(\);/);
   assert.match(main, /hub: \(\) => \{\s+const url = current\.webContents\.getURL\(\);/);
   const ipc = await source("ipc.ts");
   assert.match(ipc, /inHub\(hub, event\.senderFrame\.url\)/);

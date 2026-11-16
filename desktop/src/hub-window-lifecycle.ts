@@ -1,14 +1,13 @@
 import { inHub } from "./urls.js";
 import type { HubAddress } from "./urls.js";
 
-/** A window belongs to the hub captured at its creation. A hub transition creates a new generation, even if the old
+/** A window belongs to the hub captured at creation. A hub transition creates a new generation, even if the old
  * window is still loading or being destroyed; its asynchronous callbacks must never own the next hub. */
 export class HubWindowLifecycle<T> {
   #pending: Promise<T> | undefined;
   #generation = 0;
 
   get generation(): number { return this.#generation; }
-
   get pending(): boolean { return this.#pending !== undefined; }
 
   show(create: () => Promise<T>): Promise<T> {

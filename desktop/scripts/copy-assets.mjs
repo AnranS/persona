@@ -8,6 +8,7 @@ await copyFile(join("src", "setup.html"), join(setup, "setup.html"));
 await copyFile(join("src", "setup.css"), join(setup, "setup.css"));
 await copyFile(join("src", "setup.js"), join(setup, "setup.cjs"));
 await cp(join("src", "locales"), join("dist", "locales"), { recursive: true });
+await cp(join("src", "assets"), join("dist", "assets"), { recursive: true });
 for (const name of ["preload", "setup-preload", "contract", "link-contract", "notification-permission"]) {
   await rename(join("dist-preload", "desktop", "src", `${name}.cjs`), join("dist", `${name}.cjs`));
 }
