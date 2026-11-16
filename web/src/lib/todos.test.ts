@@ -5,7 +5,6 @@ import {
   shownDecisions,
   heldDelivery,
   isCancelled,
-  cancellationReason,
   isAutoDone,
   isRemovable,
   TODO_STATUS_INFO,
@@ -13,14 +12,11 @@ import {
   buildTodoAgentGroups,
   dockAgents,
   findTodoForSpace,
-  formatAgentSource,
-  formatTodoContext,
   interruption,
   isOverdue,
   isSpacesSupported,
   makeSessionLookup,
   mostUrgentAgent,
-  resolveLinkCurrentTodoId,
   runningSubagents,
   sortTodos,
   shownStatus,
@@ -32,6 +28,7 @@ import {
   type TodoAgent,
   type TodoSpace,
 } from "./todos";
+import { cancellationReason, formatAgentSource, formatTodoContext, resolveLinkCurrentTodoId } from "./todo-details";
 import type { AgentMutes } from "./agent-groups";
 import { BOARD_ORDER, boardSectionOf } from "./task-board";
 
@@ -680,12 +677,12 @@ describe("弹窗关联目标判定 (resolveLinkCurrentTodoId)", () => {
 describe("交付与等待处理的状态标签 (#5732)", () => {
   const base: Todo = { id: "t", title: "交付任务", created_at: "2026-11-04T06:00:00Z", updated_at: "2026-11-04T08:00:00Z" };
 
-  it("pending_review 和未验收的 live 都是已交付·待看，不显示未开始", () => {
+  it("pending_review 和未验收的 live 的短标签都是待验收，不显示未开始", () => {
     const pending = { ...base, supervision: { supervisor: "main", state: "pending_review" as const } };
-    expect(todoStatusLabel(pending, "not_started")).toBe("已交付·待看");
+    expect(todoStatusLabel(pending, "not_started")).toBe("待验收");
     expect(shownStatus(pending, "not_started")).toBe("unread");
     const live = { ...base, delivery: { state: "live" as const, at: "2026-11-04T08:00:00Z" } };
-    expect(todoStatusLabel(live, "not_started")).toBe("已交付·待看");
+    expect(todoStatusLabel(live, "not_started")).toBe("待验收");
     expect(shownStatus(live, "not_started")).toBe("unread");
   });
 
@@ -695,15 +692,15 @@ describe("交付与等待处理的状态标签 (#5732)", () => {
     expect(shownStatus(concern, "not_started")).toBe("not_started");
   });
 
-  it("pending_review 的 open concern 仍显示已交付·待看", () => {
+  it("pending_review 的 open concern 短标签仍是待验收", () => {
     const concern = { ...base, kind: "concern", supervision: { supervisor: "main", state: "pending_review" as const } };
-    expect(todoStatusLabel(concern, "not_started")).toBe("已交付·待看");
+    expect(todoStatusLabel(concern, "not_started")).toBe("待验收");
     expect(shownStatus(concern, "not_started")).toBe("unread");
   });
 
-  it("needs_user 显示等你处理，而不是普通的需要你", () => {
+  it("needs_user 复用待处理标签，而不是普通的需要你", () => {
     const waiting = { ...base, supervision: { supervisor: "main", state: "needs_user" as const } };
-    expect(todoStatusLabel(waiting, "follow_up")).toBe("等你处理");
+    expect(todoStatusLabel(waiting, "follow_up")).toBe("待处理");
     expect(shownStatus(waiting, "follow_up")).toBe("needs_you");
   });
 

@@ -274,5 +274,5 @@
   "section_waiting": "あなたの対応待ち",
   "section_parked": "保留中",
   "ask_chat_route": "判断への回答：{title}",
-  "ask_chat_hint": "次のメッセージをこの判断への回答としてタスクに保存します。判断せず相談する場合は、この宛先を解除してください。"
+  "ask_chat_hint": "回答を保存。相談だけなら宛先を解除。"
 }

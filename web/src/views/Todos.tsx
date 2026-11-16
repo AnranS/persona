@@ -34,8 +34,6 @@ import {
   setDecisionSupersedes,
   supersedeCandidates,
   shownDecisions,
-  formatAgentSource,
-  formatTodoContext,
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
@@ -46,7 +44,6 @@ import {
   TODO_TONE_CLASS,
   isAutoDone,
   isCancelled,
-  cancellationReason,
   isOverdue,
   todoDueDay,
   todoDueText,
@@ -75,6 +72,7 @@ import { FoldAllButton } from "../ui/FoldAllButton";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
+import { cancellationReason, formatAgentSource, formatTodoContext } from "../lib/todo-details";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../lib/todo-triage";

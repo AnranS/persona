@@ -12,7 +12,6 @@ import {
   linkAgentToTodo,
   linkSpaceToTodo,
   makeSessionLookup,
-  resolveLinkCurrentTodoId,
   shownStatus,
   todoStatus,
   todoStatusLabel,
@@ -22,6 +21,7 @@ import {
   unlinkSpaceFromTodo,
   type Todo,
 } from "../lib/todos";
+import { resolveLinkCurrentTodoId } from "../lib/todo-details";
 import type { Session } from "../lib/types";
 import { hasFinePointer } from "../lib/viewport";
 import { Button, cx, Dialog, toast, useNow } from "../ui/atoms";
