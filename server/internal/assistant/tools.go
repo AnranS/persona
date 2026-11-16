@@ -885,11 +885,11 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, 
 	}
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
 		closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID)
-		if closed || linkErr == nil {
-			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
-				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-				"%s).%s", m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
-		}
+		// Adoption has already confirmed this session. A task-link write failure is a warning about that link, never
+		// evidence that the start's identity is unknown; keep the session id and prevent a duplicate start (#5732).
+		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
+			"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
+			"%s).%s", m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
 	}
 	s.signal(superviseSignal{Todo: task.ID, Kind: sigUnjudged, Key: "start-unknown@" + task.ID,
 		Detail: startUnknownDetail})

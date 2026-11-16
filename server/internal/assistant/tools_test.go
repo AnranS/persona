@@ -71,6 +71,35 @@ func TestAgentStartAdoptsTheSessionThatStartedLate(t *testing.T) {
 	}
 }
 
+// The bounded adoption heuristic is also a confirmed identity: an ordinary task-link failure must not turn it back
+// into an unknown start, hide the session id, or arm start-unknown for an Agent the hub has already found (#5732).
+func TestAgentStartAdoptedSessionLinkFailureKeepsConfirmedResult(t *testing.T) {
+	st := newCtxAwareLinkStore()
+	st.failSession = "s-adopt-1"
+	s, f := newQuietServiceOn(t, st)
+	shortAgentStartTimeout(t)
+	f.slowStart = true
+	f.onStart = func(f *fakeHub, a map[string]any) {
+		launcher, _ := a["launcher"].(string)
+		f.sessions["box"] = []proto.Session{{SessionID: "s-adopt-1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+			Launcher: launcher, StartedByPersona: true, Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().UTC()}}
+	}
+	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
+		json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"check CI"}`))
+	if err != nil {
+		t.Fatalf("the adopted Agent started; its link failure is a warning, not a start failure: %v", err)
+	}
+	if !strings.Contains(res, "s-adopt-1") || !strings.Contains(res, "confirmed from the machine's own list") ||
+		!strings.Contains(res, "task link could not be recorded") || !strings.Contains(res, "Do NOT start it again") ||
+		strings.Contains(res, "result is unknown") {
+		t.Fatalf("adopted-session link failure answer = %q", res)
+	}
+	if st.linkCount() != 1 {
+		t.Fatalf("link attempts = %d, want only the adopted session", st.linkCount())
+	}
+	requireStartUnknownState(t, s, onlyTodo(s).ID, false)
+}
+
 // Once a creation id identifies the started session, a link failure cannot fall back to a heuristic and bind another
 // Agent. The answer keeps that exact session's identity and warns the caller not to start a duplicate (#5732).
 func TestAgentStartExactCreationIDLinkFailureDoesNotAdoptAnotherSession(t *testing.T) {
