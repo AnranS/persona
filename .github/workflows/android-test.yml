@@ -1,27 +1,22 @@
-name: Android CI
+name: Android recommendation whitespace verification
 on:
-  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: android-${{ github.repository }}-${{ github.ref_name }}-android
-  cancel-in-progress: true
+  group: whitespace-9189-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  android:
-    name: Android ${{ matrix.lane }}
+  android-and-bindings:
     runs-on: ubuntu-latest
-    # Retain headroom until hosted cold/warm timings establish a safe lower bound.
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        # Two lanes balanced by task time; each runs its share in one Gradle invocation (scripts/ci/android-shards.py).
-        lane: [lint-build-test-0, test-1]
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false'
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 3
           persist-credentials: false
       - uses: actions/setup-java@v4
         with:
@@ -29,48 +24,136 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@v3
         with:
-          # The default also installs the legacy `tools` package, which the SDK repository no longer has.
           packages: platform-tools
       - name: Install Android SDK
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-      - name: Install Rust Android targets
-        run: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          # Only a manual main run may populate caches; PRs and other refs only restore.
-          cache-read-only: ${{ github.event_name != 'workflow_dispatch' || github.ref != 'refs/heads/main' }}
-      - name: Restore public Robolectric runtime dependencies
-        id: robolectric
+          cache-read-only: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Restore public Cargo artifacts
         uses: actions/cache/restore@v4
         with:
-          # Never cache Maven settings, credentials or unrelated/private artifacts.
           path: |
-            ~/.m2/repository/org/robolectric/android-all
-            ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          # Another lane's entry, or one saved under an old lane name, holds the same public jars: better than a download.
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            native/app-core/target
+          key: core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-${{ hashFiles('native/app-core/crates/**') }}
           restore-keys: |
-            ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-
-            ${{ runner.os }}-robolectric-v1-
-      - name: Android checks
-        run: scripts/ci/android.sh --lane '${{ matrix.lane }}' --profile
-      - name: Save public Robolectric runtime dependencies
-        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.robolectric.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+            core-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/app-core/Cargo.lock', 'native/app-core/rust-toolchain.toml') }}-
+      - name: Restore public Robolectric jars
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.m2/repository/org/robolectric/android-all
             ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ steps.robolectric.outputs.cache-primary-key }}
-      - name: Upload Android reports
+          key: ${{ runner.os }}-robolectric-v1-whitespace-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-robolectric-v1-
+      - name: Prove the new fixture fails against the original Kotlin builder
+        run: |
+          python3 - <<'PY_RED'
+          from pathlib import Path
+          import shutil, subprocess, xml.etree.ElementTree as E
+          root = Path.cwd()
+          proof = Path('/tmp/9189-proof'); proof.mkdir()
+          source = root / 'android/core/domain/src/main/kotlin/persona/core/domain/answer/AnswerBuilder.kt'
+          fixed = source.read_bytes()
+          source.write_bytes(subprocess.check_output(['git', 'show', 'b860cb433c:android/core/domain/src/main/kotlin/persona/core/domain/answer/AnswerBuilder.kt']))
+          command = ['./gradlew', '--no-daemon', '--no-watch-fs', '--console=plain', '--stacktrace', '--max-workers=2', '-Dorg.gradle.jvmargs=-Xmx3g', '-Pkotlin.compiler.execution.strategy=in-process', '-PpersonaApplicationId=com.example.persona', '-PpersonaGoogleOAuthScheme=persona.oauth.unset', '-PpersonaRepoRoot=' + str(root), ':core:domain:test', '--tests', 'persona.core.domain.answer.AnswerFixtureTest']
+          try:
+              with (proof / 'before.log').open('w') as log:
+                  result = subprocess.run(command, cwd=root / 'android', stdout=log, stderr=subprocess.STDOUT)
+              report = root / 'android/core/domain/build/test-results/test/TEST-persona.core.domain.answer.AnswerFixtureTest.xml'
+              assert report.exists(), 'Baseline did not reach JUnit execution'
+              shutil.copy2(report, proof / 'before-AnswerFixtureTest.xml')
+              suite = E.parse(report).getroot()
+              failed = [case for case in suite.findall('testcase') if case.find('failure') is not None]
+              assert result.returncode != 0 and len(failed) == 1 and suite.get('errors') == '0', 'Baseline failure is not the one expected display mismatch'
+              assert 'recommended_corefoundation_boundary' in failed[0].get('name')
+              print('RED: only the new CoreFoundation display-boundary fixture fails on the unchanged Kotlin builder')
+          finally:
+              source.write_bytes(fixed)
+          PY_RED
+      - name: Verify the fixed Kotlin builder, real JNI and question component
+        working-directory: android
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD:android)" = "$(git rev-parse fa0a209540294487b026a5d691a8ba4690510d3a:android)"
+          ./gradlew --no-daemon --no-watch-fs --console=plain --stacktrace --max-workers=2 \
+            -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process \
+            -PpersonaApplicationId=com.example.persona -PpersonaGoogleOAuthScheme=persona.oauth.unset \
+            -PpersonaRepoRoot="$GITHUB_WORKSPACE" \
+            :core:domain:test --tests 'persona.core.domain.answer.*' \
+            :core:rustcore:test --tests 'persona.core.rustcore.AnswerBindingFixtureTest' \
+            :feature:chat:testDebugUnitTest --tests 'persona.feature.chat.RecommendedWhitespaceShotsTest'
+      - name: Verify the shared fixture through Rust, C and ArkTS
+        run: |
+          set -euo pipefail
+          cd native/app-core
+          cargo fmt --all --check
+          cargo test --locked -p persona-core --test answer_projection
+          cargo test --locked -p persona-core-ffi --test projection_boundaries
+          cargo build --locked -p persona-core-ohos --example host_replay
+          PERSONA_CORE_HOST_REPLAY="$GITHUB_WORKSPACE/native/app-core/target/debug/examples/host_replay" node --test --test-concurrency=1 "$GITHUB_WORKSPACE/harmony/tests/core-host/projections.test.mjs"
+          cargo build --locked --release -p persona-core-ffi
+          bash scripts/test-c-abi.sh
+          cd "$GITHUB_WORKSPACE/server"
+          GOMAXPROCS=2 go test -count=1 -p 1 ./internal/proto -run '^TestResolutionFixtures$'
+      - name: Upload exact-source evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-reports-${{ matrix.lane }}
+          name: whitespace-9189-linux
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error
           path: |
-            android/build/reports/profile/
-            android/**/build/reports/lint-results*
-            android/**/build/reports/tests/
+            /tmp/9189-proof/
             android/**/build/test-results/
+            android/feature/chat/build/recommended-whitespace-shots/*.png
+  swift-source-oracle:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run the unmodified iOS display method against every recommendation fixture
+        run: |
+          python3 - <<'PY_SWIFT'
+          from pathlib import Path
+          source = Path('apple/Shared/Models.swift').read_text()
+          start = source.index('    static func display(_ label: String) -> (String, Bool) {', source.index('nonisolated struct QuestionOption:'))
+          end = source.index('\n    }', start) + len('\n    }')
+          method = source[start:end]
+          runner = 'import Foundation\nenum DisplayOracle {\n' + method + '\n}\n'
+          runner += r'''
+          let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
+          let document = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+          let cases = document["cases"] as! [[String: Any]]
+          precondition(cases.count == 9)
+          for entry in cases {
+              let input = entry["input"] as! [String: Any]
+              let interaction = input["interaction"] as! [String: Any]
+              let questions = interaction["questions"] as! [[String: Any]]
+              let options = questions[0]["options"] as! [[String: Any]]
+              let label = options[0]["label"] as! String
+              let expected = (entry["expected"] as! [String: Any])["display"] as! [String: Any]
+              let actual = DisplayOracle.display(label)
+              precondition(actual.0 == expected["text"] as! String, "display text mismatch")
+              precondition(actual.1 == expected["recommended"] as! Bool, "recommendation mismatch")
+              print("PASS", entry["name"] as! String)
+          }
+          print("PASS: 9 fixtures against the source-extracted iOS method on host Foundation; no iOS app runtime claim")
+          '''
+          Path('/tmp/9189-display-oracle.swift').write_text(runner)
+          PY_SWIFT
+          swiftc --version
+          swiftc /tmp/9189-display-oracle.swift -o /tmp/9189-display-oracle
+          /tmp/9189-display-oracle spec/fixtures/answer/recommended.json
