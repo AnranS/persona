@@ -5,6 +5,12 @@ on:
   # unsigned artifacts, so this workflow never receives a certificate or a notarization key.
   workflow_call:
   workflow_dispatch:
+    inputs:
+      acceptance:
+        description: 'full: desktop checks and update installation; first-run: Linux packaged sandbox gate only'
+        type: choice
+        options: [full, first-run]
+        default: full
 
 permissions:
   contents: read
@@ -13,6 +19,8 @@ jobs:
   linux:
     name: Linux tests
     runs-on: ubuntu-latest
+    env:
+      FIRST_RUN_ONLY: ${{ inputs.acceptance == 'first-run' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +36,7 @@ jobs:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
       - name: Desktop checks
+        if: ${{ !cancelled() && env.FIRST_RUN_ONLY != 'true' }}
         run: scripts/ci/desktop.sh
       # The acceptance smoke loads the built web client the way the hub serves it. It is built once here (its sign-in
       # module needs Go) and handed to the macOS and Windows jobs, which need neither Go nor the web's dependencies.
@@ -40,9 +49,64 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Linux Electron acceptance smoke (headless)
+        if: ${{ !cancelled() && env.FIRST_RUN_ONLY != 'true' }}
         run: scripts/ci/desktop-smoke.sh
+      - name: Build the unsigned Linux package
+        if: ${{ !cancelled() }}
+        run: scripts/ci/desktop-first-run-package.sh
+      - name: Load the run-scoped Chromium user-namespace profile
+        id: sandbox-load
+        if: ${{ !cancelled() }}
+        run: scripts/ci/desktop-first-run-apparmor.sh load
+      # Record exactly one outcome after the real first-run test. Cleanup cannot replace this result.
+      - name: Linux packaged first-run acceptance (headless)
+        id: first-run
+        if: ${{ steps.sandbox-load.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          PERSONA_DESKTOP_TEST_PACKAGE: ${{ github.workspace }}/desktop/release/linux-unpacked/persona-desktop
+        run: xvfb-run -a scripts/ci/desktop-first-run.sh desktop/release/first-run
+      - name: Record the packaged first-run result
+        if: ${{ steps.sandbox-load.outcome == 'success' && steps.first-run.outcome != 'skipped' }}
+        env:
+          FIRST_RUN_OUTCOME: ${{ steps.first-run.outcome }}
+        run: |
+          if [ "$FIRST_RUN_OUTCOME" = success ]; then
+            scripts/ci/desktop-first-run-apparmor.sh first-run-ok
+          else
+            scripts/ci/desktop-first-run-apparmor.sh first-run-failed
+          fi
+      - name: Remove the run-scoped Chromium profile
+        id: sandbox-cleanup
+        if: ${{ always() && steps.sandbox-load.outcome == 'success' && steps.first-run.outcome != 'skipped' }}
+        continue-on-error: true
+        run: scripts/ci/desktop-first-run-apparmor.sh cleanup
+      - name: Preserve sandbox receipts
+        if: ${{ always() && steps.sandbox-load.outcome != 'skipped' }}
+        run: |
+          destination="$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$destination"
+          for suffix in run.json cleanup.json apparmor policy ownership; do
+            if [ -f "$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.$suffix" ]; then
+              cp -- "$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.$suffix" "$destination/$suffix"
+            fi
+          done
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && steps.sandbox-load.outcome != 'skipped' }}
+        with:
+          name: persona-desktop-linux-first-run-apparmor
+          path: ${{ runner.temp }}/persona-first-run-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.first-run.outcome != 'skipped' }}
+        with:
+          name: persona-desktop-linux-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && env.FIRST_RUN_ONLY != 'true' }}
         with:
           name: persona-desktop-linux-smoke
           path: desktop/release/smoke
@@ -54,7 +118,7 @@ jobs:
     needs: linux
     # Runs even when the Linux smoke failed, so each platform reports its own verdict; without the web client its
     # download step fails.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -75,7 +139,7 @@ jobs:
       - name: macOS Electron acceptance smoke
         run: scripts/ci/desktop-smoke.sh
       - name: Build universal macOS packages
-        if: ${{ !cancelled() }} # the package and the smoke report separately
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }} # the package and the smoke report separately
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh mac
@@ -87,7 +151,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-macos-unsigned
           path: |
@@ -100,7 +164,7 @@ jobs:
   windows:
     name: Windows package and smoke test
     needs: linux
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -123,7 +187,7 @@ jobs:
         shell: bash
         run: scripts/ci/desktop-smoke.sh
       - name: Build Windows NSIS
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         shell: bash
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
@@ -136,7 +200,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-windows-unsigned
           path: |
@@ -149,6 +213,7 @@ jobs:
   # verifies a new one from a feed served on the runner (desktop/scripts/update-test.mjs).
   update:
     name: Update from a local feed (${{ matrix.name }})
+    if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
     strategy:
       fail-fast: false
       matrix:

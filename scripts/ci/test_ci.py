@@ -314,7 +314,8 @@ class DesktopWorkflowTests(unittest.TestCase):
         workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows', 'update'})
         self.assertEqual(workflow['on']['workflow_call'], '')
-        self.assertEqual(workflow['on']['workflow_dispatch'], '')
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['acceptance']['options'], ['full', 'first-run'])
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['acceptance']['default'], 'full')
         text = (root / '.github/workflows/desktop-test.yml').read_text()
         self.assertNotIn('inputs.signed', text)
         self.assertNotIn('CSC_LINK', text)
@@ -333,6 +334,36 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertIn('target: nsis', production)
         for platform in ('server', 'web', 'android', 'apple', 'core', 'runtimes', 'desktop', 'scripts'):
             self.assertIn(f'"{platform}"', (root / 'scripts/ci/required.py').read_text())
+    def test_linux_packaged_sandbox_preserves_first_run_and_cleanup_results(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
+        linux = workflow['jobs']['linux']
+        steps = {step.get('id', step.get('name')): step for step in linux['steps']}
+        package = linux['steps'].index(next(step for step in linux['steps'] if step.get('name') == 'Build the unsigned Linux package'))
+        load = steps['sandbox-load']
+        run = steps['first-run']
+        record = next(step for step in linux['steps'] if step.get('name') == 'Record the packaged first-run result')
+        cleanup = steps['sandbox-cleanup']
+        self.assertLess(package, linux['steps'].index(load))
+        self.assertEqual(load['if'], '${{ !cancelled() }}')
+        self.assertEqual(linux['steps'][package]['if'], '${{ !cancelled() }}')
+        self.assertIn('scripts/ci/desktop-first-run-apparmor.sh load', load['run'])
+        self.assertEqual(run['continue-on-error'], 'true')
+        self.assertIn('first-run-ok', record['run'])
+        self.assertIn('first-run-failed', record['run'])
+        self.assertIn('always()', cleanup['if'])
+        self.assertIn("steps.sandbox-load.outcome == 'success'", cleanup['if'])
+        self.assertIn("steps.first-run.outcome != 'skipped'", cleanup['if'])
+        self.assertEqual(cleanup['continue-on-error'], 'true')
+        for name in ('macos', 'windows', 'update'):
+            self.assertIn("inputs.acceptance != 'first-run'", workflow['jobs'][name]['if'])
+        helper = (root / 'scripts/ci/desktop-first-run-apparmor.sh').read_text()
+        self.assertIn('sudo apparmor_parser --abort-on-error -K -T -B -a "$compiled"', helper)
+        self.assertIn('sudo apparmor_parser --abort-on-error -R "$profile"', helper)
+        self.assertNotIn('PERSONA_APPARMOR', helper)
+        self.assertNotIn('--no-sandbox', helper)
+        for forbidden in ('chmod 4755', '--no-sandbox', 'fuse', 'apparmor_parser -r'):
+            self.assertNotIn(forbidden, (root / '.github/workflows/desktop-test.yml').read_text())
 
 
 class AppleWorkflowTests(unittest.TestCase):
