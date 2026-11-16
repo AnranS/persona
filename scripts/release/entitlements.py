@@ -13,7 +13,8 @@ groups whose bundle id was empty (2026-11-02).
 
 In an exported .ipa / .pkg the push entitlement (`aps-environment`, on a Mac
 `com.apple.developer.aps-environment`) must also say production: the archive says development, and only the App Store
-export changes it.
+export changes it. `check` also fails when any binary in the app links CallKit (check_no_callkit.py; App Review rejects
+that for China, docs/operations/release.md "No CallKit").
 
 Both read the targets from the Xcode project (`xcodebuild -showBuildSettings`, after xcodegen) and expand the build
 settings in each entitlements file; `$(AppIdentifierPrefix)` is the team's (the signature's own, when checking). A
@@ -27,6 +28,9 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import check_no_callkit  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROJECT = os.path.join(ROOT, "apple", "Persona.xcodeproj")
@@ -194,11 +198,18 @@ def check(path):
                     problems.append("%s: Info.plist %s = %s is not one of its keychain groups" % (name, k, v))
                 if k.endswith("AppGroup") and v not in app_groups:
                     problems.append("%s: Info.plist %s = %s is not one of its App Groups" % (name, k, v))
+        # No binary in the app links CallKit, the extensions' and the Watch app's included (#9290).
+        try:
+            macho, linked = check_no_callkit.scan(app)
+        except check_no_callkit.CheckError as error:
+            sys.exit("entitlements: CallKit check: %s" % error)
+        problems += ["links CallKit (App Review rejects it for China): %s" % line for line in linked]
         for p in problems:
             print(p)
         if problems:
             sys.exit("entitlements: %d problem(s) in %s" % (len(problems), path))
         print("entitlements ok: %d bundles in %s" % (len(bundles(app)), os.path.basename(path)))
+        print("no CallKit: %d Mach-O files checked" % macho)
 
 
 def main():

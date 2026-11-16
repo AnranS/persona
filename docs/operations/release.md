@@ -65,7 +65,7 @@ What `release.sh` does:
    the archive uses automatically signed development profiles (so `aps-environment` in the archive is `development`), and export re-signs with the App Store profiles to
    `production`. With `NO_UPLOAD=1`, `destination` changes from `upload` to `export`, and it additionally checks that `aps-environment` in the exported ipa
    really is `production`.
-6. `scripts/release/entitlements.py check`: in the archive (plus the exported ipa with `NO_UPLOAD=1`), every bundle carries its target's keychain groups, and the group name in Info.plist is among them; see "entitlements" below.
+6. `scripts/release/entitlements.py check`: in the archive (plus the exported ipa with `NO_UPLOAD=1`), every bundle carries its target's keychain groups, and the group name in Info.plist is among them; see "entitlements" below. It also fails when any binary in the app links CallKit; see "No CallKit" below.
 7. `git tag -f testflight/<build number>`.
 
 A build shows up in TestFlight about 10–30 minutes after archiving. `asc_testflight.py wait [minutes] [build number]` checks every 30 seconds until
@@ -237,6 +237,22 @@ Steps on the developer website (developer.apple.com › Account › Certificates
 5. After a release export, `scripts/release/entitlements.py check` verifies the App Groups of the app and its extensions, including both watch bundles.
 
 The #1147 system-surface store is independent of Fleet's avatar files, because it contains per-device credentials. Validate first unlock, offline expiry, pairing/rotation/removal, WidgetCenter full reports (including removal of the last configuration), paired-watch direct requests, and real background `extension_widget` pushes on devices before claiming acceptance. Simulator-only unsigned builds cannot validate App Group signing or background APNs delivery. No build, screenshots or device acceptance were run for #1147 while builds were paused.
+
+## No CallKit (#9290)
+
+App Review rejects a build offered in China when **any** binary in it links `CallKit.framework`, even weakly and even when the only use is a `CXCallObserver` inside an SDK. Calls go through LiveCommunicationKit (LCK). The system LCK framework links CallKit itself; that is Apple's binary, not the app's, and does not count. Only the Mach-O files inside `Persona.app` count. LCK reports its errors in CallKit's domains (`com.apple.CallKit.error.…`). Compare those as strings, and never `import CallKit` for a constant.
+
+Two checks:
+
+- **Sources** (`scripts/test/test_apple_no_callkit.py`, no build needed): every Swift and Objective-C file under `apple/` (all targets and their tests, `Shared`, the local packages) must not import CallKit or name a `CX…` type, outside comments and strings. An unused import counts, in any spelling: ``import `CallKit` ``, `import` and the name on different lines, `@import CallKit;`. The XcodeGen specs, `Package.swift` manifests, module maps, xcconfig files and the xcconfig `scripts/persona_config.py` writes must not mention CallKit outside a comment (`sdk: CallKit.framework`, `-framework` / `-weak_framework CallKit`, `-lswiftCallKit`, `.linkedFramework("CallKit")`, a Call Directory extension). It runs in `scripts/ci/guards.sh`, at the start of `scripts/ci/apple.sh`, and in `scripts/check-fast.sh` for `apple/` changes.
+- **Binaries** (`scripts/release/check_no_callkit.py <.app | .ipa | .xcarchive>`): every file in the bundle that starts with a Mach-O magic number is checked, whatever its name (the main binary, `*.debug.dylib`, `Frameworks/*`, `PlugIns/*.appex`, the Watch app and its extensions), in every architecture. `otool -arch all -L` lists the dylib load commands, and any install name with CallKit in it fails the check (`CallKit.framework`, `libswiftCallKit.dylib`, weak or re-exported). The check prints `binary [arch] → dependency` for each one. An otool error, or a bundle with no Mach-O in it, also fails. On success it prints `no CallKit: N Mach-O files checked`. Only the binaries show what a remote package or a prebuilt framework links. `scripts/ci/apple.sh` runs it on the device build and on the simulator build-for-testing app. `entitlements.py check` runs it on the release archive, and with `NO_UPLOAD=1` or `UPLOADER=asc` on the exported ipa too. Export re-signs the binaries but does not change their load commands, so the archive check also covers the default upload.
+
+Run them by hand:
+
+```sh
+python3 scripts/test/test_apple_no_callkit.py
+python3 scripts/release/check_no_callkit.py <Persona.app | .ipa | .xcarchive>
+```
 
 ## Changing the store name
 
