@@ -864,9 +864,9 @@ func TestARefusedSendIsForgottenWhenItsCleanupWriteFails(t *testing.T) {
 }
 
 // A turn of the agent starts while a send of more for its accepted task is out, and is held for the send's answer;
-// before the turn ends, the agent goes to another task, an open one. The turn's end is that task's (taken and judged:
-// done), not put off for the answer, and nothing stays kept for the accepted task; the answer, unknown, leaves the
-// accepted task closed.
+// before the turn ends, the agent goes to another task, a legacy open one. The turn's end is that task's (taken and
+// judged: delivered, waiting for main's review rather than automatically closed), not put off for the answer, and
+// nothing stays kept for the accepted task; the answer, unknown, leaves the accepted task closed.
 func TestAHeldTurnOfAnAgentThatWentToAnotherTaskIsThatTasks(t *testing.T) {
 	ctx := context.Background()
 	database := taskRecoveryDatabase(t)
@@ -893,8 +893,8 @@ func TestAHeldTurnOfAnAgentThatWentToAnotherTaskIsThatTasks(t *testing.T) {
 	}
 	note.sent(ctx, context.DeadlineExceeded)
 	closedUnchanged(t, s, accepted)
-	if got := todoNow(s, other.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
-		t.Fatalf("the other task's turn end was not judged: %+v", got)
+	if got := todoNow(s, other.ID); got.DoneAt != nil || got.Supervision == nil || got.Supervision.State != reviewPending || got.Check == nil {
+		t.Fatalf("the other task's turn end was not judged for main review: %+v", got)
 	}
 }
 

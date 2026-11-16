@@ -891,12 +891,18 @@ func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, 
 			"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
 			"%s).%s", m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
 	}
+	result := fmt.Sprintf("The agent may already be starting on %s in %s, but the machine did not answer within the wait, "+
+		"so the result is unknown. ", m.Name, cwd)
+	if current, ok := s.todoNow(task.ID); ok && current.DoneAt != nil {
+		return result + fmt.Sprintf("Task %s closed while the start was in flight; the node's creation-id confirmation can "+
+			"still link the Agent to that task for cleanup. Do NOT start it again: check the app's Agents tab (or call "+
+			"agents_list) for the new session there.%s", task.ID, note)
+	}
 	s.signal(superviseSignal{Todo: task.ID, Kind: sigUnjudged, Key: "start-unknown@" + task.ID,
 		Detail: startUnknownDetail})
-	return fmt.Sprintf("The agent may already be starting on %s in %s, but the machine did not answer within the wait, "+
-		"so the result is unknown. Task %s stays open for the node's creation-id confirmation. Do NOT start it again: "+
+	return result + fmt.Sprintf("Task %s stays open for the node's creation-id confirmation. Do NOT start it again: "+
 		"check the app's Agents tab (or call agents_list) for a new session there, and only start again if no new session appears.%s",
-		m.Name, cwd, task.ID, note)
+		task.ID, note)
 }
 
 // knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no heuristic

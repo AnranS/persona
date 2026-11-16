@@ -656,6 +656,44 @@ func TestAgentStartUnknownReportsStartedWhenTaskClosesDuringLaunch(t *testing.T)
 	}
 }
 
+// An unanswered start whose prepared card closes in flight must not arm a new supervision stream or claim the card is
+// open. A later exact creation-id confirmation still links the Agent to the done card for cleanup.
+func TestAgentStartUnknownDoesNotRearmTaskClosedDuringLaunch(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	shortAgentStartTimeout(t)
+	f.slowStart = true
+	f.onStart = func(f *fakeHub, a map[string]any) {
+		id, _ := a["creation_id"].(string)
+		now := time.Now().UTC()
+		s.todos.mu.Lock()
+		if todo := s.todos.todos[id]; todo != nil {
+			todo.DoneAt = &now
+		}
+		s.todos.mu.Unlock()
+	}
+	res, err := s.runTool(context.Background(), "server", "conv1", "agent_start",
+		json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res, "stays open") || !strings.Contains(res, "closed while the start was in flight") ||
+		!strings.Contains(res, "Do NOT start it again") {
+		t.Fatalf("unknown result after the owner closed the card = %q", res)
+	}
+	todo := onlyTodo(s)
+	if todo.DoneAt == nil {
+		t.Fatal("the prepared card did not close")
+	}
+	requireStartUnknownState(t, s, todo.ID, false)
+
+	s.autoLinkTodos("box", []proto.Session{{SessionID: "s-late", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Hierarchy: &proto.SessionHierarchy{CreationID: todo.ID}, StartedByPersona: true, Status: proto.StatusWorking, UpdatedAt: time.Now()}})
+	got := todoNow(s, todo.ID)
+	if got.DoneAt == nil || len(got.Agents) != 1 || got.Agents[0].SessionID != "s-late" {
+		t.Fatalf("the delayed session is not linked to the closed card for cleanup: %+v", got)
+	}
+}
+
 // An unanswered start still has its task from before the request. When the session appears later, its persisted
 // creation id links it back to that same card without guessing from cwd or adopting a manual session (#5732).
 func TestAgentStartUnknownKeepsPendingTaskAndLinksByCreationID(t *testing.T) {

@@ -1213,7 +1213,11 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 	if t.Supervision == nil {
 		// Tasks created before universal supervision still join the main conversation instead of being closed (#5732).
 		if main := s.settings(ctx).Main; main != "" {
-			s.superviseTodo(ctx, t.ID, main, nil, 0)
+			if err := s.superviseTodo(ctx, t.ID, main, nil, 0); err != nil {
+				// Leave the turn unjudged so the next sweep can attach this legacy delivery and tell main after the
+				// store recovers. Marking it now would strand an open task without anybody allowed to review it (#5732).
+				return
+			}
 			if current, ok := s.todoNow(t.ID); ok {
 				t = current
 			}

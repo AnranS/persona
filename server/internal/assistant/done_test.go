@@ -148,6 +148,42 @@ func TestDoneSignals(t *testing.T) {
 	}
 }
 
+// A legacy task joins main supervision before its judgment is marked complete. If that ledger write fails, leaving the
+// turn unjudged lets the same completed work retry and reach review after the store recovers instead of stranding it.
+func TestLegacyDoneRetriesSupervisionAttachAfterStoreRecovery(t *testing.T) {
+	st := &ledgerDown{DB: todoTestDB(t)}
+	st.down.Store(true)
+	s, _ := newQuietServiceOn(t, st)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Legacy delivery", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := time.Now().UTC()
+	if _, again := s.takeTurn(ctx, todo, turnRow(proto.StatusDone, 1, "delivered"), nil,
+		turnClose{Key: "legacy-turn"}, true, work, turnDone); again {
+		t.Fatal("the terminated test turn was already taken")
+	}
+	check := taskDoneCheck{Verdict: verdictDone, Reason: "delivered"}
+	s.applyTaskDone(ctx, todo, work, true, check, nil)
+	if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Judged != nil {
+		t.Fatalf("the turn was marked judged without its supervision ledger: %+v, %v", e, ok)
+	}
+	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision != nil {
+		t.Fatalf("the failed attach changed the legacy task: %+v", cur)
+	}
+
+	st.down.Store(false)
+	s.applyTaskDone(ctx, todo, work, true, check, nil)
+	cur := todoNow(s, todo.ID)
+	if cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.Supervisor != "conv1" || cur.Supervision.State != reviewPending {
+		t.Fatalf("the recovered attach did not reach main review: %+v", cur)
+	}
+	if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Judged == nil {
+		t.Fatalf("the successful retry did not record its judgment: %+v, %v", e, ok)
+	}
+}
+
 func TestSameRequest(t *testing.T) {
 	if !sameRequest("<persona-context kind=\"context\">x</persona-context>\niPad 横屏时登录页崩溃，修好并补测试", "iPad 横屏时登录页崩溃，修好并补测试") ||
 		sameRequest("再把「全部 N」挪到最左边", "iPad 横屏时登录页崩溃，修好并补测试") {
