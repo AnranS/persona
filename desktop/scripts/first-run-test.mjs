@@ -15,13 +15,13 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { getCurrentFuseWire, FuseState, FuseV1Options } from "@electron/fuses";
 import { DesktopCDP } from "./first-run-cdp.mjs";
 import { startGateway } from "./smoke-gateway.mjs";
 import { finalizeFirstRun } from "./first-run-finalize.mjs";
-import { classifyFirstRunDiagnostics, SETUP_SECURITY_URLS, setupCSPResource } from "./first-run-diagnostics.mjs";
+import { classifyFirstRunDiagnostics, SETUP_SECURITY_URLS as LEGACY_SETUP_SECURITY_URLS, setupCSPResource } from "./first-run-diagnostics.mjs";
 import { appAsarPath, sha256File, sourceIdentity } from "./first-run-evidence.mjs";
 
 const require = createRequire(import.meta.url);
@@ -35,6 +35,7 @@ const webDist = resolve(process.env.PERSONA_DESKTOP_SMOKE_WEB ?? join(root, "web
 const platform = process.platform;
 const npm = platform === "win32" ? "npm.cmd" : "npm";
 const gatewayRequests = () => gateway.requests().map(({ method, path, status }) => ({ method, path, status }));
+let SETUP_URL, SETUP_SECURITY_URLS;
 const owned = new Set();
 const steps = [];
 let work, hub, gateway, log = "", failure, macSignature;
@@ -203,13 +204,12 @@ async function fuseCheck(file) {
 async function packageCheck(file) {
   const archive = appAsarPath(platform, file);
   const files = asar.listPackage(archive).map(name => `/${name.replaceAll("\\", "/").replace(/^\/+/, "")}`);
-  const publicResources = ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"];
-  const allowed = new Set(publicResources);
+  const publicResources = ["/dist/setup.html", "/dist/setup.css", "/dist/setup.cjs"];
   const missing = publicResources.filter(name => !files.includes(name));
-  const unexpected = files.filter(name => name.startsWith("/dist/setup/") && !allowed.has(name));
-  step("packaged setup resource listing", true, { archive, setup: files.filter(name => name.startsWith("/dist/setup")), sample: files.slice(0, 40) });
-  need("only the three public resources enter the setup directory", missing.length === 0 && unexpected.length === 0, { missing, unexpected, archive });
-  need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.includes("/dist/setup/setup-preload.cjs") && files.includes("/dist/setup-preload.cjs"));
+  const unexpected = files.filter(name => name.startsWith("/dist/setup/"));
+  step("packaged setup resource listing", true, { archive, setup: publicResources.filter(name => files.includes(name)), unexpected, sample: files.slice(0, 40) });
+  need("only the three public setup resources enter the package", missing.length === 0 && unexpected.length === 0, { missing, unexpected, archive });
+  need("no test driver or privileged preload enters the public resource directory", !files.some(name => name.includes("first-run")) && !files.some(name => name.startsWith("/dist/setup/")) && files.includes("/dist/setup-preload.cjs"));
 }
 async function launch(file, profile, home, linkLog) {
   const debugPort = await freePort();
@@ -252,7 +252,7 @@ async function screenshot(page, name) {
 }
 async function observe(client, phase, targetId) {
   const snapshot = await client.phase(phase);
-  const result = classifyFirstRunDiagnostics({ ...snapshot, hubURL: gateway?.url, signInTargetId: phase === "hub-sign-in" ? targetId : undefined, hubTargetId: phase === "hub-chat" ? targetId : undefined });
+  const result = classifyFirstRunDiagnostics({ ...snapshot, hubURL: gateway?.url, setupURL: SETUP_URL, securityURLs: SETUP_SECURITY_URLS, signInTargetId: phase === "hub-sign-in" ? targetId : undefined, hubTargetId: phase === "hub-chat" ? targetId : undefined });
   observations.push(result);
   need(`${phase} has no unexpected renderer or network failure`, result.ok, { expected: result.expected, unexpected: result.unexpected });
 }
@@ -262,8 +262,8 @@ async function assertSetupSecurityNegatives(client) {
     const pages = snapshot.pages;
     const urls = snapshot.consoleErrors.filter(value => value.kind === "log").map(setupCSPResource);
     return [...SETUP_SECURITY_URLS].every(url => urls.includes(url))
-      && snapshot.failedRequests.some(value => value.type === "Document" && value.errorText === "net::ERR_ABORTED" && value.url === "https://example.com/" && value.documentURL === "persona-setup://app/setup.html")
-      && pages.some(value => value.url === "persona-setup://app/setup.html");
+      && snapshot.failedRequests.some(value => value.type === "Document" && value.errorText === "net::ERR_ABORTED" && value.url === "https://example.com/" && value.documentURL === SETUP_URL)
+      && pages.some(value => value.url === SETUP_URL);
   });
 }
 async function absentScenario(file) {
@@ -272,8 +272,8 @@ async function absentScenario(file) {
   await mkdir(home, { recursive: true });
   need("the first profile is empty and no hub is supplied", !existsSync(profile) && !process.env.PERSONA_HUB_URL);
   const { child, client } = await launch(file, profile, home);
-  const setup = await client.pageFor("the first-run setup page", target => target.url === "persona-setup://app/setup.html");
-  need("the packaged setup document loads from the trusted local scheme", setup.url() === "persona-setup://app/setup.html");
+  const setup = await client.pageFor("the first-run setup page", target => target.url === SETUP_URL);
+  need("the packaged setup document loads from the trusted local scheme", setup.url() === SETUP_URL);
   await until("setup localization and Link status", async () => (await setup.evaluate("document.querySelector('h1')?.textContent.length > 0 && !document.querySelector('#link-state')?.textContent.includes('…')")) === true);
   await setup.evaluate("document.querySelector('details').open = true; document.querySelector('#pair').scrollIntoView({block:'center'}); true");
   await screenshot(setup, "01-setup-no-link");
@@ -286,16 +286,16 @@ async function absentScenario(file) {
   for (const url of SETUP_SECURITY_URLS) {
     await client.action(setup.id, "setup-resource-negative", url);
     need(`the setup security negative is refused: ${url}`, !(await setup.evaluate(`fetch(${JSON.stringify(url)}).then(r => r.ok).catch(() => false)`)));
-    await until(`the CSP denial is observed: ${url}`, () => client.diagnostics().consoleErrors.filter(value => value.kind === "log" && setupCSPResource(value) === url && value.action?.url === url).length >= 2);
+    await until(`the CSP denial is observed: ${url}`, () => client.diagnostics().consoleErrors.filter(value => value.kind === "log" && setupCSPResource(value, SETUP_SECURITY_URLS) === url && value.action?.url === url).length >= 2);
     client.finishAction();
   }
   await client.action(setup.id, "setup-navigation-negative", "https://example.com/");
-  need("the setup window refuses navigation away from its trusted origin", await setup.evaluate("location.href = 'https://example.com/'; true").then(() => sleep(500)).then(() => setup.url() === "persona-setup://app/setup.html"));
-  await until("the deliberate navigation failure is observed", () => client.diagnostics().failedRequests.some(value => value.type === "Document" && value.errorText === "net::ERR_ABORTED" && value.url === "https://example.com/" && value.documentURL === "persona-setup://app/setup.html" && value.action?.kind === "setup-navigation-negative"));
+  need("the setup window refuses navigation away from its trusted origin", await setup.evaluate("location.href = 'https://example.com/'; true").then(() => sleep(500)).then(() => setup.url() === SETUP_URL));
+  await until("the deliberate navigation failure is observed", () => client.diagnostics().failedRequests.some(value => value.type === "Document" && value.errorText === "net::ERR_ABORTED" && value.url === "https://example.com/" && value.documentURL === SETUP_URL && value.action?.kind === "setup-navigation-negative"));
   client.finishAction();
   await setup.evaluate("document.querySelector('#hub').value = 'persona-setup://app/setup.html'; document.querySelector('#connect').requestSubmit(); true");
   await until("invalid hub address stays recoverable", () => setup.evaluate("!document.querySelector('#error').hidden && !!document.querySelector('#error').textContent"));
-  need("an invalid hub does not get saved or open a window", setup.url() === "persona-setup://app/setup.html" && !existsSync(join(profile, "desktop-state.json")));
+  need("an invalid hub does not get saved or open a window", setup.url() === SETUP_URL && !existsSync(join(profile, "desktop-state.json")));
   await assertSetupSecurityNegatives(client);
   await observe(client, "setup-security");
   await stop(child);
@@ -335,7 +335,7 @@ process.stdin.on("end", () => {
     need("the synthetic Link answers status before app launch", probe.code === 0 && JSON.parse(probe.text).machine === "Example computer", probe.text);
   }
   const { child, client } = await launch(file, profile, home, platform === "win32" ? record : undefined);
-  const setup = await client.pageFor("setup with the separately installed test Link", target => target.url === "persona-setup://app/setup.html");
+  const setup = await client.pageFor("setup with the separately installed test Link", target => target.url === SETUP_URL);
   await until("redacted Link state", () => setup.evaluate("document.querySelector('#link-state')?.textContent.includes('connected') && !document.querySelector('#pair-link').disabled"));
   await setup.evaluate("document.querySelector('details').open = true; true");
   await until("the paired Link form is laid out", () => setup.evaluate("document.querySelector('#pair-link').getBoundingClientRect().height > 0 && !document.querySelector('#pair-link').disabled"));
@@ -417,6 +417,8 @@ async function main() {
   appAsarSHA256 = await sha256File(appAsarPath(platform, file));
   await fuseCheck(file);
   await packageCheck(file);
+  SETUP_URL = pathToFileURL(`${appAsarPath(platform, file)}/dist/setup.html`).href;
+  SETUP_SECURITY_URLS = new Set([new URL("setup-preload.cjs", SETUP_URL).href, new URL("main.js", SETUP_URL).href]);
   hub = await startHub();
   gateway = await startGateway({ dist: webDist, mockPort: hub.port });
   await absentScenario(file);

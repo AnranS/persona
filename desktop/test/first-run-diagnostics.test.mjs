@@ -129,6 +129,21 @@ test("real CDP event framing retains target and request attribution", async t =>
   assert.equal(finalOutcome([classified]).verdict.functionalFirstRunAccepted, true);
 });
 
+test("packaged file URLs bind setup security evidence to the exact asar location", () => {
+  const setupURL = "file:///tmp/runner/desktop/release/linux-unpacked/resources/app.asar/dist/setup.html";
+  const url = new URL("main.js", setupURL).href;
+  const action = { targetId: "setup", kind: "setup-resource-negative", url, sequence: 1, endSequence: 2 };
+  const pages = [{ targetId: "setup", url: setupURL }];
+  const logs = [
+    { kind: "log", text: `Connecting to '${url}' violates the following Content Security Policy directive: "default-src 'none'".`, targetId: "setup", action },
+    { kind: "log", text: `Fetch API cannot load ${url}. Refused to connect because it violates the document's Content Security Policy.`, targetId: "setup", action },
+  ];
+  const result = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL, securityURLs: new Set([url]), pages, actions: [action], consoleErrors: logs });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const other = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "file:///tmp/other/app.asar/dist/setup.html", securityURLs: new Set([url]), pages, actions: [action], consoleErrors: logs });
+  assert.equal(other.ok, false);
+});
+
 test("every unclassified error turns otherwise successful functional steps into FAIL", async t => {
   const { client, event, target } = await connected(t);
   const url = "http://127.0.0.1:18760/";
@@ -172,7 +187,7 @@ test("declared setup negatives are expected only at their exact action and URL",
   await client.until("the deliberate refused navigation", () => client.diagnostics().failedRequests.some(value => value.url === "https://example.com/" && value.action?.kind === "setup-navigation-negative"));
   client.finishAction();
   await settled();
-  const result = classifyFirstRunDiagnostics({ phase: "setup-security", ...client.diagnostics() });
+  const result = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", ...client.diagnostics() });
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
   assert.equal(finalOutcome([result]).exitCode, 0);
   for (const changed of [
@@ -255,13 +270,13 @@ test("navigation exemption rejects pre-action and duplicate failed requests", as
   await client.action("setup", "setup-navigation-negative", "https://example.com/");
   event("Network.loadingFailed", { requestId: "preexisting", type: "Document", errorText: "net::ERR_ABORTED", url: "https://example.com/", documentURL: "persona-setup://app/setup.html" }, "session-setup");
   await client.until("first pre-existing failure", () => client.diagnostics().failedRequests.length === 1);
-  const first = classifyFirstRunDiagnostics({ phase: "setup-security", ...client.diagnostics() });
+  const first = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", ...client.diagnostics() });
   assert.equal(first.ok, false);
   event("Network.requestWillBeSent", { requestId: "duplicate", documentURL: "persona-setup://app/setup.html", request: { url: "https://example.com/" } }, "session-setup");
   event("Network.loadingFailed", { requestId: "duplicate", type: "Document", errorText: "net::ERR_ABORTED", url: "https://example.com/", documentURL: "persona-setup://app/setup.html" }, "session-setup");
   await client.until("duplicate failure", () => client.diagnostics().failedRequests.length === 2);
   client.finishAction();
-  const result = classifyFirstRunDiagnostics({ phase: "setup-security", ...client.diagnostics() });
+  const result = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", ...client.diagnostics() });
   assert.equal(result.ok, false);
   assert.ok(result.unexpected.length >= 1);
   assert.equal(finalOutcome([result]).exitCode, 1);
@@ -276,7 +291,7 @@ test("an actual Chromium refused navigation is bound by Page.frameRequestedNavig
   event("Network.loadingFailed", { requestId: "navigation-only", type: "Document", errorText: "net::ERR_ABORTED", canceled: true }, "session-setup");
   await client.until("the navigation request and failure are paired", () => client.diagnostics().failedRequests.some(value => value.url === "https://example.com/" && value.documentURL === "persona-setup://app/setup.html"));
   client.finishAction();
-  const result = classifyFirstRunDiagnostics({ phase: "setup-security", ...client.diagnostics() });
+  const result = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", ...client.diagnostics() });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.expected.length, 1);
   assert.equal(finalOutcome([result]).exitCode, 0);
@@ -364,10 +379,10 @@ test("duplicate action identities and missing CSP forms cannot borrow one anothe
     { targetId: "setup", kind: "setup-navigation-negative", url: "https://example.com/", sequence: 10, endSequence: 20 },
     { targetId: "setup", kind: "setup-navigation-negative", url: "https://example.com/", sequence: 20, endSequence: 30 },
   ];
-  const onlySecond = classifyFirstRunDiagnostics({ phase: "setup-security", actions, pages: [{ targetId: "setup", url: "persona-setup://app/setup.html" }], failedRequests: [{ type: "Document", errorText: "net::ERR_ABORTED", url: "https://example.com/", documentURL: "persona-setup://app/setup.html", targetId: "setup", action: actions[1], requestSequence: 21, sequence: 22 }] });
+  const onlySecond = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", actions, pages: [{ targetId: "setup", url: "persona-setup://app/setup.html" }], failedRequests: [{ type: "Document", errorText: "net::ERR_ABORTED", url: "https://example.com/", documentURL: "persona-setup://app/setup.html", targetId: "setup", action: actions[1], requestSequence: 21, sequence: 22 }] });
   assert.equal(onlySecond.ok, false);
   const cspAction = { targetId: "setup", kind: "setup-resource-negative", url: "persona-setup://app/main.js", sequence: 40, endSequence: 50 };
-  const oneForm = classifyFirstRunDiagnostics({ phase: "setup-security", actions: [cspAction], pages: [{ targetId: "setup", url: "persona-setup://app/setup.html" }], consoleErrors: [{ kind: "log", text: "Connecting to 'persona-setup://app/main.js' violates the following Content Security Policy directive: \"default-src 'none'\".", targetId: "setup", action: cspAction }] });
+  const oneForm = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", actions: [cspAction], pages: [{ targetId: "setup", url: "persona-setup://app/setup.html" }], consoleErrors: [{ kind: "log", text: "Connecting to 'persona-setup://app/main.js' violates the following Content Security Policy directive: \"default-src 'none'\".", targetId: "setup", action: cspAction }] });
   assert.equal(oneForm.ok, false);
   assert.match(oneForm.failure, /complete expected diagnostic/);
 });
@@ -394,7 +409,7 @@ test("identical request IDs on different sessions cannot hide an error response"
 test("duplicate CSP evidence within one action fails instead of becoming extra expected entries", () => {
   const action = { targetId: "setup", kind: "setup-resource-negative", url: "persona-setup://app/main.js", sequence: 10, endSequence: 20 };
   const base = { kind: "log", targetId: "setup", action };
-  const result = classifyFirstRunDiagnostics({ phase: "setup-security", pages: [{ targetId: "setup", url: "persona-setup://app/setup.html" }], actions: [action], consoleErrors: [
+  const result = classifyFirstRunDiagnostics({ phase: "setup-security", setupURL: "persona-setup://app/setup.html", pages: [{ targetId: "setup", url: "persona-setup://app/setup.html" }], actions: [action], consoleErrors: [
     { ...base, text: "Connecting to 'persona-setup://app/main.js' violates the following Content Security Policy directive: \"default-src 'none'\"." },
     { ...base, text: "Fetch API cannot load persona-setup://app/main.js. Refused to connect because it violates the document's Content Security Policy." },
     { ...base, text: "Connecting to 'persona-setup://app/main.js' violates the following Content Security Policy directive: \"default-src 'none'\"." },
