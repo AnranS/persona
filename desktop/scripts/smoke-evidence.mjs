@@ -1,8 +1,10 @@
-export function browserFaviconEvidence(scenario, outside, gatewayURL) {
-  // Only the exact root of the scenario's first gateway can be the favicon for its proven outside-browser hand-off.
-  // It stays in outsidePrefix and the query-free request journal; this prevents a false second navigation failure.
-  return scenario === "hub-prefix-parent" && gatewayURL.startsWith("http://127.0.0.1:")
-    && gatewayURL.endsWith("/persona/") && outside.length > 0 && outside.every(entry => entry === "GET / (request)");
+export function browserFaviconEvidence(scenario, outside, gatewayURL, external = []) {
+  // A metadata-free favicon is allowed only for an off-prefix URL that Electron actually handed to the system browser
+  // during this scenario. The driver separately proves the hub window never left its prefix. A root 404 is not proof.
+  const origin = gatewayURL.match(/^http:\/\/127\.0\.0\.1:\d+/)?.[0];
+  const handedOff = external.some(url => origin && url.startsWith(origin) && !url.startsWith(gatewayURL));
+  return (scenario === "subpath" || scenario === "hub-prefix-parent") && handedOff
+    && outside.length > 0 && outside.every(entry => entry === "GET / (request)");
 }
 
 export async function settleGatewayHTTP(gateway, timeout = 15_000) {
@@ -23,13 +25,17 @@ export function recordScenarioEvidence(current, failure) {
 
 export function smokeScenarioSummary(scenario, name) {
   const screenshots = Array.isArray(scenario.screenshots) ? scenario.screenshots : [];
+  const malformedScreenshots = [];
+  const indexed = screenshots.map((screenshot, index) => {
+    const file = typeof screenshot === "string" ? screenshot : screenshot && typeof screenshot === "object" && typeof screenshot.name === "string" ? screenshot.name : undefined;
+    if (!file) { malformedScreenshots.push({ index, reason: "missing screenshot name" }); return undefined; }
+    return file.startsWith(`${name}/`) ? file : `${name}/${file}`;
+  });
   return {
     ...scenario,
     steps: Array.isArray(scenario.steps) ? scenario.steps : [],
-    screenshots: screenshots.map(screenshot => {
-      const file = typeof screenshot === "string" ? screenshot : screenshot.name;
-      return file.startsWith(`${name}/`) ? file : `${name}/${file}`;
-    }),
+    screenshots: indexed.filter(file => file !== undefined),
+    ...(malformedScreenshots.length ? { malformedScreenshots } : {}),
     evidence: { ...scenario },
   };
 }

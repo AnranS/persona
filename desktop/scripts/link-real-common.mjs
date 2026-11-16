@@ -77,10 +77,11 @@ export function redactPaths(run, paths = []) {
 }
 
 function ownedReplacement(run, candidate) {
+  if (typeof candidate !== "string" || candidate.includes(";") || /(^|[\\/])\.\.([\\/]|$)/.test(candidate)) return undefined;
+  if (/[A-Za-z]:(?![\\/])/.test(candidate)) return undefined;
   const kind = classifyOwnedPath(run, candidate);
   if (kind === "root") return "<run>";
   if (kind !== "descendant") return undefined;
-  if (candidate.includes(";") || /(^|[\\/])\.\.([\\/]|$)/.test(candidate)) return undefined;
   if (/^[A-Za-z]:[\\/]|^\\\\|^\/{2}/.test(candidate)) {
     const rootPath = trimWindowsTrailing(windowsComparable(run)).toLowerCase();
     const path = trimWindowsTrailing(win32.resolve(windowsComparable(candidate)));
@@ -94,104 +95,57 @@ function ownedReplacement(run, candidate) {
  * Returns `{ replacement, consumed }` or `undefined` when no path starts here.
  */
 function redactOnePath(text, run) {
-  // Structural separators always end a path token. Spaces and commas may be
-  // ordinary filename characters; they are handled below by checking whether
-  // the text after them continues the path or starts a new token.
-  const terminator = /[\r\n"'`;]|[,;](?=\s)/;
-  const isWindowsRoot = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(run);
-  const windowsToken = /^(?:\\\\[?.]\\|\/\/[?.]\/|[A-Za-z]:[\\/]|[A-Za-z]:[^/\\]+\\|\\\\|\/\/[^/]+[\\/])/.exec(text);
-  let tokenText;
-  if (windowsToken) {
-    const rest = text.slice(windowsToken[0].length);
-    const end = terminator.exec(rest)?.index ?? rest.length;
-    tokenText = windowsToken[0] + rest.slice(0, end);
-    // A space or comma followed by an absolute path token (optionally wrapped in
-    // brackets) is a field boundary, not part of this filename. Truncate before
-    // it so the next path is seen.
-    const boundary = /[ ,]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/))/.exec(rest);
-    if (boundary) tokenText = windowsToken[0] + rest.slice(0, boundary.index);
-    // An embedded namespace device (`//?/`, `//./`) or UNC (`//server/share`)
-    // is a separate path token, not a component of this one. Split before it so
-    // each token is classified independently: the owned prefix survives, the
-    // unowned tail collapses.
-    const embedded = rest.search(/\/\/[?.]\/|\/\/[^/]+\/[^/]+\//);
-    if (embedded !== -1) tokenText = windowsToken[0] + rest.slice(0, embedded);
-  } else if (text.startsWith("/")) {
-    if (isWindowsRoot) return undefined;
-    // `/` may itself be the run root. Replace the bare root only when it is not
-    // immediately followed by more path components; `/tmp/run` must stay one token.
-    if (trimTrailing(run) === "/" && !text.startsWith("//") && !/^\/[^\s"'`;,:)\]}]/.test(text)) return { replacement: "<run>", consumed: 1 };
-    // POSIX filenames may contain spaces, commas and brackets. The token ends at
-    // a diagnostic boundary (` key=value`, ` failed`) or at a new absolute path;
-    // ordinary spaces inside the path are kept. A semicolon followed by a path
-    // component is part of the same path expression, not a command separator.
-    const match = /^\/(?:[^\s"'`;)]+\/?)+/.exec(text);
-    if (!match) return undefined;
-    tokenText = match[0];
-    for (;;) {
-      const next = /^[;]([^\s"'`;,\[\]]+)/.exec(text.slice(tokenText.length));
-      if (!next) break;
-      tokenText += next[0];
-    }
-  } else return undefined;
+  const windowsRoot = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(run);
+  const windowsToken = /^(?:\\\\[?.]\\|\/\/[?.]\/|[A-Za-z]:[\\/]|[A-Za-z]:[^/\\\s]+\\|\\\\[^\\]+[\\/]|\/\/[^/]+[\\/])[^\r\n"'`]*/.exec(text);
+  const posixToken = !windowsToken && /^\/(?:[^\s"'`;]+\/?)+/.test(text) ? /^\/[^\r\n"'`]*/.exec(text) : undefined;
+  if (/[A-Za-z]:[^\\/\s]+\\/.test(text.slice(1)) || /[A-Za-z]:[^\s\\/]+\\/.test(text)) {
+    if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, relativeDrive: true, consumed: text.length }));
+    return { replacement: "<path>", consumed: text.length };
+  }
+  const token = windowsToken ?? posixToken;
+  if (!token) return undefined;
+  const windows = windowsToken !== null;
+  const embedded = windows ? token[0].slice(1).search(/\/\/[?.]\/|\/\/[^/]+\/[^/]+\//) : -1;
+  const first = embedded >= 1 ? token[0].slice(0, embedded) : token[0];
+  const structural = first.search(/[\r\n"'`\[\]()]|[,;](?=\s)|:(?=\s)/);
+  const pathText = structural >= 0 ? first.slice(0, structural) : first;
+  const trailing = trimTrailing(pathText).replace(/[,:]+$/, "");
+  const core = trailing.replace(/[\\/]+$/, "") || trailing;
+  if (!core) return { replacement: first, consumed: first.length };
 
-  const raw = trimTrailing(tokenText);
-  if (!raw) return { replacement: tokenText, consumed: tokenText.length };
-  // `next=<run>,` is a field boundary, not a semicolon inside a shell expression. Strip receipt punctuation before
-  // ownership classification so a following comma/semicolon cannot turn the next Windows path into unowned evidence.
-  const boundarySuffix = /^[;,]+/.exec(text.slice(tokenText.length))?.[0] ?? "";
-  const core = trimTrailing(raw).replace(/[,:]+$/, "");
-  const suffix = raw.slice(core.length) + boundarySuffix;
-  const kind = classifyOwnedPath(run, core);
-  if (kind === "root" || kind === "descendant") {
-    let extended = tokenText;
-    for (;;) {
-      const match = /^[ ,;]([^\s"'`;,\[\]]+)/.exec(text.slice(extended.length));
-      if (!match) break;
-      if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(match[1])) break;
-      if (match[1].includes(run)) break;
-      const candidate = trimTrailing(extended + match[0]);
-      const candidateCore = candidate.replace(/[,:]+$/, "");
-      if (classifyOwnedPath(run, candidateCore) === "descendant") extended += match[0];
-      else break;
+  // Try the full path field first, then walk back to component boundaries. This preserves spaces in real paths while
+  // allowing a following diagnostic or an independently scanned absolute path to survive.
+  if (windowsToken === null && token[0].includes(";")) {
+    const separator = token[0].search(/;\s/);
+    if (separator < 0) {
+      const consumed = token[0].search(/\s+(?:[A-Za-z][\w.-]*=|(?:failed|error|cannot|denied|unexpected|fatal|exception)\b)/i);
+      const end = consumed < 0 ? token[0].length : consumed;
+      if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, token: token[0], consumed: end, remainder: token[0].slice(end) }));
+      return { replacement: "<path>", consumed: Math.max(1, end) };
     }
-    const extendedRaw = trimTrailing(extended);
-    const extendedCore = extendedRaw.replace(/[,:]+$/, "");
-    const extendedSuffix = extendedRaw.slice(extendedCore.length) + boundarySuffix;
-    return { replacement: `${ownedReplacement(run, extendedCore)}${extendedSuffix}`, consumed: extended.length + boundarySuffix.length };
+    token[0] = token[0].slice(0, separator);
   }
-
-  // The path is outside the run root. A drive/UNC/namespace token is wholly
-  // opaque: spaces and commas belong to its private components, so the entire
-  // token collapses. A POSIX token stops at the first whitespace or comma; any
-  // suffix there is ordinary diagnostic text and must survive.
-  if (windowsToken) {
-    const diagnostics = /[ ,](?=[A-Za-z][\w.-]*=|(?:failed|error|cannot|denied|unexpected)\b)/i;
-    const match = diagnostics.exec(tokenText);
-    const consumed = match ? match.index : tokenText.length;
-    // A trailing bracket is receipt punctuation, not part of the private path.
-    const bracket = tokenText.endsWith("]") && consumed === tokenText.length;
-    return { replacement: bracket ? "<path>]" : "<path>", consumed };
+  const nextAbsolute = /[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
+  const candidates = [first, ...Array.from(first.matchAll(/[\s,;:]/g), match => first.slice(0, match.index)).reverse()];
+  for (const candidate of candidates) {
+    if (nextAbsolute && candidate.length > nextAbsolute.index) continue;
+    const trimmed = candidate.replace(/[,:]+$/, "");
+    const replacement = ownedReplacement(run, candidate) ?? ownedReplacement(run, trimmed);
+    if (replacement) {
+      if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, candidate, replacement, consumed: candidate.length }));
+      const trailing = candidate.slice(trimmed.length) + (first.slice(candidate.length).match(/^[,:;]+/)?.[0] ?? "");
+      const consumed = candidate.length + trailing.length - candidate.slice(trimmed.length).length;
+      if (windowsToken === null && first[candidate.length] === ";" && !/^\s/.test(first[candidate.length + 1] ?? "")) return { replacement: "<path>", consumed: first.length };
+      return { replacement: replacement + trailing, consumed };
+    }
   }
-  // POSIX paths may contain commas and spaces as ordinary filename characters.
-  // Extend over spaces that continue the path; stop at a diagnostic boundary
-  // (` key=value`, ` failed`) or at a new absolute path token.
-  let extended = tokenText;
-  for (;;) {
-    const next = /^[ ]([^\s"'`;,\[\]]+)/.exec(text.slice(extended.length));
-    if (!next) break;
-    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(next[1])) break;
-    // A diagnostic field or an explicit error phrase is evidence, not a filename suffix. Stop before consuming it.
-    if (/^[A-Za-z][\w.-]*=/.test(next[1])) break;
-    if (/^(?:failed|error|cannot|denied|unexpected)\b/i.test(next[1])) break;
-    if (next[1].startsWith("/")) break;
-    extended += next[0];
-  }
-  if (ownedReplacement(run, extended)) return { replacement: ownedReplacement(run, extended), consumed: extended.length };
-  if (classifyOwnedPath(run, extended) !== "outside") return { replacement: "<path>", consumed: extended.length };
-  const diagnostics = /[\s,](?=[A-Za-z][\w.-]*=|(?:failed|error|cannot|denied|unexpected)\b)/i;
-  const match = diagnostics.exec(extended);
-  return { replacement: "<path>", consumed: match ? match.index : extended.length };
+  const field = /(?:^|\s)[A-Za-z][\w.-]*=/.exec(first);
+  const phrase = /\s+(?:failed|error|cannot|denied|unexpected|fatal|exception)\b/i.exec(first);
+  const boundary = Math.min(field?.index ?? first.length, phrase?.index ?? first.length);
+  const nextPath = /\s+(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
+  const consumed = Math.min(boundary, nextPath?.index ?? first.length);
+  if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, token: token[0], first, boundary, nextPath: nextPath?.index, consumed }));
+  return { replacement: "<path>", consumed: Math.max(1, consumed - (first[consumed - 1] === "]" ? 1 : 0)) };
 }
 
 /** Redact every path token in a receipt string; arbitrary encodings are outside this contract. */

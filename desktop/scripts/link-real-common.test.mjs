@@ -226,6 +226,19 @@ test("namespace, spaced and punctuated private paths cannot leak or swallow evid
   ]);
 });
 
+test("independent review path counterexamples stay private without swallowing evidence", () => {
+  assert.equal(sanitize("/tmp/run/child /tmp/private/secret", "/tmp/run"), "<run>/child <path>");
+  assert.equal(sanitize("/tmp/private/secret),PRIVATE", "/tmp/run"), "<path>");
+  assert.equal(sanitize("/tmp/private/path", "C:\\Temp\\run"), "<path>");
+  assert.equal(sanitize("C:\\Temp\\run\\child C:private\\secret", "C:\\Temp\\run"), "<path>");
+  assert.equal(sanitize("C:\\Temp\\run\\..\\run\\child", "C:\\Temp\\run"), "<path>");
+  assert.equal(sanitize("C:\\Other Private\\secret.txt fatal exception after", "C:\\Temp\\run"), "<path> fatal exception after");
+  assert.equal(sanitize("C:\\Other Private\\secret.txt /tmp/private/secret", "C:\\Temp\\run"), "<path> <path>");
+  assert.equal(sanitize("open D:\\Private, CustomerName\\secret.txt failed", "C:\\Temp\\run"), "open <path> failed");
+  assert.equal(sanitize("Error: ENOENT: no such file or directory, open \"D:\\Private\\secret.txt\"", "C:\\Temp\\run"), "Error: ENOENT: no such file or directory, open \"<path>\"");
+  assert.equal(sanitize("open /tmp/run/private;secret-next-token/child detail=keep", "/tmp/run"), "open <path> detail=keep");
+});
+
 function assertUnsupportedGroup(result) {
   assert.equal(result.groupEmpty, false);
   assert.equal(result.group.error, "a Linux owned-process-group receipt is required");

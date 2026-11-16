@@ -250,11 +250,20 @@ async function showSetup(): Promise<void> {
     },
   });
   setupWindow = setup;
+  const setupHub = hub;
   let connectQueue: Promise<unknown> = Promise.resolve();
   const recoverSetupAfterClose = () => {
     hubWindow.replace();
-    hub = undefined;
     if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+  };
+  const discardFailedConnection = (next: HubAddress) => {
+    if (hub?.url.href !== next.url.href) return;
+    hub = setupHub;
+    hubWindow.replace();
+    const failedWindow = mainWindow;
+    mainWindow = undefined;
+    mainWindowHub = undefined;
+    if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
   };
   setup.setMenu(null);
   setup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -278,8 +287,12 @@ async function showSetup(): Promise<void> {
           hub = next;
           const loadedWindow = await showMain();
           // An obsolete or destroyed load cannot persist or close setup.
-          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
+          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
               !loadedWindow || loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
+            if (setup.isDestroyed()) {
+              discardFailedConnection(next);
+              recoverSetupAfterClose();
+            }
             return { ok: false, error: "The hub connection was replaced before it finished." };
           }
           try {
@@ -297,8 +310,12 @@ async function showSetup(): Promise<void> {
             if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
             return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
           }
-          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
+          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
               loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
+            if (setup.isDestroyed()) {
+              discardFailedConnection(next);
+              recoverSetupAfterClose();
+            }
             return { ok: false, error: "The hub connection was replaced before it finished." };
           }
           if (!setup.isDestroyed()) setup.close();
@@ -309,13 +326,7 @@ async function showSetup(): Promise<void> {
           if (setup.isDestroyed()) {
             // The user already closed this failed connection: retire its owner before reopening local setup. The close
             // callback cannot see a hubWindow still owned by the failed load, so this branch must perform that cleanup.
-            if (hub?.url.href === next.url.href) {
-              hub = undefined;
-              const failedWindow = mainWindow;
-              mainWindow = undefined;
-              mainWindowHub = undefined;
-              if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
-            }
+            discardFailedConnection(next);
             recoverSetupAfterClose();
             return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
           }

@@ -143,13 +143,25 @@ test("legacy screenshot paths remain stable and arrays cannot crash aggregation"
   assert.deepEqual(smokeScenarioSummary({ screenshots: [{ name: "root/failure.png" }] }, "root").screenshots, ["root/failure.png"]);
 });
 
+test("malformed screenshot entries preserve the aggregate and explicit diagnostics", () => {
+  const scenario = { ok: false, steps: [{ name: "failed step", ok: false }], screenshots: [{}, null, "failure.png", { name: 42 }] };
+  assert.deepEqual(smokeScenarioSummary(scenario, "root"), {
+    ...scenario,
+    screenshots: ["root/failure.png"],
+    malformedScreenshots: [{ index: 0, reason: "missing screenshot name" }, { index: 1, reason: "missing screenshot name" }, { index: 3, reason: "missing screenshot name" }],
+    evidence: scenario,
+  });
+});
+
 test("browser favicon evidence is scoped to the first prefixed gateway", () => {
   const first = "http://127.0.0.1:12345/persona/";
-  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], first), true);
-  assert.equal(browserFaviconEvidence("hub-change", ["GET / (request)"], first), false);
-  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], "http://127.0.0.1:12345/"), false);
-  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)", "GET /other (request)"], first), false);
-  assert.equal(browserFaviconEvidence("hub-prefix-parent", [], first), false);
+  const handedOff = ["http://127.0.0.1:12345/outside-the-prefix"];
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], first, handedOff), true);
+  assert.equal(browserFaviconEvidence("subpath", ["GET / (request)"], first, handedOff), true);
+  assert.equal(browserFaviconEvidence("hub-change", ["GET / (request)"], first, handedOff), false);
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], "http://127.0.0.1:12345/", handedOff), false);
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], first), false);
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], first, ["http://127.0.0.1:12345/persona/inside"]), false);
 });
 
 test("HTTP journals settle before a verdict; WebSocket and timeout evidence stay distinct", async () => {

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 export const events = [];
 export const windows = [];
 export const controls = new Map();
-export const scenario = { failNew: false, failNext: false, unhandled: [], oldPending: true, oldSucceeds: false };
+export const scenario = { failNew: false, failNext: false, unhandled: [], oldPending: true, oldSucceeds: false, holdNew: false };
 process.on("unhandledRejection", error => { scenario.unhandled.push(String(error)); });
 export let connect;
 export let hubGet;
@@ -107,6 +107,10 @@ export class BrowserWindow extends EventEmitter {
     }
     if (this.destroyed) throw new Error("ERR_ABORTED: intentionally destroyed stale load");
     if (url === "https://new.example/" && scenario.failNew) throw new Error("synthetic hub connection failure");
+    if (url === "https://new.example/" && scenario.holdNew) {
+      await new Promise(done => { controls.set("release-new", () => { scenario.holdNew = false; done(); }); });
+    }
+    if (this.destroyed) throw new Error("ERR_ABORTED: destroyed while the new hub load was pending");
     if (scenario.failNext) {
       scenario.failNext = false;
       throw new Error("synthetic hub connection failure");
