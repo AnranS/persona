@@ -1,24 +1,18 @@
-name: Android CI
+name: Android handset verification
 on:
-  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: android-${{ github.repository }}-${{ github.ref_name }}-android
-  cancel-in-progress: true
+  group: handset-8742-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  android:
-    name: Android ${{ matrix.lane }}
+  handset:
     runs-on: ubuntu-latest
-    # Retain headroom until hosted cold/warm timings establish a safe lower bound.
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        # Two lanes balanced by task time; each runs its share in one Gradle invocation (scripts/ci/android-shards.py).
-        lane: [lint-build-test-0, test-1]
+    env:
+      CARGO_BUILD_JOBS: '1'
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false -Dorg.gradle.jvmargs=-Xmx3g'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,48 +23,53 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@v3
         with:
-          # The default also installs the legacy `tools` package, which the SDK repository no longer has.
           packages: platform-tools
-      - name: Install Android SDK
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-      - name: Install Rust Android targets
-        run: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
+      - name: Install pinned native toolchains
+        run: |
+          sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
       - uses: gradle/actions/setup-gradle@v4
         with:
-          # Only a manual main run may populate caches; PRs and other refs only restore.
-          cache-read-only: ${{ github.event_name != 'workflow_dispatch' || github.ref != 'refs/heads/main' }}
-      - name: Restore public Robolectric runtime dependencies
-        id: robolectric
-        uses: actions/cache/restore@v4
+          cache-read-only: true
+      - name: Build exact handset APK and check the existing voice menu contract
+        working-directory: android
+        run: |
+          ./gradlew --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process -PpersonaApplicationId=com.example.persona.shots :app:assembleDebug :feature:assistant:testDebugUnitTest --tests persona.feature.assistant.AssistantMenuTest
+          ./gradlew --stop
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Capture the real composer, attachment panel and voice menu
+        uses: reactivecircus/android-emulator-runner@v2
         with:
-          # Never cache Maven settings, credentials or unrelated/private artifacts.
-          path: |
-            ~/.m2/repository/org/robolectric/android-all
-            ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          # Another lane's entry, or one saved under an old lane name, holds the same public jars: better than a download.
-          restore-keys: |
-            ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-
-            ${{ runner.os }}-robolectric-v1-
-      - name: Android checks
-        run: scripts/ci/android.sh --lane '${{ matrix.lane }}' --profile
-      - name: Save public Robolectric runtime dependencies
-        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.robolectric.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.m2/repository/org/robolectric/android-all
-            ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ steps.robolectric.outputs.cache-primary-key }}
-      - name: Upload Android reports
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 2048M
+          heap-size: 256M
+          disable-animations: true
+          emulator-boot-timeout: 180
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          script: |
+            for style in glass brief board; do SHOTS_STYLE=$style SHOTS_PLUGINS=1 scripts/app/android.sh shots-live -s emulator-5554 --scenario scripts/app/android_adaptive_scenes/voice-handset-8742.json --theme both --out /tmp/handset-8742/$style || exit $?; done
+      - name: Retain exact source and native evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        run: |
+          mkdir -p /tmp/handset-8742
+          git rev-parse HEAD HEAD:android > /tmp/handset-8742/source.txt
+          adb -s emulator-5554 logcat -d > /tmp/handset-8742/logcat.txt 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: android-reports-${{ matrix.lane }}
+          name: handset-8742
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error
           path: |
-            android/build/reports/profile/
-            android/**/build/reports/lint-results*
-            android/**/build/reports/tests/
-            android/**/build/test-results/
+            /tmp/handset-8742/
+            android/feature/assistant/build/test-results/testDebugUnitTest/
+            android/app/build/outputs/apk/debug/app-debug.apk

@@ -1,0 +1,38 @@
+{
+  "id": "voice-handset-8742",
+  "description": "Inspect the existing Voice Chat handset, composer and attachment panel in each style and theme.",
+  "requires": {
+    "fields": []
+  },
+  "steps": [
+    {
+      "step": "launch",
+      "session": "assistant-chat",
+      "conversationKind": "assistant"
+    },
+    {
+      "step": "capture",
+      "name": "composer"
+    },
+    {
+      "step": "tap",
+      "content-desc": "Add attachments and quick messages"
+    },
+    {
+      "step": "capture",
+      "name": "attachment-panel"
+    },
+    {
+      "step": "key",
+      "key": "BACK"
+    },
+    {
+      "step": "tap",
+      "text": "Persona"
+    },
+    {
+      "step": "capture",
+      "name": "voice-menu"
+    }
+  ]
+}
