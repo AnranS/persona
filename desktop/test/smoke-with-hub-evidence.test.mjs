@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startGateway } from "../scripts/smoke-gateway.mjs";
-import { recordScenarioEvidence, smokeScenarioSummary } from "../scripts/smoke-evidence.mjs";
+import { browserFaviconEvidence, recordScenarioEvidence, settleGatewayHTTP, smokeScenarioSummary } from "../scripts/smoke-evidence.mjs";
 
 test("gateway strangers is a query-free diagnostic, not process attribution", async t => {
   const directory = await mkdtemp(join(tmpdir(), "persona-gateway-strangers-"));
@@ -141,6 +141,56 @@ test("legacy screenshot paths remain stable and arrays cannot crash aggregation"
   assert.deepEqual(smokeScenarioSummary({ screenshots: "not-an-array" }, "root").screenshots, []);
   assert.deepEqual(smokeScenarioSummary({ screenshots: ["root/failure.png"] }, "root").screenshots, ["root/failure.png"]);
   assert.deepEqual(smokeScenarioSummary({ screenshots: [{ name: "root/failure.png" }] }, "root").screenshots, ["root/failure.png"]);
+});
+
+test("browser favicon evidence is scoped to the first prefixed gateway", () => {
+  const first = "http://127.0.0.1:12345/persona/";
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], first), true);
+  assert.equal(browserFaviconEvidence("hub-change", ["GET / (request)"], first), false);
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)"], "http://127.0.0.1:12345/"), false);
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", ["GET / (request)", "GET /other (request)"], first), false);
+  assert.equal(browserFaviconEvidence("hub-prefix-parent", [], first), false);
+});
+
+test("HTTP journals settle before a verdict; WebSocket and timeout evidence stay distinct", async () => {
+  const entry = { method: "GET", path: "/api/v1/models", closed: false };
+  const socket = { method: "UPGRADE", path: "/api/v1/ws", closed: false };
+  const gateway = { requests: () => [entry, socket] };
+  const waiting = settleGatewayHTTP(gateway, 500);
+  setTimeout(() => { entry.closed = true; }, 30);
+  await waiting;
+  const hung = { requests: () => [{ method: "GET", path: "/api/v1/hung", closed: false }] };
+  await assert.rejects(settleGatewayHTTP(hung, 20), /did not settle.*GET \/api\/v1\/hung/);
+});
+
+test("client cancellation remains observable in the real gateway journal", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "persona-gateway-abort-"));
+  let respond;
+  const upstream = createServer((req, res) => { respond = () => res.end('{"ok":true}'); });
+  let gateway;
+  t.after(async () => {
+    await gateway?.close();
+    if (upstream.listening) await new Promise((done, fail) => { upstream.closeAllConnections(); upstream.close(error => error ? fail(error) : done()); });
+    await rm(directory, { recursive: true, force: true });
+  });
+  await mkdir(join(directory, "dist"));
+  await writeFile(join(directory, "dist", "index.html"), '<base href="/" />');
+  await new Promise(done => upstream.listen(0, "127.0.0.1", done));
+  gateway = await startGateway({ dist: join(directory, "dist"), mockPort: upstream.address().port });
+  const pending = new Promise(resolve => {
+    const req = request({ host: "127.0.0.1", port: gateway.port, path: "/api/v1/slow" }, res => { res.resume(); res.on("end", resolve); });
+    req.on("error", error => resolve(error));
+    req.end();
+    setTimeout(() => req.destroy(), 30);
+  });
+  await pending;
+  await settleGatewayHTTP(gateway);
+  const entry = gateway.requests().find(item => item.path === "/api/v1/slow");
+  assert.equal(entry.clientAborted, true);
+  assert.equal(entry.status, "client-aborted");
+  assert.equal(entry.complete, false);
+  assert.equal(entry.upstreamError, undefined);
+  respond?.();
 });
 
 test("a missing inner result is an explicit failure, not a fabricated pass", () => {

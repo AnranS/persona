@@ -1,5 +1,34 @@
 # Lessons: hub / node and networking
 
+## A transport made for one request opens a connection for one request (2026-11-16, #9202)
+
+The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
+but each new relay stream is `extensions.accept` on the bus plus the manager's WebSocket back to the hub, about four round trips. Between a
+hub and a manager on a 142 ms link every relayed request took about a second, while the hub's own answers took a millisecond. The manager
+side had served many requests per stream all along; only the hub threw the stream away.
+
+- On a hop between machines, keep the transport, and with it the pool, for as long as what it dials through. Here that is the manager's
+  bus connection: a new connection gets a new transport, and the old one's idle streams are closed when that connection ends.
+- A pooled connection over a long link can die without a sound (a stalled tunnel, a NAT that forgot it). Ping the idle ones, so the next
+  request does not wait for an answer that is not coming.
+- net/http keeps upgrades apart: a request with `Upgrade` has its own pool key, so a WebSocket never takes a pooled stream and its stream
+  is never pooled after it. A request whose context ends closes its connection instead of pooling it, so revoking a caller still closes
+  the stream its request was on.
+- `httptrace`'s `PutIdleConn` runs after the connection is already back in the pool, so the next request may have taken it by then.
+  Count the uses (`GotConn`) and compare them, rather than setting an idle flag.
+
+## A command on the hub's machine does not come from loopback because it runs there (2026-11-16, #9182)
+
+The hub's own commands (`hub pair`, `hub admin`, `hub peer`, `hub setup`, `hub doctor`, `personad extension`) dialled
+`127.0.0.1:<listen port>`. A hub whose `listen` names one address (`<LAN address>:18660`) does not answer there, so each of
+them said the hub was not running while it served the LAN. Dialling the LAN address instead is only half the fix: the
+connection then comes from that address, and the hub's checks for the master token over loopback (pairing codes, admin,
+peers, extension installs) refuse it with 403. `managerconf.CLIHubURL` picks the address (listen's only when it is loopback
+or one of this machine's, never a name or an address the machine no longer has, so the token stays on the machine) and
+`managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
+A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
+the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
 The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
@@ -1037,7 +1066,7 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 
 - Connector mode watching mustn't record only startup mtime and wait for a later change before checking mode (2026-11-03, #748): the run loop picks active/passive then starts its watcher asynchronously; if the user switches before the watcher goroutine begins, new config becomes the initial snapshot and the first switch is missed forever. Sample initial time, then immediately compare actual mode and cancel the old mode if different. Bidirectional regressions directly simulate "config changed before watcher starts", not longer waits; observing initial state doesn't mean the watcher is ready.
 
-- Optional Chat Completions parameters need error-shape-specific compatibility retries, not a generic "400 mentions the field" rule. `reasoning_effort` can appear in an unsupported-parameter response (safe to remove and retry once), but also in an invalid-level or operator-ceiling response (must be returned unchanged). Keep independent per-field retry flags so existing token/usage fallbacks still compose, log every without-effort downgrade, and make a degraded connection test return an empty effort that it did not verify. Empty provider-model effort lists still mean unknown, while `no_effort` is explicit and `all_efforts` carries the direct API's complete levels; keep that capability suppression in one helper shared by probes and runtime resolution so their wire behavior cannot split (#8779).
+- Optional Chat Completions parameters need error-shape-specific compatibility retries, not a generic "400 mentions the field" rule. `reasoning_effort` can appear in an unsupported-parameter response (safe to remove and retry once), but also in an invalid-level or operator-ceiling response (must be returned unchanged). Off is the one exception to value rejection: because Information screening defaults to `off` without a user choice, a gateway rejecting `none` as a value must also get one without-field retry, or existing Chat providers regress; explicit non-off values still fail unchanged. Keep independent per-field retry flags so existing token/usage fallbacks still compose, log every without-effort downgrade, and make a degraded connection test return an empty effort that it did not verify. A retry alone still makes every later loop call fail first, so share a one-hour, hard-bounded cache by Base URL + credential + route computer + model between probes and real calls, distinguishing whole-field rejection from none-only rejection; an explicit no-retry response neither retries nor populates it (#8779, #8822). Empty provider-model effort lists still mean unknown, while `no_effort` is explicit and `all_efforts` carries the direct API's complete levels; keep that capability suppression in one helper shared by probes and runtime resolution so their wire behavior cannot split.
 - Collapsing purpose models into category defaults needs more than hiding lists or making the resolver ignore old records (2026-11-03, #697): starting a task, resuming its own session, or returning to the source session may reintroduce old `Launcher/Model/Effort` execution parameters, which `applyModel` treats as explicit choices. Stop passing these old purpose parameters at execution entry points; compare only category results when deciding launcher changes on resume. Regressions check real RPC arguments for all three paths, unchanged permissions, rejected old-purpose PATCH, and preserved original records.
 - Sending into an existing assistant chat (phone messages, scheduled follow-ups returning to the source) mustn't choose launchers independently (2026-11-04, #1518): follow-ups resolved the Agents category, defaulting to bare Claude Code,
   and at the scheduled time `--resume`d the main chat into a logged-out claude on the hub machine. Main-chat sends then inherited the "currently running" launcher, so they never switched back and every message reported
@@ -1250,7 +1279,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - Gateways return `HTTP 429 account_quota_exhausted` for exhausted quota and `HTTP 503 account_concurrency_full` for full concurrency. Previously each caller treated these as ordinary failures: knowledge processing and Inbox sorting retried item by item, producing 429 requests and log lines in 15 minutes; Inbox items were marked sorted "by rules" and weren't reprocessed after quota recovery.
   Handle rate limits per connection in the shared client (`ai/limit.go`, `docs/assistant/model-config.md` ("Upstream rate limits")): while paused, return `ai.PausedError` without sending; callers seeing `ai.IsPaused` stop the round, don't log, and don't mark items processed. New model-calling loops must do the same.
-- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`; a recognized code wins over wording, while an unknown code must retain the previous fallback. `X-Should-Retry: false` overrides status-based transience. A 429 carrying it together with `Retry-After` is a quota pause until the reset, not busy backoff; HTTP 402 and explicit budget-exhaustion codes are quota pauses too. Keep model-unavailable, missing-endpoint and excess-context classifications separate, and never infer an automatic model switch from any of them (#8776).
+- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`, as a string or number; decode fields independently so a malformed field cannot erase a valid message or type. A recognized code wins over wording, while an unknown code keeps the previous fallback. `X-Should-Retry: false` makes the original response non-transient, not the gate: only a 429 with a positive, valid `Retry-After` is the quota-reset exception. Zero, malformed or absent cooldown keeps the existing busy gate. A bounded compatibility request with a rejected field changed is not a same-request retry and remains allowed. Keep model-unavailable, missing-endpoint and excess-context classifications separate: Anthropic's 404 `not_found_error` with a `model:` message is a missing model, but overload wording such as `model service unavailable` is not. `model_unavailable` on model.complete means no configured/callable model, never an upstream model failure; use `model_failed` for the latter (#8833).
 - Thinking models (e.g. `claude-haiku-5-5` thinks by default) count thinking tokens toward `max_tokens` too (2026-11-03, #1000): a project profile of about 2000 Chinese characters needs 3.7–4.7K,
   so `kb.project`'s old 4000 cap often truncated into thinking plus half a JSON object, reported as "unterminated JSON object", retrying every 2 minutes.
   Inspect Messages `stop_reason`: if `ai.JSONMax` lacks a complete object and stopped on `max_tokens`, double the cap and retry once; if still truncated, return `ai.ErrTruncated`.
@@ -2509,3 +2538,22 @@ nothing ran the old build after the new one.
   has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
   and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
   `knownLauncher` does.
+
+## On a Mac with a resident node, the hub's node deploy doesn't reach it (2026-11-16, #8859)
+
+- On a computer where Persona Link installed the resident node (`com.persona.node` → `~/.persona/bin/persona-node node
+  --attach`), the `personad node --stdio` the hub starts over ssh only relays to it. A hub deploy replaces `personad`
+  on that computer, but the program that answers is still the resident one. `scripts/app/mac-link.sh install` installs
+  that resident node once (a Mac without one gets it: "Installed and started the resident node service") and leaves it
+  alone after that ("already installed … leaving it unchanged", `docs/operations/node-update.md`).
+- So a node change can look deployed and still not run. The live screen's x264 probe (#8883) never reported on such a
+  Mac: its resident node predated the probe. A first guess blamed a cached failed probe and changed the probe (#8989:
+  its own deadline, a failure retried after a minute, each outcome logged), which is sound but wasn't the cause.
+- Before debugging a node's behaviour, read the version the hub has for it: `node_version` / `node_mismatch` in `GET
+  /api/v1/machines`, or the hub's connect line "[<machine>] node <version> is not build <hub's>: an update is offered".
+- **Redeploy** (`POST /api/v1/machines/{mid}/deploy`) and automatic node updates send the hub's own node packages,
+  `$PERSONA_HOME/bin/nodes` on the hub machine. `scripts/deploy/deploy.sh`'s hub step refreshes them (`personad-<plat>`,
+  `persona-node-<plat>` and its `.version`). A deploy that skips that step leaves them at an older build, and Redeploy
+  then installs that older build: here it moved a resident node back five days, to a build without the live screen's
+  video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
+  `node_mismatch`.

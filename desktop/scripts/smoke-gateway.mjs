@@ -53,8 +53,19 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     const entry = { method: req.method, path: (req.url ?? "/").split("?")[0] };
     requests.push(entry);
     stranger(req, req.method);
+    const clientCancellation = () => {
+      if (req.aborted || !res.writableFinished) {
+        entry.clientAborted = true;
+        entry.status = "client-aborted";
+      }
+    };
     res.on("finish", () => { entry.status = res.statusCode; });
-    res.on("close", () => { entry.closed = true; entry.complete = res.writableFinished; });
+    res.once("close", () => {
+      clientCancellation();
+      entry.closed = true;
+      entry.complete = res.writableFinished;
+    });
+    req.once("aborted", () => { entry.clientAborted = true; entry.status = "client-aborted"; });
     if (path === undefined) {
       escaped(req, req.method);
       res.writeHead(404, { "Content-Type": "text/plain" }).end("outside the hub prefix");
@@ -72,11 +83,19 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
         res.writeHead(answer.statusCode ?? 502, answer.headers);
         answer.pipe(res);
       });
-      upstream.on("error", () => {
-        entry.upstreamError = true;
+      upstream.on("error", error => {
+        if (!entry.clientAborted) entry.upstreamError = error.message;
         if (!res.headersSent) res.writeHead(502);
         res.end();
       });
+      upstream.on("close", () => {
+        // A close after a response has begun is settled by the response/downstream close handlers. Before that it is
+        // an upstream failure even if Node lets the downstream socket finish an empty default response.
+        if (!res.headersSent && !entry.clientAborted) { entry.upstreamError ??= "upstream closed before a response"; res.destroy(); }
+      });
+      // A client that closes before a complete response has cancelled its read. Record that from the response's
+      // terminal state too: Node does not emit the legacy request `aborted` event for every such cancellation.
+      req.once("aborted", () => { entry.clientAborted = true; entry.status = "client-aborted"; });
       req.pipe(upstream);
       return;
     }
@@ -143,7 +162,7 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     });
     for (const end of [socket, upstream]) {
       sockets.add(end);
-      end.on("error", () => { entry.upstreamError = true; socket.destroy(); upstream.destroy(); });
+      end.on("error", () => { entry.clientDisconnected = true; socket.destroy(); upstream.destroy(); });
       end.on("close", () => {
         entry.closed = true;
         entry.complete = entry.status === 101 && upgraded && !entry.upstreamError;

@@ -391,6 +391,9 @@ async function hubChangeScenario() {
     const accepted = await page(`window.personaDesktop.notify({title: 'Second hub notification', body: 'Bridge after the hub change', tag: 'second-hub-smoke', route: ${JSON.stringify(route)}})`);
     if (!accepted) throw new Error("the replacement hub's production notify IPC was refused");
     await until("second hub native notification", () => shown.find(n => n.title === "Second hub notification"));
+    // All hub-bound assertions have observed their terminal state. Closing the production window flushes/cancels
+    // renderer-owned requests before the outer driver reads either gateway journal; no exception is needed for them.
+    await new Promise(done => { win.once("closed", done); win.destroy(); });
     return { oldWindowDestroyed: true, permission, presence, nativeNotification: accepted, targetURL, sessionChanged: targetSession !== previousSession, loginItemState, previousHubWithdrawn: original.registered.length === 0 };
   });
 }
@@ -469,6 +472,9 @@ async function finish(error) {
     await writeFile(join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   } catch (writeError) { console.error(writeError); }
   console.log(`desktop e2e ${scenario}: ${ok ? "PASS" : "FAIL"}${error ? ` (${result.error})` : consoleErrors.length ? ` (renderer errors: ${consoleErrors.join(" | ")})` : ""}`);
+  // Let the gateway observe normal response close events after the assertion settles. The parent also waits for actual
+  // HTTP terminal states before judging its journals, so no in-flight request is silently called a successful response.
+  await sleep(500);
   app.exit(ok ? 0 : 1);
 }
 main().then(() => finish(), error => finish(error));

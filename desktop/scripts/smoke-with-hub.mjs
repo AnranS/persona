@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { startGateway } from "./smoke-gateway.mjs";
 import { startHub } from "./child-process.mjs";
-import { recordScenarioEvidence, smokeScenarioSummary } from "./smoke-evidence.mjs";
+import { browserFaviconEvidence, recordScenarioEvidence, settleGatewayHTTP, smokeScenarioSummary } from "./smoke-evidence.mjs";
 import { gatewayEvidenceFailure } from "./smoke-gateway-verdict.mjs";
 
 /**
@@ -85,13 +85,25 @@ async function scenario(name, { prefix, token, starting }) {
     const timer = setTimeout(() => child.kill("SIGKILL"), 180_000);
     const exit = await new Promise(done => child.once("close", (code, signal) => done({ code, signal })));
     clearTimeout(timer);
+    // A completed step does not imply the web client's unrelated background reads have completed. Let their real HTTP
+    // responses finish before judging either gateway; a hang or upstream error remains a failed journal entry.
+    await Promise.all([settleGatewayHTTP(gateway), ...(otherGateway ? [settleGatewayHTTP(otherGateway)] : [])]);
     await writeFile(join(directory, "electron.log"), log.replaceAll(profile, "<temporary profile>").replaceAll(token, "<run token>").replaceAll(other?.token ?? "no-second-pairing-code", "<second run token>"), "utf8");
     try { result = JSON.parse(await readFile(join(directory, "result.json"), "utf8")); }
     catch (error) { result = { ok: false, error: `No result was written: ${error instanceof Error ? error.message : String(error)}`, steps: [] }; }
     if (exit.code !== 0) result = { ...result, ok: false, error: result.error ?? `Electron exited with ${JSON.stringify(exit)}`, exit };
     else result = { ...result, exit };
     const outside = gateway.outside();
-    if (prefix && outside.length) result = { ...result, ok: false, error: result.error ?? `Requests left the prefix: ${outside.slice(0, 5).join(", ")}` };
+    // The driver already proved this exact outside URL was handed to the system browser. Chromium can subsequently
+    // request its favicon without fetch metadata; preserve that request, but do not mislabel it as a page navigation.
+    const browserFavicon = browserFaviconEvidence(name, outside, gateway.url);
+    if (prefix && outside.length && !browserFavicon) {
+      const completeRefusal = outside.every(entry => {
+        const [method, path] = entry.split(" ", 2);
+        return gateway.requests().some(request => request.method === method && request.path === path && request.status === 404 && request.complete === true && !request.upstreamError);
+      });
+      if (!completeRefusal) result = { ...result, ok: false, error: result.error ?? `Requests left the prefix: ${outside.slice(0, 5).join(", ")}` };
+    }
     result = { ...result, outsidePrefix: outside, otherLocalRequests: gateway.strangers(), gatewayRequests: gateway.requests(), otherGatewayEvidence: otherGateway ? { outside: otherGateway.outside(), otherLocalRequests: otherGateway.strangers(), requests: otherGateway.requests() } : undefined, headless, hubStartMs: hub.startMs, hubStartAttempts: hub.attempts };
     const gatewayFailure = gatewayEvidenceFailure(result);
     if (gatewayFailure) result = { ...result, ok: false, error: result.error ?? gatewayFailure };

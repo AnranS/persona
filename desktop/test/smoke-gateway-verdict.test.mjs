@@ -27,9 +27,23 @@ test("incomplete, malformed and failed gateway requests fail closed", () => {
   ]) assert.match(gatewayEvidenceFailure({ gatewayRequests: [request] }), /gateway request failed/);
 });
 
-test("unexpected local and second-gateway failures affect the verdict", () => {
-  assert.match(gatewayEvidenceFailure({ otherLocalRequests: ["GET /persona/private-local-path (request)"] }), /unattributed local requests/);
-  assert.match(gatewayEvidenceFailure({ otherGatewayEvidence: { otherLocalRequests: ["GET /unexpected (request)"], requests: [] } }), /second gateway/);
+test("ordinary prefix escapes require a complete refusal, never an accepted page", () => {
+  const outsidePrefix = ["GET /outside (request)"];
+  assert.equal(gatewayEvidenceFailure({ outsidePrefix, gatewayRequests: [{ method: "GET", path: "/outside", status: 404, complete: true }] }), undefined);
+  assert.match(gatewayEvidenceFailure({ outsidePrefix, gatewayRequests: [{ method: "GET", path: "/outside", status: 200, complete: true }] }), /not completely refused/);
+  assert.match(gatewayEvidenceFailure({ outsidePrefix, gatewayRequests: [{ method: "GET", path: "/outside", status: 404, complete: false }] }), /not completely refused/);
+});
+
+test("client cancellation is distinct from upstream failure", () => {
+  const cancelled = { method: "GET", path: "/api/v1/models", status: "client-aborted", clientAborted: true, complete: false };
+  assert.equal(gatewayEvidenceFailure({ gatewayRequests: [cancelled] }), undefined);
+  assert.equal(gatewayEvidenceFailure({ otherGatewayEvidence: { requests: [cancelled] } }), undefined);
+  assert.match(gatewayEvidenceFailure({ gatewayRequests: [{ ...cancelled, upstreamError: "socket hang up" }] }), /gateway request failed/);
+});
+
+test("metadata-free traffic stays diagnostic, not proof of another local process", () => {
+  assert.equal(gatewayEvidenceFailure({ otherLocalRequests: ["GET / (request)"], gatewayRequests: [{ method: "GET", path: "/", status: 200, complete: true }] }), undefined);
+  assert.equal(gatewayEvidenceFailure({ otherGatewayEvidence: { otherLocalRequests: ["GET / (request)"], requests: [{ method: "GET", path: "/", status: 200, complete: true }] } }), undefined);
 });
 
 test("gateway verdict failures retain their diagnostic text", () => {

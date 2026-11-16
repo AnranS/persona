@@ -2,61 +2,55 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { dirname, posix, relative, resolve, sep } from "node:path";
+import { dirname, posix, relative, resolve, sep, win32 } from "node:path";
 
 export const PAIR_INPUT = "persona://link?";
 export const SERVICE_SENTINEL = "real Link smoke: systemctl access is unavailable";
 
 function windowsComparable(value) {
-  const text = String(value).replace(/^\\\\[?.]\\(?:UNC\\)?/i, match => match.toLowerCase().startsWith("\\\\?\\unc\\") ? "//" : "").replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").replaceAll("/", "\\");
-  return text.replaceAll("\\", "/");
+  const text = String(value).replace(/^\\\\[?.]\\(?:UNC\\)?/i, match => match.toLowerCase().startsWith("\\\\?\\unc\\") ? "//" : "").replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "");
+  return text;
+}
+
+function windowsComparablePath(value) {
+  return windowsComparable(value).replaceAll("\\", "/");
+}
+
+function trimWindowsTrailing(value) {
+  return /^[A-Za-z]:[\\/]?$/.test(value) ? value.slice(0, 2).toLowerCase() + "\\" : value.replace(/[\\/]+$/, "");
+}
+
+function trimPosixTrailing(value) {
+  return value.replace(/\/+$/, "") || "/";
 }
 
 /**
- * Path redaction safety contract (explicit, bounded; replaces the previous incremental scanner):
- *
- * - Only real descendants of an explicitly attributed root survive as `<run>/…`.
- *   Roots: POSIX absolute paths, `C:\…` drives, `\\server\share\…` UNC.
- * - Namespace (`\\?\`, `//?/`) input is normalized before classification; when the
- *   normalized form is unambiguously under the run root it is preserved, otherwise
- *   the whole token becomes `<path>`.
- * - Ambiguous, unresolved, sparse-separator, mismatched-UNC or drive-relative
- *   inputs collapse to `<path>`. No private path, sibling, or namespace device
- *   path may leak.
- * - Non-path diagnostic text (e.g. `detail=keep`, ` unexpected exception`) is
- *   preserved. Path tokens are terminated by structural separators
- *   (`"'`, backtick, `;`, newlines, `[`, `]`), not by spaces or commas: a
- *   space or comma that continues an unambiguous owned path stays inside the
- *   replacement; one that would extend an outside path is treated as ordinary
- *   evidence text.
- *
+ * Path redaction safety contract: only descendants of an explicitly attributed absolute root survive. Windows drives,
+ * UNC, namespace and POSIX roots are compared in their own family; unresolved or ambiguous expressions become `<path>`.
  * Lexical identity only: this never authorizes recursive deletion through symlinks.
  */
 export function classifyOwnedPath(run, candidate) {
   if (typeof run !== "string" || typeof candidate !== "string") return "outside";
-  // An embedded `//?/` or `//./` namespace device after the leading prefix is a
-  // separate, unowned path that happens to follow an owned one; it must not be
-  // treated as an owned descendant. A leading `//?/` is the candidate's own
-  // namespace prefix and is normalized below.
   const embedded = candidate.slice(1).includes("//?/") || candidate.slice(1).includes("//./");
   if (embedded) return "outside";
   const windows = value => /^(?:[A-Za-z]:[\\/]|\\\\|\/\/[?.]\/)/.test(value) && !/^\/\/[?.]\/UNC\//i.test(value);
   const unc = value => /^\/\/[^/]+[\\/][^/]+[\\/]/.test(value) && !/^\/\/[?.]\//.test(value);
   const uncNamespace = value => /^\/\/[?.]\/UNC\//i.test(value);
-  // A UNC namespace path and a plain UNC path are the same ownership family.
   if (windows(run) !== windows(candidate) || (unc(run) !== unc(candidate) && !(uncNamespace(run) && unc(candidate)) && !(unc(run) && uncNamespace(candidate)))) return "outside";
   if (windows(run) || windows(candidate) || unc(run) || unc(candidate) || uncNamespace(run) || uncNamespace(candidate)) {
-    const root = windowsComparable(run).replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").toLowerCase();
-    const path = windowsComparable(candidate).replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").toLowerCase();
-    if (root === path) return "root";
-    return path.startsWith(root.endsWith("/") ? root : `${root}/`) ? "descendant" : "outside";
+    const rootPath = trimWindowsTrailing(windowsComparable(run)).toLowerCase();
+    const path = trimWindowsTrailing(win32.resolve(windowsComparable(candidate))).toLowerCase();
+    const descendant = win32.relative(rootPath, path);
+    if (descendant === "") return "root";
+    if (descendant === ".." || descendant.startsWith(`..${win32.sep}`) || win32.isAbsolute(descendant)) return "outside";
+    return "descendant";
   }
   if (!run.startsWith(sep) || !candidate.startsWith(sep)) return "outside";
-  // A semicolon is a shell command separator, not a filename character in this
-  // receipt contract. Any path expression containing it is unowned evidence.
-  if (candidate.includes(";")) return "outside";
-  const descendant = relative(resolve(run), resolve(candidate));
-  if (descendant === "") return "root";
+  if (candidate.includes(";") || candidate.split("/").includes("..")) return "outside";
+  const root = trimPosixTrailing(resolve(run));
+  const normalized = trimPosixTrailing(resolve(candidate));
+  if (root === normalized) return "root";
+  const descendant = relative(root, normalized);
   if (descendant === ".." || descendant.startsWith(`..${sep}`) || descendant.startsWith(sep)) return "outside";
   return "descendant";
 }
@@ -73,12 +67,26 @@ export function redactPaths(run, paths = []) {
     let replacement = "<path>";
     if (kind === "root") replacement = "<run>";
     else if (kind === "descendant") {
-      const root = trimTrailing(windowsComparable(run));
-      const rest = trimTrailing(windowsComparable(path)).slice(root.length).replace(/^\/+/, "");
+      const root = trimWindowsTrailing(windowsComparable(run));
+      const normalized = trimWindowsTrailing(windowsComparable(path));
+      const rest = windowsComparablePath(normalized).slice(root.length).replace(/^\/+/, "");
       replacement = `<run>/${rest}`;
     }
     return { path, replacement };
   });
+}
+
+function ownedReplacement(run, candidate) {
+  const kind = classifyOwnedPath(run, candidate);
+  if (kind === "root") return "<run>";
+  if (kind !== "descendant") return undefined;
+  if (candidate.includes(";") || /(^|[\\/])\.\.([\\/]|$)/.test(candidate)) return undefined;
+  if (/^[A-Za-z]:[\\/]|^\\\\|^\/{2}/.test(candidate)) {
+    const rootPath = trimWindowsTrailing(windowsComparable(run)).toLowerCase();
+    const path = trimWindowsTrailing(win32.resolve(windowsComparable(candidate)));
+    return `<run>/${windowsComparablePath(path).slice(rootPath.length).replace(/^\/+/, "")}`;
+  }
+  return `<run>/${relative(trimPosixTrailing(resolve(run)), trimPosixTrailing(resolve(candidate)))}`;
 }
 
 /**
@@ -89,7 +97,7 @@ function redactOnePath(text, run) {
   // Structural separators always end a path token. Spaces and commas may be
   // ordinary filename characters; they are handled below by checking whether
   // the text after them continues the path or starts a new token.
-  const terminator = /[\r\n"'`;]/;
+  const terminator = /[\r\n"'`;]|[,;](?=\s)/;
   const isWindowsRoot = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(run);
   const windowsToken = /^(?:\\\\[?.]\\|\/\/[?.]\/|[A-Za-z]:[\\/]|[A-Za-z]:[^/\\]+\\|\\\\|\/\/[^/]+[\\/])/.exec(text);
   let tokenText;
@@ -129,24 +137,18 @@ function redactOnePath(text, run) {
 
   const raw = trimTrailing(tokenText);
   if (!raw) return { replacement: tokenText, consumed: tokenText.length };
-  // Receipt punctuation (`root,`, `root:`, `root;`) is not part of the path.
-  // Strip it for classification and emit it after the replacement.
-  const core = raw.replace(/[,:]+$/, "");
-  const suffix = raw.slice(core.length);
+  // `next=<run>,` is a field boundary, not a semicolon inside a shell expression. Strip receipt punctuation before
+  // ownership classification so a following comma/semicolon cannot turn the next Windows path into unowned evidence.
+  const boundarySuffix = /^[;,]+/.exec(text.slice(tokenText.length))?.[0] ?? "";
+  const core = trimTrailing(raw).replace(/[,:]+$/, "");
+  const suffix = raw.slice(core.length) + boundarySuffix;
   const kind = classifyOwnedPath(run, core);
-
   if (kind === "root" || kind === "descendant") {
-    // The core path is owned. Extend over spaces/commas only while the result
-    // remains unambiguously under the run root (e.g. `run/Private,Customer/x`).
-    // A following absolute path token is never part of this one: it is the next
-    // diagnostic field and must be redacted separately.
     let extended = tokenText;
     for (;;) {
-      const match = /^[ ,]([^\s"'`;,\[\]]+)/.exec(text.slice(extended.length));
+      const match = /^[ ,;]([^\s"'`;,\[\]]+)/.exec(text.slice(extended.length));
       if (!match) break;
       if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(match[1])) break;
-      // Do not extend into a suffix that repeats the run root: that is a new
-      // path field, not a filename component of the current one.
       if (match[1].includes(run)) break;
       const candidate = trimTrailing(extended + match[0]);
       const candidateCore = candidate.replace(/[,:]+$/, "");
@@ -155,12 +157,8 @@ function redactOnePath(text, run) {
     }
     const extendedRaw = trimTrailing(extended);
     const extendedCore = extendedRaw.replace(/[,:]+$/, "");
-    const extendedSuffix = extendedRaw.slice(extendedCore.length);
-    if (classifyOwnedPath(run, extendedCore) === "root") return { replacement: `<run>${extendedSuffix}`, consumed: extended.length };
-    const normalizedRoot = trimTrailing(windowsComparable(run));
-    const normalized = trimTrailing(windowsComparable(extendedCore));
-    const rest = normalized.slice(normalizedRoot.length).replace(/^\/+/, "");
-    return { replacement: `<run>/${rest}${extendedSuffix}`, consumed: extended.length };
+    const extendedSuffix = extendedRaw.slice(extendedCore.length) + boundarySuffix;
+    return { replacement: `${ownedReplacement(run, extendedCore)}${extendedSuffix}`, consumed: extended.length + boundarySuffix.length };
   }
 
   // The path is outside the run root. A drive/UNC/namespace token is wholly
@@ -183,11 +181,14 @@ function redactOnePath(text, run) {
     const next = /^[ ]([^\s"'`;,\[\]]+)/.exec(text.slice(extended.length));
     if (!next) break;
     if (/^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/.test(next[1])) break;
+    // A diagnostic field or an explicit error phrase is evidence, not a filename suffix. Stop before consuming it.
     if (/^[A-Za-z][\w.-]*=/.test(next[1])) break;
     if (/^(?:failed|error|cannot|denied|unexpected)\b/i.test(next[1])) break;
     if (next[1].startsWith("/")) break;
     extended += next[0];
   }
+  if (ownedReplacement(run, extended)) return { replacement: ownedReplacement(run, extended), consumed: extended.length };
+  if (classifyOwnedPath(run, extended) !== "outside") return { replacement: "<path>", consumed: extended.length };
   const diagnostics = /[\s,](?=[A-Za-z][\w.-]*=|(?:failed|error|cannot|denied|unexpected)\b)/i;
   const match = diagnostics.exec(extended);
   return { replacement: "<path>", consumed: match ? match.index : extended.length };
@@ -212,9 +213,6 @@ export function sanitize(value, run, paths = []) {
     .replace(/(?:persona|jarvis):\/\/(?:link|pair)\?[^\s"']*/gi, "<pairing-link>");
   text = redactPathString(text, run)
     .replace(/\b(?:PERSONA_|JARVIS_)?[A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|CODE|FP)=\S+/g, match => `${match.slice(0, match.indexOf("=") + 1)}<redacted>`)
-    .replace(/([?&](?:token|code|fp|password)=)[^\s&"']*/gi, "$1<redacted>")
-    .replace(/Bearer\s+[\x21-\x7e]+/g, "Bearer <redacted>")
-    .replace(/(?:persona|jarvis):\/\/(?:link|pair)\?[^\s"']*/gi, "<pairing-link>")
     .replace(/([?&](?:token|code|fp|password)=)[^\s&"']*/gi, "$1<redacted>")
     .replace(/Bearer\s+[\x21-\x7e]+/g, "Bearer <redacted>");
   if (text.length > 128 * 1024) {
@@ -449,8 +447,7 @@ export function runCaptured(executable, args, options = {}) {
       if (settled) return;
       settled = true;
       for (const timer of [terminateTimer, killTimer, closeTimer]) clearTimeout(timer);
-      let group = { groupEmpty: false, error: platform() === "linux" ? "group observation not completed" : "owned process-group observation is unavailable on this platform" };
-      if (platform() === "linux") group = await observeOwnedGroup(child, closeGrace);
+      const group = await observeOwnedGroup(child, closeGrace);
       const groupError = group.error ?? (group.groupEmpty ? undefined : "owned process group was not observed empty");
       escalationError = [escalationError, groupError].filter(Boolean).join("; ") || undefined;
       resolve({ executable, args: [...args], pid: child.pid, code, signal, error, spawnError, stdinError, timedOut, closeTimedOut, escalationError, closed: !closeTimedOut, groupEmpty: group.groupEmpty === true, group: { groupEmpty: group.groupEmpty === true, remaining: group.remaining, error: group.error }, stdout, stderr, startedAt, endedAt: new Date().toISOString() });

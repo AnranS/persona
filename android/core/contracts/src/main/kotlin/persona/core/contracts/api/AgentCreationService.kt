@@ -65,6 +65,9 @@ interface AgentCreationService {
      * choice: empty from an older hub (404) and on any failure, which then shows no choice.
      */
     suspend fun workspaces(machineId: String): List<AgentWorkspace> = emptyList()
+
+    /** A catalog refresh for an existing list: failures propagate so a transient outage cannot clear native pins. */
+    suspend fun workspaceCatalog(machineId: String): List<AgentWorkspace> = workspaces(machineId)
 }
 
 /**
@@ -92,6 +95,8 @@ data class AgentWorkspace(
     val online: Boolean? = null,
     val available: Boolean? = null,
     val owned: Boolean? = null,
+    /** The source's workspace pin, independent of Persona's session/project preferences. */
+    @SerialName("pinned_at") val pinnedAt: String? = null,
 )
 
 /**
@@ -113,9 +118,17 @@ data class WorktreeStatus(
     val unmerged: Int = 0,
 )
 
-/** What `worktree/add` made: the checkout the agent starts in. */
+/**
+ * What `worktree/add` made: the checkout the agent starts in, and [workspaceId] the workspace a runtime engine made for
+ * it (Paseo, #8856), which the start goes into; null for a worktree a terminal host makes, or from an older node.
+ */
 @Serializable
-data class WorktreeAdded(val path: String, val branch: String = "", val root: String? = null)
+data class WorktreeAdded(
+    val path: String,
+    val branch: String = "",
+    val root: String? = null,
+    @SerialName("workspace_id") val workspaceId: String? = null,
+)
 
 /** What `worktree/remove` did. */
 @Serializable
