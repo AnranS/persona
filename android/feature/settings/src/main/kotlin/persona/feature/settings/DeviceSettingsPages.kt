@@ -31,16 +31,17 @@ internal fun DevicesPage(
     val features = LocalHubFeatures.current
     val feedback = LocalAppFeedback.current
     val context = LocalContext.current
+    var loginRequest by remember { mutableStateOf<BrowserLoginRequest?>(null) }
     val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
         result.contents?.let { value ->
-            val uri = android.net.Uri.parse(value)
-            if (uri.scheme == "persona" && uri.host == "browser-login") {
-                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri).setPackage(context.packageName))
-            } else { feedback?.notice(context.getString(R.string.settings_browser_login_invalid)) }
+            val request = browserLoginRequest(value)
+            if (request != null) loginRequest = request
+            else feedback?.notice(context.getString(R.string.settings_browser_login_invalid))
         }
     }
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
+    loginRequest?.let { request -> if (connect != null) BrowserLoginApproval(connect, request, scope) { loginRequest = null } }
     var pending by remember { mutableStateOf<PairedDevice?>(null) }
     var connecting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(controller) { if (available) controller.loadDevices() }

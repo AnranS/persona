@@ -27,5 +27,6 @@
   "qr_scanned": "已扫码，请在手机上确认",
   "qr_hint": "在已登录的 Persona 手机 App 中扫码，确认后此浏览器将自动登录。二维码有效期为 5 分钟。",
   "qr_refresh": "刷新二维码",
-  "qr_alternatives": "其他登录方式"
+  "qr_alternatives": "其他登录方式",
+  "qr_retry": "正在重连，登录请求已保留…"
 }

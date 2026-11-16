@@ -27,5 +27,6 @@
   "qr_scanned": "Scanned. Confirm on your phone.",
   "qr_hint": "Scan in the signed-in Persona phone app, then confirm to sign in here. The code expires in 5 minutes.",
   "qr_refresh": "Refresh code",
-  "qr_alternatives": "Other ways to sign in"
+  "qr_alternatives": "Other ways to sign in",
+  "qr_retry": "Reconnecting… Your sign-in request is kept."
 }

@@ -12,14 +12,23 @@ let root: Root, host: HTMLDivElement;
 let status = "pending";
 let pollCount = 0;
 let starts = 0;
+let clockOffset = 0;
+let pollFailure: "" | "network" | "503" = "";
+let pollBodies: string[] = [];
 let onDone = vi.fn<() => void>();
 const reply = (data: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
 beforeEach(() => {
- vi.useFakeTimers(); fake.paired.mockReset(); status = "pending"; pollCount = 0; starts = 0; onDone = vi.fn<() => void>();
+ vi.useFakeTimers(); fake.paired.mockReset(); status = "pending"; pollCount = 0; starts = 0; clockOffset = 0; pollFailure = ""; pollBodies = []; onDone = vi.fn<() => void>();
  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
- vi.stubGlobal("fetch", vi.fn((url: string) => {
-  if (url.endsWith("/start")) { starts++; return reply({ id: `request-${starts}`, secret: "browser-only", expires_at: new Date(Date.now()+300000).toISOString(), qr: { rows: ["1"] } }); }
+ vi.stubGlobal("fetch", vi.fn((url: string, options: RequestInit) => {
+  if (url.endsWith("/start")) { starts++; return reply({ id: `request-${starts}`, secret: "browser-only", expires_at: new Date(Date.now()+clockOffset+300000).toISOString(), qr: { rows: ["1"] } }); }
   pollCount++;
+  pollBodies.push(String(options.body));
+  if (pollFailure) {
+    const failure = pollFailure; pollFailure = "";
+    return failure === "network" ? Promise.reject(new TypeError("fixture lost response")) : Promise.resolve({ok:false,status:503,json:()=>Promise.resolve({})});
+  }
+  if (status === "expired") return Promise.resolve({ ok:false, status:410, json:() => Promise.resolve({}) });
   return reply(status === "approved" ? { state: status, token: "device-token", id: "device-id" } : { state: status });
  }));
  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -44,5 +53,20 @@ it("pauses network polling while hidden and refuses an expired code", async () =
  await mount(); const n = pollCount;
  Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
  await tick(6000); expect(pollCount).toBe(n);
- await tick(300000); expect(host.textContent).toContain(t("login.qr_expired")); expect(fake.paired).not.toHaveBeenCalled();
+ status = "expired";
+ Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+ await tick(); expect(host.textContent).toContain(t("login.qr_expired")); expect(fake.paired).not.toHaveBeenCalled();
+});
+
+it("uses the hub expiry response even when the browser clock is ahead", async () => {
+ clockOffset = -360000; await mount();
+ expect(pollCount).toBe(1); expect(host.textContent).not.toContain(t("login.qr_expired"));
+ status = "expired"; await tick(); expect(host.textContent).toContain(t("login.qr_expired"));
+});
+
+it.each(["network", "503"] as const)("retries the same approved challenge after %s failure", async (failure) => {
+ status = "approved"; pollFailure = failure; await mount();
+ expect(fake.paired).not.toHaveBeenCalled(); expect(host.textContent).toContain(t("login.qr_retry"));
+ await tick(3000); expect(starts).toBe(1); expect(pollBodies).toHaveLength(2); expect(pollBodies[0]).toBe(pollBodies[1]);
+ expect(fake.paired).toHaveBeenCalledExactlyOnceWith("device-token", "device-id");
 });

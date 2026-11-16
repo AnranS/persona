@@ -8,6 +8,10 @@ import { Button, Spinner } from "../ui/atoms";
 const QRCode = lazy(() => import("./settings/LoginSteps").then((m) => ({ default: m.QRCode })));
 type Challenge = { id: string; secret: string; expires_at: string; qr: { rows: string[] } };
 
+class BrowserLoginRequestError extends Error {
+  constructor(readonly status: number) { super(status === 410 ? t("login.qr_expired") : t("login.qr_failed")); }
+}
+
 export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
   const [generation, refresh] = useState(0);
   const [challenge, setChallenge] = useState<Challenge>();
@@ -22,7 +26,7 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body), signal: controller.signal, cache: "no-store",
       });
-      if (!response.ok) throw new Error(response.status === 410 ? t("login.qr_expired") : t("login.qr_failed"));
+      if (!response.ok) throw new BrowserLoginRequestError(response.status);
       return response.json();
     }
     function failed(err: unknown) {
@@ -31,7 +35,6 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
     }
     async function poll(c: Challenge) {
       if (controller.signal.aborted || done) return;
-      if (Date.now() >= Date.parse(c.expires_at)) { setState("expired"); done = true; return; }
       if (document.visibilityState !== "hidden") {
         try {
           const result = await request<{ state: string; token?: string; id?: string }>("poll", { id: c.id, secret: c.secret });
@@ -41,7 +44,14 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
             done = true; setPairedToken(result.token, result.id); onDone(); return;
           }
           if (result.state === "denied") { done = true; return; }
-        } catch (err) { failed(err); return; }
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          if (err instanceof TypeError || err instanceof BrowserLoginRequestError && (err.status >= 500 || err.status === 429)) {
+            setState("retrying");
+            timer = setTimeout(() => void poll(c), 3000);
+          } else failed(err);
+          return;
+        }
       }
       timer = setTimeout(() => void poll(c), 1500);
     }
@@ -59,7 +69,7 @@ export function BrowserLoginQR({ onDone }: { onDone: () => void }) {
       {state === "loading" ? <Spinner /> : challenge && !ended ? <Suspense fallback={<Spinner />}><QRCode rows={challenge.qr.rows} label={t("login.phone_title")} /></Suspense> : null}
       {ended && <p className="text-[13px] text-ink-2">{error || t(state === "denied" ? "login.qr_denied" : "login.qr_expired")}</p>}
     </div>
-    <p className="text-[13px] text-ink-2" role="status">{t(state === "scanned" ? "login.qr_scanned" : "login.qr_hint")}</p>
+    <p className="text-[13px] text-ink-2" role="status">{t(state === "scanned" ? "login.qr_scanned" : state === "retrying" ? "login.qr_retry" : "login.qr_hint")}</p>
     <Button tone="secondary" type="button" className="mt-3" onClick={() => refresh((n) => n + 1)}>{t("login.qr_refresh")}</Button>
   </section>;
 }

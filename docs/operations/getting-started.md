@@ -219,3 +219,9 @@ checks the hub identity. The browser can redeem only with its separate secret; r
 a lost reply returns the same credential. Revoking the approving device before redemption
 prevents issuance. Pending handshakes are bounded and expire in memory, like password
 handshakes; a hub restart invalidates them. Issued device credentials remain in Postgres.
+
+Browser sign-in approval opens only from the Android app's Devices scanner; links
+received in a browser, chat or email do not open an authorization dialog. Check the
+request source and age on the phone before approving. The hub rejects multiline or
+non-printable browser names. Expiry is decided by the hub, so a browser clock difference
+does not shorten the code lifetime. Temporary poll failures retry the original request.

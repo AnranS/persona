@@ -1,7 +1,10 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"github.com/nwverse/persona/server/internal/db"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,4 +124,53 @@ func TestBrowserLoginRejectsCrossOriginAndPlaintext(t *testing.T) {
 		t.Fatalf("cross-origin request accepted: %d", response.Code)
 	}
 
+}
+
+type ambiguousBrowserStore struct {
+	*pairStore
+	failNext bool
+}
+
+func (s *ambiguousBrowserStore) CreateDeviceToken(ctx context.Context, token db.DeviceToken, hash string) error {
+	if err := s.pairStore.CreateDeviceToken(ctx, token, hash); err != nil {
+		return err
+	}
+	if s.failNext {
+		s.failNext = false
+		return errors.New("fixture: acknowledgement lost after commit")
+	}
+	return nil
+}
+func TestBrowserLoginAmbiguousCommit(t *testing.T) {
+	h := newTestHub(t)
+	s := &ambiguousBrowserStore{pairStore: newPairStore()}
+	h.store = s
+	mux := h.routes()
+	_, phone := call(t, mux, "POST", "/api/v1/auth/tokens", h.cfg.Token, `{"name":"Phone","kind":"phone"}`)
+	c := browserCall(t, mux, "start", "", map[string]any{"name": "Browser"}, 200)
+	browserCall(t, mux, "approve", phone["token"].(string), map[string]any{"id": c["id"], "hub": h.hubID(), "allow": true}, 200)
+	poll := map[string]any{"id": c["id"], "secret": c["secret"]}
+	s.failNext = true
+	browserCall(t, mux, "poll", "", poll, 503)
+	result := browserCall(t, mux, "poll", "", poll, 200)
+	if len(s.rows) != 2 {
+		t.Fatalf("created duplicate credentials: %d", len(s.rows))
+	}
+	if result["token"] != h.browserLogin.flows[c["id"].(string)].Token {
+		t.Fatal("credential identity changed")
+	}
+}
+func TestBrowserLoginTrustedRequestMetadata(t *testing.T) {
+	h := newTestHub(t)
+	h.store = newPairStore()
+	mux := h.routes()
+	for _, name := range []string{"Browser\nVerified", "Browser\tVerified", "Browser\u202eVerified"} {
+		browserCall(t, mux, "start", "", map[string]any{"name": name}, 400)
+	}
+	_, phone := call(t, mux, "POST", "/api/v1/auth/tokens", h.cfg.Token, `{"name":"Phone","kind":"phone"}`)
+	c := browserCall(t, mux, "start", "", map[string]any{"name": "Browser"}, 200)
+	data := browserCall(t, mux, "approve", phone["token"].(string), map[string]any{"id": c["id"], "hub": h.hubID()}, 200)
+	if data["source"] != "127.0.0.1" || data["age_seconds"].(float64) < 0 {
+		t.Fatal(data)
+	}
 }

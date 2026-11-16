@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -15,6 +16,9 @@ import (
 // Browser challenges are short-lived handshakes, like passwordLoginState. Durable
 // device credentials are issued only after approval and are stored in Postgres.
 type browserLoginFlow struct {
+	Source                                             string
+	CreatedAt                                          time.Time
+	Issued                                             bool
 	Secret, Name, State, ApproverHash, Token, DeviceID string
 	Until                                              time.Time
 }
@@ -36,7 +40,7 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 			return
 		}
 		in.Name = strings.TrimSpace(in.Name)
-		if in.Name == "" || len([]rune(in.Name)) > 80 {
+		if in.Name == "" || len([]rune(in.Name)) > 80 || strings.IndexFunc(in.Name, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
 			writeErr(w, 400, errors.New("invalid browser name"))
 			return
 		}
@@ -56,7 +60,7 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 			s.flows = map[string]*browserLoginFlow{}
 		}
 		id, secret := randomToken(), randomToken()
-		f := &browserLoginFlow{Secret: hashToken(secret), Name: in.Name, State: "pending", Until: time.Now().Add(passwordFlowLifetime)}
+		f := &browserLoginFlow{Secret: hashToken(secret), Name: in.Name, Source: remoteIP(r).String(), CreatedAt: time.Now(), State: "pending", Until: time.Now().Add(passwordFlowLifetime)}
 		link := "persona://browser-login?" + url.Values{"hub": {h.hubID()}, "request": {id}}.Encode()
 		qr, err := newQRImage(link)
 		if err != nil {
@@ -96,13 +100,23 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 			return
 		}
 		if f.Token == "" {
-			token, id := "jd_"+randomHex(24), "dev_"+randomHex(6)
-			if err := h.store.CreateDeviceToken(r.Context(), db.DeviceToken{ID: id, Name: f.Name, Kind: "web", Role: roleFull}, hashToken(token)); err != nil {
+			f.Token, f.DeviceID = "jd_"+randomHex(24), "dev_"+randomHex(6)
+		}
+		if !f.Issued {
+			// Reconcile a commit whose acknowledgement was lost using the same identity.
+			existing, err := h.store.DeviceTokenByHash(r.Context(), hashToken(f.Token))
+			if err != nil {
 				writeErr(w, 503, err)
 				return
 			}
-			f.Token, f.DeviceID = token, id
-			h.notifyPairing(f.Name, id)
+			if existing == nil {
+				if err := h.store.CreateDeviceToken(r.Context(), db.DeviceToken{ID: f.DeviceID, Name: f.Name, Kind: "web", Role: roleFull}, hashToken(f.Token)); err != nil {
+					writeErr(w, 503, err)
+					return
+				}
+			}
+			f.Issued = true
+			h.notifyPairing(f.Name, f.DeviceID)
 		}
 		// The same browser can retry a lost response without creating another device.
 		writeJSON(w, map[string]any{"state": "approved", "token": f.Token, "id": f.DeviceID})
@@ -146,7 +160,7 @@ func (h *Hub) browserLoginRoutes(mux *http.ServeMux) {
 		} else if f.State == "pending" {
 			f.State = "scanned"
 		}
-		writeJSON(w, map[string]any{"name": f.Name, "state": f.State, "expires_at": f.Until})
+		writeJSON(w, map[string]any{"name": f.Name, "state": f.State, "expires_at": f.Until, "source": f.Source, "age_seconds": int(time.Since(f.CreatedAt).Seconds())})
 	})
 	routes.Handle("POST /api/v1/auth/browser-login/approve", h.gate(h.auth(approval)))
 	mux.Handle("/api/v1/auth/browser-login/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
