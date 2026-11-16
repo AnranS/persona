@@ -70,6 +70,8 @@ class ManyPairsTests(unittest.TestCase):
         for r in first["related"]:
             self.assertEqual(r["title"], by_id[r["id"]]["title"])
         self.assertEqual([x["id"] for x in many(self.items) if x.get("related")], ["many:action:0"])
+        # an event (it has a chain), so its page draws the Related line
+        self.assertEqual([c["kind"] for c in first["chain"]], ["received"])
 
     def test_ids_are_unique(self):
         ids = [x["id"] for x in self.items]

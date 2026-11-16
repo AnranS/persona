@@ -103,8 +103,11 @@ try {
       await p.waitForTimeout(200);
       assert.equal(await p.locator("[data-inbox-bar]").evaluate((el) => el.getBoundingClientRect().top), top, `${tag}: the bar stays in sight`);
       await shot(p, `bar-needs-you-scrolled-${tag}`);
-      const allAt = () => p.locator('[data-bar-choice="all"]').evaluate((el) => Math.round(el.getBoundingClientRect().left));
+      // where All and the grouping's place are: the chosen pill's heavier words may move All by a fraction of a px
+      const allAt = () => p.locator('[data-bar-choice="all"]').evaluate((el) => el.getBoundingClientRect().left);
+      const groupingAt = () => p.locator("[data-bar-grouping]").evaluate((el) => el.getBoundingClientRect().left);
       const allX = await allAt();
+      const groupingX = await groupingAt();
       for (const id of ["working", "fyi", "done"]) {
         await p.locator(`[data-bar-choice="${id}"]`).click();
         await p.waitForTimeout(400);
@@ -114,7 +117,8 @@ try {
         // the grouping is hidden where the choice isn't grouped, its place kept, so All doesn't move between choices
         fits(`${tag} ${id}`, await barShape(p));
         assert.equal(await p.locator('[data-inbox-bar] button[aria-label="Group by"]').isVisible(), id === "fyi", `${tag}: ${id}'s grouping`);
-        assert.equal(await allAt(), allX, `${tag}: ${id} leaves All in place`);
+        assert.equal(await groupingAt(), groupingX, `${tag}: ${id} keeps the grouping's place`);
+        assert.ok(Math.abs((await allAt()) - allX) < 1.5, `${tag}: ${id} leaves All in place`);
         await shot(p, `bar-${id}-${tag}`);
       }
       await p.locator('[data-bar-choice="all"]').click();
