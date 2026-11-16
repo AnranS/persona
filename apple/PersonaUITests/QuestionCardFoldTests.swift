@@ -125,7 +125,15 @@ final class QuestionCardFoldTests: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
         settle(0.8)
         let after = strip(top, bottom, card)
-        XCTAssertNotEqual(before, after, "\(step): a drag over the conversation (\(Int(top))…\(Int(bottom))) did not move it", file: file, line: line)
+        let moved = { XCTAssertNotEqual(before, after, "\(step): a drag over the conversation (\(Int(top))…\(Int(bottom))) did not move it",
+                                        file: file, line: line) }
+        // XCUITest's drags never reach the chat's list on the open iPhone Duo simulator, card or not (seen before #9392,
+        // the app responsive): there the room over the card is checked (`assertInPage`) and the drag on iPad and iPhone.
+        if ProcessInfo.processInfo.environment["PERSONA_DRAGS_UNSUPPORTED"] != nil {
+            XCTExpectFailure("XCUITest drags do not scroll the chat on the open iPhone Duo simulator", strict: false, failingBlock: moved)
+        } else {
+            moved()
+        }
     }
 
     /// The report's case: a task's question in Persona's conversation, light and dark. It is capped under the top bar with
