@@ -429,6 +429,33 @@ nonisolated struct DecisionReview: Codable, Hashable, Sendable {
     var dismissed: Bool { !(dismissalID ?? "").isEmpty }
 }
 
+/// What the hub last read of one pull request (`pr_status` / `other_prs`, docs/protocol/protocol.md "Tasks and the chat feed").
+nonisolated struct TodoPRStatus: Codable, Hashable, Sendable {
+    var url: String
+    var state: String
+    var draft: Bool
+    var review: String
+    var checks: String
+    var conflicts: Bool
+    var checkedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case url, state, draft, review, checks, conflicts
+        case checkedAt = "checked_at"
+    }
+
+    init(url: String, state: String = "open", draft: Bool = false, review: String = "pending", checks: String = "none",
+         conflicts: Bool = false, checkedAt: String? = nil) {
+        self.url = url
+        self.state = state
+        self.draft = draft
+        self.review = review
+        self.checks = checks
+        self.conflicts = conflicts
+        self.checkedAt = checkedAt
+    }
+}
+
 /// A todo (docs/assistant/todos.md); a task is one whose `origin` is an assistant conversation.
 nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     nonisolated struct Space: Codable, Hashable, Sendable {
@@ -495,6 +522,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var stage: String?
     /// The pull request its work is in (`pr_url`, #2768); nil from a hub without it.
     var prURL: String?
+    /// Fresh hub-read facts for the current PR and earlier PRs of the same task (#7935).
+    var prStatus: TodoPRStatus?
+    var otherPRs: [TodoPRStatus]?
     /// Started from the main conversation while Notify Main-Chat Tasks Only in the Main Chat was on (#1731, fixed when the hub made it):
     /// the main conversation tells the user about it, nothing else does (the island, notifications, badges, the watch).
     /// Its card in the conversation shows as always. False from a hub without it.
@@ -537,13 +567,14 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         case decisionReview = "decision_review"
         case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", seenAt = "seen_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", cancelledAt = "cancelled_at", cancelledReason = "cancelled_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
-             remindAt = "remind_at", remindedAt = "reminded_at"
+             prStatus = "pr_status", otherPRs = "other_prs", remindAt = "remind_at", remindedAt = "reminded_at"
     }
 
     init(id: String, title: String, notes: String? = nil, doneAt: Date? = nil, createdAt: Date? = nil, updatedAt: Date? = nil,
          origin: String? = nil, planID: String? = nil, startError: String? = nil, doneBy: String? = nil, doneReason: String? = nil,
          cancelledAt: Date? = nil, cancelledReason: String? = nil,
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
+         prStatus: TodoPRStatus? = nil, otherPRs: [TodoPRStatus]? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
          remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
          delivery: TodoDelivery? = nil, lineage: [TodoLineageStep]? = nil, manager: String? = nil, seenAt: Date? = nil,
@@ -566,6 +597,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.quiet = quiet
         self.stage = stage
         self.prURL = prURL
+        self.prStatus = prStatus
+        self.otherPRs = otherPRs
         self.supervision = supervision
         self.dueAt = dueAt
         self.dueDate = dueDate
@@ -606,6 +639,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         // A hub before #2776 / #2768 sends neither: old payloads decode as before.
         stage = try c.decodeIfPresent(String.self, forKey: .stage)
         prURL = try c.decodeIfPresent(String.self, forKey: .prURL)
+        prStatus = (try? c.decodeIfPresent(TodoPRStatus.self, forKey: .prStatus)) ?? nil
+        otherPRs = (try? c.decodeIfPresent([TodoPRStatus].self, forKey: .otherPRs)) ?? nil
         // Optional and new (#3124): one that does not decode is as if there were none, never the whole todo failing.
         supervision = (try? c.decodeIfPresent(TaskSupervision.self, forKey: .supervision)) ?? nil
         // New (#1683): absent from older hubs; one that does not decode is as if there were none.

@@ -156,16 +156,37 @@ nonisolated enum TodoTriageLogic {
         return times.compactMap { $0 }.max() ?? .distantPast
     }
 
-    /// The PR its work stopped at, still to merge: the hub says the delivery stopped at a PR, or it knows a PR and no
-    /// delivery state past it.
-    static func openPR(_ todo: TodoItem) -> Bool {
-        let d = todo.delivery?.state ?? ""
-        if d == "pr" { return true }
-        return !(todo.prURL ?? "").isEmpty && (d.isEmpty || d == "none") && stageIndex(todo.stage) < stageIndex("merge")
+    /// How long hub-read PR facts remain authoritative for triage, matching the web and Android.
+    private static let prStatusFresh: TimeInterval = 15 * 60
+
+    private static func normalizedPR(_ url: String?) -> String {
+        (url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "[#?].*$", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+            .lowercased()
     }
 
-    private static let stages = ["plan", "develop", "review", "merge", "deploy", "verify"]
-    private static func stageIndex(_ stage: String?) -> Int { max(stages.firstIndex(of: stage ?? "") ?? 0, 0) }
+    /// This task's PRs whose fresh facts say open and non-draft: the current URL first, then earlier PRs (#7935).
+    static func openMergePRs(_ todo: TodoItem, now: Date) -> [TodoPRStatus] {
+        func fresh(_ facts: TodoPRStatus) -> Bool {
+            guard let checked = JSON.parseDate(facts.checkedAt ?? "") else { return false }
+            let age = now.timeIntervalSince(checked)
+            return age >= 0 && age <= prStatusFresh && facts.state == "open" && !facts.draft
+        }
+        var out: [TodoPRStatus] = []
+        if let current = todo.prStatus, let prURL = todo.prURL,
+           normalizedPR(prURL) == normalizedPR(current.url), fresh(current) {
+            out.append(current)
+        }
+        for facts in todo.otherPRs ?? [] where normalizedPR(facts.url) != normalizedPR(todo.prURL) && fresh(facts) {
+            out.append(facts)
+        }
+        return out
+    }
+
+    static func hasOpenPR(_ todo: TodoItem, now: Date) -> Bool {
+        !openMergePRs(todo, now: now).isEmpty
+    }
 
     /// A task (an agent was linked, or a conversation handed it out) with no due date ahead. The user's own to-dos
     /// without agents — reminders, errands — never shelve themselves. An open concern never shelves (#3582).
@@ -245,7 +266,7 @@ nonisolated enum TodoTriageLogic {
             || ask?.outcome == "done"
         let acceptanceRequired = !seenCanFile(todo)
         if finished, !seen(last) || acceptanceRequired { return at(.justDone, .finishedUnseen) }
-        if openPR(todo) { return at(.pr, .prOpen) }
+        if hasOpenPR(todo, now: now) { return at(.pr, .prOpen) }
         // seen since it last moved, and no PR waits on the owner; a concern is never Done while open
         if finished, !concern { return at(.done, .seen) }
         if shelvable(todo, now: now, calendar: calendar), now.timeIntervalSince(last) >= shelveAfter { return at(.shelved, .stale) }

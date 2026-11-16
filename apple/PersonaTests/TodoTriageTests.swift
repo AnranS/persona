@@ -61,6 +61,10 @@ struct TodoTriageTests {
     private func ask(_ outcome: String?, verdict: String = "v") -> TodoAsk {
         TodoAsk(outcome: outcome, verdict: verdict, recommend: nil, askedAt: ISO8601DateFormatter().string(from: ago(1)))
     }
+    private func prFacts(_ url: String, state: String = "open", draft: Bool = false,
+                         checkedHoursAgo: Double = 0) -> TodoPRStatus {
+        TodoPRStatus(url: url, state: state, draft: draft, checkedAt: ISO8601DateFormatter().string(from: ago(checkedHoursAgo)))
+    }
 
     @Test func agentAskingIsWaitingWhateverElseHolds() {
         let t = at(todo("t", agents: ["ask", "run"]))
@@ -191,7 +195,11 @@ struct TodoTriageTests {
         #expect(seen.section == .done && seen.rule == .seen)
         let movedSince = at(todo("t", agents: ["unseen"]) { $0.seenAt = ago(2) })
         #expect(movedSince.section == .justDone && movedSince.rule == .finishedUnseen)
-        let pr = at(todo("t", agents: ["unseen"]) { $0.seenAt = ago(0.5); $0.prURL = "https://example.com/pull/1" })
+        let pr = at(todo("t", agents: ["unseen"]) {
+            $0.seenAt = ago(0.5)
+            $0.prURL = "https://example.com/pull/1"
+            $0.prStatus = prFacts("https://example.com/pull/1")
+        })
         #expect(pr.section == .pr && pr.rule == .prOpen)
         // seen, it is no longer open work: every count reads it the same way
         #expect(TodoTriageLogic.bucket(todo("t", agents: ["unseen"]) { $0.seenAt = ago(0.5) }, lookup: lookup, now: now) == .closed)
@@ -220,13 +228,56 @@ struct TodoTriageTests {
         #expect(r.open == 2 && r.shelved == 0 && r.finished == 3)
     }
 
-    @Test func openPRIsPRToMergeHoweverOldMergedIsNot() {
-        #expect(at(todo("t", updated: 300, agents: ["old"]) { $0.delivery = .init(state: "pr") }).section == .pr)
-        #expect(at(todo("t", updated: 300, agents: ["old"]) { $0.prURL = "https://example.com/pull/1" }).section == .pr)
+    @Test func freshOpenPRIsPRToMergeHoweverOldMergedIsNot() {
+        #expect(at(todo("t", updated: 300, agents: ["old"]) {
+            $0.delivery = .init(state: "pr")
+            $0.prURL = "https://example.com/pull/1"
+            $0.prStatus = prFacts("https://example.com/pull/1")
+        }).section == .pr)
         #expect(at(todo("t", updated: 300, agents: ["old"]) {
             $0.prURL = "https://example.com/pull/1"
+            $0.prStatus = prFacts("https://example.com/pull/1")
+        }).section == .pr)
+        #expect(at(todo("t", updated: 300, agents: ["old"]) {
+            $0.prURL = "https://example.com/pull/1"
+            $0.prStatus = prFacts("https://example.com/pull/1", state: "merged")
             $0.delivery = .init(state: "merged")
         }).section == .shelved)
+    }
+
+    @Test func onlyFreshMatchingOpenNonDraftFactsFormPROpen() {
+        let url = "https://example.com/pull/1"
+        #expect(at(todo("open", agents: ["idle"]) {
+            $0.prURL = url
+            $0.prStatus = prFacts(url)
+        }).section == .pr)
+
+        // Absent, stale, draft, mismatched, merged and future facts never stand in for an open PR.
+        let negative: [(String, (inout TodoItem) -> Void)] = [
+            ("absent", { $0.prURL = url }),
+            ("stale", { $0.prURL = url; $0.prStatus = prFacts(url, checkedHoursAgo: 0.5) }),
+            ("draft", { $0.prURL = url; $0.prStatus = prFacts(url, draft: true) }),
+            ("mismatch", { $0.prURL = url; $0.prStatus = prFacts("https://example.com/pull/2") }),
+            ("merged", { $0.prURL = url; $0.prStatus = prFacts(url, state: "merged") }),
+            ("future", { $0.prURL = url; $0.prStatus = prFacts(url, checkedHoursAgo: -1) }),
+        ]
+        for (name, build) in negative {
+            let result = at(todo(name, agents: ["idle"], build: build))
+            #expect(result.section == .other && result.rule == .rest, "\(name) must not form pr_open")
+        }
+
+        let earlier = at(todo("earlier", agents: ["idle"]) {
+            $0.prURL = url
+            $0.prStatus = prFacts(url, state: "merged")
+            $0.otherPRs = [prFacts("https://example.com/pull/2")]
+        })
+        #expect(earlier.section == .pr && earlier.rule == .prOpen)
+        let allMerged = at(todo("all-merged", agents: ["idle"]) {
+            $0.prURL = url
+            $0.prStatus = prFacts(url, state: "merged")
+            $0.otherPRs = [prFacts("https://example.com/pull/2", state: "merged")]
+        })
+        #expect(allMerged.section == .other && allMerged.rule == .rest)
     }
 
     @Test func noMoveFor48HoursIsShelvedANewerAgentMoveKeepsIt() {
@@ -305,8 +356,14 @@ struct TodoTriageTests {
         let list = [
             todo("fix", title: "Fix #412 lost pushes", agents: ["run"]),
             todo("test", title: "#412 lost pushes: regression test", updated: 100, agents: ["old"]),
-            todo("pr-a", title: "A", updated: 120, agents: ["old2"]) { $0.prURL = "https://example.com/pull/9" },
-            todo("pr-b", title: "B", updated: 121, agents: ["old2"]) { $0.prURL = "https://example.com/pull/9/" },
+            todo("pr-a", title: "A", updated: 120, agents: ["old2"]) {
+                $0.prURL = "https://example.com/pull/9"
+                $0.prStatus = prFacts("https://example.com/pull/9")
+            },
+            todo("pr-b", title: "B", updated: 121, agents: ["old2"]) {
+                $0.prURL = "https://example.com/pull/9/"
+                $0.prStatus = prFacts("https://example.com/pull/9")
+            },
             todo("lone", title: "Something else"),
         ]
         let r = TodoTriageLogic.triageTodos(list, lookup: lookup, now: now)
@@ -527,6 +584,7 @@ extension TodoTriageTests {
         #expect(unseen.section == .justDone && unseen.rule == .finishedUnseen)
         let pr = at(todo("pr", updated: 100, agents: ["old"], kind: "concern") {
             $0.prURL = "https://example.com/pull/3582"
+            $0.prStatus = prFacts("https://example.com/pull/3582")
         })
         #expect(pr.section == .pr && pr.rule == .prOpen)
     }
@@ -671,7 +729,7 @@ extension TodoTriageTests {
 
     /// Shared case `concern_pr_open`: PR to merge / pr_open.
     @Test func sharedConcernPROpen() throws {
-        let t = try sharedAt(#"{"id":"concern-pr","title":"Answer the merge question","kind":"concern","created_at":"2026-11-01T00:00:00.000Z","updated_at":"2026-11-04T10:00:00.000Z","done_at":null,"agents":[],"origin":"main","pr_url":"https://example.com/pull/7","stage":"review"}"#)
+        let t = try sharedAt(#"{"id":"concern-pr","title":"Answer the merge question","kind":"concern","created_at":"2026-11-01T00:00:00.000Z","updated_at":"2026-11-04T10:00:00.000Z","done_at":null,"agents":[],"origin":"main","pr_url":"https://example.com/pull/7","pr_status":{"url":"https://example.com/pull/7","state":"open","draft":false,"review":"pending","checks":"none","conflicts":false,"checked_at":"2026-11-10T12:00:00Z"},"stage":"review"}"#)
         #expect(t.section == .pr && t.rule == .prOpen)
     }
 
