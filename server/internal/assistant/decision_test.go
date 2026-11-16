@@ -407,6 +407,41 @@ func TestPriorityDecisionIsTakenAtItsDefaultTime(t *testing.T) {
 	}
 }
 
+// A default recommendation at its deadline is not an explicit owner action: with no Agent it keeps the existing
+// rollback and reminder behavior instead of becoming a recorded-only success.
+func TestDefaultRecommendationWithStoppedAgentKeepsReminder(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+		t.Fatal(err)
+	}
+	a := askOf(s, todo.ID)
+	c := idleAgent(time.Now().Add(-time.Hour))
+	c.Status = proto.StatusInterrupted
+	f.setSessions("box", c)
+	sent := len(sentToAgent(f))
+	pushes := len(decidePushes(t, f))
+	pastDeadline(t, s, todo.ID)
+	s.sweepDecisionDeadlines(time.Now())
+	got := askOf(s, todo.ID)
+	if !got.AcceptedAt.IsZero() || got.ByDefault || got.DueAt.IsZero() ||
+		todoNow(s, todo.ID).Supervision.State != reviewNeedsUser || listedAsk(t, s, todo.ID) == nil ||
+		len(decidePushes(t, f)) != pushes+1 {
+		t.Fatalf("automatic default changed its reminder behavior: %+v", got)
+	}
+	if len(sentToAgent(f)) != sent {
+		t.Fatal("the stopped Agent got the default recommendation")
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if pending && g.Key == key || told {
+		t.Fatalf("the default became an owner decision: %+v", g)
+	}
+}
+
 // A decision that cannot be undone has no default: nothing is ever taken, however long it waits. After a day it goes
 // back to its supervisor once to be confirmed, and from then on it is raised to the owner again once a day.
 func TestIrreversibleDecisionIsNeverTakenAndRaisedDaily(t *testing.T) {
