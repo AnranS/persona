@@ -17,6 +17,14 @@ case "${PERSONA_APPARMOR_TEST_FAILURE:-}" in
   remove-fails) [[ "$action" == -R ]] && exit 1 ;;
   query-fails) [[ "$action" == -R ]] && exit 1 ;;
   query-empty) [[ "$action" == -a ]] && exit 0 ;;
+  query-after-load-fails)
+    if [[ "$action" == -a ]]; then
+      printf 'persona-first-run-12345-1 (unconfined)\n' >> "$PERSONA_APPARMOR_PROFILES_FILE"
+      mv -- "$PERSONA_APPARMOR_PROFILES_FILE" "$PERSONA_APPARMOR_PROFILES_FILE.contents"
+      mkdir -- "$PERSONA_APPARMOR_PROFILES_FILE"
+      exit 0
+    fi
+    ;;
 esac
 case "$action" in
   -a) printf 'persona-first-run-12345-1 (unconfined)\n' >> "$PERSONA_APPARMOR_PROFILES_FILE" ;;

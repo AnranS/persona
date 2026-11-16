@@ -1,7 +1,7 @@
 #!/bin/bash
 # Maintainer-approved, run-scoped policy for a fresh, exclusive GitHub-hosted runner; never a shared host.
 set -euo pipefail
-case "${1:?usage: load|first-run-ok|first-run-failed|cleanup}" in load|first-run-ok|first-run-failed|cleanup) ;; *) exit 2 ;; esac
+case "${1:?usage: load|first-run-ok|first-run-failed|cleanup|cleanup-owned}" in load|first-run-ok|first-run-failed|cleanup|cleanup-owned) ;; *) exit 2 ;; esac
 : "${GITHUB_WORKSPACE:?workspace required}" "${GITHUB_RUN_ID:?run id required}" "${GITHUB_RUN_ATTEMPT:?run attempt required}" "${RUNNER_TEMP:?temporary directory required}"
 [[ "${GITHUB_ACTIONS:-}" == true && "${CI:-}" == true ]] || { printf 'approved hosted CI environment required\n' >&2; exit 2; }
 [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || { printf 'invalid run id\n' >&2; exit 2; }
@@ -56,24 +56,26 @@ cleanup_fail() {
 }
 
 if [[ "$1" == load ]]; then
-  # No stale success can survive: every result path is unique and O_EXCL-published.
   python3 -I "$receipt_helper" begin-load "$name" "$RUNNER_TEMP" || exit 1
   [[ -f "$exe" && -x "$exe" && ! -L "$exe" ]] || fail missing-exact-test-executable
   [[ ! -e "$ownership" && ! -L "$ownership" ]] || fail ownership-record-already-exists
-  # Establish local pending ownership before any privileged load.
   (set -o noclobber; printf 'load-pending\n' > "$ownership") || fail ownership-record-write-failed
   state="$(query_state)" || fail profile-query-failed
   [[ "$state" == absent ]] || fail profile-already-exists
   printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' '' \
     "profile $name $exe flags=(unconfined) {" '  userns,' '}' > "$profile" || fail profile-file-write-failed
-  # Compile to an immutable binary input, then load that exact input. No cache replacement.
   apparmor_parser -Q -K -T -o "$compiled" "$profile" || fail policy-compilation-failed
   [[ -f "$compiled" && ! -L "$compiled" ]] || fail compiled-policy-not-regular
   if ! sudo apparmor_parser --abort-on-error -K -T -B -a "$compiled"; then
-    # Ambiguity is never cleaned up automatically: a partial load and a foreign entry are indistinguishable here.
+    # An ambiguous add is never removed automatically; it may be a foreign same-name entry.
     rm -f -- "$ownership" || fail load-failed-ownership-invalidation-failed
     fail load-failed-owner-review-required
   fi
+  # The approved add returned success. Any later failure can use cleanup-owned after exact identity checks.
+  printf 'load-confirmed\n' > "$ownership" || {
+    printf 'confirmed profile could not publish ownership; cleanup-owned must refuse this attempt\n' >&2
+    exit 1
+  }
   state="$(query_state)" || fail profile-query-failed-after-load
   [[ "$state" == present ]] || fail load-verification-failed
   python3 -I "$receipt_helper" load-success "$name" "$RUNNER_TEMP" || {
@@ -81,16 +83,24 @@ if [[ "$1" == load ]]; then
     exit 1
   }
 elif [[ "$1" == first-run-ok || "$1" == first-run-failed ]]; then
-  # The workflow calls this exactly once after its real first-run test, whether it passed or failed.
   outcome=failed
   if [[ "$1" == first-run-ok ]]; then outcome=passed; fi
   python3 -I "$receipt_helper" first-run-result "$name" "$RUNNER_TEMP" "$outcome"
 else
-  # Preserve the original run artifact. Cleanup cannot overwrite it.
-  python3 -I "$receipt_helper" validate-first-run-result "$name" "$RUNNER_TEMP" || {
-    printf 'cleanup refused: missing or failed run result is preserved\n' >&2
-    exit 1
-  }
+  if [[ "$1" == cleanup ]]; then
+    # The ordinary path requires an immutable result from the real first-run test.
+    python3 -I "$receipt_helper" validate-first-run-result "$name" "$RUNNER_TEMP" || {
+      printf 'cleanup refused: missing or failed run result is preserved\n' >&2
+      exit 1
+    }
+  else
+    # A missing/cancelled first-run must not fabricate a passed result just to permit cleanup.
+    # Only a confirmed add without any first-run result is eligible; ambiguous parser failures are not.
+    python3 -I "$receipt_helper" validate-owned-cleanup "$name" "$RUNNER_TEMP" "$exe" || {
+      printf 'cleanup-owned refused: confirmed ownership and an unfinished first run are required\n' >&2
+      exit 1
+    }
+  fi
   [[ -f "$ownership" && ! -L "$ownership" ]] || {
     printf 'cleanup refused: ownership record is missing\n' >&2
     exit 1
@@ -103,7 +113,10 @@ else
   state="$(query_state)" || cleanup_fail query-error profile-query-failed
   removed=already-absent
   if [[ "$state" == present ]]; then
-    [[ -f "$profile" && ! -L "$profile" ]] || cleanup_fail removal-failed profile-file-not-regular
+    [[ -f "$profile" && ! -L "$profile" && -r "$profile" ]] || cleanup_fail removal-failed profile-file-not-readable
+    if ! grep -F -x -q -- "profile $name $exe flags=(unconfined) {" "$profile"; then
+      cleanup_fail removal-failed profile-identity-mismatch
+    fi
     if ! sudo apparmor_parser --abort-on-error -R "$profile"; then
       cleanup_fail removal-failed removal-failed
     fi

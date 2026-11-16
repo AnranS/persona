@@ -94,6 +94,25 @@ def main() -> None:
         require_identity(current, name)
         if current["ok"] is not True or current.get("failure") != "" or current.get("firstRun") not in ("passed", "failed"):
             raise ValueError("cleanup requires successful load and a completed first-run result")
+    elif action == "validate-owned-cleanup":
+        current = read(run)
+        require_identity(current, name)
+        if current.get("firstRun") is not None:
+            raise ValueError("owned cleanup cannot replace a completed first-run result")
+        pending = current["ok"] is False and current.get("failure") in (
+            "load-in-progress", "profile-query-failed-after-load", "load-verification-failed")
+        loaded = current["ok"] is True and current.get("failure") == ""
+        if not pending and not loaded:
+            raise ValueError("owned cleanup requires a confirmed add, not an ambiguous parser failure")
+        marker = directory / f"{name}.ownership"
+        if not regular(marker) or marker.read_text(encoding="utf-8") != "load-confirmed\n":
+            raise ValueError("owned cleanup ownership marker does not match the receipt")
+        profile = directory / f"{name}.apparmor"
+        if not regular(profile):
+            raise ValueError("owned cleanup profile must be a regular file")
+        expected = f"profile {name} {sys.argv[4]} flags=(unconfined) {{"
+        if expected not in profile.read_text(encoding="utf-8").splitlines():
+            raise ValueError("owned cleanup profile identity does not match the run")
     elif action == "cleanup-attempt":
         # Never overwrite a prior success OR a prior specific failure.
         exclusive_json(cleanup, {"profile": name, "ok": False, "failure": "cleanup-in-progress"})

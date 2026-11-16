@@ -352,9 +352,20 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertIn('first-run-ok', record['run'])
         self.assertIn('first-run-failed', record['run'])
         self.assertIn('always()', cleanup['if'])
-        self.assertIn("steps.sandbox-load.outcome == 'success'", cleanup['if'])
-        self.assertIn("steps.first-run.outcome != 'skipped'", cleanup['if'])
+        self.assertIn("steps.sandbox-load.outcome != 'skipped'", cleanup['if'])
+        self.assertIn("steps.first-run-result.outcome != 'cancelled'", cleanup['if'])
+        self.assertIn('cleanup-owned', cleanup['run'])
         self.assertEqual(cleanup['continue-on-error'], 'true')
+        verdict = next(step for step in linux['steps'] if step.get('name') == 'Enforce packaged first-run and sandbox cleanup verdicts')
+        self.assertIn('FIRST_RUN_OUTCOME', verdict['env'])
+        self.assertIn('RECORD_OUTCOME', verdict['env'])
+        self.assertIn('CLEANUP_OUTCOME', verdict['env'])
+        self.assertIn('exit 1', verdict['run'])
+        self.assertLess(linux['steps'].index(cleanup), linux['steps'].index(verdict))
+        for upload in (step for step in linux['steps'] if step.get('uses', '').startswith('actions/upload-artifact')):
+            if upload['with']['name'].startswith('persona-desktop-linux-first-run'):
+                self.assertIn('always()', upload['if'])
+                self.assertGreater(linux['steps'].index(upload), linux['steps'].index(verdict))
         for name in ('macos', 'windows', 'update'):
             self.assertIn("inputs.acceptance != 'first-run'", workflow['jobs'][name]['if'])
         helper = (root / 'scripts/ci/desktop-first-run-apparmor.sh').read_text()

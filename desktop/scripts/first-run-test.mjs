@@ -201,7 +201,7 @@ async function fuseCheck(file) {
   need("the packaged fuses retain the security boundary", Object.values(actual).every(Boolean), actual);
 }
 async function packageCheck(file) {
-  const archive = platform === "darwin" ? join(file, "..", "..", "Resources", "app.asar") : platform === "win32" ? join(file, "..", "resources", "app.asar") : join(desktop, "release", "linux-unpacked", "resources", "app.asar");
+  const archive = appAsarPath(platform, file);
   const files = asar.listPackage(archive).map(name => `/${name.replaceAll("\\", "/").replace(/^\/+/, "")}`);
   const publicResources = ["/dist/setup/setup.html", "/dist/setup/setup.css", "/dist/setup/setup.cjs"];
   const allowed = new Set(publicResources);
@@ -414,7 +414,7 @@ async function main() {
     const archive = platform === "darwin" ? resolve(process.env.PERSONA_DESKTOP_TEST_PACKAGE) : file;
     artifactSHA256 = await sha256File(archive);
   }
-  appAsarSHA256 = await sha256File(appAsarPath(platform, file, desktop));
+  appAsarSHA256 = await sha256File(appAsarPath(platform, file));
   await fuseCheck(file);
   await packageCheck(file);
   hub = await startHub();

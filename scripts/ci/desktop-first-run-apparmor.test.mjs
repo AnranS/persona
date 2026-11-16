@@ -60,16 +60,20 @@ const fixture = async directory => {
   await chmod(exe, 0o755);
   return join(temporaryRoot, "safe-runner");
 };
-const environment = async (directory, extra = {}) => ({
-  ...process.env,
-  CI: "",
-  GITHUB_WORKSPACE: await fixture(directory),
-  GITHUB_RUN_ID: "12345",
-  GITHUB_RUN_ATTEMPT: "1",
-  RUNNER_TEMP: directory,
-  PERSONA_APPARMOR_TEST_DOUBLE: double(doubles.normal),
-  ...extra,
-});
+const environment = async (directory, extra = {}) => {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("PERSONA_APPARMOR_")) delete env[key];
+  return {
+    ...env,
+    CI: "",
+    GITHUB_WORKSPACE: await fixture(directory),
+    GITHUB_RUN_ID: "12345",
+    GITHUB_RUN_ATTEMPT: "1",
+    RUNNER_TEMP: directory,
+    PERSONA_APPARMOR_TEST_DOUBLE: double(doubles.normal),
+    ...extra,
+  };
+};
 const temporary = async (t, prefix) => {
   const directory = await mkdtemp(join(tmpdir(), `persona-7702-${prefix}-`));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -77,6 +81,106 @@ const temporary = async (t, prefix) => {
 };
 
 test.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+
+test("a confirmed add with a later verification failure permits only owned cleanup", async t => {
+  for (const failure of ["query-after-load-fails", "query-empty"]) {
+    const directory = await temporary(t, `confirmed-${failure}`);
+    const profiles = join(directory, "profiles");
+    const env = await environment(directory, { PERSONA_APPARMOR_PROFILES_FILE: profiles, PERSONA_APPARMOR_TEST_FAILURE: failure });
+    await writeFile(profiles, "unrelated-profile (enforce)\n");
+    assert.notEqual(run(["load"], { env }).code, 0);
+    assert.equal(await readFile(join(directory, `${name}.ownership`), "utf8"), "load-confirmed\n");
+    const loaded = await readReceipt(directory);
+    const expectedFailure = failure === "query-empty" ? "load-verification-failed" : "profile-query-failed-after-load";
+    assert.equal(loaded.ok, false);
+    assert.equal(loaded.failure, expectedFailure);
+    const visibleProfiles = failure === "query-empty" ? profiles : `${profiles}.contents`;
+    const expectedEntries = failure === "query-empty" ? "unrelated-profile (enforce)\n" : `unrelated-profile (enforce)\n${name} (unconfined)\n`;
+    assert.equal(await readFile(visibleProfiles, "utf8"), expectedEntries);
+    const cleaned = run(["cleanup-owned"], { env: { ...env, PERSONA_APPARMOR_PROFILES_FILE: visibleProfiles, PERSONA_APPARMOR_TEST_FAILURE: "" } });
+    assert.equal(cleaned.code, 0, cleaned.output);
+    assert.equal(await readFile(visibleProfiles, "utf8"), "unrelated-profile (enforce)\n");
+    const cleanup = await readCleanupReceipt(directory);
+    assert.equal(cleanup.ok, true);
+    assert.equal(cleanup.verifiedAbsent, true);
+    assert.equal(cleanup.removal, failure === "query-empty" ? "already-absent" : "removed");
+    assert.equal((await readReceipt(directory)).failure, expectedFailure);
+  }
+});
+
+test("missing first-run results can clean an owned load without hiding the failure", async t => {
+  const directory = await temporary(t, "cancelled-first-run");
+  const profiles = join(directory, "profiles");
+  const env = await environment(directory, { PERSONA_APPARMOR_PROFILES_FILE: profiles });
+  await writeFile(profiles, "");
+  assert.equal(run(["load"], { env }).code, 0);
+  assert.notEqual(run(["cleanup"], { env }).code, 0);
+  assert.equal(await readFile(profiles, "utf8"), `${name} (unconfined)\n`);
+  const cleaned = run(["cleanup-owned"], { env });
+  assert.equal(cleaned.code, 0, cleaned.output);
+  assert.equal(await readFile(profiles, "utf8"), "");
+  assert.equal((await readCleanupReceipt(directory)).verifiedAbsent, true);
+  assert.equal((await readReceipt(directory)).firstRun, undefined);
+  assert.equal((await readReceipt(directory)).ok, true);
+});
+
+test("cleanup-owned cannot erase a completed first-run outcome", async t => {
+  const directory = await temporary(t, "cleanup-owned-result");
+  const profiles = join(directory, "profiles");
+  const env = await environment(directory, { PERSONA_APPARMOR_PROFILES_FILE: profiles });
+  await writeFile(profiles, "");
+  assert.equal(run(["load"], { env }).code, 0);
+  assert.equal(run(["first-run-failed"], { env }).code, 0);
+  assert.notEqual(run(["cleanup-owned"], { env }).code, 0);
+  assert.equal(await readFile(profiles, "utf8"), `${name} (unconfined)\n`);
+  assert.equal((await readReceipt(directory)).firstRun, "failed");
+  assert.notEqual(run(["cleanup"], { env }).code, 0);
+  assert.equal(await readFile(profiles, "utf8"), "");
+  const cleanup = await readCleanupReceipt(directory);
+  assert.equal(cleanup.failure, "first-run-failed");
+  assert.equal(cleanup.verifiedAbsent, true);
+});
+
+test("cleanup-owned refuses failed parser loads and stale ownership or profile identity", async t => {
+  const directory = await temporary(t, "cleanup-owned-refusals");
+  const profiles = join(directory, "profiles");
+  const env = await environment(directory, { PERSONA_APPARMOR_PROFILES_FILE: profiles, PERSONA_APPARMOR_TEST_FAILURE: "load-fails" });
+  await writeFile(profiles, "");
+  assert.notEqual(run(["load"], { env }).code, 0);
+  await writeFile(profiles, `${name} (unconfined)\n`);
+  assert.notEqual(run(["cleanup-owned"], { env }).code, 0);
+  assert.equal(await readFile(profiles, "utf8"), `${name} (unconfined)\n`);
+  assert.equal((await readReceipt(directory)).failure, "load-failed-owner-review-required");
+  for (const [file, value] of [
+    [`${name}.ownership`, "load-pending\n"],
+    [`${name}.apparmor`, "profile another-name /tmp/another-executable flags=(unconfined) {\n  userns,\n}\n"],
+  ]) {
+    const caseDirectory = await temporary(t, "cleanup-owned-identity");
+    const caseProfiles = join(caseDirectory, "profiles");
+    const caseEnv = await environment(caseDirectory, { PERSONA_APPARMOR_PROFILES_FILE: caseProfiles });
+    await writeFile(caseProfiles, `${name} (unconfined)\n`);
+    await writeFile(join(caseDirectory, `${name}.run.json`), JSON.stringify({ profile: name, ok: true, failure: "" }));
+    await writeFile(join(caseDirectory, `${name}.ownership`), "load-confirmed\n");
+    await writeFile(join(caseDirectory, file), value);
+    assert.notEqual(run(["cleanup-owned"], { env: caseEnv }).code, 0);
+    assert.equal(await readFile(caseProfiles, "utf8"), `${name} (unconfined)\n`);
+  }
+});
+
+test("an unreadable profile file fails closed before owned removal", async t => {
+  const directory = await temporary(t, "unreadable-profile");
+  const profiles = join(directory, "profiles");
+  const env = await environment(directory, { PERSONA_APPARMOR_PROFILES_FILE: profiles });
+  await writeFile(profiles, "");
+  assert.equal(run(["load"], { env }).code, 0);
+  const policy = join(directory, `${name}.apparmor`);
+  await chmod(policy, 0);
+  t.after(() => chmod(policy, 0o600).catch(() => {}));
+  assert.notEqual(cleanupAfterPassed(env).code, 0);
+  assert.equal((await readCleanupReceipt(directory)).failure, "profile-file-not-readable");
+  assert.equal((await readCleanupReceipt(directory)).verifiedAbsent, false);
+  assert.equal(await readFile(profiles, "utf8"), `${name} (unconfined)\n`);
+});
 
 test("rejects path, run identity and CI injection before emitting a rule", async t => {
   const directory = await temporary(t, "injection");
@@ -96,6 +200,8 @@ test("rejects path, run identity and CI injection before emitting a rule", async
   assert.notEqual(ci.code, 0);
   assert.match(await readFile(source, "utf8"), /profiles_file=\/sys\/kernel\/security\/apparmor\/profiles/);
   assert.doesNotMatch(await readFile(source, "utf8"), /PERSONA_APPARMOR|apparmor_compile|PERSONA_APPARMOR_SUDO/);
+  const registration = await readFile(join(sourceDirectory, "desktop.sh"), "utf8");
+  assert.ok(registration.includes("node --test scripts/ci/desktop-first-run-apparmor.test.mjs"));
 });
 
 test("a foreign profile is preserved through both failed load and always-cleanup", async t => {

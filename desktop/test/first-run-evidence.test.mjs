@@ -21,7 +21,8 @@ test("first-run evidence uses the source tree and distinguishes tracked edits fr
   assert.equal(identity.sourceMatchesHead, false);
   assert.equal(identity.untrackedFilesPresent, true);
   assert.deepEqual(commands[2], ["diff", "--quiet", "HEAD", "--"]);
-  assert.equal(appAsarPath("linux", "/ignored", "/synthetic/repository/desktop"), join("/synthetic/repository/desktop", "release", "linux-unpacked", "resources", "app.asar"));
+  assert.equal(appAsarPath("linux", "/tmp/supplied/persona-desktop"), join("/tmp/supplied", "resources", "app.asar"));
+  assert.notEqual(appAsarPath("linux", "/tmp/supplied/persona-desktop"), join("/synthetic/repository/desktop", "release", "linux-unpacked", "resources", "app.asar"));
 });
 
 test("first-run evidence rejects untracked code even when tracked files match", () => {

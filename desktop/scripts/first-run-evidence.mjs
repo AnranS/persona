@@ -26,8 +26,8 @@ export function sourceIdentity(root, runGit = args => execFileSync("git", args, 
   return { sourceCommit: head, sourceTree, sourceMatchesHead: !trackedDiff && untracked.length === 0, untrackedFilesPresent: untracked.length > 0 };
 }
 
-export function appAsarPath(platform, file, desktop) {
+export function appAsarPath(platform, file) {
   if (platform === "darwin") return join(file, "..", "..", "Resources", "app.asar");
-  if (platform === "win32") return join(file, "..", "resources", "app.asar");
-  return join(desktop, "release", "linux-unpacked", "resources", "app.asar");
+  if (platform === "win32" || platform === "linux") return join(file, "..", "resources", "app.asar");
+  throw new Error(`Unsupported packaged first-run platform: ${platform}`);
 }
