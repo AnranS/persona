@@ -362,11 +362,46 @@ test("a detached descendant survives original-group observation and cannot autho
 });
 
 test("stdin failures remain observable beside a genuine child close", async () => {
-  const result = await runCaptured("/bin/sh", ["-c", "exec 0<&-; sleep 0.1"], { input: "x".repeat(128 * 1024), timeout: 2000 });
+  // Writing immediately after spawn races the shell's exec 0<&-. If the kernel buffers all 128 KiB before fd 0
+  // closes, no write fails and result.error is undefined (hosted Linux Desktop-tests runs 43801973207/43797673900).
+  // This fixture does not rely on that race. The driver starts a new Node process: a marker child proves fd 0 is
+  // closed on stdout, then the driver's fresh stdin is guaranteed to have its write end still open. Reading it and
+  // writing to a new child while the driver is still alive exercises the genuine EPIPE without inheriting an EOF'd
+  // stdin (which would make child.stdin.end return before any write reaches the kernel).
+  const script = `
+    import { spawn } from "node:child_process";
+    import { readFileSync } from "node:fs";
+    import { runCaptured } from ${JSON.stringify(new URL("./link-real-common.mjs", import.meta.url).href)};
+    const marker = spawn("/bin/sh", ["-c", "exec 0<&-; printf 'stdin closed\\\\n'; sleep 0.1"], {
+      stdio: ["pipe", "pipe", "inherit"], detached: process.platform !== "win32",
+    });
+    const result = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        try { process.kill(-marker.pid, "SIGKILL"); } catch { /* preserve failure */ }
+        reject(new Error("the marker child did not report its closed stdin within 10 s"));
+      }, 10_000);
+      marker.once("error", reject);
+      marker.stdout.once("data", () => {
+        clearTimeout(timer);
+        const input = readFileSync(0, "utf8");
+        runCaptured("/bin/sh", ["-c", "exec 0<&-; sleep 0.1"], { input, timeout: 2000 }).then(result => {
+          resolve({ ...result, fixture: { inputBytes: input.length, inputProvenance: "written after the marker child closed fd 0" } });
+        }, reject);
+      });
+    });
+    process.stdout.write(JSON.stringify(result));
+  `;
+  const driver = await runCaptured(process.execPath, ["--input-type=module", "-e", script], {
+    input: "x".repeat(128 * 1024), timeout: 30_000,
+  });
+  assert.equal(driver.code, 0, `fixture driver failed: ${driver.error ?? ""} ${driver.stderr}`);
+  const result = JSON.parse(driver.stdout);
+  assert.equal(result.fixture.inputBytes, 128 * 1024);
+  assert.equal(result.fixture.inputProvenance, "written after the marker child closed fd 0");
   assert.equal(result.code, 0);
   assert.equal(result.closed, true);
+  assert.equal(typeof result.error, "string", `expected a genuine stdin EPIPE beside close; result=${driver.stdout}`);
   assert.match(result.error, /stdin:.*EPIPE/);
-  assert.equal(result.stdout.includes("private fixture input"), false);
 });
 
 test("a missing provenance failure replaces an old PASS and preserves the run root", async t => {
