@@ -782,6 +782,7 @@ static const char *const question_manifest[] = {
 
 static const char *const recommended_manifest[] = {
     "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
+    "recommended_corefoundation_boundary",
     "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
     "recommended_trims_prefix_space", "recommended_unspaced",
 };
@@ -1425,7 +1426,7 @@ int main(int argc, char **argv) {
     check_sort(argv[1]);
     check_stream(argv[1]);
     check_answer_file(argv[1], "questions.json", 0, 15);
-    check_answer_file(argv[1], "recommended.json", 1, 8);
+    check_answer_file(argv[1], "recommended.json", 1, 9);
     check_answer_boundaries();
     check_turns(argv[1]);
     check_task_index(argv[1]);

@@ -32,6 +32,7 @@ const expectedNames = new Map([
     'recommended_spaced', 'recommended_unspaced', 'recommended_chinese_fullwidth', 'recommended_chinese_ascii',
     'recommended_trims_prefix_space', 'recommended_case_sensitive', 'recommended_suffix_only',
     'recommended_trailing_space',
+    'recommended_corefoundation_boundary',
   ]],
   ['stream-chunks/split.json', [
     'cuts_after_blank_line_once_next_block_starts', 'blank_line_at_end_is_not_cut_yet',
