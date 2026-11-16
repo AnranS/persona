@@ -24,6 +24,8 @@
   "empty_working": "没有进行中的",
   "empty_fyi": "没有要看的",
   "empty_done": "还没有已处理的",
+  "empty_section_hint": "其余的在上面的其他分区里。",
+  "empty_done_hint": "标为已处理的会出现在这里。",
   "clear_filters": "清除筛选",
   "clear_search": "清除搜索",
   "clear_fyi": "全部看过",

@@ -170,7 +170,10 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(chosen()).toBe("action");
     const empty = host.querySelector<HTMLElement>("[data-inbox-section-empty]")!;
     expect(empty.dataset.inboxSectionEmpty).toBe("action");
-    expect(empty.textContent).toBe("没有需要你处理的");
+    // its own words, and under them where the rest are, as the other empty states draw their line
+    expect(empty.querySelector("p")?.textContent).toBe("没有需要你处理的");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("其余的在上面的其他分区里。");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.className).toContain("text-ink-3");
     expect(host.textContent).not.toContain("都处理完了");
     expect(host.querySelector(".bg-green-tint")).toBeNull();
     // no count at zero, and the rows elsewhere are counted right above
@@ -185,10 +188,25 @@ describe("the Inbox's section bar (#9053)", () => {
     await flush();
     expect(chosen()).toBe("working");
     expect(choice("working").textContent).toBe("进行中");
-    expect(host.querySelector("[data-inbox-section-empty]")?.textContent).toBe("没有进行中的");
+    expect(host.querySelector("[data-inbox-section-empty] p")?.textContent).toBe("没有进行中的");
+    expect(host.querySelector("[data-inbox-section-empty] [data-inbox-empty-hint]")?.textContent).toBe("其余的在上面的其他分区里。");
     // left, it goes: no row and not chosen
     pick("action");
     expect(choice("working")).toBeNull();
+  });
+
+  it("says what comes to 已处理 under its empty words, not where the rest are", async () => {
+    await show();
+    pick("done");
+    // its one item moved back: nothing done, with the rest counted above
+    hub.items = everySection().map((it) => (it.id === "d1" ? { ...it, done_at: undefined, done_by: undefined } : it));
+    await act(async () => { await reloadInbox(); });
+    await flush();
+    expect(chosen()).toBe("done");
+    const empty = host.querySelector<HTMLElement>("[data-inbox-section-empty]")!;
+    expect(empty.dataset.inboxSectionEmpty).toBe("done");
+    expect(empty.querySelector("p")?.textContent).toBe("还没有已处理的");
+    expect(empty.querySelector("[data-inbox-empty-hint]")?.textContent).toBe("标为已处理的会出现在这里。");
   });
 
   it("says 都处理完了 only when nothing is open anywhere, with 已处理 still a choice", async () => {

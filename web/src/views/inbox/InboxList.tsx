@@ -565,7 +565,8 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
               {emptyKind === "caught_up" ? <Icon name="check" size={17} stroke={2.6} /> : <Icon name={emptyKind === "filtered" ? "filter" : emptyKind === "no_match" ? "search" : "inbox"} size={17} />}
             </span>
             <p className="text-[13.5px] font-medium text-ink">{emptyKind === "section" ? choice !== "all" && t(SECTION_EMPTY[choice]) : t(emptyKind === "caught_up" ? "inbox-inboxlist.empty_all_done" : emptyKind === "filtered" ? "inbox-inboxlist.empty_filtered" : "inbox-inboxlist.empty_no_match")}</p>
-            {emptyKind !== "section" && <p className={cx("text-[12.5px] text-ink-3", emptyCleared && "max-w-80")}>{t(emptyKind === "caught_up" ? "inbox-inboxlist.empty_all_done_hint" : emptyKind === "filtered" ? "inbox-inboxlist.empty_filtered_hint" : "inbox-inboxlist.empty_no_match_hint")}</p>}
+            {/* a chosen section's: where the rest are, or (Done) what comes to it */}
+            {(emptyKind !== "section" || choice !== "all") && <p className={cx("text-[12.5px] text-ink-3", emptyKind !== "caught_up" && "max-w-80")} data-inbox-empty-hint>{t(emptyKind === "section" ? (choice === "done" ? "inbox-inboxlist.empty_done_hint" : "inbox-inboxlist.empty_section_hint") : emptyKind === "caught_up" ? "inbox-inboxlist.empty_all_done_hint" : emptyKind === "filtered" ? "inbox-inboxlist.empty_filtered_hint" : "inbox-inboxlist.empty_no_match_hint")}</p>}
             {emptyCleared && <Button tone="secondary" onClick={clearFilters} className="mt-2 touch-hit">{t(emptyKind === "filtered" ? "inbox-inboxlist.clear_filters" : "inbox-inboxlist.clear_search")}</Button>}
           </div>
         )}

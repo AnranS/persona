@@ -26,6 +26,8 @@
   "empty_working": "Nothing in progress",
   "empty_fyi": "Nothing to read",
   "empty_done": "Nothing done yet",
+  "empty_section_hint": "The rest are in the other sections above.",
+  "empty_done_hint": "What you mark done shows up here.",
   "clear_filters": "Clear filters",
   "clear_search": "Clear search",
   "clear_fyi": "Mark all seen",

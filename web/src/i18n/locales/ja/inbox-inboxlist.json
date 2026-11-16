@@ -24,6 +24,8 @@
   "empty_working": "進行中のものはありません",
   "empty_fyi": "読むものはありません",
   "empty_done": "完了したものはまだありません",
+  "empty_section_hint": "残りは上のほかの区分にあります。",
+  "empty_done_hint": "対応済みにしたものがここに表示されます。",
   "clear_filters": "フィルターを解除",
   "clear_search": "検索をクリア",
   "clear_fyi": "すべて確認済み",
