@@ -61374,6 +61374,28 @@
       },
       "extractionState" : "manual"
     },
+    "Echo Cancellation with the Speaker" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Echo Cancellation with the Speaker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スピーカー使用時のエコー除去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开喇叭时消除回声"
+          }
+        }
+      }
+    },
     "Edit" : {
       "localizations" : {
         "en" : {
@@ -64975,6 +64997,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Experimental [Meeting Settings]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimental"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実験的機能"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验"
+          }
+        }
+      }
     },
     "Expired" : {
       "localizations" : {
@@ -92421,24 +92465,24 @@
       },
       "extractionState" : "manual"
     },
-    "Model not connected: Claude Code isn't signed in" : {
+    "Model not connected: Claude Code CLI isn't signed in" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Model not connected: Claude Code isn't signed in"
+            "value" : "Model not connected: Claude Code CLI isn't signed in"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "モデル未接続：Claude Code にログインしていません"
+            "value" : "モデル未接続：Claude Code CLI にログインしていません"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "模型没接好：Claude Code 没登录"
+            "value" : "模型没接好：Claude Code 命令行没登录"
           }
         }
       },
@@ -109064,24 +109108,24 @@
       },
       "extractionState" : "manual"
     },
-    "On %@, open Terminal, type this word, press Return, and sign in once in the browser as it asks:" : {
+    "Persona runs the Claude Code CLI on %@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "On %1$@, open Terminal, type this word, press Return, and sign in once in the browser as it asks:"
+            "value" : "Persona runs the Claude Code CLI on %1$@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ でターミナルを開き、次の語を入力して Return キーを押し、案内に従ってブラウザで一度ログインしてください："
+            "value" : "Persona は %1$@ の Claude Code CLI を使い、Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータでターミナルを開き、次のコマンドを実行して、ブラウザで一度ログインしてください："
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 %1$@ 上打开终端，输入下面这个词，回车，按提示在浏览器里登录一次："
+            "value" : "Persona 用的是 %1$@ 上的 Claude Code 命令行，Claude 桌面版登录了也不算。在那台电脑上打开终端，运行下面这条命令，按提示在浏览器里登录一次："
           }
         }
       },
@@ -109930,29 +109974,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iPhone 上的 Persona 配对好之后，点下面从 iPhone 同步。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Once google.client_id is in the assistant's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password)." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Once google.client_id is in the assistant's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password)."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アシスタントの manager.json に google.client_id を追加してハブを再起動すると、ここに「Googleでサインイン」が表示されます（初回のみの設定）。それまではアプリパスワードで追加できます。Google アカウントで 2 段階認証プロセスを有効にし、Google アカウント › セキュリティ › アプリパスワードで 16 文字のパスワードを作成してここに入力してください（Google のログインパスワードではありません）。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在助手的 manager.json 里写上 google.client_id 并重启 hub 后，这里会出现「使用 Google 账号登录」（一次性配置）。在那之前可以用应用专用密码添加：Google 账号先开两步验证，再到 Google 账号 › 安全性 › 应用专用密码 生成一个 16 位密码填在这里（不是 Google 登录密码）。"
           }
         }
       },
@@ -119022,6 +119043,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona が会議に参加しました"
+          }
+        }
+      }
+    },
+    "Persona left the meeting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona left the meeting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 离开了会议"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が会議から退出しました"
           }
         }
       }
@@ -146227,24 +146271,24 @@
       },
       "extractionState" : "manual"
     },
-    "Sign in once on that computer, or use an API key instead." : {
+    "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sign in once on that computer, or use an API key instead."
+            "value" : "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "そのコンピュータで一度ログインするか、代わりに API キーを使ってください。"
+            "value" : "Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータのターミナルで claude auth login を実行するか、代わりに API キーを使ってください。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在那台电脑上登录一次，或者改用 API Key。"
+            "value" : "Claude 桌面版登录了也不算。在那台电脑的终端里运行 claude auth login，或者改用 API Key。"
           }
         }
       },
@@ -178978,6 +179022,28 @@
         }
       }
     },
+    "Turning on the speaker during a meeting stops the microphone for a moment." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turning on the speaker during a meeting stops the microphone for a moment."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議中にスピーカーをオンにすると、マイクが一瞬止まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会中打开喇叭时，麦克风会短暂中断一下。"
+          }
+        }
+      }
+    },
     "Turning the pack back on turns on %@ again. A member you turn on or off yourself stays as you set it." : {
       "localizations" : {
         "en" : {
@@ -203435,6 +203501,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%@」"
+          }
+        }
+      }
+    },
+    "The password is an app password, not your Google password: turn on 2-Step Verification for the Google account, then open App passwords, create one and paste the 16-character password above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The password is an app password, not your Google password: turn on 2-Step Verification for the Google account, then open App passwords, create one and paste the 16-character password above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードには Google アカウントのパスワードではなくアプリ パスワードを入力します。Google アカウントで 2 段階認証を有効にし、「アプリ パスワード」ページで作成した 16 文字のパスワードを上に貼り付けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码要填应用专用密码，不是 Google 账号密码：先给 Google 账号开启两步验证，再打开「应用专用密码」页面生成一个，把 16 位密码粘贴到上面。"
+          }
+        }
+      }
+    },
+    "The password is an app-specific password, not your Apple Account password: sign in to your Apple Account, open Sign-In and Security › App-Specific Passwords, create one and paste it above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The password is an app-specific password, not your Apple Account password: sign in to your Apple Account, open Sign-In and Security › App-Specific Passwords, create one and paste it above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードには Apple アカウントのパスワードではなく App 用パスワードを入力します。Apple アカウントにサインインし、サインインとセキュリティ › App 用パスワード で作成したものを上に貼り付けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码要填 App 专用密码，不是 Apple 账户密码：登录 Apple 账户，打开 登录与安全 › App 专用密码，生成一个并粘贴到上面。"
+          }
+        }
+      }
+    },
+    "Open Google App passwords" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Google App passwords"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google のアプリ パスワードを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Google 应用专用密码页面"
+          }
+        }
+      }
+    },
+    "Open Apple Account" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Apple Account"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple アカウントを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Apple 账户"
           }
         }
       }
