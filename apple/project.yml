@@ -181,6 +181,9 @@ targets:
         # uploads what the watch sent while the phone sat in the background, run while charging (RecordingDayCatchUp).
         UIBackgroundModes: [remote-notification, audio, processing, voip]
         BGTaskSchedulerPermittedIdentifiers: [persona.recording.day-catchup]
+        # A redial from the Phone app's Recents comes as one of these (#9290, PersonaCalls.continueActivity): without them
+        # the tap opens the app but hands it nothing.
+        NSUserActivityTypes: [INStartCallIntent, INStartAudioCallIntent]
         # CarPlay (docs/apple/carplay.md): the voice conversation scene. Only CarPlay is declared; the phone window stays SwiftUI's own.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

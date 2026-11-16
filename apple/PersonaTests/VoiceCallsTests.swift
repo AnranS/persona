@@ -72,6 +72,45 @@ struct VoiceCallsTests {
         #expect(calls.current?.phase == .connecting)
     }
 
+    /// A call to Persona (#9290) goes on in the background and off the page; only its manager ends it.
+    @Test func aSystemCallGoesOnInTheBackgroundAndOffThePage() async {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        let call = rig.call(surface: .call)
+        await calls.begin(call)
+        calls.appDidEnterBackground()
+        calls.leave(rig.key)
+        calls.end(.left, from: .phone)
+        #expect(calls.current === call && call.phase == .connecting)
+        #expect(rig.socket?.closed == false)
+    }
+
+    /// The same conversation from another surface is a call of its own: a voice chat on the main conversation while a
+    /// call to Persona is on it ends the call, not picks it up.
+    @Test func anotherSurfaceOnTheSameConversationIsACallOfItsOwn() async throws {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
+        let chat = try #require(calls.current)
+        let call = rig.call(surface: .call)
+        await calls.begin(call)
+        #expect(chat.phase == .ended(.replaced) && calls.current === call)
+        await calls.start(rig.key, extensionID: "voice", surface: .phone, deps: rig.deps)
+        #expect(call.phase == .ended(.replaced) && calls.current?.surface == .phone)
+    }
+
+    @Test func anEndedSystemCallIsNeverPickedUpAgain() async throws {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        let call = rig.call(surface: .call)
+        await calls.begin(call)
+        call.end(.lost)
+        await calls.resume(rig.key)
+        #expect(call.phase == .ended(.lost) && rig.sockets.count == 1)
+        calls.release(call)
+        #expect(calls.current == nil)
+    }
+
     @Test func continueOnAnEndedCallPicksItUp() async throws {
         let rig = VoiceRig()
         let calls = VoiceCalls()

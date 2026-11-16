@@ -124,6 +124,36 @@ struct UrgentCallCardTests {
         #expect(answered.map(\.resolution) == [Resolution(allow: true)])
     }
 
+    /// On hold (#9290) nothing is said or heard; once it is off, the call goes on where it was.
+    @Test func onHoldNothingIsSaidOrHeardUntilTheHoldEnds() async {
+        let owner = Owner(["没有了，挂断吧"])
+        var ended = false
+        let session = UrgentCallSession(ring: ring, voice: owner, card: nil, resolve: { _, _ in }, ended: { _ in ended = true })
+        session.setHeld(true)
+        session.start()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(owner.said.isEmpty && !ended)
+        session.setHeld(false)
+        let deadline = Date.now.addingTimeInterval(2)
+        while !ended, Date.now < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(ended && !owner.said.isEmpty)
+    }
+
+    /// Muted from the system: Persona still speaks, but listens only once the mute is off (and a muted wait is no silence).
+    @Test func mutedPersonaSpeaksButDoesNotListen() async {
+        let owner = Owner(["没有了，挂断吧"])
+        var ended = false
+        let session = UrgentCallSession(ring: ring, voice: owner, card: nil, resolve: { _, _ in }, ended: { _ in ended = true })
+        session.setMuted(true)
+        session.start()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(owner.said.count == 1 && owner.lines.count == 1 && !ended, "the introduction, then waiting")
+        session.setMuted(false)
+        let deadline = Date.now.addingTimeInterval(2)
+        while !ended, Date.now < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(ended && owner.lines.isEmpty)
+    }
+
     @Test func aReadBackTurnedDownAnswersNothing() async {
         var card = Interaction(id: "ix_3", machineID: "server", sessionID: "conv", kind: .question)
         card.questions = [Question(question: "要不要现在停掉？", header: nil, multiSelect: false, options: [QuestionOption(label: "现在停掉")])]
@@ -151,7 +181,7 @@ struct UrgentCallIsolationTests {
                                                        maximumConversationsPerConversationGroup: 1, includesConversationInRecents: false,
                                                        supportsVideo: false, supportedHandleTypes: [.generic])
         nonisolated(unsafe) let manager = ConversationManager(configuration: config)
-        nonisolated(unsafe) let delegate: any ConversationManagerDelegate = UrgentCallLCKDelegate()
+        nonisolated(unsafe) let delegate: any ConversationManagerDelegate = PersonaCallsLCKDelegate()
         await offMain {
             delegate.conversationManagerDidBegin(manager)
             delegate.conversationManagerDidReset(manager)
@@ -167,10 +197,14 @@ struct UrgentCallIsolationTests {
         #expect(UrgentCallPush.shared.token == nil)
     }
 
-    /// The call page's cover, on every launch, reads only the presenter: no call center's LiveCommunicationKit manager.
+    /// The call pages' covers, on every launch, read only the presenter and the call manager's state: no
+    /// LiveCommunicationKit manager (#9264).
     @Test @MainActor func launchingMakesNoCallManager() {
         _ = UrgentCallPresenter.shared.session
-        #expect(!UrgentCallCenter.shared.managerMade)
+        _ = PersonaCalls.shared.presented
+        _ = PersonaCalls.shared.ownerCall
+        _ = PersonaCalls.shared.urgentInProgress
+        #expect(!PersonaCalls.shared.systemMade)
     }
 
     /// Every system callback in the call code is written `nonisolated`, so a new one cannot quietly be the main actor's.

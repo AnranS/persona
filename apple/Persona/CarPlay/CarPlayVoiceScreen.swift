@@ -142,6 +142,7 @@ nonisolated enum CarPlayVoiceScreen {
         case .replaced: String(localized: "Switched to another voice chat")
         case .interrupted: String(localized: "A call or another app took the audio, so the chat stopped")
         case .microphoneTaken: String(localized: "The microphone is recording or dictating. Stop that first, then talk")
+        case .urgentCall: String(localized: "Ended for Persona's urgent call")
         case .microphoneBusy: String(localized: "The microphone is recording or dictating. Stop that first, then talk")
         case .permissionDenied: CarPlayMicGate.denied
         case .audioFailed: String(localized: "Couldn't open the microphone, so the chat stopped")

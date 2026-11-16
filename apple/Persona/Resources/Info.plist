@@ -81,6 +81,11 @@
 	<string>Persona turns your voice into text when you hold the mic button, for example to dictate a reply to Claude, and on an urgent call you answer, to hear what you decide. It does this on your iPhone when it can.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INStartCallIntent</string>
+		<string>INStartAudioCallIntent</string>
+	</array>
 	<key>PersonaAppGroup</key>
 	<string>$(PERSONA_APP_GROUP)</string>
 	<key>PersonaGettingStartedURL</key>

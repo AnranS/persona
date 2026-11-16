@@ -86,6 +86,8 @@ nonisolated struct VoiceEndNote: Equatable, Sendable {
             return note(String(localized: "A call or another app took the audio"))
         case .microphoneTaken:
             return note(String(localized: "A recording or dictation took the microphone"))
+        case .urgentCall:
+            return note(String(localized: "Ended for Persona's urgent call"))
         case .microphoneBusy:
             return note(String(localized: "Finish the recording or dictation first"), .retry)
         case .permissionDenied:

@@ -164,6 +164,12 @@ nonisolated enum VoiceAvailability: Equatable, Sendable {
         // The composer's own rule: a call hands things over only where typing could. A conversation with no source
         // (herdr) takes messages without capabilities; a source has to say it does.
         guard session.canSend else { return .readOnly }
+        return evaluateExtension(extensions: extensions, info: info)
+    }
+
+    /// The hub's side alone: a voice extension that runs, speaks protocol 2 and is set up. A call to Persona (#9290) asks
+    /// only this when the app does not have the main conversation yet (a redial from Recents as the app launches).
+    static func evaluateExtension(extensions: [HubExtension]?, info: VoiceInfoState?) -> VoiceAvailability {
         guard let extensions else { return .unknown }
         guard let voice = pick(extensions) else {
             if let waiting = extensions.first(where: { $0.kind == "voice" && $0.status == "needs_setup" }) {
@@ -360,6 +366,12 @@ extension APIClient {
     func availability(for session: Session?, group: String, platform: VoicePlatform = .current) -> VoiceAvailability {
         let probe = probes[group]
         return VoiceAvailability.evaluate(platform: platform, session: session, extensions: probe?.extensions, info: probe?.info)
+    }
+
+    /// Whether the group's hub takes a call at all (its voice extension), whatever the conversation.
+    func extensionAvailability(group: String) -> VoiceAvailability {
+        let probe = probes[group]
+        return VoiceAvailability.evaluateExtension(extensions: probe?.extensions, info: probe?.info)
     }
 
     /// Asks the group's hub unless its answer is younger than a minute. Not on platforms without calls.

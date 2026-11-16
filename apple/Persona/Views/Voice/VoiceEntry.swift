@@ -23,8 +23,12 @@ extension VoiceSupport {
         return session.assistant ? model.persona.name : session.agentLabel
     }
 
-    /// Starts a call bound to `key` where the page offers one; otherwise what to say about it.
+    /// Starts a call bound to `key` where the page offers one; otherwise what to say about it. Not while Persona's
+    /// urgent call rings or is on (#9290): its audio is the system's.
     @discardableResult static func start(_ key: SessionKey, model: AppModel) -> VoiceUnavailableNote? {
+        #if os(iOS)
+        if PersonaCalls.shared.urgentInProgress { return PersonaCalls.urgentNote }
+        #endif
         let availability = VoiceSupport.shared.availability(for: model.session(key), group: key.group)
         guard case .available(let id) = availability else {
             return VoiceUnavailableNote.make(availability, extensionID: VoiceSupport.shared.voiceExtensionID(group: key.group))
@@ -35,7 +39,13 @@ extension VoiceSupport {
         #if DEBUG
         if VoiceSample.silentAudio { deps.audio = { VoiceSample.SilentAudio() } }
         #endif
-        Task { await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps) }
+        Task {
+            #if os(iOS)
+            // A call to Persona is on: it ends first, and the voice chat starts once the system let its audio go.
+            await PersonaCalls.shared.endForVoiceChat()
+            #endif
+            await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps)
+        }
         return nil
     }
 

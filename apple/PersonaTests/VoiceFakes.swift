@@ -101,9 +101,9 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
         lock.withLock { handler }?(.data(data))
     }
 
-    /// The extension's `ready`, protocol 2, bound to `key`.
-    @MainActor func ready(_ key: SessionKey, input: Int = 16000, output: Int = 24000, protocolVersion: Int = 2) {
-        deliver(#"{"type":"ready","protocol":\#(protocolVersion),"features":["target","runs","asks","resume","suspend"],"input_rate":\#(input),"output_rate":\#(output),"target":{"machine_id":"\#(key.machineID)","session_id":"\#(key.sessionID)","kind":"agent","title":"web-api","agent_label":"Claude Code","machine_name":"Mac"}}"#)
+    /// The extension's `ready`, protocol 2, bound to `key`; `hold`: it takes a system call's hold frames (#9290).
+    @MainActor func ready(_ key: SessionKey, input: Int = 16000, output: Int = 24000, protocolVersion: Int = 2, hold: Bool = false) {
+        deliver(#"{"type":"ready","protocol":\#(protocolVersion),"features":["target","runs","asks","resume","suspend"\#(hold ? #","hold""# : "")],"input_rate":\#(input),"output_rate":\#(output),"target":{"machine_id":"\#(key.machineID)","session_id":"\#(key.sessionID)","kind":"agent","title":"web-api","agent_label":"Claude Code","machine_name":"Mac"}}"#)
     }
 
     /// The socket goes away from the other side (`status`: the handshake refused with it).
@@ -116,8 +116,8 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     }
 }
 
-/// The call's audio without a microphone or speaker.
-@MainActor final class FakeVoiceAudio: VoiceAudio {
+/// The call's audio without a microphone or speaker; a system call's too (#9290: the system activates it).
+@MainActor final class FakeVoiceAudio: SystemCallAudio {
     var failStart = false
     var cancelsEcho = true
     /// What a failing start throws.
@@ -130,8 +130,27 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     private(set) var stops = 0
     private(set) var uplink: VoiceUplink?
     private var events: (@MainActor (VoiceAudioEvent) -> Void)?
+    /// A system call's: the system activated the session (and has not taken it away).
+    private(set) var active = false
+    private(set) var activations = 0
+    private(set) var deactivations = 0
+    private(set) var heldNow = false
+    var onRunning: (@MainActor () -> Void)?
 
     var running: Bool { uplink != nil }
+
+    func activate() {
+        active = true
+        activations += 1
+        if running { onRunning?() }
+    }
+
+    func deactivate() {
+        active = false
+        deactivations += 1
+    }
+
+    func setHeld(_ held: Bool) { heldNow = held }
 
     func start(_ format: VoiceAudioFormat, uplink: VoiceUplink, events: @escaping @MainActor (VoiceAudioEvent) -> Void) throws {
         if failStart { throw startError }
@@ -186,6 +205,8 @@ struct FakeMicPermission: MicPermission {
     var session: Session?
     var voice: String? = "marin"
     private(set) var sockets: [FakeVoiceSocket] = []
+    /// What a call told its system call's manager (`VoiceDeps.callEvents`).
+    private(set) var heard: [VoiceCallEvent] = []
 
     var socket: FakeVoiceSocket? { sockets.last }
 
@@ -207,7 +228,7 @@ struct FakeMicPermission: MicPermission {
                   },
                   audio: { self.audio },
                   mic: FakeMicPermission(allowed: allowed), microphone: microphone, idleTimer: idleTimer, clock: clock,
-                  session: { _ in self.session }, voice: { _, _ in self.voice })
+                  session: { _ in self.session }, voice: { _, _ in self.voice }, callEvents: { self.heard.append($0) })
     }
 
     func call(_ key: SessionKey? = nil, surface: VoiceSurface = .phone, recent: [VoiceLine] = []) -> VoiceConversation {

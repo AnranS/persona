@@ -211,10 +211,13 @@ extension AppModel {
     }
 
     /// The app went to the background: every tunnel closes (iOS would cut them anyway), but those of a group whose
-    /// button is still on its way (`outside`), which closes them itself when it is done.
+    /// button is still on its way (`outside`), which closes them itself when it is done, and those of a call to Persona's
+    /// group (#9290): the call goes on in the background, and its voice's socket may go through one.
     func closeTunnelsForBackground() {
-        guard !outsideRuns.isEmpty else { return closeAllTunnels() }
-        for h in registry.hubs where outsideRuns[h.group] == nil { closeTunnels(h.id, forget: false) }
+        var keep = Set(outsideRuns.keys)
+        if let call = VoiceCalls.shared.current, call.surface == .call, !call.phase.isEnded { keep.insert(call.key.group) }
+        guard !keep.isEmpty else { return closeAllTunnels() }
+        for h in registry.hubs where !keep.contains(h.group) { closeTunnels(h.id, forget: false) }
     }
 
     /// Every tunnel of every hub closes (the app went to the background, or there is no hub left).

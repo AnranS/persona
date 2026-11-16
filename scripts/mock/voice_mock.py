@@ -399,7 +399,7 @@ class Call:
         # this call made the conversation work and its script has not reached done yet
         self.left_working = False
         LOG["starts"].append({k: start.get(k) for k in ("model", "voice", "protocol", "target", "recent", "history", "resume",
-                                                        "echo_cancellation", "speech_gate")})
+                                                        "echo_cancellation", "speech_gate", "surface")})
 
     # frames out
 

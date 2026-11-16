@@ -15208,6 +15208,29 @@
       },
       "extractionState" : "manual"
     },
+    "A recording or dictation is using the microphone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A recording or dictation is using the microphone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音または音声入力がマイクを使用しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "录音或听写正在使用麦克风。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "A recording or dictation took the microphone" : {
       "localizations" : {
         "en" : {
@@ -21563,6 +21586,29 @@
       },
       "extractionState" : "manual"
     },
+    "Allow Persona to use the microphone in Settings, then call again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Persona to use the microphone in Settings, then call again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定で Persona にマイクの使用を許可してから、もう一度かけてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在“设置”里允许 Persona 使用麦克风，然后再打。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Allow Persona to use your location in Settings › Privacy & Security › Location Services, or search for the address." : {
       "localizations" : {
         "en" : {
@@ -23296,6 +23342,29 @@
           }
         }
       }
+    },
+    "Another call is on, so this is a voice chat in the app instead" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another call is on, so this is a voice chat in the app instead"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかの通話中のため、アプリ内の音声チャットに切り替えました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已有别的通话，改为 App 内语音对话"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Another conversation" : {
       "extractionState" : "manual",
@@ -62477,6 +62546,29 @@
       },
       "extractionState" : "manual"
     },
+    "Ended for Persona's urgent call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended for Persona's urgent call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona の緊急コールのため終了しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "因 Persona 的加急来电而结束"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Ended in the background" : {
       "localizations" : {
         "en" : {
@@ -67313,6 +67405,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "先结束录音或听写"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Finish the urgent call first" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finish the urgent call first"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先に緊急コールを終えてください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先结束加急来电"
           }
         }
       },
@@ -104819,6 +104934,29 @@
       },
       "extractionState" : "manual"
     },
+    "Not paired with a hub yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not paired with a hub yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだハブとペアリングしていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有配对 hub"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Not paired with a hub yet. Open Persona on the phone first" : {
       "localizations" : {
         "en" : {
@@ -112165,6 +112303,29 @@
         }
       }
     },
+    "Open Persona's chat once, then call again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Persona's chat once, then call again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一度 Persona のチャットを開いてから、もう一度かけてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先打开一次 Persona 的对话，然后再打。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Open Personal Agent" : {
       "localizations" : {
         "en" : {
@@ -115618,6 +115779,29 @@
           }
         }
       }
+    },
+    "Pair this iPhone with a hub to call Persona." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pair this iPhone with a hub to call Persona."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona に電話するには、この iPhone をハブとペアリングしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 配对 hub 后才能打给 Persona。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Paired" : {
       "localizations" : {
@@ -119425,6 +119609,29 @@
       },
       "extractionState" : "manual"
     },
+    "Persona's main chat isn't set up yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona's main chat isn't set up yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona のメインチャットがまだ設定されていません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 的主对话还没设好"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Persona's meeting conversation isn't available. Ask again for an answer from the meeting so far." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -119489,6 +119696,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agent 里能用 Persona 的工具"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Persona's urgent call is on. Call again once it's over." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona's urgent call is on. Call again once it's over."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona の緊急コール中です。終わってからもう一度かけてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 的加急来电正在进行，结束后再打。"
           }
         }
       },
@@ -164345,6 +164575,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ペアリングが無効になりました。Persona でもう一度ペアリングしてください"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The phone didn't place the call, so this is a voice chat in the app instead" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The phone didn't place the call, so this is a voice chat in the app instead"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "電話が発信されなかったため、アプリ内の音声チャットに切り替えました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机没有拨出这通电话，改为 App 内语音对话"
           }
         }
       },

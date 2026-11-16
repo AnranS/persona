@@ -8,8 +8,9 @@ import UIKit
 /// asks `isBound(to:)`; the bar and the thread's tail read `current` themselves.
 ///
 /// Rules (docs/assistant/voice.md 6.5): a new call ends the one before; the app going to the background ends a call started from
-/// the phone, never one started from the car; leaving the page ends the phone's call bound to it. Starting a recording
-/// or dictation, a phone call, three failed reconnects or ten idle minutes end it from inside (`VoiceConversation`).
+/// the phone, never one started from the car or a system call to Persona (#9290, `PersonaCalls` runs it); leaving the
+/// page ends the phone's call bound to it. Starting a recording or dictation, a phone call, three failed reconnects or
+/// ten idle minutes end it from inside (`VoiceConversation`; a system call holds through a phone call instead).
 @MainActor @Observable final class VoiceCalls {
     static let shared = VoiceCalls(watchesApp: true)
 
@@ -30,11 +31,13 @@ import UIKit
         #endif
     }
 
-    /// Starts a call bound to `key`. The same conversation's call is left as it is (or picked up again when it ended);
-    /// another one is ended first. Returns once the call sent its `start`, or ended.
+    /// Starts a call bound to `key`. The same conversation's call from the same surface is left as it is (or picked up
+    /// again when it ended); another one is ended first, a call from another surface too (a voice chat on the main
+    /// conversation while a call to Persona is on it is a call of its own). Returns once the call sent its `start`, or ended.
     func start(_ key: SessionKey, extensionID: String, surface: VoiceSurface, recent: [VoiceLine] = [], deps: VoiceDeps) async {
         if let call = current {
-            if call.key == key, call.extensionID == extensionID {
+            // A system call that ended has no system call behind it any more: it is never picked up again.
+            if call.key == key, call.extensionID == extensionID, call.surface == surface, surface != .call {
                 if call.phase.isEnded { await call.restart() }
                 return
             }
@@ -46,9 +49,24 @@ import UIKit
         await call.begin()
     }
 
-    /// Continue on the ended call bound to `key`.
+    /// A call made elsewhere becomes the app's call and begins (a system call: `PersonaCalls` holds it for the system's
+    /// audio before it begins). The one before ends.
+    func begin(_ call: VoiceConversation) async {
+        if let before = current, before !== call {
+            before.end(.replaced)
+        }
+        current = call
+        await call.begin()
+    }
+
+    /// A system call that ended goes away at once: no Continue (there is no system call to pick up again).
+    func release(_ call: VoiceConversation) {
+        if current === call { current = nil }
+    }
+
+    /// Continue on the ended call bound to `key` (not a system call's).
     func resume(_ key: SessionKey) async {
-        guard let call = current, call.key == key, call.phase.isEnded else { return }
+        guard let call = current, call.key == key, call.phase.isEnded, call.surface != .call else { return }
         await call.restart()
     }
 

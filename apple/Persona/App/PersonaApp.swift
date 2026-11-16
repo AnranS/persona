@@ -23,6 +23,12 @@ struct PersonaApp: App {
                 .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
+                #if os(iOS)
+                // A redial from the Phone app's Recents (#9290), where SwiftUI hands it over rather than the scene's delegate;
+                // the two are one tap (`PersonaCalls.continueActivity` takes it once).
+                .onContinueUserActivity(PersonaCalls.activityTypes[0]) { PersonaCalls.shared.continueActivity($0) }
+                .onContinueUserActivity(PersonaCalls.activityTypes[1]) { PersonaCalls.shared.continueActivity($0) }
+                #endif
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
                     #if os(iOS)
@@ -173,6 +179,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
                 UrgentCallCenter.shared.showSample()
+            }
+        }
+        // `-openOwnerCall YES`: calls Persona (#9290) once the hub is there, as the main conversation's Call does (on the
+        // Simulator through `SimulatedCallSystem`); `-openOwnerCallSeconds <n>` hangs up n seconds after it connected.
+        if d.bool(forKey: "openOwnerCall") {
+            let seconds = d.integer(forKey: "openOwnerCallSeconds")
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                await PersonaCalls.shared.callPersona(origin: .recents)
+                guard seconds > 0 else { return }
+                for _ in 0..<60 where PersonaCalls.shared.ownerCall?.connectedSince == nil && PersonaCalls.shared.ownerInProgress {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                try? await Task.sleep(for: .seconds(seconds))
+                PersonaCalls.shared.hangUp()
+            }
+        }
+        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended`: the call page's
+        // state, with no system and no audio (PersonaCalls.showSample).
+        if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                PersonaCalls.shared.showSample(sample)
             }
         }
         #endif

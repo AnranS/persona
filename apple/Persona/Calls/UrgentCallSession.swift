@@ -40,6 +40,10 @@ import os
     /// Listening is not allowed (microphone or speech recognition off): the owner taps the card's options instead.
     private(set) var tapOnly = false
     private(set) var outcome: String?
+    /// The system's Mute (its call UI, AirPods; #9290): Persona still speaks, nothing is heard.
+    private(set) var muted = false
+    /// On hold (the system paused the call, or its audio was interrupted): nothing is said or heard until it is not.
+    private(set) var held = false
 
     @ObservationIgnored private let voice: any UrgentCallSpeech
     /// Answers a card: `AppModel.resolve`, exactly as a tap on the card does, so the card is answered everywhere.
@@ -47,6 +51,8 @@ import os
     @ObservationIgnored private var run: Task<Void, Never>?
     @ObservationIgnored private var nextLine = 0
     @ObservationIgnored private let ended: @MainActor (UrgentCallSession) -> Void
+    /// The turns waiting for the call to be unmuted or off hold.
+    @ObservationIgnored private var waiting: [CheckedContinuation<Void, Never>] = []
     private static let log = Logger(subsystem: "persona", category: "urgent-call")
 
     /// `card`: the call's card when it is known already (the tests); else `prepare` finds it among the pending ones.
@@ -84,12 +90,43 @@ import os
         run = Task { await talk() }
     }
 
+    /// Muted or unmuted from the system: what is being heard stops (it is not the owner's to hear), and listening waits.
+    func setMuted(_ on: Bool) {
+        guard muted != on else { return }
+        muted = on
+        if on { voice.stop() }
+        wakeIfFree()
+    }
+
+    /// On hold or off it: whatever is said or heard stops now, and the turns wait for the hold to end.
+    func setHeld(_ on: Bool) {
+        guard held != on else { return }
+        held = on
+        if on { voice.stop() }
+        wakeIfFree()
+    }
+
+    private func wakeIfFree() {
+        guard !held, !muted else { return }
+        let waiting = waiting
+        self.waiting = []
+        for w in waiting { w.resume() }
+    }
+
+    /// Returns once the call may listen (unmuted and off hold), or at once if it may.
+    private func untilFree(listening: Bool) async {
+        while (held || (listening && muted)) && !Task.isCancelled && phase != .ended {
+            await withCheckedContinuation { waiting.append($0) }
+        }
+    }
+
     /// The owner hung up, or the call ended on its own: whatever is said or heard stops, and the manager hears how it went.
     func hangUp() {
         guard phase != .ended else { return }
         run?.cancel()
         voice.stop()
         phase = .ended
+        wakeAll()
         let seconds = answeredAt.map { Int(Date.now.timeIntervalSince($0)) } ?? 0
         let transcript = lines.map { "\($0.who == .persona ? "Persona" : String(localized: "You")): \($0.text)" }.joined(separator: "\n")
         let outcome = outcome
@@ -104,6 +141,12 @@ import os
             }
         }
         ended(self)
+    }
+
+    private func wakeAll() {
+        let waiting = waiting
+        self.waiting = []
+        for w in waiting { w.resume() }
     }
 
     /// The owner tapped an option on the call page: read back, as if said.
@@ -146,8 +189,12 @@ import os
         var silences = 0
         for _ in 0..<12 where !Task.isCancelled && phase != .ended {
             guard !tapOnly else { return } // the page waits for a tap
+            await untilFree(listening: true)
+            guard !Task.isCancelled, phase != .ended else { return }
             phase = .listening
             guard let heard = await voice.listen() else {
+                // Muted or held while it listened: not a silence of the owner's.
+                if muted || held { continue }
                 silences += 1
                 if silences >= 2 { break }
                 await say(String(localized: "Are you still there? Say what you'd like to do, or say “hang up”."))
@@ -191,6 +238,8 @@ import os
         phase = .confirming
         await say(String(localized: "You chose: \(pending.said). Say “confirm” to go ahead."))
         guard !tapOnly else { return }
+        await untilFree(listening: true)
+        guard !Task.isCancelled, phase != .ended else { return }
         phase = .listening
         let heard = await voice.listen() ?? ""
         if !heard.isEmpty { add(.owner, heard) }
@@ -243,6 +292,7 @@ import os
     }
 
     private func say(_ text: String) async {
+        await untilFree(listening: false)
         guard !Task.isCancelled, phase != .ended else { return }
         phase = .speaking
         add(.persona, text)
