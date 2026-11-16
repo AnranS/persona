@@ -60,7 +60,20 @@ test("settled writes release the shared queue after success and failure", async 
   await other.update({ window: { width: 1200 } });
   assert.equal(pendingWrites().size, 0);
 });
-test("a failed update leaves the original state and permits a later serialized write", async t => {
+test("a retired write is skipped inside the store's serialized commit", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "persona-store-retired-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, "desktop-state.json");
+  const store = new JSONStore(file);
+  await store.update({ hub: "https://old.example/" });
+  let current = true;
+  const originalRead = store.read.bind(store);
+  store.read = async <T,>(): Promise<T | undefined> => { current = false; return originalRead<T>(); };
+  assert.equal(await store.update({ hub: "https://new.example/" }, () => current), false);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).hub, "https://old.example/");
+  assert.deepEqual(await readdir(directory), ["desktop-state.json"]);
+});
+
   const directory = await mkdtemp(join(tmpdir(), "persona-store-failure-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = join(directory, "desktop-state.json");

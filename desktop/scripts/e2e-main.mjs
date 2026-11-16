@@ -335,6 +335,15 @@ async function rootScenario() {
 
 async function hubChangeScenario() {
   await signIn();
+  if (scenario === "hub-prefix-parent") {
+    // This scenario has no off-prefix navigation. Prove that its gateway root is handed to the system browser while
+    // the hub page remains inside its prefix before accepting the root favicon as non-navigation evidence.
+    const href = hub.origin + "/";
+    const before = external.length;
+    await shell.openExternal(href);
+    if (external.length !== before + 1 || external.at(-1) !== href) throw new Error("the prefixed gateway root was not handed to the system browser");
+    if (await path() !== `${prefix}/`) throw new Error("the hub window left its prefix during the root hand-off");
+  }
   await step("changing the hub replaces its window, session and IPC authorization together", async () => {
     if (!otherHub || !otherToken) throw new Error("the second synthetic hub is missing");
     await page("window.personaDesktop.setLaunchAtLogin(true)");
@@ -425,15 +434,6 @@ async function subpathScenario() {
   await refused("an off-hub link in a new window is refused", "https://example.com/elsewhere", true);
   await refused("an off-hub navigation of the window itself is refused", "https://example.com/takeover", false);
   await refused("the same origin outside the prefix is not the hub", `${hub.origin}/outside-the-prefix`, false);
-  if (scenario === "hub-prefix-parent") {
-    // The prefix-to-parent scenario has no other off-prefix navigation. Prove this exact root is handed to the system
-    // browser without changing the hub page before accepting its favicon as evidence, never as a successful hub page.
-    const href = hub.origin + "/";
-    const before = external.length;
-    await shell.openExternal(href);
-    if (external.length !== before + 1 || external.at(-1) !== href) throw new Error("the prefixed gateway root was not handed to the system browser");
-    if (await page("location.href") !== `${prefix}/`) throw new Error("the hub window left its prefix during the root hand-off");
-  }
   await enableNotifications();
   await lockWithdraws("close"); // a hub without desktop_unregister: only closing the socket withdraws (docs/desktop/desktop.md)
 }

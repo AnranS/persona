@@ -17,12 +17,15 @@ export class JSONStore {
     } catch { return undefined; }
   }
 
-  async update(patch: Record<string, unknown>): Promise<void> {
+  /** Return false after the queued read when the caller's generation or close/quit state has retired the write. */
+  async update(patch: Record<string, unknown>, whenCurrent?: () => boolean): Promise<boolean> {
     // Facades are lightweight, but their canonical state path shares one read-modify-rename queue.
     const file = resolve(this.file);
     const previousWrite = JSONStore.pendingWrites.get(file) ?? Promise.resolve();
-    const operation = previousWrite.then(async () => {
+    const operation = previousWrite.then(async (): Promise<boolean> => {
+      if (whenCurrent && !whenCurrent()) return false;
       const previous = await this.read<Record<string, unknown>>() ?? {};
+      if (whenCurrent && !whenCurrent()) return false;
       const next = { ...previous, ...patch };
       const temporary = `${file}.${process.pid}.${++JSONStore.writeSequence}.tmp`;
       try {
@@ -33,10 +36,11 @@ export class JSONStore {
         // A failed write or rename must not leave a temporary file that can be mistaken for state.
         await unlink(temporary).catch(() => {});
       }
+      return true;
     });
-    const queued = operation.catch(() => {});
+    const queued: Promise<void> = operation.then(() => {}, () => {});
     JSONStore.pendingWrites.set(file, queued);
-    try { await operation; } finally { if (JSONStore.pendingWrites.get(file) === queued) JSONStore.pendingWrites.delete(file); }
+    try { return await operation; } finally { if (JSONStore.pendingWrites.get(file) === queued) JSONStore.pendingWrites.delete(file); }
   }
 
   async saveWindow(state: WindowState): Promise<void> { await this.update({ window: state }); }

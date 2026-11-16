@@ -299,7 +299,14 @@ async function showSetup(): Promise<void> {
             return { ok: false, error: "The hub connection was replaced before it finished." };
           }
           try {
-            await store().update({ hub: next.url.href });
+            const current = () => !quitting && generation === hubWindow.generation && hub?.url.href === next.url.href && !setup.isDestroyed();
+            if (!await store().update({ hub: next.url.href }, current)) {
+              if (setup.isDestroyed()) {
+                discardFailedConnection(next);
+                recoverSetupAfterClose();
+              }
+              return { ok: false, error: "The hub connection was replaced before it finished." };
+            }
           } catch (error) {
             // Do not leave a live window using a hub that the setup state no longer owns.
             if (generation === hubWindow.generation && hub?.url.href === next.url.href) {
@@ -310,7 +317,7 @@ async function showSetup(): Promise<void> {
               mainWindowHub = undefined;
               if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
             }
-            if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+            if (!quitting && (!setupWindow || setupWindow.isDestroyed())) void showSetup().catch(() => {});
             return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
           }
           if (quitting || generation !== hubWindow.generation || hub?.url.href !== next.url.href || setup.isDestroyed() ||
@@ -333,7 +340,11 @@ async function showSetup(): Promise<void> {
             recoverSetupAfterClose();
             return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
           }
-          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
+          if (quitting || generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
+            if (setup.isDestroyed()) {
+              discardFailedConnection(next);
+              recoverSetupAfterClose();
+            }
             return { ok: false, error: "The hub connection was replaced before it finished." };
           }
           const failedWindow = mainWindow;

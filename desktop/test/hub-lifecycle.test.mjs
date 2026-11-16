@@ -132,6 +132,22 @@ async function run(name) {
       if (electron.windows.some(window => !window.destroyed)) throw new Error("a late connection reopened a window after Quit");
       const updates = (await import("./fixtures/lifecycle-store.mjs")).updates;
       if (updates.some(update => update.hub === "https://new.example/")) throw new Error("a late connection persisted after Quit");
+    ` : name === "quit-pending-save" || name === "quit-save-failure" ? `
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
+      await electron.app.emit("second-instance", {}, ["persona://link"]);
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the setup before a pending save");
+      const store = await import("./fixtures/lifecycle-store.mjs");
+      store.scenario.holdUpdate = true;
+      store.scenario.failUpdate = ${name === "quit-save-failure" ? "true" : "false"};
+      const connecting = electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://new.example/");
+      await electron.waitFor(() => typeof store.scenario.releaseUpdate === "function", "the store write held in flight");
+      await electron.app.quit();
+      store.scenario.releaseUpdate();
+      const response = await connecting;
+      if (response.ok) throw new Error("a pending store write completed successfully after Quit");
+      await electron.settle();
+      if (electron.windows.some(window => !window.destroyed)) throw new Error("a pending store completion reopened a window after Quit");
+      if (store.updates.some(update => update.hub === "https://new.example/")) throw new Error("a pending store write persisted after Quit");
     ` : `
       await electron.importMain();
       await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
@@ -215,6 +231,15 @@ test("quitting with no hub does not reopen setup", async () => {
 
 for (const name of ["quit-pending-success", "quit-pending-failure"]) {
   test(`${name}: a late connection cannot reopen setup or persist after Quit`, async () => {
+    const { windows, events, updates, unhandled } = await run(name);
+    assert.deepEqual(unhandled, []);
+    assert.equal(windows.some(window => !window.destroyed), false, JSON.stringify(events));
+    assert.equal(updates.some(update => update.hub === "https://new.example/"), false, JSON.stringify(events));
+  });
+}
+
+for (const name of ["quit-pending-save", "quit-save-failure"]) {
+  test(`${name}: a late store completion cannot persist or reopen setup`, async () => {
     const { windows, events, updates, unhandled } = await run(name);
     assert.deepEqual(unhandled, []);
     assert.equal(windows.some(window => !window.destroyed), false, JSON.stringify(events));
