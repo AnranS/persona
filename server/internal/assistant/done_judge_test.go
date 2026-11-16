@@ -179,6 +179,16 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"Chinese resolved full-width control", "要不要继续？这个问题已回答。", verdictDone, ""},                                                                                            // i18n-ignore: parser fixture
 		{"English narrative about a choice", "The report evaluates whether you need to split the module and concludes no.", verdictDone, ""},
 		{"Chinese narrative about a choice", "评估了要不要拆分模块，结论是不拆。", verdictDone, ""},
+		{"Chinese narrative about a required operation", "已检查是否需要你本人操作，结论是无需操作。", verdictDone, ""},
+		{"Chinese conditional about a required operation", "如果需要你本人操作，说明尚未完成；现已自动完成。", verdictDone, ""},
+		{"Chinese narrative does not hide a later direct requirement", "已检查是否需要你本人操作回滚；需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
+		{"Chinese direct requirement after a conditional clause", "如果部署需要审批，先记录；需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
+		{"Chinese direct requirement after an ASCII semicolon", "如果部署需要审批，先记录;需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
+		{"Chinese direct requirement after an ASCII full stop", "如果部署需要审批，先记录.需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
+		{"Chinese conditional with a decimal version", "如果 iOS 18.2 需要你本人操作，先记录。", verdictDone, ""},
+		{"Chinese quantifier is not a conditional", "还有若干事项需要你本人操作。", verdictNeedsUser, "需要你本人操作"},
+		{"Chinese sentence-initial quantifier is not a conditional", "若干事项需要你本人操作。", verdictNeedsUser, "需要你本人操作"},
+		{"Chinese conditional using ruo", "若需要你本人操作，说明尚未完成；现已自动完成。", verdictDone, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}

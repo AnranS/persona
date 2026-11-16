@@ -647,6 +647,43 @@ func ownerChineseOfferMarker(text, marker string, negations []string) bool {
 	return false
 }
 
+// ownerChineseConditionalPrefix reports whether the current clause is still conditional. A full stop or semicolon
+// starts a new clause; an independent instruction there is not hidden by an earlier condition (#5732).
+func ownerChineseConditionalPrefix(prefix string) bool {
+	start := 0
+	for i, r := range prefix {
+		boundary := r == '\n' || strings.ContainsRune(ownerSentenceEnds, r)
+		// A decimal point inside a version or number is not a sentence boundary; an ASCII stop between clauses is.
+		if r == '.' && i > 0 && i+1 < len(prefix) &&
+			prefix[i-1] >= '0' && prefix[i-1] <= '9' && prefix[i+1] >= '0' && prefix[i+1] <= '9' {
+			boundary = false
+		}
+		if boundary {
+			start = i + utf8.RuneLen(r)
+		}
+	}
+	clause := prefix[start:]
+	for _, word := range []string{"如果", "假如", "倘若", "若"} { // i18n-ignore: parser markers, not display copy
+		for end := len(clause); end > 0; {
+			i := strings.LastIndex(clause[:end], word)
+			if i < 0 {
+				break
+			}
+			if word == "若" && strings.HasPrefix(clause[i+len(word):], "干") { // i18n-ignore: 若干 is a quantifier, not conditional 若
+				end = i
+				continue
+			}
+			lead := strings.TrimSpace(clause[:i])
+			if lead == "" || strings.HasSuffix(lead, "：") || strings.HasSuffix(lead, ":") ||
+				strings.HasSuffix(lead, "，") || strings.HasSuffix(lead, ",") { // i18n-ignore: parser punctuation
+				return true
+			}
+			break
+		}
+	}
+	return false
+}
+
 // ownerChineseDirectMarker reports an unquoted, unnegated direct instruction. Quoting or negating one occurrence does
 // not hide a later genuine requirement, and a historical quoted instruction is not a new owner action (#5732).
 func ownerChineseDirectMarker(text, marker string, negations []string) bool {
@@ -665,7 +702,7 @@ func ownerChineseDirectMarker(text, marker string, negations []string) bool {
 				break
 			}
 		}
-		if !negated && !ownerMarkerQuoted(text, i) {
+		if !negated && !strings.HasSuffix(prefix, "是否") && !ownerChineseConditionalPrefix(prefix) && !ownerMarkerQuoted(text, i) { // i18n-ignore: parser marker, not display copy
 			return true
 		}
 		from = i + len(marker)
