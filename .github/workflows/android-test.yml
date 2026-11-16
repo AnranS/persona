@@ -56,14 +56,13 @@ jobs:
           emulator-boot-timeout: 180
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           script: |
-            for style in glass brief board; do SHOTS_STYLE=$style SHOTS_PLUGINS=1 scripts/app/android.sh shots-live -s emulator-5554 --scenario scripts/app/android_adaptive_scenes/voice-handset-8742.json --theme both --out /tmp/handset-8742/$style || exit $?; done
+            bash -euo pipefail -c 'mkdir -p /tmp/handset-8742; for style in glass brief board; do SHOTS_STYLE=$style SHOTS_PLUGINS=1 scripts/app/android.sh shots-live -s emulator-5554 --scenario scripts/app/android_adaptive_scenes/voice-handset-8742.json --theme both --out /tmp/handset-8742/$style 2>&1 | tee /tmp/handset-8742/$style-run.log || exit $?; done'
       - name: Retain exact source and native evidence
         if: always()
         timeout-minutes: 1
         run: |
           mkdir -p /tmp/handset-8742
           git rev-parse HEAD HEAD:android > /tmp/handset-8742/source.txt
-          timeout --kill-after=5s 15s adb -s emulator-5554 logcat -d > /tmp/handset-8742/logcat.txt 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
