@@ -128,8 +128,8 @@ test('ArkTS host replays all answer and display_answer expectations', options, a
         count++;
       }
     }
-    assert.equal(count, 23);
-    console.log('  answer/display_answer host replay: 15 + 8 complete expected objects');
+    assert.equal(count, 24);
+    console.log('  answer/display_answer host replay: 15 + 9 complete expected objects');
   });
 });
 

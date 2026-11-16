@@ -1,7 +1,7 @@
 // An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
-// answer + display_answer (15 + 8 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
+// answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
 // overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
 // viewed_images (ordinary post-overlay plus source-derived folded expected objects).
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
@@ -1436,6 +1436,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }
