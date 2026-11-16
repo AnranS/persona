@@ -23,6 +23,8 @@ func TestOwnerMarkerConditionalAndQuotedOccurrences(t *testing.T) {
 		{"but inside an even-if sentence stays direct", "Even if the release fails, the rollback is automatic, but you need to notify the owner.", verdictNeedsUser},
 		{"last but only if does not hide an earlier unconditional contrast", "The work is complete. You need to approve the release, but roll it back, but only if it fails.", verdictNeedsUser},
 		{"contrast without a comma keeps the first requirement direct", "The work is complete. You need to approve the release but roll it back if it fails.", verdictNeedsUser},
+		{"but meaning except is not a clause contrast", "The work is complete. You need to notify everyone but the owner if the release fails.", verdictDone},
+		{"nothing but is not a clause contrast", "The work is complete. You need to do nothing but approve if the release fails.", verdictDone},
 		{"modifier after the governing verb keeps the if-question direct", "The work is complete. You need to check carefully if the release failed.", verdictNeedsUser},
 		{"but only if keeps the requirement conditional", "The work is complete. You need to roll it back, but only if the release fails.", verdictDone},
 		{"but only if without a comma stays conditional", "The work is complete. You need to roll it back but only if the release fails.", verdictDone},

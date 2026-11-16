@@ -102,7 +102,24 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 		i += from
 		left := i > at && (lower[i-1] == ' ' || lower[i-1] == '\t' || lower[i-1] == ',')
 		right := i+3 < end && (lower[i+3] == ' ' || lower[i+3] == '\t')
-		if left && right && !ownerMarkerQuoted(lower, i) {
+		exception := false
+		if left && right {
+			before := strings.Fields(lower[at:i])
+			if len(before) > 0 {
+				switch before[len(before)-1] {
+				case "nothing", "anything", "everything", "something", "everyone", "anyone", "someone", "all", "both":
+					exception = true // "nothing/everyone … but …" means except, not a new clause
+				}
+			}
+			after := strings.Fields(lower[i+3 : end])
+			if len(after) > 0 {
+				switch after[0] {
+				case "the", "a", "an", "this", "that", "these", "those":
+					exception = true // a determiner starts a noun phrase, not a contrasted clause
+				}
+			}
+		}
+		if left && right && !exception && !ownerMarkerQuoted(lower, i) {
 			out = append(out, i)
 		}
 		from = i + 3
