@@ -325,8 +325,8 @@ func (s *Service) askCopy(id string) (acceptAsk, bool) {
 // takeRecommendation: the owner took decision a's recommended option for task id (or, a.ByDefault, nobody answered by its
 // deadline and the hub took it, #3127): it is kept in the todo's decisions and sent to the task's agent, whose next stop
 // comes back to the supervisor (userDecided). With no Agent to receive an explicit owner choice, the choice is recorded
-// and handed to the supervisor instead. Any other delivery error takes nothing and leaves the round retryable. A failed
-// automatic default keeps the old rollback and owner-reminder behavior. A failed
+// and handed to the supervisor instead. Any other delivery error takes nothing and leaves the round retryable. A
+// failed automatic default keeps the old rollback and owner-reminder behavior.
 func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk) (acceptResult, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
