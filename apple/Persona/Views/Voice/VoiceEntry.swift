@@ -93,6 +93,8 @@ struct VoiceEndedStrip: View {
     @Environment(AppModel.self) private var model
     @State private var showDetails = false
     @State private var showModel = false
+    /// Why Continue did not pick the call up (Persona's urgent call is on, #9290).
+    @State private var refusal: VoiceUnavailableNote?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -109,7 +111,7 @@ struct VoiceEndedStrip: View {
                 if let again = note.again {
                     Button {
                         Haptics.tap()
-                        Task { await VoiceCalls.shared.resume(call.key) }
+                        Task { refusal = await VoiceCalls.shared.resume(call.key) }
                     } label: {
                         Label(again == .resume ? String(localized: "Continue") : String(localized: "Retry [Components b8784c]"), systemImage: Theme.Icon.voiceChannel)
                             .lineLimit(1)
@@ -146,6 +148,7 @@ struct VoiceEndedStrip: View {
         } message: {
             Text(note.details ?? "")
         }
+        .voiceUnavailableAlert($refusal, model: model)
         // The default assistant's: calls talk to its voice extension.
         .modelConfigurationSheet(isPresented: $showModel, purposeID: "plugin." + call.extensionID, owner: .defaultAssistant)
     }

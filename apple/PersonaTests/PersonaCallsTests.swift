@@ -62,13 +62,19 @@ import Testing
     let system = FakeCallSystem()
     let voice = VoiceRig()
     let voiceCalls = VoiceCalls()
-    private(set) lazy var calls = PersonaCalls(system: { [system] in system }, clock: voice.clock, voiceCalls: voiceCalls,
-                                               ownerAudio: { [voice] in voice.audio }, ownerDeps: { [voice] _, audio, events in
-        var deps = voice.deps
-        deps.audio = { audio }
-        deps.callEvents = events
-        return deps
-    })
+    /// The groups whose call to Persona ended (`PersonaCalls.callLeft`: their tunnels may go).
+    private(set) var left: [String] = []
+    private(set) lazy var calls: PersonaCalls = {
+        let calls = PersonaCalls(system: { [system] in system }, clock: voice.clock, voiceCalls: voiceCalls,
+                                 ownerAudio: { [voice] in voice.audio }, ownerDeps: { [voice] _, audio, events in
+            var deps = voice.deps
+            deps.audio = { audio }
+            deps.callEvents = events
+            return deps
+        })
+        calls.callLeft = { [weak self] in self?.left.append($0) }
+        return calls
+    }()
 
     /// A call to Persona the system was asked to start (it has not handed Start back yet).
     func dial() async -> PersonaCall {
@@ -270,6 +276,65 @@ struct PersonaCallsTests {
         #expect(!call.held && !call.resumeOffered)
     }
 
+    /// The interruption's notifications alone (no `didDeactivate`): the engine went with the session, and the system's
+    /// next activation brings it back; the call is never left connected and silent.
+    @Test func anInterruptionWithoutADeactivationComesBackOnTheNextActivation() async {
+        let rig = CallRig()
+        let (call, _) = await rig.connected()
+        #expect(rig.voice.audio.activations == 1)
+        rig.voice.audio.interruptSystemSession()
+        #expect(call.held && call.holdReason == .interruption && rig.voice.audio.deactivations == 1)
+        rig.voice.audio.emit(.interruptionEnded(shouldResume: true))
+        rig.system.activate()
+        #expect(rig.voice.audio.activations == 2 && rig.voice.audio.active, "the engine starts again")
+        #expect(!call.held && call.voice?.held == false && !rig.voice.audio.heldNow)
+    }
+
+    @Test func anInterruptionWithoutADeactivationStillRecoversAndOffersResume() async {
+        let rig = CallRig()
+        let (call, _) = await rig.connected()
+        rig.voice.audio.interruptSystemSession()
+        rig.system.activates = false
+        let sleeping = rig.voice.clock.sleeping
+        rig.voice.audio.emit(.interruptionEnded(shouldResume: true))
+        await rig.voice.advance(1, sleepers: sleeping + 2)
+        await rig.voice.waitUntil { rig.system.requests.contains(.pause(false)) }
+        #expect(rig.system.requests.contains(.pause(false)), "the system asked to resume")
+        await rig.voice.advance(0.5, sleepers: sleeping + 2)
+        await rig.voice.waitUntil { rig.system.activations == 1 }
+        #expect(rig.system.activations == 1, "then the session activated once")
+        await rig.voice.advance(4, sleepers: sleeping + 1)
+        await rig.voice.waitUntil { call.resumeOffered }
+        #expect(call.resumeOffered && call.held && call.phase.isLive)
+        rig.system.activate()
+        #expect(!call.held && rig.voice.audio.activations == 2)
+    }
+
+    /// Start and End (or a reset) one after the other, before the voice's start ran: it never begins, so nothing claims
+    /// the microphone or opens a socket after the system call is over.
+    @Test func aStartThenAnEndBeforeTheVoiceBeganNeverStartsIt() async {
+        for reset in [false, true] {
+            let rig = CallRig()
+            let call = await rig.dial()
+            rig.system.act(.start, call.id)
+            if reset { rig.calls.systemReset() } else { rig.system.act(.end, call.id) }
+            await rig.settle()
+            try? await Task.sleep(for: .milliseconds(50))
+            #expect(call.phase.isEnded && call.voice?.phase.isEnded == true, "reset \(reset)")
+            #expect(rig.voice.sockets.isEmpty && !rig.voice.audio.running, "reset \(reset): no socket, no audio")
+            #expect(rig.voice.microphone.isFree && rig.voiceCalls.current == nil, "reset \(reset)")
+        }
+    }
+
+    /// Calls to Persona end: their group's tunnels may go (the background kept them for the call).
+    @Test func aCallToPersonaEndingLetsItsTunnelsGo() async {
+        let rig = CallRig()
+        let (call, _) = await rig.connected()
+        #expect(rig.left.isEmpty)
+        call.voice?.end(.lost)
+        #expect(rig.left == [rig.voice.key.group])
+    }
+
     @Test func aStartTooEarlyIsTriedOnceMoreAndAnotherRefusalFallsBack() async {
         let early = NSError(domain: CallSystemError.requestTransaction, code: 6)
         let rig = CallRig()
@@ -320,6 +385,55 @@ struct PersonaCallsTests {
         rig.system.act(.join, id)
         #expect(chat.phase == .ended(.urgentCall))
         #expect(VoiceEndNote.make(.urgentCall, extensionID: "voice")?.again == .resume, "Continue offered")
+    }
+
+    /// While an urgent call rings, and once it is answered: no voice chat starts and none is picked up again (Continue,
+    /// CarPlay's too), and nothing of the audio is touched; once it is over, Continue works.
+    @Test func noVoiceChatStartsOrContinuesUnderAnUrgentCall() async throws {
+        let rig = CallRig()
+        await rig.voiceCalls.start(rig.voice.key, extensionID: "voice", surface: .phone, deps: rig.voice.deps)
+        let chat = try #require(rig.voiceCalls.current)
+        chat.end(.interrupted)
+        let id = UUID()
+        try await rig.calls.ring(id, callID: "call_1", name: "Persona Urgent Call")
+        let stops = rig.voice.audio.stops
+        #expect(await rig.voiceCalls.resume(rig.voice.key) == .urgentCall, "ringing: Continue is refused")
+        let other = SessionKey(group: rig.voice.key.group, machineID: "m2", sessionID: "s2")
+        #expect(await rig.voiceCalls.start(other, extensionID: "voice", surface: .phone, deps: rig.voice.deps) == .urgentCall)
+        #expect(rig.voiceCalls.current === chat && chat.phase == .ended(.interrupted))
+        #expect(rig.voice.sockets.count == 1 && !rig.voice.audio.running && rig.voice.audio.stops == stops, "no audio touched")
+        rig.system.act(.join, id)
+        #expect(await rig.voiceCalls.start(other, extensionID: "voice", surface: .carPlay, deps: rig.voice.deps) == .urgentCall,
+                "answered: CarPlay's start is refused")
+        rig.calls.urgentEnded(id)
+        #expect(await rig.voiceCalls.resume(rig.voice.key) == nil)
+        #expect(chat.phase == .connecting && rig.voice.sockets.count == 2)
+    }
+
+    /// CarPlay's chat ended for the urgent call offers Continue; it is refused until the urgent call is over.
+    @Test func carPlaysContinueAfterTheUrgentCallWaitsForItsEnd() async throws {
+        let rig = CallRig()
+        await rig.voiceCalls.start(rig.voice.key, extensionID: "voice", surface: .carPlay, deps: rig.voice.deps)
+        let chat = try #require(rig.voiceCalls.current)
+        let id = UUID()
+        try await rig.calls.ring(id, callID: "call_1", name: "Persona Urgent Call")
+        rig.system.act(.join, id)
+        #expect(chat.phase == .ended(.urgentCall))
+        #expect(await rig.voiceCalls.resume(rig.voice.key) == .urgentCall)
+        #expect(chat.phase == .ended(.urgentCall) && rig.voice.sockets.count == 1 && !rig.voice.audio.running)
+        rig.calls.urgentEnded(id)
+        #expect(await rig.voiceCalls.resume(rig.voice.key) == nil && chat.phase == .connecting)
+    }
+
+    /// An urgent call that rang while the call to Persona was being prepared (the hub asked, the microphone prompt):
+    /// asked again just before the system's Start, and refused with the urgent call's note.
+    @Test func anUrgentCallThatRangMeanwhileRefusesTheStart() async throws {
+        let rig = CallRig()
+        let call = rig.calls.add(kind: .owner(group: "g"), direction: .outgoing)
+        try await rig.calls.ring(UUID(), callID: "call_1", name: "Persona Urgent Call")
+        await rig.calls.place(call, origin: .app)
+        #expect(rig.system.starts.isEmpty)
+        #expect(call.phase == .ended(.failed) && rig.calls.refusal == PersonaCalls.urgentNote && !rig.calls.presented)
     }
 
     @Test func holdAndAcceptThenTheUrgentCallEndsAndTheCallToPersonaResumes() async throws {

@@ -95,6 +95,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     @ObservationIgnored private var interruptions: NSObjectProtocol?
     /// When the last redial came (`continueActivity`): the same tap can come twice.
     @ObservationIgnored var lastRedial: Date?
+    /// A call to Persona on this group ended: the tunnels it kept open in the background go (`AppModel.callEnded`).
+    @ObservationIgnored var callLeft: @MainActor (_ group: String) -> Void = { AppModel.shared.callEnded(group: $0) }
 
     init(system: @escaping @MainActor () -> any CallSystem = PersonaCalls.makeSystem, clock: any VoiceClock = SystemVoiceClock(),
          voiceCalls: VoiceCalls = .shared,
@@ -106,6 +108,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         self.voiceCalls = voiceCalls
         self.ownerAudio = ownerAudio
         self.ownerDeps = ownerDeps
+        // Every voice chat starts or goes on through `VoiceCalls` (a page, CarPlay, Continue): none under an urgent call.
+        voiceCalls.urgentCallOn = { [weak self] in self?.urgentInProgress ?? false }
     }
 
     /// The system's side, made the first time a call needs it. On the Simulator a stand-in (it has no call service);
@@ -223,6 +227,7 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
             }
         }
         if !calls.contains(where: { $0.kind.isUrgent && $0.phase.isLive }) { stopWatchingInterruptions() }
+        if !call.sample, let owner = call.engine as? OwnerCallEngine, owner.voice != nil { callLeft(owner.key.group) }
         let clock = clock
         Task { [weak self, weak call] in
             try? await clock.sleep(for: Self.endedStays)

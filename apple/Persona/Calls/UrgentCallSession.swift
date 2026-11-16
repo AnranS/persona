@@ -53,6 +53,10 @@ import os
     @ObservationIgnored private let ended: @MainActor (UrgentCallSession) -> Void
     /// The turns waiting for the call to be unmuted or off hold.
     @ObservationIgnored private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// Move on at every hold and every mute: a line a hold cut is said again after it, and what was being heard when
+    /// either came is not the owner's answer (it is listened for again).
+    @ObservationIgnored private var holdCount = 0
+    @ObservationIgnored private var muteCount = 0
     private static let log = Logger(subsystem: "persona", category: "urgent-call")
 
     /// `card`: the call's card when it is known already (the tests); else `prepare` finds it among the pending ones.
@@ -90,30 +94,36 @@ import os
         run = Task { await talk() }
     }
 
-    /// Muted or unmuted from the system: what is being heard stops (it is not the owner's to hear), and listening waits.
+    /// Muted or unmuted from the system: listening stops and waits for the mute to end; what Persona is saying goes on.
     func setMuted(_ on: Bool) {
         guard muted != on else { return }
         muted = on
-        if on { voice.stop() }
-        wakeIfFree()
+        if on {
+            muteCount += 1
+            voice.stopListening()
+        }
+        wake()
     }
 
     /// On hold or off it: whatever is said or heard stops now, and the turns wait for the hold to end.
     func setHeld(_ on: Bool) {
         guard held != on else { return }
         held = on
-        if on { voice.stop() }
-        wakeIfFree()
+        if on {
+            holdCount += 1
+            voice.stop()
+        }
+        wake()
     }
 
-    private func wakeIfFree() {
-        guard !held, !muted else { return }
+    /// Hold or mute changed: every waiting turn looks again whether it may go on (speaking needs only the hold off).
+    private func wake() {
         let waiting = waiting
         self.waiting = []
         for w in waiting { w.resume() }
     }
 
-    /// Returns once the call may listen (unmuted and off hold), or at once if it may.
+    /// Returns once the call may speak (off hold) or, `listening`, listen (unmuted too), or at once if it may.
     private func untilFree(listening: Bool) async {
         while (held || (listening && muted)) && !Task.isCancelled && phase != .ended {
             await withCheckedContinuation { waiting.append($0) }
@@ -126,7 +136,7 @@ import os
         run?.cancel()
         voice.stop()
         phase = .ended
-        wakeAll()
+        wake()
         let seconds = answeredAt.map { Int(Date.now.timeIntervalSince($0)) } ?? 0
         let transcript = lines.map { "\($0.who == .persona ? "Persona" : String(localized: "You")): \($0.text)" }.joined(separator: "\n")
         let outcome = outcome
@@ -141,12 +151,6 @@ import os
             }
         }
         ended(self)
-    }
-
-    private func wakeAll() {
-        let waiting = waiting
-        self.waiting = []
-        for w in waiting { w.resume() }
     }
 
     /// The owner tapped an option on the call page: read back, as if said.
@@ -189,12 +193,9 @@ import os
         var silences = 0
         for _ in 0..<12 where !Task.isCancelled && phase != .ended {
             guard !tapOnly else { return } // the page waits for a tap
-            await untilFree(listening: true)
+            let heard = await hearOwner()
             guard !Task.isCancelled, phase != .ended else { return }
-            phase = .listening
-            guard let heard = await voice.listen() else {
-                // Muted or held while it listened: not a silence of the owner's.
-                if muted || held { continue }
+            guard let heard else {
                 silences += 1
                 if silences >= 2 { break }
                 await say(String(localized: "Are you still there? Say what you'd like to do, or say “hang up”."))
@@ -238,10 +239,8 @@ import os
         phase = .confirming
         await say(String(localized: "You chose: \(pending.said). Say “confirm” to go ahead."))
         guard !tapOnly else { return }
-        await untilFree(listening: true)
+        let heard = await hearOwner() ?? ""
         guard !Task.isCancelled, phase != .ended else { return }
-        phase = .listening
-        let heard = await voice.listen() ?? ""
         if !heard.isEmpty { add(.owner, heard) }
         await act(UrgentCallReply.readBack(heard))
     }
@@ -291,12 +290,35 @@ import os
         }
     }
 
+    /// One turn of listening, once the call may listen: what the owner said (nil: nothing). Muted or held while it
+    /// listened, what it had is not their answer: it listens again once it may.
+    private func hearOwner() async -> String? {
+        while !Task.isCancelled, phase != .ended {
+            await untilFree(listening: true)
+            guard !Task.isCancelled, phase != .ended else { return nil }
+            phase = .listening
+            let (holds, mutes) = (holdCount, muteCount)
+            let heard = await voice.listen()
+            if holds == holdCount, mutes == muteCount { return heard }
+        }
+        return nil
+    }
+
+    /// Says `text` once the call is off hold (muted, Persona still speaks). A hold that cuts it: said again, whole, after.
     private func say(_ text: String) async {
-        await untilFree(listening: false)
-        guard !Task.isCancelled, phase != .ended else { return }
-        phase = .speaking
-        add(.persona, text)
-        await voice.say(text)
+        var shown = false
+        while !Task.isCancelled, phase != .ended {
+            await untilFree(listening: false)
+            guard !Task.isCancelled, phase != .ended else { return }
+            phase = .speaking
+            if !shown {
+                add(.persona, text)
+                shown = true
+            }
+            let holds = holdCount
+            await voice.say(text)
+            if holds == holdCount { return }
+        }
     }
 
     private func add(_ who: Line.Who, _ text: String) {

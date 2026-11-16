@@ -18,6 +18,10 @@ import UIKit
     private(set) var current: VoiceConversation?
 
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    /// Persona's urgent call rings or is on (#9290): no voice chat starts or is picked up again under it, from any
+    /// page, CarPlay or Continue (its audio session is the system's). `PersonaCalls` answers it once it exists; before
+    /// that there is no urgent call.
+    @ObservationIgnored var urgentCallOn: @MainActor () -> Bool = { false }
 
     /// `watchesApp`: end the phone's call when the app goes to the background (the shared one; the tests drive
     /// `appDidEnterBackground` themselves).
@@ -33,13 +37,17 @@ import UIKit
 
     /// Starts a call bound to `key`. The same conversation's call from the same surface is left as it is (or picked up
     /// again when it ended); another one is ended first, a call from another surface too (a voice chat on the main
-    /// conversation while a call to Persona is on it is a call of its own). Returns once the call sent its `start`, or ended.
-    func start(_ key: SessionKey, extensionID: String, surface: VoiceSurface, recent: [VoiceLine] = [], deps: VoiceDeps) async {
+    /// conversation while a call to Persona is on it is a call of its own). Returns once the call sent its `start`, or ended;
+    /// or at once with why not, touching nothing (no call ends, no audio opens), while Persona's urgent call is on.
+    @discardableResult
+    func start(_ key: SessionKey, extensionID: String, surface: VoiceSurface, recent: [VoiceLine] = [], deps: VoiceDeps) async
+        -> VoiceUnavailableNote? {
+        if let refused = refusal(surface) { return refused }
         if let call = current {
             // A system call that ended has no system call behind it any more: it is never picked up again.
             if call.key == key, call.extensionID == extensionID, call.surface == surface, surface != .call {
                 if call.phase.isEnded { await call.restart() }
-                return
+                return nil
             }
             call.end(.replaced)
             current = nil
@@ -47,11 +55,14 @@ import UIKit
         let call = VoiceConversation(key: key, extensionID: extensionID, surface: surface, recent: recent, deps: deps)
         current = call
         await call.begin()
+        return nil
     }
 
     /// A call made elsewhere becomes the app's call and begins (a system call: `PersonaCalls` holds it for the system's
-    /// audio before it begins). The one before ends.
+    /// audio before it begins). The one before ends. One that ended already (its system call was over before it began)
+    /// never begins.
     func begin(_ call: VoiceConversation) async {
+        guard !call.phase.isEnded else { return }
         if let before = current, before !== call {
             before.end(.replaced)
         }
@@ -59,15 +70,25 @@ import UIKit
         await call.begin()
     }
 
+    /// Why a voice chat from `surface` may not start now: Persona's urgent call is on (a system call to Persona is
+    /// placed by `PersonaCalls`, which refuses it itself).
+    private func refusal(_ surface: VoiceSurface) -> VoiceUnavailableNote? {
+        surface != .call && urgentCallOn() ? .urgentCall : nil
+    }
+
     /// A system call that ended goes away at once: no Continue (there is no system call to pick up again).
     func release(_ call: VoiceConversation) {
         if current === call { current = nil }
     }
 
-    /// Continue on the ended call bound to `key` (not a system call's).
-    func resume(_ key: SessionKey) async {
-        guard let call = current, call.key == key, call.phase.isEnded, call.surface != .call else { return }
+    /// Continue on the ended call bound to `key` (not a system call's). Not while Persona's urgent call is on: why not,
+    /// and the call stays ended.
+    @discardableResult
+    func resume(_ key: SessionKey) async -> VoiceUnavailableNote? {
+        guard let call = current, call.key == key, call.phase.isEnded, call.surface != .call else { return nil }
+        if let refused = refusal(call.surface) { return refused }
         await call.restart()
+        return nil
     }
 
     /// Ends the call started from `surface`; a call another surface started goes on (CarPlay only stops its own).

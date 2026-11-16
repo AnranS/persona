@@ -315,8 +315,12 @@ nonisolated struct CallMachine: Equatable, Sendable {
         case .audioActivated, .sessionActivated:
             guard phase.isLive else { return [] }
             if event == .sessionActivated { out.append(.log("the call's audio session activated by the app")) }
+            let on = !audioActive
             out += activated()
-            startingUntil = .distantFuture
+            // A system mute is the engine's own from now until half a second after it runs (`engineRunning`). Only when
+            // the audio comes on: a second word of the same activation (the watchdog's own and the system's late one)
+            // starts no engine, so nothing would close the window again.
+            if on { startingUntil = .distantFuture }
 
         case .sessionActivationFailed:
             guard phase.isLive, !audioActive else { return [] }
@@ -381,6 +385,14 @@ nonisolated struct CallMachine: Equatable, Sendable {
         case .interruptionBegan:
             // Only once the call has its audio: a ring or a dial has no session of the app's to interrupt.
             guard phase == .connecting || phase.connectedSince != nil else { return [] }
+            // The session is not the call's any more, whether or not the system also says so (`didDeactivate` may never
+            // come): the engine goes (`PhoneVoiceAudio` took its own down already), the recovery's waits see no audio,
+            // and the next activation starts it again.
+            if audioActive {
+                audioActive = false
+                startingUntil = nil
+                out.append(.audioOff)
+            }
             holds.insert(.interruption)
             recovering = false
             resumeOffered = false

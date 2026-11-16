@@ -180,6 +180,13 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     }
 
     func emit(_ event: VoiceAudioEvent) { events?(event) }
+
+    /// The session interrupted, as `PhoneVoiceAudio(session: .system)` hears it: its engine goes and the session is not
+    /// the call's until the next `activate`, whether or not the system also says so (`didDeactivate`).
+    func interruptSystemSession() {
+        active = false
+        events?(.interrupted)
+    }
 }
 
 struct FakeMicPermission: MicPermission {

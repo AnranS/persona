@@ -96,9 +96,19 @@ struct CallSourceTests {
         #expect(moved.contains("if owner == .app {"), "only the app's own session follows VoiceRoute")
     }
 
+    /// The refusal itself is `VoiceCalls`' (`VoiceCallsTests`, `PersonaCallsTests`); here, that every way in says it:
+    /// the page's Voice Chat at once, its Continue, CarPlay's start and Continue, and that `PersonaCalls` answers it.
     @Test func voiceChatIsRefusedDuringAnUrgentCall() throws {
-        let start = try #require(Self.body(try Self.lines("Persona/Views/Voice/VoiceEntry.swift"), "static func start("))
+        let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
+        let start = try #require(Self.body(entry, "static func start("))
         #expect(start.contains("PersonaCalls.shared.urgentInProgress"))
         #expect(start.contains("PersonaCalls.shared.endForVoiceChat()"))
+        let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
+        #expect(strip.contains("refusal = await VoiceCalls.shared.resume(") && strip.contains(".voiceUnavailableAlert($refusal"))
+        let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift").joined(separator: "\n")
+        #expect(car.contains("if let refused = await VoiceCalls.shared.start("))
+        #expect(car.contains("if let refused = await VoiceCalls.shared.resume("))
+        let calls = try Self.lines("Persona/Calls/PersonaCalls.swift").joined(separator: "\n")
+        #expect(calls.contains("voiceCalls.urgentCallOn = { [weak self] in self?.urgentInProgress ?? false }"))
     }
 }

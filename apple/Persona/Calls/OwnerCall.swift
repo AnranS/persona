@@ -26,8 +26,7 @@ extension PersonaCalls {
         // From Recents or Siri the app may have just launched: its hubs come first.
         if origin != .app { await Self.waitForHub(group) }
         guard call.phase.isLive else { return }
-        if urgentInProgress { return refuse(call, note: Self.urgentNote) }
-        guard !voiceCalls.isRecording(RecordingMicrophone.shared) else { return refuse(call, note: Self.recordingNote) }
+        if let note = admission() { return refuse(call, note: note) }
         guard let group = group ?? model.hub?.group, let api = model.api(group) else { return refuse(call, note: Self.noHubNote) }
 
         let key: SessionKey
@@ -42,7 +41,8 @@ extension PersonaCalls {
                 return refuse(call, note: Self.unreachableNote)
             }
         }
-        // The same checks as the chat's Voice Chat, so the reasons and Open Settings match (`VoiceEntry`).
+        // The same checks as the chat's Voice Chat, so the reasons and Open Settings match (`VoiceEntry`). It waits for
+        // the group's probe even when the chat's page asked first (a cold launch from Recents).
         await VoiceSupport.shared.refresh(group: group, api: api)
         guard call.phase.isLive else { return }
         let availability = model.session(key).map { VoiceSupport.shared.availability(for: $0, group: group) }
@@ -60,6 +60,8 @@ extension PersonaCalls {
             return refuse(call, note: Self.microphoneNote)
         }
         guard call.phase.isLive else { return }
+        // An urgent call or a recording may have come while the hub, the extension or the microphone prompt were asked.
+        if let note = admission() { return refuse(call, note: note) }
 
         // An in-app voice chat ends first: its audio would end the call's.
         endVoiceChat(for: .replaced)
@@ -89,6 +91,8 @@ extension PersonaCalls {
         let system = system
         var again = true
         while call.phase.isLive {
+            // Asked again just before each Start: an urgent call that rang meanwhile goes first.
+            if let note = admission() { return refuse(call, note: note) }
             do {
                 try await system.start(call.id)
                 // Hung up while the system took it: its call ends too.
@@ -109,6 +113,14 @@ extension PersonaCalls {
                 return
             }
         }
+    }
+
+    /// What refuses a call to Persona now: an urgent call ringing or on (its audio is the system's), a recording or
+    /// dictation on the microphone. Asked first and again after every wait before the system's Start.
+    func admission() -> VoiceUnavailableNote? {
+        if urgentInProgress { return Self.urgentNote }
+        if voiceCalls.isRecording(RecordingMicrophone.shared) { return Self.recordingNote }
+        return nil
     }
 
     /// The system would not place the call: the voice chat in the app on the main conversation, its page open.
@@ -173,10 +185,7 @@ extension PersonaCalls {
 
     // MARK: Notes
 
-    static var urgentNote: VoiceUnavailableNote {
-        VoiceUnavailableNote(title: String(localized: "Finish the urgent call first"),
-                             message: String(localized: "Persona's urgent call is on. Call again once it's over."), settings: nil)
-    }
+    static var urgentNote: VoiceUnavailableNote { .urgentCall }
 
     static var recordingNote: VoiceUnavailableNote {
         VoiceUnavailableNote(title: String(localized: "Finish the recording or dictation first"),

@@ -55,6 +55,10 @@ extension VoiceEnd {
     private let deps: (any SystemCallAudio, @escaping @MainActor (VoiceCallEvent) -> Void) -> VoiceDeps
     private var muted = false
     private var held = false
+    /// The voice's start, on its way to `VoiceCalls` (it runs after the Start action was handled).
+    private var starting: Task<Void, Never>?
+    /// Hung up: the voice never starts again, even if its start had not run yet.
+    private var over = false
 
     /// `deps`: the voice's, on `audio` and reporting to the engine (`VoiceDeps.systemCall`; the tests' fakes).
     init(key: SessionKey, extensionID: String, recent: [VoiceLine], audio: any SystemCallAudio, calls: VoiceCalls,
@@ -68,7 +72,7 @@ extension VoiceEnd {
     }
 
     func begin() {
-        guard voice == nil else { return }
+        guard voice == nil, !over else { return }
         let voice = VoiceConversation(key: key, extensionID: extensionID, surface: .call, recent: recent,
                                       deps: deps(audio) { [weak self] event in self?.heard(event) })
         // Muted or held before it began (while it dialled): so from its first buffer.
@@ -78,7 +82,13 @@ extension VoiceEnd {
         audio.onRunning = { [weak self] in self?.events?(.running) }
         self.voice = voice
         let calls = calls
-        Task { await calls.begin(voice) }
+        starting = Task { [weak self] in
+            // Ended before this ran (an End or a reset right after the Start): the voice never begins, so nothing claims
+            // the microphone or opens a socket for a system call that is over.
+            guard !Task.isCancelled, let self, !self.over, !voice.phase.isEnded else { return }
+            self.starting = nil
+            await calls.begin(voice)
+        }
     }
 
     func audioActivated() { audio.activate() }
@@ -97,6 +107,9 @@ extension VoiceEnd {
     }
 
     func hangUp() {
+        over = true
+        starting?.cancel()
+        starting = nil
         guard let voice, !voice.phase.isEnded else { return }
         if calls.current === voice {
             calls.end(.user, from: .call)

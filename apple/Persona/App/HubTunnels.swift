@@ -188,7 +188,8 @@ extension AppModel {
             outsideRuns[group, default: 1] -= 1
             if outsideRuns[group] == 0 {
                 outsideRuns[group] = nil
-                if link(group)?.live.suspended != false {
+                // Not those a call to Persona still goes through (#9290): closing them would cut its voice.
+                if link(group)?.live.suspended != false, !callKeepsTunnels(group) {
                     for h in registry.members(group) { closeTunnels(h.id, forget: false) }
                 }
             }
@@ -215,9 +216,32 @@ extension AppModel {
     /// group (#9290): the call goes on in the background, and its voice's socket may go through one.
     func closeTunnelsForBackground() {
         var keep = Set(outsideRuns.keys)
-        if let call = VoiceCalls.shared.current, call.surface == .call, !call.phase.isEnded { keep.insert(call.key.group) }
+        if let group = callTunnelGroup { keep.insert(group) }
         guard !keep.isEmpty else { return closeAllTunnels() }
         for h in registry.hubs where !keep.contains(h.group) { closeTunnels(h.id, forget: false) }
+    }
+
+    /// The group a call to Persona is on (#9290): the call goes on in the background, and its voice's socket may go
+    /// through one of the group's tunnels, so none of them closes for the background while it is on.
+    var callTunnelGroup: String? {
+        #if DEBUG
+        let calls = voiceCallsForTests ?? .shared
+        #else
+        let calls = VoiceCalls.shared
+        #endif
+        guard let call = calls.current, call.surface == .call, !call.phase.isEnded else { return nil }
+        return call.key.group
+    }
+
+    /// Whether a call to Persona keeps `group`'s tunnels open: every background cleanup asks (`closeTunnelsForBackground`,
+    /// a button outside the app done, the call's own end).
+    func callKeepsTunnels(_ group: String) -> Bool { callTunnelGroup == group }
+
+    /// A call to Persona on `group` ended (#9290). In the background its tunnels close now, as they would have when the
+    /// app went there, unless a button outside the app still uses them (it closes them itself) or another call does.
+    func callEnded(group: String) {
+        guard link(group)?.live.suspended == true, outsideRuns[group] == nil, !callKeepsTunnels(group) else { return }
+        for h in registry.members(group) { closeTunnels(h.id, forget: false) }
     }
 
     /// Every tunnel of every hub closes (the app went to the background, or there is no hub left).
