@@ -155,9 +155,10 @@ async function shot(name) {
   const size = image.getSize();
   if (size.width < 600 || size.height < 400) throw new Error(`${name}: the captured page is ${size.width}x${size.height}`);
   await writeFile(join(output, `${name}.png`), image.toPNG());
+  shots.push({ name: `${name}.png`, ...size });
   // What the page held when it was captured, so a verdict can be checked against the picture.
   const dom = await page("({title: document.title, heading: document.querySelector('header h1, main h1, h1')?.textContent?.trim().slice(0, 80) ?? '', testids: [...new Set([...document.querySelectorAll('[data-testid]')].map(e => e.dataset.testid))].slice(0, 40), links: document.querySelectorAll('a[href]').length, buttons: document.querySelectorAll('button').length})");
-  shots.push({ name: `${name}.png`, ...size, ...dom });
+  Object.assign(shots.at(-1), dom);
 }
 
 /** In-app navigation as the router sees a link: the address changes, the page does not reload. */
@@ -285,6 +286,7 @@ async function rootScenario() {
     const image = await options.webContents.capturePage();
     if (image.getSize().width < 600 || image.getSize().height < 400) throw new Error(`local options capture ${JSON.stringify(image.getSize())}`);
     await writeFile(join(output, "10-local-options.png"), image.toPNG());
+    shots.push({ name: "10-local-options.png", ...image.getSize() });
     const boundary = await options.webContents.executeJavaScript("({node: typeof require !== 'undefined', hub: !!window.personaDesktop, commands: Object.keys(window.desktopSetup).sort()})");
     if (boundary.node || boundary.hub) throw new Error(`local window boundary ${JSON.stringify(boundary)}`);
     options.close();
@@ -458,7 +460,11 @@ async function finish(error) {
     if (!ok && win && !win.isDestroyed()) {
       result.failedAt = { url: win.webContents.getURL().split("?")[0], text: String(await text().catch(() => "")).slice(0, 1500) };
       const image = await win.webContents.capturePage().catch(() => undefined);
-      if (image && image.getSize().width > 1) await writeFile(join(output, "failure.png"), image.toPNG());
+      if (image && image.getSize().width > 1) {
+        await writeFile(join(output, "failure.png"), image.toPNG());
+        shots.push({ name: "failure.png", ...image.getSize() });
+        result.screenshots = shots;
+      }
     }
     await writeFile(join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   } catch (writeError) { console.error(writeError); }

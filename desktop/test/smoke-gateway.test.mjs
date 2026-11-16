@@ -57,7 +57,7 @@ test("an in-prefix request passes, with redacted reporting but an intact forward
   assert.equal(response.status, 200);
   assert.equal(forwarded(), "/api/v1/test?synthetic-secret=one");
   assert.equal(gateway.outside().length, 0);
-  assert.deepEqual(gateway.requests(), [{ method: "GET", path: "/persona/api/v1/test", status: 200 }]);
+  assert.deepEqual(gateway.requests(), [{ method: "GET", path: "/persona/api/v1/test", status: 200, closed: true, complete: true }]);
   assert.ok(!JSON.stringify(gateway.requests()).includes("synthetic-secret"));
 });
 

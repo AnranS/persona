@@ -113,9 +113,15 @@ export class BrowserWindow extends EventEmitter {
 }
 
 export async function settle() { await new Promise(resolve => setTimeout(resolve, 30)); }
+export async function waitFor(read, label, attempts = 200) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const value = read();
+    if (value) return value;
+    await settle();
+  }
+  throw new Error(`Timed out waiting for ${label}: ${JSON.stringify({ events, windows: windows.map(window => ({ title: window.options.title, url: window.url, destroyed: window.destroyed })), controls: [...controls.keys()] })}`);
+}
 export async function importMain() {
-  const startup = import(process.env.PERSONA_TEST_MAIN);
-  if (ready) await ready;
-  await startup;
+  await import(process.env.PERSONA_TEST_MAIN);
   await settle();
 }

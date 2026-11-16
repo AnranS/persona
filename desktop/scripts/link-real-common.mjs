@@ -2,14 +2,29 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, posix, relative, resolve, sep, win32 } from "node:path";
 
 export const PAIR_INPUT = "persona://link?";
 export const SERVICE_SENTINEL = "real Link smoke: systemctl access is unavailable";
 
+function windowsComparable(value) {
+  const text = String(value).replace(/^\\\\[?.]\\(?:UNC\\)?/i, match => match.toLowerCase().startsWith("\\\\?\\unc\\") ? "//" : "").replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").replaceAll("/", "\\");
+  return text.replaceAll("\\", "/");
+}
+
 /** Classify lexical path identity only; this never authorizes recursive deletion through symlinks. */
 export function classifyOwnedPath(run, candidate) {
-  if (typeof run !== "string" || !run.startsWith(sep) || typeof candidate !== "string" || !candidate.startsWith(sep)) return "outside";
+  if (typeof run !== "string" || typeof candidate !== "string") return "outside";
+  const windows = value => /^(?:[A-Za-z]:[\\/]|\\\\|\/\/[?.]\/)/.test(value);
+  const unc = value => /^\/\/[^/]+[\\/][^/]+[\\/]/.test(value) && !/^\/\/[?.]\//.test(value);
+  if (windows(run) !== windows(candidate) || unc(run) !== unc(candidate)) return "outside";
+  if (windows(run) || windows(candidate) || unc(run) || unc(candidate)) {
+    const root = windowsComparable(run).replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").toLowerCase();
+    const path = windowsComparable(candidate).replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").toLowerCase();
+    if (root === path) return "root";
+    return path.startsWith(root.endsWith("/") ? root : `${root}/`) ? "descendant" : "outside";
+  }
+  if (!run.startsWith(sep) || !candidate.startsWith(sep)) return "outside";
   const descendant = relative(resolve(run), resolve(candidate));
   if (descendant === "") return "root";
   if (descendant === ".." || descendant.startsWith(`..${sep}`) || descendant.startsWith(sep)) return "outside";
@@ -18,6 +33,12 @@ export function classifyOwnedPath(run, candidate) {
 
 /** Map only the run root and its descendants. Siblings and string prefixes are private, not owned paths. */
 export function redactPaths(run, paths = []) {
+  const windowsRoot = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/[?.]\/)/.test(run) || /^\/\/[^/]+[\\/][^/]+[\\/]/.test(run);
+  if (windowsRoot) {
+    const rootText = windowsComparable(run).replace(/\/$/, "").toLowerCase();
+    const unique = [...new Set([run, ...paths.filter(Boolean), homedir()].map(path => windowsComparable(path)))].sort((a, b) => b.length - a.length || a.localeCompare(b));
+    return unique.map(path => ({ path, replacement: classifyOwnedPath(run, path) === "root" ? "<run>" : classifyOwnedPath(run, path) === "descendant" ? `<run>/${windowsComparable(path).slice(rootText.length + (rootText.endsWith("/") ? 0 : 1))}` : "<path>" }));
+  }
   const root = resolve(run);
   const unique = [...new Set([root, ...paths.filter(Boolean).map(path => resolve(path)), homedir()])]
     .sort((a, b) => b.length - a.length || a.localeCompare(b));
@@ -29,10 +50,41 @@ export function redactPaths(run, paths = []) {
   });
 }
 
+function redactWindowsPathString(text, run, paths) {
+  const root = run.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
+  const mappings = redactPaths(run, paths);
+  const token = /^(?:\\\\[?.]\\|\/\/[?.]\/|[A-Za-z]:[\\/]|[A-Za-z]:[^/\\]+\\|\\\\|\/\/[^/]+[\\/])/.exec(text);
+  if (!token) return undefined;
+  if (/^\/\/[?.]\//.test(text)) {
+    const path = text.replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "").replace(/[\\/]+$/, "");
+    const normalized = path.replace(/^\/\/[?.]\/(?:UNC\/)?/i, match => match.toLowerCase().startsWith("//?/unc/") ? "//" : "");
+    const mapping = mappings.find(candidate => windowsComparable(candidate.path).toLowerCase() === normalized.toLowerCase());
+    return { replacement: mapping ? mapping.replacement : "<path>", consumed: text.length };
+  }
+  const rest = text.slice(token[0].length);
+  const next = /^\/\/[?.]\//.test(text) ? /[\r\n"'`;]/.exec(rest) : /[\s,;\[](?=(?:\\\\[?.]\\|\/\/[?.]\/|[A-Za-z]:[\\/]|\\\\|\/))/.exec(rest);
+  const diagnostic = /(?:\r|\n|["'`]|\s+[A-Za-z][\w.-]*=|\s+(?:failed|error|cannot|denied|unexpected)\b)/i.exec(rest);
+  const end = Math.min(next?.index ?? rest.length, diagnostic?.index ?? rest.length);
+  const tokenText = token[0] + rest.slice(0, end);
+  const consumed = tokenText.endsWith("]") && !tokenText.includes("[") ? tokenText.length - 1 : tokenText.length;
+  const raw = token[0] + rest.slice(0, end).replace(/[\\/]+$/, "");
+  const kind = classifyOwnedPath(run, raw);
+  if (kind === "root") return { replacement: "<run>", consumed };
+  if (kind === "descendant") {
+    const relativePath = windowsComparable(raw).slice(windowsComparable(run).length).replace(/^[/\\]+/, "");
+    return { replacement: `<run>/${relativePath}`, consumed };
+  }
+  return { replacement: "<path>", consumed };
+}
+
 function redactPathString(text, run, paths) {
+  const root = resolve(run);
+  if (root.startsWith("/") && text.startsWith("/") && /[\s,:\])]/.test(text.slice(1)) && !/\s\//.test(text)) return "<path>";
   const mappings = redactPaths(run, paths);
   let output = "";
   for (let start = 0; start < text.length;) {
+    const windows = redactWindowsPathString(text.slice(start), run, paths);
+    if (windows !== undefined) { output += windows.replacement; start += windows.consumed; continue; }
     const match = /^\/(?:[^\s"'`;,:)}\]]+\/?)+/.exec(text.slice(start));
     if (!match) { output += text[start++]; continue; }
     const raw = match[0].replace(/\/+$/, "");
@@ -56,7 +108,7 @@ export function sanitize(value, run, paths = []) {
   let text = String(value ?? "")
     .replace(/(?:persona|jarvis):\/\/(?:link|pair)\?[^\s"']*/gi, "<pairing-link>");
   text = redactPathString(text, run, paths)
-    .replace(/\b(?:PERSONA_|JARVIS_)?(?:TOKEN|PASSWORD|SECRET|CODE|FP)=\S+/g, match => `${match.slice(0, match.indexOf("=") + 1)}<redacted>`)
+    .replace(/\b(?:PERSONA_|JARVIS_)?[A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|CODE|FP)=\S+/g, match => `${match.slice(0, match.indexOf("=") + 1)}<redacted>`)
     .replace(/([?&](?:token|code|fp|password)=)[^\s&"']*/gi, "$1<redacted>")
     .replace(/Bearer\s+[\x21-\x7e]+/g, "Bearer <redacted>")
     .replace(/(?:persona|jarvis):\/\/(?:link|pair)\?[^\s"']*/gi, "<pairing-link>")
@@ -294,7 +346,7 @@ export function runCaptured(executable, args, options = {}) {
       if (settled) return;
       settled = true;
       for (const timer of [terminateTimer, killTimer, closeTimer]) clearTimeout(timer);
-      let group = { groupEmpty: false, error: "group observation not completed" };
+      let group = { groupEmpty: false, error: platform() === "linux" ? "group observation not completed" : "owned process-group observation is unavailable on this platform" };
       if (platform() === "linux") group = await observeOwnedGroup(child, closeGrace);
       const groupError = group.error ?? (group.groupEmpty ? undefined : "owned process group was not observed empty");
       escalationError = [escalationError, groupError].filter(Boolean).join("; ") || undefined;

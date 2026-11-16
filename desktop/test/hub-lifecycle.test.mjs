@@ -15,54 +15,62 @@ const loader = join(root, "desktop", "test", "fixtures", "lifecycle-register.mjs
 async function run(name) {
   const script = `
     const electron = await import("./fixtures/electron-lifecycle.mjs");
-    ${name === "tray-failure" ? "" : "await electron.importMain();"}
+    ${name === "prefix-root" || name === "tray-failure" ? "electron.scenario.oldSucceeds = true;" : ""}
+    await electron.importMain();
     ${name === "stale" ? `
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
       await electron.app.emit("second-instance", {}, ["persona://link"]);
-      await electron.settle();
-      const setup = electron.windows.find(window => window.options.title === "Persona setup");
-      if (!setup) throw new Error("setup was not created");
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup"), "the setup window");
       const response = await electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://new.example/");
       if (!response.ok) throw new Error("hub replacement failed");
       electron.controls.get("reject-old")(new Error("ERR_ABORTED: intentionally destroyed stale load"));
     ` : name === "connect-failure" ? `
       electron.scenario.failNew = true;
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
       await electron.app.emit("second-instance", {}, ["persona://link"]);
-      await electron.settle();
-      const setup = electron.windows.find(window => window.options.title === "Persona setup");
-      if (!setup) throw new Error("setup was not created");
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup"), "the setup window");
       const response = await electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://new.example/");
       if (response.ok || response.error === "Enter a valid HTTP or HTTPS hub address.") throw new Error("the real connection error was not preserved");
       if (setup.destroyed) throw new Error("setup closed before a failed connection recovered");
+      if (setup.destroyed) throw new Error("setup closed before a failed connection recovered");
       setup.close();
       for (let i = 0; i < 20 && !electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed); i++) await electron.settle();
-      if (electron.windows.some(window => window.options.title === "Persona" && !window.destroyed && !window.url)) throw new Error("a blank hubless main window was created");
+      if (electron.windows.some(window => window.options.title === "Persona" && !window.destroyed && !window.url)) throw new Error("a blank hubless main window was created: " + JSON.stringify(electron.events));
       if (!electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed)) throw new Error("setup recovery did not occur: " + JSON.stringify(electron.events));
+      const recovered = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the recovered setup window");
+      electron.scenario.failNew = false;
+      const retry = await electron.connect({sender: recovered.webContents, senderFrame: recovered.webContents}, "https://new.example/");
+      if (!retry.ok) throw new Error("recovered setup could not connect: " + JSON.stringify(retry));
+      if (electron.windows.some(window => window.options.title === "Persona" && window.destroyed && !window.url && !electron.events.some(event => event.loading === window.number))) throw new Error("a retired blank hubless window was left: " + JSON.stringify(electron.events));
     ` : name === "prefix-root" ? `
-      electron.scenario.oldSucceeds = true;
-      await electron.importMain();
+      await electron.waitFor(() => electron.events.includes("tray-click-registered"), "the initial old-hub load and tray startup");
       await electron.app.emit("second-instance", {}, ["persona://link"]);
-      await electron.settle();
-      const setup = electron.windows.find(window => window.options.title === "Persona setup");
-      if (!setup) throw new Error("setup was not created");
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup"), "the setup window");
       const response = await electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://old.example/");
       if (!response.ok) throw new Error("prefix-to-root replacement failed");
     ` : name === "destroyed-load" ? `
-      electron.windows[0].destroy();
+      const window = await electron.waitFor(() => electron.windows[0], "the initial hub window");
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
+      window.destroy();
       electron.controls.get("reject-old")(new Error("ERR_ABORTED: destroyed during a current-generation load"));
     ` : name === "geometry-failure" ? `
+      const window = await electron.waitFor(() => electron.windows[0], "the initial hub window");
       (await import("./fixtures/lifecycle-store.mjs")).scenario.failWindowSave = true;
-      electron.windows[0].emit("resize");
+      window.emit("resize");
     ` : name === "tray-failure" ? `
-      electron.scenario.oldSucceeds = true;
-      await electron.importMain();
-      for (let i = 0; i < 20 && !electron.events.includes("tray-click-registered"); i++) await electron.settle();
-      electron.windows[0].destroy();
+      await electron.waitFor(() => electron.events.includes("tray-click-registered"), "the tray click handler");
+      const window = await electron.waitFor(() => electron.windows[0], "the initial hub window");
+      window.destroy();
       electron.scenario.failNext = true;
       const tray = electron.Tray.instances.at(-1);
       if (!tray) throw new Error("tray was not created: " + JSON.stringify(electron.events));
       tray.emit("click");
       for (let i = 0; i < 20 && !electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed); i++) await electron.settle();
-    ` : `electron.controls.get("reject-old")(new Error("synthetic current-load failure"));`}
+    ` : `
+      await electron.importMain();
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
+      electron.controls.get("reject-old")(new Error("synthetic current-load failure"));
+    `}
     await electron.settle();
     process.stdout.write(JSON.stringify({events: electron.events, unhandled: electron.scenario.unhandled, updates: (await import("./fixtures/lifecycle-store.mjs")).updates, windows: electron.windows.map(window => ({title: window.options.title, url: window.url, destroyed: window.destroyed, partition: window.options.webPreferences.partition}))}));
     process.exit(0);
@@ -114,7 +122,8 @@ test("same-origin prefix-to-root replaces the window, partition and saved hub", 
 test("a failed first-time connection preserves setup and reports the actual error", async () => {
   const { windows, events } = await run("connect-failure");
   const setup = windows.find(window => window.title === "Persona setup" && !window.destroyed);
-  assert.ok(setup, JSON.stringify(events));
+  assert.equal(setup, undefined, JSON.stringify(events));
+  assert.equal(windows.some(window => window.title === "Persona" && !window.destroyed && window.url === "https://new.example/"), true, JSON.stringify(events));
   assert.equal(windows.some(window => window.title === "Persona" && !window.destroyed && !window.url), false, JSON.stringify(events));
 });
 

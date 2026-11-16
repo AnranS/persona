@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { startGateway } from "./smoke-gateway.mjs";
 import { startHub } from "./child-process.mjs";
+import { recordScenarioEvidence, smokeScenarioSummary } from "./smoke-evidence.mjs";
+import { gatewayEvidenceFailure } from "./smoke-gateway-verdict.mjs";
 
 /**
  * Development-only acceptance smoke: a real Electron process against the repository's synthetic hub, serving the built
@@ -84,15 +86,18 @@ async function scenario(name, { prefix, token, starting }) {
     const exit = await new Promise(done => child.once("close", (code, signal) => done({ code, signal })));
     clearTimeout(timer);
     await writeFile(join(directory, "electron.log"), log.replaceAll(profile, "<temporary profile>").replaceAll(token, "<run token>").replaceAll(other?.token ?? "no-second-pairing-code", "<second run token>"), "utf8");
-    try { result = JSON.parse(await readFile(join(directory, "result.json"), "utf8")); } catch { result = { ok: false, error: "No result was written", steps: [] }; }
+    try { result = JSON.parse(await readFile(join(directory, "result.json"), "utf8")); }
+    catch (error) { result = { ok: false, error: `No result was written: ${error instanceof Error ? error.message : String(error)}`, steps: [] }; }
     if (exit.code !== 0) result = { ...result, ok: false, error: result.error ?? `Electron exited with ${JSON.stringify(exit)}`, exit };
     else result = { ...result, exit };
     const outside = gateway.outside();
     if (prefix && outside.length) result = { ...result, ok: false, error: result.error ?? `Requests left the prefix: ${outside.slice(0, 5).join(", ")}` };
-    result = { ...result, outsidePrefix: outside, otherLocalRequests: gateway.strangers(), headless, hubStartMs: hub.startMs, hubStartAttempts: hub.attempts };
+    result = { ...result, outsidePrefix: outside, otherLocalRequests: gateway.strangers(), gatewayRequests: gateway.requests(), otherGatewayEvidence: otherGateway ? { outside: otherGateway.outside(), otherLocalRequests: otherGateway.strangers(), requests: otherGateway.requests() } : undefined, headless, hubStartMs: hub.startMs, hubStartAttempts: hub.attempts };
+    const gatewayFailure = gatewayEvidenceFailure(result);
+    if (gatewayFailure) result = { ...result, ok: false, error: result.error ?? gatewayFailure };
     if (!result.ok) console.error(`${name}: ${result.error}\n${log.slice(-3000)}\n${hub.log().slice(-1500)}`);
   } catch (error) {
-    result = { ok: false, error: error instanceof Error ? error.message : String(error), steps: [] };
+    result = recordScenarioEvidence(result, error);
     console.error(`${name}: ${result.error}`);
   } finally {
     const cleanupFailures = [];
@@ -101,7 +106,10 @@ async function scenario(name, { prefix, token, starting }) {
     await gateway?.close().catch(error => { cleanupFailures.push(error); });
     await (await starting).hub?.stop().catch(error => { cleanupFailures.push(error); });
     if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(error => { cleanupFailures.push(error); });
-    if (cleanupFailures.length) result = { ...result, ok: false, error: result.error ?? `Cleanup failed: ${cleanupFailures.map(error => error instanceof Error ? error.message : String(error)).join("; ")}` };
+    if (cleanupFailures.length) {
+      const error = `Cleanup failed: ${cleanupFailures.map(error => error instanceof Error ? error.message : String(error)).join("; ")}`;
+      result = { ...result, ok: false, error: result.error ?? error, cleanupFailures: cleanupFailures.map(item => item instanceof Error ? item.message : String(item)) };
+    }
   }
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
@@ -133,12 +141,19 @@ try {
   console.error(failure);
 }
 const names = Object.keys(scenarios);
-const ok = !failure && names.length === plans.length && names.every(name => scenarios[name].ok === true);
-const line = `Desktop acceptance smoke (${process.platform}): ${ok ? "PASS" : "FAIL"}${names.length ? ` (${names.map(name => `${name} ${scenarios[name].ok ? "PASS" : "FAIL"}, ${scenarios[name].steps.filter(s => s.ok).length}/${scenarios[name].steps.length} steps`).join("; ")})` : ""}${failure ? `: ${failure}` : ""}`;
-await mkdir(output, { recursive: true });
-await writeFile(join(output, "result.json"), `${JSON.stringify({
-  ok, verdict: line, platform: process.platform, web: "built web client behind a local gateway", ...(failure ? { error: failure } : {}),
-  scenarios: Object.fromEntries(names.map(name => [name, { ok: scenarios[name].ok, ...(scenarios[name].error ? { error: scenarios[name].error } : {}), steps: scenarios[name].steps.map(s => ({ name: s.name, ok: s.ok })), screenshots: (scenarios[name].screenshots ?? []).map(s => `${name}/${s.name}`) }])),
-}, null, 2)}\n`, "utf8");
+let ok = false;
+let line;
+try {
+  ok = !failure && names.length === plans.length && names.every(name => scenarios[name].ok === true);
+  line = `Desktop acceptance smoke (${process.platform}): ${ok ? "PASS" : "FAIL"}${names.length ? ` (${names.map(name => { const summary = smokeScenarioSummary(scenarios[name], name); return `${name} ${summary.ok ? "PASS" : "FAIL"}, ${summary.steps.filter(s => s.ok).length}/${summary.steps.length} steps`; }).join("; ")})` : ""}${failure ? `: ${failure}` : ""}`;
+  await mkdir(output, { recursive: true });
+  await writeFile(join(output, "result.json"), `${JSON.stringify({
+    ok, verdict: line, platform: process.platform, web: "built web client behind a local gateway", ...(failure ? { error: failure } : {}),
+    scenarios: Object.fromEntries(names.map(name => [name, smokeScenarioSummary(scenarios[name], name)])),
+  }, null, 2)}\n`, "utf8");
+} catch (error) {
+  ok = false;
+  line = `Desktop acceptance smoke (${process.platform}): FAIL (could not publish the complete result: ${error instanceof Error ? error.message : String(error)})`;
+}
 console.log(line);
 process.exitCode = ok ? 0 : 1;

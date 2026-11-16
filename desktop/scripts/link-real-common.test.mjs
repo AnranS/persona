@@ -14,6 +14,7 @@ import {
   receiptVerdict,
   runCaptured,
   sanitize,
+  sanitizeJSON,
   serviceVerdict,
   writeFailureReceipt,
   writeSanitizedJSON,
@@ -117,7 +118,74 @@ test("a collision during failure reporting replaces the old PASS with a minimal 
   succeed();
 });
 
-test("an observer spawn failure produces a bounded failed command receipt", async t => {
+test("Windows drive, UNC and sibling paths cannot evade receipt redaction", () => {
+  const root = "C:\\Users\\Test\\AppData\\Local\\Temp\\persona-link-real-common-AbCd";
+  assert.equal(classifyOwnedPath(root, root), "root");
+  assert.equal(classifyOwnedPath(root, `${root}\\child`), "descendant");
+  assert.equal(classifyOwnedPath(root, `${root}-sibling\\child`), "outside");
+  assert.equal(classifyOwnedPath(root, "D:\\Temp\\child"), "outside");
+  assert.equal(classifyOwnedPath(root, "child"), "outside");
+  assert.equal(classifyOwnedPath(root, "/tmp"), "outside");
+  assert.equal(classifyOwnedPath(root, "\\\\server\\share\\private"), "outside");
+  assert.equal(sanitize(`${root}\\result.json ${root}/child.json ${root.toLowerCase()}`, root), "<run>/result.json <run>/child.json <run>");
+  assert.equal(sanitize(`${root}-sibling\\private.txt`, root), "<path>");
+  assert.equal(sanitize("C:\\Other\\private.txt", root), "<path>");
+  assert.equal(sanitize("C:/Other/private.txt", root), "<path>");
+  assert.equal(sanitize("\\\\server\\share\\private.txt", root), "<path>");
+  assert.equal(sanitize("\\\\/evil/private.txt", root), "<path>");
+  assert.equal(classifyOwnedPath(root, `\\\\?\\${root}\\secret.txt`), "descendant");
+  assert.equal(sanitize(`\\\\?\\${root}\\secret.txt`, root), "<run>/secret.txt");  assert.equal(sanitize("\\\\?\\C:\\Users\\Alice\\private\\secret.txt", root), "<path>");
+  assert.equal(sanitize("\\\\.\\C:\\Users\\Alice\\private\\secret.txt", root), "<path>");
+  assert.equal(sanitize("\\\\?\\UNC\\server\\share\\private\\secret.txt", root), "<path>");
+  assert.equal(sanitize("\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\private\\secret.txt", root), "<path>");
+  assert.equal(sanitize("\\\\?\\C:", root), "<path>");
+  assert.equal(sanitize("\\\\?\\UNC", root), "<path>");
+  assert.equal(classifyOwnedPath("/", "/tmp/run"), "descendant");
+  assert.equal(sanitize("/tmp/run", "/"), "<run>/tmp/run");
+  assert.equal(classifyOwnedPath("C:\\", "C:\\Temp\\Run"), "descendant");
+  assert.equal(sanitize("C:\\Temp\\Run", "C:\\"), "<run>/Temp/Run");
+  assert.equal(sanitize(`${root}\\Secret.txt`, root), "<run>/Secret.txt");
+  assert.equal(classifyOwnedPath("/", "\\\\Server\\PrivateShare\\Secret.txt"), "outside");
+  assert.equal(sanitize("\\\\Server\\PrivateShare\\Secret.txt", "/"), "<path>");
+  assert.equal(sanitize("C:\\Other\\Private\\My Documents\\Secret.txt", root), "<path>");
+  assert.equal(sanitize("C:\\Other\\Private[1]\\Secret.txt", root), "<path>");
+  const spaced = "C:\\Users\\Alice Smith\\AppData\\Local\\Temp\\persona-run";
+  assert.equal(sanitize(`cwd=${spaced}\\result.json`, spaced), "cwd=<run>/result.json");
+  assert.equal(sanitize(`open \\\\?\\${root}\\result.json,C:\\Users\\Alice\\Private\\secret.txt failed`, root), "open <run>/result.json,<path> failed");
+  assert.deepEqual(sanitizeJSON({ cwd: root, path: `${root}\\result.json` }, root), { cwd: "<run>", path: "<run>/result.json" });
+  assert.throws(() => sanitizeJSON({ [root]: 1, [`${root.toLowerCase()}/`]: 2 }, root), /merge or shadow distinct receipt keys/);
+});
+
+test("namespace, spaced and punctuated private paths cannot leak or swallow evidence", () => {
+  const root = "C:\\Temp\\run";
+  assert.equal(sanitize("//?/C:/Private Folder/secret.txt", root), "<path>");
+  assert.equal(sanitize("D:\\Private Folder\\secret.txt\nprivateCustomerEvidence=retain-me", root), "<path>\nprivateCustomerEvidence=retain-me");
+  assert.equal(sanitize("/tmp/folder,PrivateCustomerName/secret.txt", "/tmp/run"), "<path>");
+  assert.equal(sanitize("C:\\Temp\\run\\result.json [D:\\Other Private\\secret.txt]", root), "<run>/result.json [<path>]");
+  assert.equal(sanitize("C:Users\\Alice\\private\\secret.txt", root), "<path>");
+  assert.equal(sanitize("//?/C:/Temp/run/Secret.txt", root), "<run>/Secret.txt");
+  assert.equal(sanitize("D:\\Other Private\\secret.txt", root), "<path>");
+  assert.equal(sanitize("C:\\Temp\\run\\child//?/D:/PrivateCustomer/Secret.txt", root), "<run>/child<path>");
+  assert.equal(sanitize("C:\\Temp\\run\\child//PrivateServer/PrivateShare/Secret.txt", root), "<run>/child<path>");
+  assert.equal(sanitize("C:\\Other\\private.txt detail=retain-me", root), "<path> detail=retain-me");
+  assert.equal(sanitize("/tmp/private folder/secret.txt detail=keep", "/tmp/run"), "<path> detail=keep");
+  assert.equal(sanitize("//PrivateServer/Private,Share/Secret.txt", root), "<path>");
+  assert.equal(sanitize("//PrivateServer/Private Share/Secret.txt", root), "<path>");
+  assert.equal(sanitize("//?/D:/Private,Customer/Secret.txt", root), "<path>");
+  assert.equal(sanitize("//?/C:/Temp/run/Private,Customer/Secret.txt", root), "<run>/Private,Customer/Secret.txt");
+  assert.equal(sanitize("C:\\Other Private\\secret.txt unexpected exception", root), "<path> unexpected exception");
+  assert.equal(sanitize("PERSONA_HUB_TOKEN=example-secret", root), "PERSONA_HUB_TOKEN=<redacted>");
+  assert.equal(sanitize("PERSONA_DESKTOP_E2E_TOKEN=example-secret", root), "PERSONA_DESKTOP_E2E_TOKEN=<redacted>");
+  assert.equal(sanitize("MOCK_PAIR_TOKEN=example-secret", root), "MOCK_PAIR_TOKEN=<redacted>");
+  assert.equal(sanitize("Error: ENOENT: no such file or directory detail=keep", root), "Error: ENOENT: no such file or directory detail=keep");
+  assert.equal(sanitize("note: this is not a path", root), "note: this is not a path");
+  assert.equal(sanitize("open /tmp/run/private;secret-next-token/child detail=keep", "/tmp/run"), "open <path> detail=keep");
+  assert.equal(classifyOwnedPath("//server/share/run", "//SERVER/SHARE/RUN/child"), "descendant");
+  assert.equal(classifyOwnedPath("//?/UNC/Server/Share/run", "//Server/Share/run/child"), "descendant");
+  assert.equal(sanitize("//Server/Share/run/private.txt detail=keep", "//Server/Share/run"), "<run>/private.txt detail=keep");
+});
+
+test("an observer spawn failure produces a bounded failed command receipt", { skip: process.platform !== "linux" && "requires the Linux owned-process-group observer" }, async t => {
   const original = process.execPath;
   Object.defineProperty(process, "execPath", { value: join(original, "does-not-exist"), configurable: true });
   t.after(() => { Object.defineProperty(process, "execPath", { value: original, configurable: true }); });
@@ -139,7 +207,9 @@ test("service verdict requires four intercepted reads and no mutation", () => {
 
 test("spawn failure returns a bounded failed close without an uncaught stdin error", async () => {
   const result = await runCaptured("/tmp/persona-link-real-common-does-not-exist", [], { input: "x".repeat(128 * 1024), timeout: 1000 });
-  assert.equal(result.code, -2);
+  assert.equal(typeof result.code, "number");
+  assert.notEqual(result.code, 0);
+  assert.equal(result.signal, null);
   assert.equal(result.closed, true);
   assert.match(result.spawnError, /ENOENT/);
   assert.match(result.error, /ENOENT/);
@@ -158,12 +228,27 @@ test("a captured command waits for close and preserves nonzero and signal exits"
   assert.equal(result.closed, true);
   assert.equal(result.stdout, "closed\n");
   const signaled = await runCaptured(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"]);
-  assert.equal(signaled.code, null);
-  assert.equal(signaled.signal, "SIGTERM");
   assert.equal(signaled.closed, true);
+  if (process.platform === "win32") {
+    // Node emulates a requested Windows termination as exit code 1; no POSIX signal receipt is fabricated.
+    assert.equal(signaled.code, 1);
+    assert.equal(signaled.signal, null);
+  } else {
+    assert.equal(signaled.code, null);
+    assert.equal(signaled.signal, "SIGTERM");
+  }
 });
 
-test("a real TERM-resistant child has a bounded SIGKILL close and a timeout failure", async t => {
+test("a Windows direct-child close stays bounded and cannot claim an empty process group", { skip: process.platform !== "win32" && "Windows direct-child receipt contract" }, async () => {
+  const result = await runCaptured(process.execPath, ["-e", "setTimeout(() => console.log('ready'), 20)"]);
+  assert.equal(result.code, 0);
+  assert.equal(result.closed, true);
+  assert.equal(result.groupEmpty, false);
+  assert.match(result.escalationError, /unavailable on this platform/);
+  assert.equal(receiptVerdict({ commands: [result], cleanup: { ok: true } }).mayRemoveRunRoot, false);
+});
+
+test("a real TERM-resistant child has a bounded SIGKILL close and a timeout failure", { skip: process.platform !== "linux" && "requires POSIX signals, /proc and an owned process group" }, async t => {
   const source = "process.on('SIGTERM', () => {}); console.log('ready'); setTimeout(() => {}, 10000)";
   const closeGrace = 100;
   const startedAt = Date.now();
@@ -206,7 +291,7 @@ test("a real TERM-resistant child has a bounded SIGKILL close and a timeout fail
   });
 });
 
-test("a descendant that holds inherited pipes produces a bounded close failure", async t => {
+test("a descendant that holds inherited pipes produces a bounded close failure", { skip: process.platform !== "linux" && "requires POSIX process-group cleanup and /proc identity" }, async t => {
   const { root, succeed } = await temporary(t, "descendant.pid", "descendant.closed");
   const pidFile = join(root, "descendant.pid");
   const closedFile = join(root, "descendant.closed");
@@ -242,11 +327,16 @@ test("a descendant that holds inherited pipes produces a bounded close failure",
   assert.equal(result.timedOut, true);
   assert.equal(result.closeTimedOut, false, "the owned process group closes the captured pipes");
   assert.equal(result.closed, true);
-  assert.equal(await readFile(closedFile, "utf8"), "closed");
+  let closed = "";
+  for (let attempt = 0; attempt < 200 && closed !== "closed"; attempt++) {
+    closed = await readFile(closedFile, "utf8").catch(() => "");
+    if (closed !== "closed") await new Promise(done => setTimeout(done, 10));
+  }
+  assert.equal(closed, "closed");
   succeed();
 });
 
-test("an ignored-stdio descendant prevents a successful group receipt", async t => {
+test("an ignored-stdio descendant prevents a successful group receipt", { skip: process.platform !== "linux" && "requires POSIX process-group observation and /proc identity" }, async t => {
   const { root, succeed } = await temporary(t, "descendant.pid", "descendant.py", "out", "err");
   const pidFile = join(root, "descendant.pid");
   const fixture = join(root, "descendant.py");
@@ -294,7 +384,7 @@ time.sleep(30)
   succeed();
 });
 
-test("a detached descendant survives original-group observation and cannot authorize cleanup", async t => {
+test("a detached descendant survives original-group observation and cannot authorize cleanup", { skip: process.platform !== "linux" && "requires POSIX process groups and /proc identity" }, async t => {
   const { root, succeed } = await temporary(t, "ready.json");
   const readyFile = join(root, "ready.json");
   const marker = "persona-link-detached-test-fixture";
@@ -362,7 +452,7 @@ test("a detached descendant survives original-group observation and cannot autho
 });
 
 test("stdin failures remain observable beside a genuine child close", async () => {
-  const result = await runCaptured("/bin/sh", ["-c", "exec 0<&-; sleep 0.1"], { input: "x".repeat(128 * 1024), timeout: 2000 });
+  const result = await runCaptured(process.execPath, ["-e", "setTimeout(() => process.exit(0), 50)"], { input: "x".repeat(8 * 1024 * 1024), timeout: 2000 });
   assert.equal(result.code, 0);
   assert.equal(result.closed, true);
   assert.match(result.error, /stdin:.*EPIPE/);

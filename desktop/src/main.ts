@@ -257,8 +257,12 @@ async function showSetup(): Promise<void> {
   setup.once("closed", () => {
     removeIPC();
     if (setupWindow === setup) setupWindow = undefined;
-    // Do not re-enter a connection whose setup was closed while its creation was still pending.
-    if (!mainWindow && !hubWindow.pending) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); });
+    // Do not re-enter a connection whose setup was closed while its creation was still pending. A failed retired
+    // startup load must not be awaited again: closing setup supersedes it before returning to the local setup UI.
+    if (!mainWindow && !hubWindow.pending) {
+      hubWindow.replace();
+      void showSetup().catch(() => {});
+    }
   });
   const removeIPC = installSetupIPC(setup, {
     hub: () => hub,

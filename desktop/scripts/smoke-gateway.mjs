@@ -27,12 +27,19 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   const page = Buffer.from(prefix ? index.replace('<base href="/" />', `<base href="${prefix}/" />`) : index, "utf8");
   const outside = [];
   const requests = [];
+  const strangers = [];
   /** A request outside the prefix fails acceptance even without browser metadata. Optional headers are recorded only
    *  as diagnostic labels, not as evidence of which local process sent the request. */
   const escaped = (req, method) => {
-    outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? (req.headers.origin ? "socket" : "request")})`);
+    const label = req.headers["sec-fetch-dest"] ?? (req.headers.origin ? "socket" : "request");
+    const entry = `${method} ${(req.url ?? "").split("?")[0]} (${label})`;
+    outside.push(entry);
   };
   const sockets = new Set();
+  const metadataFree = req => !req.headers["sec-fetch-dest"] && !req.headers["sec-fetch-mode"] && !req.headers.origin;
+  const stranger = (req, method) => {
+    if (metadataFree(req)) strangers.push(`${method} ${(req.url ?? "").split("?")[0]} (request)`);
+  };
 
   /** The path inside the hub, or undefined for a request the proxy would never forward. */
   const inner = url => {
@@ -45,22 +52,40 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     const path = inner(req.url ?? "/");
     const entry = { method: req.method, path: (req.url ?? "/").split("?")[0] };
     requests.push(entry);
+    stranger(req, req.method);
     res.on("finish", () => { entry.status = res.statusCode; });
+    res.on("close", () => { entry.closed = true; entry.complete = res.writableFinished; });
     if (path === undefined) {
       escaped(req, req.method);
       res.writeHead(404, { "Content-Type": "text/plain" }).end("outside the hub prefix");
       return;
     }
+    try { decodeURIComponent(path.split("?")[0]); }
+    catch {
+      res.writeHead(400, { "Content-Type": "text/plain" }).end("malformed URL encoding");
+      return;
+    }
     if (path.startsWith("/api/")) {
       const upstream = httpRequest({ host: "127.0.0.1", port: mockPort, path, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${mockPort}` } }, answer => {
+        answer.on("aborted", () => { entry.upstreamError = true; res.destroy(); });
+        answer.on("error", () => { entry.upstreamError = true; res.destroy(); });
         res.writeHead(answer.statusCode ?? 502, answer.headers);
         answer.pipe(res);
       });
-      upstream.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+      upstream.on("error", () => {
+        entry.upstreamError = true;
+        if (!res.headersSent) res.writeHead(502);
+        res.end();
+      });
       req.pipe(upstream);
       return;
     }
-    const pathname = decodeURIComponent(path.split("?")[0]);
+    let pathname;
+    try { pathname = decodeURIComponent(path.split("?")[0]); }
+    catch {
+      res.writeHead(400, { "Content-Type": "text/plain" }).end("malformed URL encoding");
+      return;
+    }
     const file = resolve(join(root, pathname));
     let body = page, type = TYPES[".html"];
     if (file.startsWith(root + sep) && extname(file) && (await stat(file).catch(() => undefined))?.isFile() && file !== join(root, "index.html")) {
@@ -74,26 +99,58 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   });
 
   server.on("upgrade", (req, socket, head) => {
+    stranger(req, "UPGRADE");
     const path = inner(req.url ?? "/");
+    const entry = { method: "UPGRADE", path: (req.url ?? "").split("?")[0], status: 404, closed: false, complete: false };
+    requests.push(entry);
     if (path === undefined || !path.startsWith("/api/")) {
       if (path === undefined) escaped(req, "UPGRADE");
       socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+      entry.closed = true;
+      entry.complete = true;
       return;
     }
+    try { decodeURIComponent(path.split("?")[0]); }
+    catch {
+      entry.status = 400;
+      socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+      entry.closed = true;
+      entry.complete = true;
+      return;
+    }
+    entry.status = "connecting";
+    let upgraded = false;
     const upstream = connect(mockPort, "127.0.0.1", () => {
+      entry.status = "connecting";
       const headers = [];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         headers.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i].toLowerCase() === "host" ? `127.0.0.1:${mockPort}` : req.rawHeaders[i + 1]}`);
       }
       upstream.write(`GET ${path} HTTP/1.1\r\n${headers.join("\r\n")}\r\n\r\n`);
+      let response = "";
+      upstream.on("data", chunk => {
+        if (upgraded) return;
+        response += chunk.toString("latin1");
+        const end = response.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        const status = Number(response.slice(9, 12));
+        entry.status = Number.isInteger(status) ? status : "invalid-response";
+        if (status === 101) upgraded = true;
+      });
       if (head.length) upstream.write(head);
       upstream.pipe(socket);
       socket.pipe(upstream);
     });
     for (const end of [socket, upstream]) {
       sockets.add(end);
-      end.on("error", () => { socket.destroy(); upstream.destroy(); });
-      end.on("close", () => { sockets.delete(end); socket.destroy(); upstream.destroy(); });
+      end.on("error", () => { entry.upstreamError = true; socket.destroy(); upstream.destroy(); });
+      end.on("close", () => {
+        entry.closed = true;
+        entry.complete = entry.status === 101 && upgraded && !entry.upstreamError;
+        sockets.delete(end);
+        socket.destroy();
+        upstream.destroy();
+      });
     }
   });
 
@@ -115,6 +172,8 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     url: `http://127.0.0.1:${port}${prefix}/`,
     /** Unattributed requests that reached this test-owned listener, as "METHOD path (diagnostic label)" without their query. */
     outside: () => [...outside],
+    /** Query-free requests without browser metadata, as diagnostics only; their local-process identity is unknown. */
+    strangers: () => [...strangers],
     /** Method, query-free path and response status only; never credentials, bodies or device tokens. */
     requests: () => [...requests],
     async close() { await close(); },

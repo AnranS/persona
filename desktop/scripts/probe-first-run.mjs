@@ -1,0 +1,12 @@
+import { DesktopCDP } from './first-run-cdp.mjs';
+const client = new DesktopCDP(process.argv[2], process.argv[3]);
+await client.connect();
+const setup = await client.pageFor('setup', target => target.url === 'persona-setup://app/setup.html');
+await client.until('setup localized', () => setup.evaluate("document.querySelector('h1')?.textContent.length > 0 && !document.querySelector('#link-state')?.textContent.includes('…')"));
+console.log('before', JSON.stringify(await setup.evaluate('({url:location.href,text:document.body.innerText})')));
+console.log('connect', JSON.stringify(await setup.evaluate(`(async () => { document.querySelector('#hub').value = ${JSON.stringify(process.env.PERSONA_PROBE_HUB)}; return await window.desktopSetup.saveHub(${JSON.stringify(process.env.PERSONA_PROBE_HUB)}); })()`)));
+await new Promise(resolve => setTimeout(resolve, 3000));
+console.log(JSON.stringify(client.diagnostics(), null, 2));
+console.log('saved-state', process.argv[2]);
+client.close();
+setTimeout(() => process.exit(0), 500);
