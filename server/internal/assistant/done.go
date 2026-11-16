@@ -92,7 +92,7 @@ func ownerNoAction(rest string) bool {
 
 // ownerContrastOffsets returns unquoted, word-boundary `but` conjunctions in [at,end). A comma before one is
 // optional. Keeping these boundaries occurrence-local lets a condition govern only its own clause.
-func ownerContrastOffsets(lower string, at, end int) []int {
+func ownerContrastOffsets(text, lower string, at, end int) []int {
 	var out []int
 	for from := at; from < end; {
 		i := strings.Index(lower[from:end], "but")
@@ -102,7 +102,7 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 		i += from
 		left := i > at && (lower[i-1] == ' ' || lower[i-1] == '\t' || lower[i-1] == ',')
 		right := i+3 < end && (lower[i+3] == ' ' || lower[i+3] == '\t')
-		clause := left && right && ownerButStartsClause(lower, at, i, end)
+		clause := left && right && ownerButStartsClause(text, lower, at, i, end)
 		if clause && !ownerMarkerQuoted(lower, i) {
 			out = append(out, i)
 		}
@@ -115,7 +115,7 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 // marker has no words in this slice and is a clause by construction. Otherwise `but` is a contrast by default, except
 // for an indefinite-pronoun exception phrase or the "nothing … but …" idiom; a finite verb at the end of a
 // determiner-led subject keeps that subject a clause, while a verb-like noun modifier does not create one.
-func ownerButStartsClause(lower string, at, i, end int) bool {
+func ownerButStartsClause(text, lower string, at, i, end int) bool {
 	suffix := strings.TrimSpace(lower[i+3 : end])
 	if suffix == "" {
 		return true
@@ -144,44 +144,93 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 	if len(words) == 0 {
 		return true
 	}
-	return ownerFiniteClauseShape(words)
+	properSubject := false
+	if len(text) == len(lower) { // equal byte lengths keep the case-folded offsets aligned
+		original := strings.Fields(strings.TrimSpace(text[i+3 : end]))
+		properSubject = len(original) == len(words) && len(original) > 0 && original[0] != strings.ToLower(original[0])
+	}
+	return ownerFiniteClauseShape(words, properSubject)
 }
 
 // ownerFiniteClauseShape looks for a predicate after the subject, rather than treating every inflected token as a
-// verb. A non-final lexical verb may take an object; a final intransitive must be unambiguous or agree with a plural
-// subject. This keeps "the final reports" a noun phrase and "the rollbacks need approval" a finite clause.
-func ownerFiniteClauseShape(words []string) bool {
+// verb. The subject head survives intervening modifiers and may be a pronoun or a nominal. Non-finite be forms do not
+// establish a predicate, and final verbs follow the same agreement rules as verbs with an object.
+func ownerFiniteClauseShape(words []string, properSubject bool) bool {
 	if len(words) == 0 {
 		return false
 	}
 	start := 0
+	subject := words[0]
+	trackHead := true
+	bareNominal := false
 	switch words[0] {
 	case "the", "a", "an":
 		if len(words) < 3 {
 			return false
 		}
+		subject = words[1]
 		start = 2
+	case "i", "you", "we", "he", "she", "they", "it", "this", "that", "these", "those":
+		trackHead = false
+		start = 1
 	default:
-		switch words[0] {
-		case "you", "we", "he", "she", "they", "it", "this", "that", "these", "those":
-			start = 1
-		default:
+		if len(words) < 2 {
 			return false
 		}
+		bareNominal = true
+		start = 1
 	}
 	for i := start; i < len(words); i++ {
 		word := words[i]
-		if i < len(words)-1 && ownerLexicalVerb(word) && ownerPredicateAgrees(words[i-1], word) {
-			return true
+		if i < len(words)-1 {
+			if !ownerPostmodifiedNoun(words, i, subject) && ownerLexicalVerb(word) && ownerPredicateAgrees(subject, word) &&
+				(!bareNominal || properSubject || (ownerBarePluralSubject(subject) && !ownerThirdPersonInflection(word))) {
+				return true
+			}
+			if trackHead && !ownerAdverb(word) && !ownerNonFiniteModifier(word) {
+				subject = word
+			}
 		}
 		if i == len(words)-1 {
-			if ownerFinalIntransitive(word) {
+			// A lowercase bare nominal needs a base-form predicate to prove a plural-subject clause
+			// ("owners need approval"). Capitalized proper nouns also accept an inflected predicate.
+			if ownerFinalIntransitive(word) && ownerPredicateAgrees(subject, word) &&
+				(!bareNominal || properSubject || (ownerBarePluralSubject(subject) && !ownerThirdPersonInflection(word))) {
 				return true
 			}
-			if ownerBaseIntransitive(word) && ownerBaseSubject(words[i-1]) {
+			if ownerBaseIntransitive(word) && ownerBaseSubject(subject) &&
+				(!bareNominal || properSubject || ownerBarePluralSubject(subject)) {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func ownerAdverb(word string) bool {
+	switch word {
+	case "still", "also", "already", "just", "now", "then", "often", "never", "always", "sometimes", "usually":
+		return true
+	}
+	return strings.HasSuffix(word, "ly")
+}
+
+func ownerNonFiniteModifier(word string) bool {
+	switch word {
+	case "be", "been", "being":
+		return true
+	}
+	return strings.HasSuffix(word, "ed") || strings.HasSuffix(word, "ing")
+}
+
+// ownerPostmodifiedNoun keeps an s-final noun head with a following prepositional modifier in the noun phrase.
+func ownerPostmodifiedNoun(words []string, i int, subject string) bool {
+	if !ownerPluralNoun(subject) || i+1 >= len(words) {
+		return false
+	}
+	switch words[i+1] {
+	case "in", "on", "at", "for", "with", "without", "under", "over", "before", "after", "during", "by", "from", "to", "of":
+		return true
 	}
 	return false
 }
@@ -205,7 +254,7 @@ func ownerLexicalVerb(word string) bool {
 
 func ownerFinalIntransitive(word string) bool {
 	switch word {
-	case "am", "is", "are", "was", "were", "be", "been", "being",
+	case "am", "is", "are", "was", "were",
 		"do", "does", "did", "have", "has", "had", "can", "could", "will", "would", "shall", "should", "may", "might", "must",
 		"waits", "fails", "remains", "stays", "goes", "comes", "runs", "stops", "starts", "finishes", "completes",
 		"continues", "rolls", "depends", "looks", "seems", "appears", "succeeds":
@@ -231,27 +280,51 @@ func ownerPluralNoun(word string) bool {
 // uses base-form agreement. Singular nouns and this/that/it take an inflected verb instead.
 func ownerBaseSubject(word string) bool {
 	switch word {
-	case "you", "we", "they", "these", "those":
+	case "i", "you", "we", "they", "these", "those":
 		return true
+	}
+	return ownerPluralNoun(word)
+}
+
+func ownerBasePronoun(word string) bool {
+	switch word {
+	case "i", "you", "we", "they", "these", "those":
+		return true
+	}
+	return false
+}
+
+// ownerBarePluralSubject is deliberately narrower than ownerBaseSubject: in a bare exception phrase, an -ous
+// adjective or a possessive pronoun is a modifier, not evidence of a plural clause subject.
+func ownerBarePluralSubject(word string) bool {
+	if strings.HasSuffix(word, "ous") {
+		return false
+	}
+	switch word {
+	case "his", "its", "ours", "yours", "theirs", "hers":
+		return false
 	}
 	return ownerPluralNoun(word)
 }
 
 func ownerAuxiliary(word string) bool {
 	switch word {
-	case "am", "is", "are", "was", "were", "be", "been", "being",
+	case "am", "is", "are", "was", "were",
 		"do", "does", "did", "have", "has", "had", "can", "could", "will", "would", "shall", "should", "may", "might", "must":
 		return true
 	}
 	return false
 }
 
-// ownerPredicateAgrees rejects a verb-like noun modifier whose number does not agree with the subject before it.
+// ownerPredicateAgrees enforces pronoun agreement strictly. Nominal number is only evidence for a base-form verb;
+// an inflected verb instead disambiguates singular s-final nouns such as analysis, status and series.
 func ownerPredicateAgrees(subject, verb string) bool {
 	if ownerAuxiliary(verb) {
 		switch verb {
-		case "is", "was", "does", "has":
-			return !ownerPluralNoun(subject)
+		case "was":
+			return subject == "i" || !ownerBasePronoun(subject)
+		case "is", "does", "has":
+			return !ownerBasePronoun(subject)
 		case "are", "were", "do", "have":
 			return ownerBaseSubject(subject)
 		default:
@@ -259,14 +332,14 @@ func ownerPredicateAgrees(subject, verb string) bool {
 		}
 	}
 	if ownerFiniteInflection(verb) {
-		return !ownerPluralNoun(subject)
+		return !ownerBasePronoun(subject)
 	}
 	return ownerBaseSubject(subject)
 }
 
 func ownerFiniteInflection(word string) bool {
 	switch word {
-	case "am", "is", "are", "was", "were", "be", "been", "being",
+	case "am", "is", "are", "was", "were",
 		"do", "does", "did", "have", "has", "had",
 		"can", "could", "will", "would", "shall", "should", "may", "might", "must",
 		"needs", "waits", "fails", "works", "remains", "stays", "goes", "comes", "runs", "stops", "starts",
@@ -279,9 +352,18 @@ func ownerFiniteInflection(word string) bool {
 	return false
 }
 
+// ownerThirdPersonInflection excludes base auxiliaries such as have/do/are, which also occur in the finite-verb list.
+func ownerThirdPersonInflection(word string) bool {
+	switch word {
+	case "is", "does", "has":
+		return true
+	}
+	return ownerFiniteInflection(word) && !ownerAuxiliary(word)
+}
+
 // ownerMarkerAfterContrast reports an owner marker immediately following an unquoted `but`, with optional whitespace.
-func ownerMarkerAfterContrast(lower string, at int) bool {
-	contrasts := ownerContrastOffsets(lower, 0, at)
+func ownerMarkerAfterContrast(text, lower string, at int) bool {
+	contrasts := ownerContrastOffsets(text, lower, 0, at)
 	return len(contrasts) > 0 && strings.TrimSpace(lower[contrasts[len(contrasts)-1]+3:at]) == ""
 }
 
@@ -337,7 +419,8 @@ func ownerSentenceEnd(lower string, at int) int {
 // sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
 // skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
 // its conditional scope; a new sentence or an independent "otherwise" clause does (#5732).
-func directOwnerMarker(lower, marker string) bool {
+func directOwnerMarker(text, marker string) bool {
+	lower := strings.ToLower(text)
 	for from := 0; from < len(lower); {
 		i := strings.Index(lower[from:], marker)
 		if i < 0 {
@@ -345,7 +428,7 @@ func directOwnerMarker(lower, marker string) bool {
 		}
 		i += from
 		before := strings.TrimSpace(lower[:i])
-		afterContrast := ownerMarkerAfterContrast(lower, i)
+		afterContrast := ownerMarkerAfterContrast(text, lower, i)
 		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise") || afterContrast
 		terminatorBefore := strings.TrimRight(before, "\"”") // a closing quote does not hide the sentence's own terminator
 		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
@@ -366,7 +449,7 @@ func directOwnerMarker(lower, marker string) bool {
 			direct = !openConditional || strings.HasSuffix(clause, "otherwise,") || strings.HasSuffix(clause, "otherwise:")
 		}
 		rest := i + len(marker)
-		if direct && !ownerNoAction(lower[rest:]) && !ownerTrailingConditional(lower, rest) && !ownerMarkerQuoted(lower, i) {
+		if direct && !ownerNoAction(lower[rest:]) && !ownerTrailingConditional(text, lower, rest) && !ownerMarkerQuoted(lower, i) {
 			return true
 		}
 		from = i + len(marker)
@@ -399,7 +482,7 @@ func ownerConditionalOpen(clause string) bool {
 // at the sentence boundary, so it cannot hide a later independent requirement. An if-question that is the
 // requirement's own object ("check if …") is not a condition, and "even if" leaves the requirement unconditional;
 // either owns later coordinated if-clauses. Quoted if-clauses are history, not conditions on an unquoted requirement.
-func ownerTrailingConditional(lower string, at int) bool {
+func ownerTrailingConditional(text, lower string, at int) bool {
 	end := ownerSentenceEnd(lower, at)
 	const marker = " if "
 	for from := at; from < end; {
@@ -411,12 +494,12 @@ func ownerTrailingConditional(lower string, at int) bool {
 		predicateText := lower[at:i]
 		predicate := strings.TrimSpace(predicateText)
 		conditionEnd := end
-		if contrasts := ownerContrastOffsets(lower, i+len(marker), end); len(contrasts) > 0 {
+		if contrasts := ownerContrastOffsets(text, lower, i+len(marker), end); len(contrasts) > 0 {
 			conditionEnd = contrasts[0]
 		}
 		condition := strings.TrimSpace(lower[i+len(marker) : conditionEnd])
 		if predicate != "" && condition != "" && !ownerMarkerQuoted(lower, i) {
-			contrasts := ownerContrastOffsets(lower, at, i)
+			contrasts := ownerContrastOffsets(text, lower, at, i)
 			if len(contrasts) > 0 {
 				last := contrasts[len(contrasts)-1]
 				if len(contrasts) > 1 || strings.TrimSpace(lower[last+3:i]) != "only" {
@@ -682,7 +765,7 @@ func ownerActionLine(text string) string {
 			}
 			if p.marker == "you need to" || p.marker == "you'll need to" {
 				// Negation is occurrence-local: its own prefix is not direct, and it never hides a later direct requirement.
-				if directOwnerMarker(lower, p.marker) {
+				if directOwnerMarker(line, p.marker) {
 					return line
 				}
 				continue
