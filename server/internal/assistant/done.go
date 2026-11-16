@@ -161,9 +161,14 @@ func ownerTrailingConditional(lower string, at int) bool {
 			return false
 		}
 		i += from
-		predicate := strings.TrimSpace(lower[at:i])
+		predicateText := lower[at:i]
+		predicate := strings.TrimSpace(predicateText)
 		condition := strings.TrimSpace(lower[i+len(marker) : end])
 		if predicate != "" && condition != "" && !ownerMarkerQuoted(lower, i) {
+			if j := strings.LastIndex(predicateText, ", but "); j >= 0 && !ownerMarkerQuoted(lower, at+j) &&
+				!strings.HasSuffix(predicate, ", but only") {
+				return false // the condition belongs to the contrasted clause, not the requirement before it
+			}
 			words := strings.Fields(predicate)
 			last := words[len(words)-1]
 			if last == "even" {
