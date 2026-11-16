@@ -30,10 +30,15 @@ async function run(name) {
       await electron.app.emit("second-instance", {}, ["persona://link"]);
       const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup"), "the setup window");
       const response = await electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://new.example/");
-      if (response.ok || response.error === "Enter a valid HTTP or HTTPS hub address.") throw new Error("the real connection error was not preserved");
+      if (response.ok || response.error !== "synthetic hub connection failure") throw new Error("the real connection error was not preserved: " + JSON.stringify(response));
       if (setup.destroyed) throw new Error("setup closed before a failed connection recovered");
+      const store = await import("./fixtures/lifecycle-store.mjs");
+      const address = async () => (await electron.hubGet({sender: setup.webContents, senderFrame: setup.webContents})).address;
+      if (await address() !== "") throw new Error("a failed first connection retained a hub owner");
       if (setup.destroyed) throw new Error("setup closed before a failed connection recovered");
       setup.close();
+      await electron.waitFor(() => electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed), "setup recovery after closing the failed connection");
+      if (await address() !== "") throw new Error("closing the failed connection retained a hub owner");
       for (let i = 0; i < 20 && !electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed); i++) await electron.settle();
       if (electron.windows.some(window => window.options.title === "Persona" && !window.destroyed && !window.url)) throw new Error("a blank hubless main window was created: " + JSON.stringify(electron.events));
       if (!electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed)) throw new Error("setup recovery did not occur: " + JSON.stringify(electron.events));
@@ -66,6 +71,23 @@ async function run(name) {
       if (!tray) throw new Error("tray was not created: " + JSON.stringify(electron.events));
       tray.emit("click");
       for (let i = 0; i < 20 && !electron.windows.some(window => window.options.title === "Persona setup" && !window.destroyed); i++) await electron.settle();
+    ` : name === "pending-close" ? `
+      electron.scenario.failNew = true;
+      await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
+      await electron.app.emit("second-instance", {}, ["persona://link"]);
+      const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup"), "the setup window");
+      const connecting = electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://new.example/");
+      await electron.waitFor(() => electron.events.some(event => event.loading && event.url === "https://new.example/"), "the pending new-hub load");
+      setup.close();
+      const recovered = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the local setup reopened while a load was pending");
+      const response = await connecting;
+      if (response.ok) throw new Error("a closed pending connection succeeded: " + JSON.stringify(response));
+      await electron.settle();
+      const store = await import("./fixtures/lifecycle-store.mjs");
+      if (await store.currentHub() === undefined) throw new Error("the late load catch cleared the hub belonging to local setup");
+      electron.scenario.failNew = false;
+      const retry = await electron.connect({sender: recovered.webContents, senderFrame: recovered.webContents}, "https://new.example/");
+      if (!retry.ok) throw new Error("the reopened local setup could not connect: " + JSON.stringify(retry));
     ` : `
       await electron.importMain();
       await electron.waitFor(() => electron.controls.has("reject-old"), "the initial old-hub load");
@@ -125,6 +147,13 @@ test("a failed first-time connection preserves setup and reports the actual erro
   assert.equal(setup, undefined, JSON.stringify(events));
   assert.equal(windows.some(window => window.title === "Persona" && !window.destroyed && window.url === "https://new.example/"), true, JSON.stringify(events));
   assert.equal(windows.some(window => window.title === "Persona" && !window.destroyed && !window.url), false, JSON.stringify(events));
+});
+
+test("closing setup retires its pending load without clearing the local hub owner", async () => {
+  const { windows, events, unhandled } = await run("pending-close");
+  assert.deepEqual(unhandled, []);
+  assert.equal(windows.at(-1).url, "https://new.example/", JSON.stringify(events));
+  assert.equal(windows.at(-1).destroyed, false, JSON.stringify(events));
 });
 
 test("a failed tray load is handled and returns to setup", async () => {

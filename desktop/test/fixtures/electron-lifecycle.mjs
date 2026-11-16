@@ -6,6 +6,7 @@ export const controls = new Map();
 export const scenario = { failNew: false, failNext: false, unhandled: [], oldPending: true, oldSucceeds: false };
 process.on("unhandledRejection", error => { scenario.unhandled.push(String(error)); });
 export let connect;
+export let hubGet;
 let oldLoad;
 
 export let ready;
@@ -35,7 +36,10 @@ export const Notification = class extends EventEmitter { static isSupported() { 
 export const dialog = { showErrorBox: (title, text) => events.push({ title, text }) };
 export const ipcMain = {
   on() {}, removeAllListeners() {}, removeHandler() {},
-  handle(name, callback) { if (name === "desktop:hub-set") connect = callback; },
+  handle(name, callback) {
+    if (name === "desktop:hub-set") connect = callback;
+    if (name === "desktop:hub-get") hubGet = callback;
+  },
 };
 export const nativeImage = {
   createFromDataURL: () => ({ resize() { events.push("icon-resized"); return this; } }),

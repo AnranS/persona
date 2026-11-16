@@ -251,18 +251,19 @@ async function showSetup(): Promise<void> {
   });
   setupWindow = setup;
   let connectQueue: Promise<unknown> = Promise.resolve();
+  const recoverSetupAfterClose = () => {
+    hubWindow.replace();
+    hub = undefined;
+    if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+  };
   setup.setMenu(null);
   setup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   setup.webContents.on("will-navigate", event => event.preventDefault());
   setup.once("closed", () => {
     removeIPC();
     if (setupWindow === setup) setupWindow = undefined;
-    // Do not re-enter a connection whose setup was closed while its creation was still pending. A failed retired
-    // startup load must not be awaited again: closing setup supersedes it before returning to the local setup UI.
-    if (!mainWindow && !hubWindow.pending) {
-      hubWindow.replace();
-      void showSetup().catch(() => {});
-    }
+    // A close after a failed connection returns to an empty local setup, not to the hub whose load failed.
+    if (!mainWindow && !hubWindow.pending) recoverSetupAfterClose();
   });
   const removeIPC = installSetupIPC(setup, {
     hub: () => hub,
@@ -303,6 +304,21 @@ async function showSetup(): Promise<void> {
           if (!setup.isDestroyed()) setup.close();
           return { ok: true };
         } catch (error) {
+          // The owner check must include this setup's lifetime, not only the generation: closing setup retires the
+          // generation synchronously, but this same load may then reject before its replacement setup finishes.
+          if (setup.isDestroyed()) {
+            // The user already closed this failed connection: retire its owner before reopening local setup. The close
+            // callback cannot see a hubWindow still owned by the failed load, so this branch must perform that cleanup.
+            if (hub?.url.href === next.url.href) {
+              hub = undefined;
+              const failedWindow = mainWindow;
+              mainWindow = undefined;
+              mainWindowHub = undefined;
+              if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
+            }
+            recoverSetupAfterClose();
+            return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
+          }
           if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
             return { ok: false, error: "The hub connection was replaced before it finished." };
           }
