@@ -102,29 +102,70 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 		i += from
 		left := i > at && (lower[i-1] == ' ' || lower[i-1] == '\t' || lower[i-1] == ',')
 		right := i+3 < end && (lower[i+3] == ' ' || lower[i+3] == '\t')
-		exception := false
-		if left && right {
-			before := strings.Fields(lower[at:i])
-			if len(before) > 0 {
-				switch before[len(before)-1] {
-				case "nothing", "anything", "everything", "something":
-					exception = true // "nothing … but …" means except, not a new clause
-				}
-			}
-			after := strings.Fields(lower[i+3 : end])
-			if len(after) == 2 {
-				switch after[0] {
-				case "the", "a", "an", "this", "that", "these", "those":
-					exception = true // a determiner plus one noun is a noun phrase, not a finite clause
-				}
-			}
-		}
-		if left && right && !exception && !ownerMarkerQuoted(lower, i) {
+		clause := left && right && ownerButStartsClause(lower, at, i, end)
+		if clause && !ownerMarkerQuoted(lower, i) {
 			out = append(out, i)
 		}
 		from = i + 3
 	}
 	return out
+}
+
+// ownerButStartsClause reports a genuine clause after `but`, rather than an exception noun phrase. An immediately
+// following owner marker has no words in this slice and is a clause by construction. "Nothing … but …" is the
+// exception idiom even when a bare verb follows; an article plus a noun phrase is not a finite clause.
+func ownerButStartsClause(lower string, at, i, end int) bool {
+	suffix := strings.TrimSpace(lower[i+3 : end])
+	if suffix == "" {
+		return true
+	}
+	before := strings.Fields(lower[at:i])
+	if len(before) > 0 {
+		switch before[len(before)-1] {
+		case "nothing", "anything", "everything", "something":
+			return false
+		}
+	}
+	words := strings.Fields(suffix)
+	if len(words) == 0 {
+		return false
+	}
+	if words[0] == "only" {
+		return true
+	}
+	start := 0
+	switch words[0] {
+	case "the", "a", "an":
+		if len(words) < 3 {
+			return false
+		}
+		start = 1
+	}
+	for _, word := range words[start:] {
+		if ownerFiniteVerb(word) {
+			return true
+		}
+	}
+	return false
+}
+
+func ownerFiniteVerb(word string) bool {
+	switch word {
+	case "am", "is", "are", "was", "were", "be", "been", "being",
+		"do", "does", "did", "have", "has", "had",
+		"can", "could", "will", "would", "shall", "should", "may", "might", "must",
+		"need", "needs", "wait", "waits", "fail", "fails", "work", "works", "remain", "remains", "stay", "stays",
+		"go", "goes", "come", "comes", "run", "runs", "stop", "stops", "start", "starts", "finish", "finishes",
+		"complete", "completes", "continue", "continues", "approve", "approves", "reject", "rejects", "roll", "rolls",
+		"notify", "notifies", "check", "checks", "verify", "verifies", "decide", "decides", "determine", "determines",
+		"review", "reviews", "ask", "asks", "inspect", "inspects", "assess", "assesses", "require", "requires",
+		"block", "blocks", "allow", "allows", "depend", "depends", "expect", "expects", "include", "includes",
+		"contain", "contains", "show", "shows", "say", "says", "tell", "tells", "report", "reports", "return", "returns",
+		"look", "looks", "seem", "seems", "appear", "appears", "make", "makes", "take", "takes", "use", "uses",
+		"get", "gets", "give", "gives", "want", "wants", "read", "reads", "succeed", "succeeds":
+		return true
+	}
+	return false
 }
 
 // ownerMarkerAfterContrast reports an owner marker immediately following an unquoted `but`, with optional whitespace.
@@ -175,12 +216,13 @@ func directOwnerMarker(lower, marker string) bool {
 		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
 		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
 		if afterContrast {
-			end := strings.LastIndexAny(before, ownerSentenceEnds)
+			clause := ownerWithoutQuotes(before)
+			end := strings.LastIndexAny(clause, ownerSentenceEnds)
 			// A contrast does not close a leading if-sentence. A trailing condition, by contrast, owns only its own
 			// clause, so the marker after its `but` remains an independent requirement.
-			direct = !ownerConditionalOpen(ownerWithoutQuotes(strings.TrimSpace(before[end+1:])))
+			direct = !ownerConditionalOpen(strings.TrimSpace(clause[end+1:]))
 		} else if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
-			clause := before
+			clause := ownerWithoutQuotes(before)
 			end := strings.LastIndexAny(clause, ownerSentenceEnds)
 			conditional := strings.TrimSpace(clause[end+1:])
 			// Commas and colons introduce guidance without closing an "if" elsewhere in this sentence. Only a
