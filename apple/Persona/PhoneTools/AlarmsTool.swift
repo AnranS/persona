@@ -2,6 +2,9 @@ import Foundation
 #if os(iOS) && canImport(AlarmKit)
 import AlarmKit
 import SwiftUI
+#if DEBUG
+import ActivityKit
+#endif
 #endif
 import PersonaWire
 
@@ -316,15 +319,45 @@ enum AlarmsTool {
 
     #if DEBUG
     /// `-showAlarmSample`: asks for AlarmKit, cancels the alarms Persona set before, starts a 25-minute "Focus" timer as
-    /// the tool does and, for `paused`, pauses it 3 s later.
+    /// the tool does and, for `paused`, pauses it 3 s later. Where AlarmKit refuses without asking (the iOS simulator), it
+    /// starts the same activity through ActivityKit instead, with the attributes the tool gives a timer, so
+    /// `AlarmLiveActivity` draws it for screenshots: a picture of the countdown, not an alarm that rings.
     static func showSample(paused: Bool) {
         Task {
-            guard await AlarmsAccess.request() == .granted else { return }
+            guard await AlarmsAccess.request() == .granted else { return await drawSample(paused: paused) }
             for alarm in (try? AlarmManager.shared.alarms) ?? [] { try? AlarmManager.shared.cancel(id: alarm.id) }
             guard let alarm = try? await scheduleTimer(seconds: 1500, label: "Focus"), paused else { return }
             try? await Task.sleep(for: .seconds(3))
             try? AlarmManager.shared.pause(id: alarm.id)
         }
+    }
+
+    private static func drawSample(paused: Bool) async {
+        for activity in Activity<AlarmAttributes<PersonaAlarmData>>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        let now = Date()
+        let mode: AlarmPresentationState.Mode = paused
+            ? .paused(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 301))
+            : .countdown(.init(totalCountdownDuration: 1500, previouslyElapsedDuration: 0, startDate: now, fireDate: now.addingTimeInterval(1500)))
+        let state = AlarmPresentationState(alarmID: UUID(), mode: mode)
+        _ = try? Activity.request(attributes: previewAttributes(paused: paused), content: .init(state: state, staleDate: nil))
+    }
+
+    /// The tool's timer attributes cut to what one state draws, its accent as one fixed colour: a request ActivityKit
+    /// takes from an app is at most 4 KB, and each dynamic `Theme.accent` encodes to about 5.7 KB (all of the tool's come to
+    /// about 23 KB; AlarmKit, not the app, starts the real ones).
+    private static func previewAttributes(paused: Bool) -> AlarmAttributes<PersonaAlarmData> {
+        let accent = Color(Theme.accent.resolve(in: EnvironmentValues()))
+        let label = LocalizedStringResource(stringLiteral: "Focus")
+        func button(_ key: String, _ symbol: String) -> AlarmButton {
+            AlarmButton(text: LocalizedStringResource(stringLiteral: key), textColor: accent, systemImageName: symbol)
+        }
+        let alert = AlarmPresentation.Alert(title: label, stopButton: button(String(localized: "Stop [Persona Alarm]"), Theme.Icon.interrupt))
+        let presentation = paused
+            ? AlarmPresentation(alert: alert, paused: .init(title: label, resumeButton: button(String(localized: "Resume [Persona Alarm]"), Theme.Icon.run)))
+            : AlarmPresentation(alert: alert, countdown: .init(title: label, pauseButton: button(String(localized: "Pause [Persona Alarm]"), Theme.Icon.pause)))
+        return AlarmAttributes(presentation: presentation, metadata: PersonaAlarmData(label: "Focus"), tintColor: accent)
     }
     #endif
 

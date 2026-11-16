@@ -392,5 +392,6 @@ rang but its countdown was not shown anywhere.
 - The tint is the one the app gave the alarm (`AlarmAttributes.tintColor`, the app's accent); nothing is read from the App Group or the keychain.
 - The activities live in their own `LiveActivityBundle` inside `PersonaWidgetsBundle` (a widget bundle's builder takes ten at most).
 - **Screenshots**: `-showAlarmSample timer|paused` (DEBUG) starts a 25-minute "Focus" timer as the tool does, and `PersonaUITests/AlarmLiveActivityShots`
-  (`PERSONA_ALARM_SAMPLE=timer|paused`) photographs the island and the Lock Screen. On a device only: the iOS 27.2 simulator's AlarmKit denies
-  every app without asking (`mobiletimerd`: "Denial for … to use AlarmKit"), so no timer starts there and the test skips.
+  (`PERSONA_ALARM_SAMPLE=timer|paused`) photographs the island and the Lock Screen. The iOS 27.2 simulator's AlarmKit denies every app without
+  asking (`mobiletimerd`: "Denial for … to use AlarmKit"), so there the sample starts the same activity through ActivityKit (DEBUG,
+  `AlarmsTool.showSample`): the drawing is a real timer's; that it rings through silent mode needs a device.

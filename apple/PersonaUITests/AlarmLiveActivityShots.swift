@@ -4,7 +4,8 @@ import XCTest
 /// `-showAlarmSample` starts a 25-minute "Focus" timer as phone_timer_start does; the test answers AlarmKit's question,
 /// then photographs the Dynamic Island (compact and expanded) and the Lock Screen. Not a pass / fail test beyond the
 /// activity showing up: look at the attachments (`xcresulttool export attachments`). `PERSONA_ALARM_SAMPLE=timer|paused`.
-/// Run it on a device: the simulator's AlarmKit refuses (below).
+/// On the simulator, whose AlarmKit refuses without asking, the app draws the same activity through ActivityKit
+/// (`AlarmsTool.showSample`): the drawing is the one a real timer gets; that it rings needs a device.
 final class AlarmLiveActivityShots: XCTestCase {
     @MainActor func testShots() throws {
         guard let sample = ProcessInfo.processInfo.environment["PERSONA_ALARM_SAMPLE"] else {
@@ -51,9 +52,7 @@ final class AlarmLiveActivityShots: XCTestCase {
         let bottom = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
         bottom.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
         sleep(1)
-        // On the iOS 27.2 simulator AlarmKit answers every request with a denial and shows no question (mobiletimerd logs
-        // "Denial for <bundle id> to use AlarmKit"), so no timer starts there: photograph it on a device.
-        if !shown { throw XCTSkip("no timer activity: AlarmKit refused this simulator (see mobiletimerd in the system log)") }
+        XCTAssertTrue(shown, "the timer's activity is not on the Lock Screen")
     }
 
     @MainActor private func shot(_ name: String) {
