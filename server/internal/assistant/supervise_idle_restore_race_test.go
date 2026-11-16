@@ -2,6 +2,9 @@ package assistant
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,16 +39,16 @@ func TestWorkingSerializesIdleRetractionWithPendingRestore(t *testing.T) {
 		s.restoreSupervisePending(ctx)
 		close(restoreDone)
 	}()
-	time.Sleep(25 * time.Millisecond)
+	waitForSuperviseMutex(t, "restoreSupervisePending", &s.relays.mu)
 	s.supervise.mu.Lock()
 	workingDone := make(chan struct{})
 	go func() {
 		s.supervisedWorking(ctx, todoNow(s, todo.ID))
 		close(workingDone)
 	}()
-	time.Sleep(25 * time.Millisecond)
+	waitForSuperviseMutex(t, "supervisedWorking", &s.supervise.mu)
 	s.relays.mu.Unlock()
-	time.Sleep(25 * time.Millisecond)
+	waitForSuperviseMutex(t, "restoreSupervisePending", &s.supervise.mu)
 	s.supervise.mu.Unlock()
 	<-restoreDone
 	<-workingDone
@@ -53,4 +56,20 @@ func TestWorkingSerializesIdleRetractionWithPendingRestore(t *testing.T) {
 	if idlePendingForReplayTest(s, old) {
 		t.Fatal("the restore inserted its older idle snapshot after working retracted it")
 	}
+}
+
+// Mutex waits are not durably blocking in testing/synctest. Observe the exact mutex in the goroutine stack instead of
+// guessing when it has joined the queue; the address distinguishes restore's relay-lock wait from its later book wait.
+func waitForSuperviseMutex(t *testing.T, method string, mu *sync.Mutex) {
+	t.Helper()
+	lock := fmt.Sprintf("lockSlow(%p)", mu)
+	waitFor(t, method+" waiting for its test-held mutex", func() bool {
+		for _, stack := range goroutineStacks() {
+			if strings.Contains(stack, "[sync.Mutex.Lock]") && strings.Contains(stack, lock) &&
+				strings.Contains(stack, "(*Service)."+method+"(") {
+				return true
+			}
+		}
+		return false
+	})
 }
