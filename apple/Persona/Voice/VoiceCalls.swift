@@ -102,9 +102,15 @@ import UIKit
     /// Whether the call (live or ended) is bound to this conversation: ChatView reads only this.
     func isBound(to key: SessionKey) -> Bool { current?.key == key }
 
-    /// The page bound to `key` went away or was hidden: its call ends, and its Continue row goes with it.
+    /// The page bound to `key` went away or was hidden: its call ends, and its Continue row goes with it. A system call
+    /// goes on (it is `PersonaCalls`'), but once it is over its line about how it ended goes with the page too.
     func leave(_ key: SessionKey, from surface: VoiceSurface = .phone) {
-        guard let call = current, call.key == key, call.surface == surface else { return }
+        guard let call = current, call.key == key else { return }
+        if call.surface == .call {
+            if surface == .phone, call.phase.isEnded { current = nil }
+            return
+        }
+        guard call.surface == surface else { return }
         call.end(.left)
         current = nil
     }

@@ -111,6 +111,23 @@ struct VoiceCallsTests {
         #expect(calls.current == nil)
     }
 
+    /// A system call goes on when its page goes (it is `PersonaCalls`'); once it ended by itself its line (「通话已结束 · 继续」)
+    /// stays on the page and goes with it (#9290).
+    @Test func aSystemCallOutlivesItsPageAndItsEndedLineGoesWithIt() async throws {
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        let call = rig.call(surface: .call)
+        await calls.begin(call)
+        calls.leave(rig.key)
+        #expect(calls.current === call && !call.phase.isEnded, "the page going leaves the system call on")
+        call.end(.lost)
+        #expect(calls.current === call, "its ended line stays while the page is there")
+        calls.leave(rig.key, from: .carPlay)
+        #expect(calls.current === call, "only the phone's page lets it go")
+        calls.leave(rig.key)
+        #expect(calls.current == nil)
+    }
+
     /// A system call's voice ended before its start ran (the system ended the call at once): it never begins.
     @Test func aSystemCallsVoiceThatEndedBeforeItBeganNeverBegins() async {
         let rig = VoiceRig()

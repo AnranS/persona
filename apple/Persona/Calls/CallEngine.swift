@@ -123,8 +123,8 @@ extension VoiceEnd {
         case .ready:
             events?(.ready)
         case .ended(let end):
-            // No Continue: the system call is over, and with it the voice's session.
-            if let voice { calls.release(voice) }
+            // The voice stays the app's ended call, so the main conversation says why (「通话已结束 · …」) until its page
+            // goes; its Continue calls Persona again (`VoiceEndedStrip`), never picks this voice up (`VoiceCalls.resume`).
             events?(.ended(failed: end.failsCall, note: VoiceEndNote.make(end, extensionID: extensionID)?.text))
         case .interrupted:
             events?(.interrupted)

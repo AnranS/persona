@@ -106,6 +106,7 @@ struct VoiceBar: View {
                 orb(status)
                 statusText(status).fixedSize()
                 Spacer(minLength: 0)
+                expandButton
                 endButton
             }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -113,6 +114,7 @@ struct VoiceBar: View {
                     muteButton
                     orb(status)
                     Spacer(minLength: 0)
+                    expandButton
                     endButton
                 }
                 statusText(status)
@@ -141,6 +143,10 @@ struct VoiceBar: View {
     private var muteButton: some View {
         Button {
             Haptics.tap()
+            #if os(iOS)
+            // A system call's mute is the system's (its call UI and AirPods say the same): through its manager.
+            if call.surface == .call { return PersonaCalls.shared.setMuted(!call.muted) }
+            #endif
             call.muted.toggle()
         } label: {
             ThemedIcon(call.muted ? Theme.Icon.voiceUnmute : Theme.Icon.voiceMute)
@@ -156,10 +162,35 @@ struct VoiceBar: View {
         .accessibilityIdentifier("voice-mute")
     }
 
-    /// Stop: the phone's red, round like the composer's send.
+    /// A system call to Persona (#9290): back to its full screen (the call screen), the call unchanged.
+    @ViewBuilder private var expandButton: some View {
+        #if os(iOS)
+        if call.surface == .call {
+            Button {
+                Haptics.tap()
+                PersonaCalls.shared.present()
+            } label: {
+                ThemedIcon(Theme.Icon.callExpand)
+                    .font(Theme.Font.bodyStrong)
+                    .foregroundStyle(ComposerInk.icon(theme))
+                    .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show Call [Voice Bar]")
+            .accessibilityIdentifier("voice-expand")
+        }
+        #endif
+    }
+
+    /// Stop: the phone's red, round like the composer's send. A system call hangs up through its manager, so the
+    /// system's call ends with it.
     private var endButton: some View {
         Button {
             Haptics.tap()
+            #if os(iOS)
+            if call.surface == .call { return PersonaCalls.shared.hangUp() }
+            #endif
             VoiceCalls.shared.end(.user, from: call.surface)
         } label: {
             ThemedIcon(Theme.Icon.voiceEnd)
@@ -172,7 +203,8 @@ struct VoiceBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Stop [Car Play Voice Screen c7b24e]")
-        .accessibilityHint("Ends the voice chat; what was handed over still gets done")
+        .accessibilityHint(call.surface == .call ? Text("Hangs up the call; what was handed over still gets done")
+                               : Text("Ends the voice chat; what was handed over still gets done"))
         .accessibilityIdentifier("voice-end")
     }
 

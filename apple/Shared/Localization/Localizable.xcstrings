@@ -26774,6 +26774,29 @@
       },
       "extractionState" : "manual"
     },
+    "Audio [Call Control]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オーディオ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音频"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Audio session" : {
       "localizations" : {
         "en" : {
@@ -31646,6 +31669,29 @@
       },
       "extractionState" : "manual"
     },
+    "Call Persona" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call Persona"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaに電話"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "呼叫 Persona"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Call Persona · %@" : {
       "localizations" : {
         "en" : {
@@ -31691,6 +31737,29 @@
         }
       }
     },
+    "Call ended · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call ended · %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話終了 · %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话已结束 · %1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Calling this iPhone. Lock it to see how a call looks." : {
       "localizations" : {
         "en" : {
@@ -31712,6 +31781,29 @@
           }
         }
       }
+    },
+    "Calling… [Call Screen]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calling…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "発信中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在呼叫…"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Calls a Day" : {
       "localizations" : {
@@ -34166,6 +34258,29 @@
           }
         }
       }
+    },
+    "Car [Call Audio Route]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Car"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "車"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "车载"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Card [Sent as You]" : {
       "localizations" : {
@@ -72299,6 +72414,52 @@
         }
       }
     },
+    "Hangs up the call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hangs up the call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話を切ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "挂断通话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Hangs up the call; what was handed over still gets done" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hangs up the call; what was handed over still gets done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話を切ります。渡した作業はそのまま続きます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "挂断通话，已经交出去的事照常做完"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Has Access To" : {
       "localizations" : {
         "en" : {
@@ -72547,6 +72708,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请求头，一行一个 Name: value"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Headphones [Call Audio Route]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Headphones"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘッドフォン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "耳机"
           }
         }
       },
@@ -91626,6 +91810,29 @@
       },
       "extractionState" : "manual"
     },
+    "Minimise [Call Screen]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimise"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小化"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Minutes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -108930,6 +109137,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 %1$@ 上打开终端，输入下面这个词，回车，按提示在浏览器里登录一次："
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "On Hold [Call Screen]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On Hold"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保持"
           }
         }
       },
@@ -132590,6 +132820,29 @@
       },
       "extractionState" : "manual"
     },
+    "Resume [Call Control]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再開"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复通话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Resume [Persona Alarm]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -133034,6 +133287,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在重试… · %1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Returns to the call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returns to the call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話に戻ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到通话"
           }
         }
       },
@@ -144112,6 +144388,29 @@
         }
       }
     },
+    "Show Call [Voice Bar]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示通话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Show Details on Lock Screen" : {
       "localizations" : {
         "en" : {
@@ -147980,6 +148279,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "对话派生"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Speaker [Call Control]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speaker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スピーカー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扬声器"
           }
         }
       },
@@ -155423,6 +155745,29 @@
         }
       }
     },
+    "Takes the call off hold" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Takes the call off hold"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留を解除して通話を続けます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消保持，继续通话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Taking a photo, one moment" : {
       "localizations" : {
         "en" : {
@@ -159741,6 +160086,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分支名里有不能用的字符"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The call goes on; the bar at the top returns to it" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The call goes on; the bar at the top returns to it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話は続きます。上部のバーから戻れます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话照常继续，点顶部的条可以回来"
           }
         }
       },
@@ -197736,6 +198104,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "手机尺寸"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "iPhone [Call Audio Route]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone"
           }
         }
       },

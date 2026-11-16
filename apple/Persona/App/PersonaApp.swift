@@ -15,6 +15,7 @@ struct PersonaApp: App {
         WindowGroup {
             RootView()
                 #if os(iOS)
+                .personaCallCover() // the call to Persona's page and the bar back to it (#9290, CallScreen.swift)
                 .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
                 #endif
                 #if DEBUG && os(iOS)

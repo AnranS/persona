@@ -22,10 +22,21 @@ import os
 
     private(set) var output: Output = .receiver
     var speakerOn: Bool { output == .speaker }
+    /// Something besides the phone's own earpiece and loudspeaker can take the call (Bluetooth, a car, headphones):
+    /// the call screen offers the system's route picker (Audio) in Speaker's place.
+    private(set) var external = false
 
     @ObservationIgnored private var observer: NSObjectProtocol?
     @ObservationIgnored private var overrode = false
     nonisolated private static let log = Logger(subsystem: "persona", category: "call")
+
+    /// Where the sound goes now, and whether another way is there: read off the main actor (the session's own queue).
+    nonisolated static func read(_ session: AVAudioSession) -> (Output, Bool) {
+        let now = output(session.currentRoute)
+        let builtIn: Set<AVAudioSession.Port> = [.builtInMic, .builtInReceiver, .builtInSpeaker]
+        let other = (session.availableInputs ?? []).contains { !builtIn.contains($0.portType) }
+        return (now, other || ![.receiver, .speaker].contains(now))
+    }
 
     /// The route as the session has it, by its first output.
     nonisolated static func output(_ route: AVAudioSessionRouteDescription) -> Output {
@@ -50,12 +61,12 @@ import os
         // Read where the session posts it, off the main actor; only the answer comes over.
         observer = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil,
                                                           queue: nil) { @Sendable [weak self] _ in
-            let now = Self.output(AVAudioSession.sharedInstance().currentRoute)
-            Task { @MainActor in self?.set(now) }
+            let (now, external) = Self.read(AVAudioSession.sharedInstance())
+            Task { @MainActor in self?.set(now, external: external) }
         }
         Task.detached { [weak self] in
-            let now = Self.output(AVAudioSession.sharedInstance().currentRoute)
-            await MainActor.run { self?.set(now) }
+            let (now, external) = Self.read(AVAudioSession.sharedInstance())
+            await MainActor.run { self?.set(now, external: external) }
         }
     }
 
@@ -78,13 +89,24 @@ import os
         }
     }
 
-    private func set(_ now: Output) {
+    private func set(_ now: Output, external: Bool) {
+        #if DEBUG
+        if sampled { return }
+        #endif
         if output != now { output = now }
+        if self.external != external { self.external = external }
     }
 
     #if DEBUG
+    /// A sample's route stays (the session's own, read a moment later, would replace it).
+    @ObservationIgnored private var sampled = false
+
     /// The call page's samples.
-    func show(_ sample: Output) { set(sample) }
+    func show(_ sample: Output) {
+        sampled = false
+        set(sample, external: ![.receiver, .speaker].contains(sample))
+        sampled = true
+    }
     #endif
 }
 #endif

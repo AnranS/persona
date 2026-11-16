@@ -100,7 +100,7 @@ struct VoiceEndedStrip: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 ThemedIcon(Theme.Icon.voiceChannel).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
-                Text("Voice ended · \(note.text)")
+                (call.surface == .call ? Text("Call ended · \(note.text)") : Text("Voice ended · \(note.text)"))
                     .font(Theme.Font.secondary)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
@@ -111,6 +111,14 @@ struct VoiceEndedStrip: View {
                 if let again = note.again {
                     Button {
                         Haptics.tap()
+                        #if os(iOS)
+                        // A system call that ended is not picked up again: Persona is called again (a new system call).
+                        if call.surface == .call {
+                            let group = call.key.group
+                            Task { await PersonaCalls.shared.callPersona(group: group, origin: .app) }
+                            return
+                        }
+                        #endif
                         Task { refusal = await VoiceCalls.shared.resume(call.key) }
                     } label: {
                         Label(again == .resume ? String(localized: "Continue") : String(localized: "Retry [Components b8784c]"), systemImage: Theme.Icon.voiceChannel)

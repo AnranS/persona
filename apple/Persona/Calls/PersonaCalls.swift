@@ -34,6 +34,11 @@ import os
     @ObservationIgnored fileprivate var finished = false
     /// A DEBUG sample: nothing reaches the system or an engine.
     @ObservationIgnored fileprivate var sample = false
+    #if DEBUG
+    /// A sample has no voice: what one would show, its connection being picked up again and its latest caption.
+    fileprivate(set) var sampleReconnecting = false
+    fileprivate(set) var sampleCaption: String?
+    #endif
 
     fileprivate init(id: UUID, kind: CallKind, direction: CallDirection) {
         self.id = id
@@ -182,6 +187,13 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// The page minimised (the bar returns to it), or shown again.
     func minimise() { if presented { presented = false } }
     func present() { if ownerCall != nil, !presented { presented = true } }
+
+    /// The app came back to the front (the Dynamic Island, the status bar's call, the Lock Screen's call, the app
+    /// switcher): a call to Persona that is on shows its page again.
+    func returnedToApp() {
+        guard let call = ownerCall, call.phase.isLive else { return }
+        present()
+    }
 
     // MARK: Adding and ending calls
 
@@ -451,6 +463,9 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     #if DEBUG
     nonisolated enum Sample: String, CaseIterable, Sendable {
         case dialing, connecting, connected, muted, held, interrupted, resume, speaker, ended
+        /// Muted on the loudspeaker; the voice's connection being picked up again; AirPods connected (Audio in
+        /// Speaker's place).
+        case mutedSpeaker, reconnecting, audioRoute
     }
 
     /// A call to Persona's page in each of its states, with no system, no audio and no hub (`-showCallSample <state>`).
@@ -464,8 +479,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         if ![.dialing, .connecting].contains(sample) { events += [.audioActivated, .engineRunning] }
         switch sample {
         case .dialing, .connecting: break
-        case .connected, .speaker: events.append(.voiceReady)
-        case .muted: events += [.voiceReady, .muteTapped(true), .muteAction(true)]
+        case .connected, .speaker, .reconnecting, .audioRoute: events.append(.voiceReady)
+        case .muted, .mutedSpeaker: events += [.voiceReady, .muteTapped(true), .muteAction(true)]
         case .held: events += [.voiceReady, .pauseAction(true)]
         case .interrupted: events += [.voiceReady, .interruptionBegan]
         case .resume: events += [.voiceReady, .interruptionBegan, .audioDeactivated, .interruptionEnded, .timer(.recoveryUnpause),
@@ -477,7 +492,15 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
             _ = call.machine.handle(event, at: event == .voiceReady ? now.addingTimeInterval(-42) : now)
         }
         if sample == .ended { call.note = String(localized: "Can't reach the hub") }
-        if sample == .speaker { route.show(.speaker) }
+        switch sample {
+        case .speaker, .mutedSpeaker: route.show(.speaker)
+        case .audioRoute: route.show(.bluetooth("AirPods Pro")) // i18n-ignore: a device's name in a DEBUG sample
+        default: route.show(.receiver)
+        }
+        call.sampleReconnecting = sample == .reconnecting
+        if call.machine.phase.connectedSince != nil {
+            call.sampleCaption = "好的，明早九点的会我帮你改到十点了，也跟大家说了一声。" // i18n-ignore: a DEBUG sample's caption
+        }
         call.sync()
         presented = true
     }

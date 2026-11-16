@@ -170,6 +170,13 @@ struct PersonaCallsTests {
         #expect(call.phase == .ended(.failed))
         #expect(lost.system.ended == [.failed])
         #expect(call.note == VoiceEndNote.make(.lost, extensionID: "voice")?.text)
+        // The ended voice stays for the main conversation's 「通话已结束 · …」 (its Continue calls Persona again), and is
+        // never picked up again itself; leaving the page lets it go.
+        #expect(lost.voiceCalls.current === call.voice)
+        let picked = await lost.voiceCalls.resume(lost.voice.key)
+        #expect(picked == nil && call.voice?.phase == .ended(.lost))
+        #expect(lost.voice.sockets.count == 1, "no second socket for an ended system call")
+        lost.voiceCalls.leave(lost.voice.key)
         #expect(lost.voiceCalls.current == nil)
 
         let idle = CallRig()
