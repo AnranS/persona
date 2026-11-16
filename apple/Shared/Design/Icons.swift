@@ -618,9 +618,10 @@ extension Theme {
         /// Call Persona (#9290): a phone call to Persona through the system's call UI, from the main conversation's +.
         /// An outgoing handset, apart from Voice Chat's `voiceChannel` beside it (the chat's own voice, in the app).
         static let callPersona = "phone.arrow.up.right"
-        /// The call screen's Speaker: the call's sound on the loudspeaker, a toggle (its round control fills when on).
-        /// Not `voiceSpeaking`, which is Persona speaking.
-        static let callSpeaker = "speaker.wave.2"
+        /// The call screen's Speaker: the call's sound on the loudspeaker, a toggle (its round control fills when on), the
+        /// Phone app's glyph for it. Not `voiceSpeaking` (Persona speaking) nor `answersAloud` (the meeting room's answers
+        /// said out loud).
+        static let callSpeaker = "speaker.wave.3"
         /// The call screen's Audio: picks where the call's sound goes (the system's route picker) when Bluetooth, a car
         /// or headphones are there; the system's own glyph for it.
         static let callAudioRoute = "airplay.audio"

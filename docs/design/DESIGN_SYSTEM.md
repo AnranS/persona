@@ -319,8 +319,8 @@ Code's `Monitor`). A command run once keeps `Theme.Icon.terminal`.
 
 The call to Persona (#9290): `Theme.Icon.callPersona` (`phone.arrow.up.right`) is **Call Persona** in the main
 conversation's + panel, a phone call through the system's call UI, apart from Voice Chat's handset (`voiceChannel`) beside
-it, the chat's own voice in the app. On the call screen `callSpeaker` (`speaker.wave.2`) is the Speaker toggle, not
-`voiceSpeaking` (Persona speaking); `callAudioRoute` (`airplay.audio`, the system's own glyph for it) is Audio, the route
+it, the chat's own voice in the app. On the call screen `callSpeaker` (`speaker.wave.3`, the Phone app's glyph) is the Speaker toggle, not
+`voiceSpeaking` (Persona speaking) nor the meeting room's `answersAloud`; `callAudioRoute` (`airplay.audio`, the system's own glyph for it) is Audio, the route
 picker; `callMinimise` is `expand`'s chevron, and the voice bar's way back to the call screen, `callExpand`, is `enlarge`.
 
 `Theme.Icon.denied` (`hand.raised.slash`) is a tool call the user, a permission rule or a hook turned down (#4303). It is

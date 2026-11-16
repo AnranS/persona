@@ -10,11 +10,16 @@ struct CallSourceTests {
     private static let apple = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 
     /// Every Swift file under `apple/` but the local packages, with `//` comments taken out.
+    /// Paths relative to `apple/`, both sides with symlinks resolved: a checkout under a symlinked folder (`/var` →
+    /// `/private/var`, where scripts/ci/apple.sh puts its snapshot) is walked under the resolved name.
     private static func sources(tests: Bool) throws -> [(path: String, lines: [String])] {
-        let walker = try #require(FileManager.default.enumerator(at: apple, includingPropertiesForKeys: nil))
+        let root = apple.resolvingSymlinksInPath()
+        let walker = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         var out: [(String, [String])] = []
         for case let url as URL in walker where url.pathExtension == "swift" {
-            let path = url.path.replacingOccurrences(of: apple.path + "/", with: "")
+            let full = url.resolvingSymlinksInPath().path
+            guard full.hasPrefix(root.path + "/") else { continue }
+            let path = String(full.dropFirst(root.path.count + 1))
             if path.hasPrefix("Packages/") || path.contains("/.build/") || path.contains("DerivedData") { continue }
             if !tests, path.hasPrefix("PersonaTests/") || path.hasPrefix("PersonaUITests/") { continue }
             let lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
