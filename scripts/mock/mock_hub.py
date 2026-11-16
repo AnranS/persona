@@ -11940,6 +11940,9 @@ def inbox_list(query):
 
 # What each bulk "Handled" / "Undo" asked for (POST /api/v1/inbox/done), kept at /mock/inbox_bulk.
 INBOX_BULK = []
+# Open unless /mock/inbox_done_hold: then GET /api/v1/inbox/done with `before` waits for /mock/inbox_done_release (#6661).
+INBOX_DONE_GATE = threading.Event()
+INBOX_DONE_GATE.set()
 
 
 def inbox_bulk(body):
@@ -22574,11 +22577,12 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0, plan=None, edit=None):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
     transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
-    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten."""
+    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten.
+    `edit`: push a successful edit of that path instead of a reply, for the transcript changes panel's live updates."""
     import time
     for send, subscribed in list(LIVE):
         for sid in list(subscribed):
@@ -22610,7 +22614,9 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upt
                     time.sleep(late / 1000)
                 items = ITEMS[sid]
             before = items[-1]["seq"]
-            new = ([it("user", "text", 0, text=user)] if user else []) + [it("assistant", "text", 0, text=text)]
+            new = ([it("user", "text", 0, text=user)] if user else []) + (tool(
+                "Edit", {"file_path": edit, "old_string": "before", "new_string": "after " + edit}, "ok", 0,
+            ) if edit else [it("assistant", "text", 0, text=text)])
             if MOCK_SYNC_REVS:  # written now, as the hub's lines are: the page compares their time with the list's
                 for x in new:
                     x["ts"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -25668,7 +25674,7 @@ class H(BaseHTTPRequestHandler):
             args = (trace["text"] if trace else SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None,
                     q.get("stream", ["0"])[0] == "1" or trace is not None,
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
-                    int(q.get("upto", ["0"])[0]), plan)
+                    int(q.get("upto", ["0"])[0]), plan, q.get("edit", [""])[0] or None)
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -25991,6 +25997,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
         if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
+        if p in ("/mock/inbox_done_hold", "/mock/inbox_done_release"):  # Done's group pages held / let go (#6661)
+            if p.endswith("hold"): INBOX_DONE_GATE.clear()
+            else: INBOX_DONE_GATE.set()
+            return self.send_json({"held": not INBOX_DONE_GATE.is_set()})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -26203,6 +26213,10 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(days) if days else self.send_json({"error": "tz must be a time zone name"}, 400)
         if p == "/api/v1/inbox/done":
             if os.environ.get("MOCK_INBOX_HISTORY") == "none": return self.send_json({"error": "not found"}, 404)
+            # A page asked from a moment (`before`: a Done group's, an older page) waits while /mock/inbox_done_hold holds
+            # them, until /mock/inbox_done_release (at most 60 s); the list's first page does not: Jump To a group still
+            # loading (#6661, docs/operations/testing.md)
+            if (q.get("before") or [""])[0]: INBOX_DONE_GATE.wait(60)
             other = other_manager(self)  # the history is each manager's own: the others have none here
             if other: return self.send_json(*other[1]) if other[1] else self.send_json({"items": []})
             return self.send_json(inbox_done(q))
