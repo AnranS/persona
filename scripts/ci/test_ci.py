@@ -364,6 +364,9 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertIn('RECORD_OUTCOME', verdict['env'])
         self.assertIn('CLEANUP_OUTCOME', verdict['env'])
         self.assertIn('exit 1', verdict['run'])
+        for diagnostic in ('DIAGNOSTICS_BEFORE_OUTCOME', 'DIAGNOSTICS_LOADED_OUTCOME', 'DIAGNOSTICS_CLEANUP_OUTCOME'):
+            self.assertIn(diagnostic, verdict['env'])
+            self.assertIn(f'"${diagnostic}" != success', verdict['run'])
         self.assertLess(linux['steps'].index(cleanup), linux['steps'].index(verdict))
         for upload in (step for step in linux['steps'] if step.get('uses', '').startswith('actions/upload-artifact')):
             if upload['with']['name'].startswith('persona-desktop-linux-first-run'):
@@ -374,6 +377,16 @@ class DesktopWorkflowTests(unittest.TestCase):
         helper = (root / 'scripts/ci/desktop-first-run-apparmor.sh').read_text()
         self.assertIn('sudo apparmor_parser --abort-on-error -K -T -B -a "$compiled"', helper)
         self.assertIn('sudo apparmor_parser --abort-on-error -R "$profile"', helper)
+        self.assertIn('sudo grep -E -q -e "^${name} ', helper)
+        self.assertIn('-- "$profiles_file"', helper)
+        diagnostics = (root / 'scripts/ci/desktop-first-run-apparmor-diagnostics.sh').read_text()
+        for command in ('sudo grep', 'sudo ls -l', 'sudo cat', 'sudo aa-status'):
+            self.assertIn(command, diagnostics)
+        workflow_text = (root / '.github/workflows/desktop-test.yml').read_text()
+        self.assertIn("'after-cleanup' ||", workflow_text)
+        self.assertIn('diagnostics-$DIAGNOSTIC_PHASE', workflow_text)
+        for forbidden in ('apparmor_parser', 'chmod', 'chown', 'mount ', 'umount', 'systemctl', 'tee', 'stat ', 'command '):
+            self.assertNotIn(forbidden, diagnostics)
         self.assertNotIn('PERSONA_APPARMOR', helper)
         self.assertNotIn('--no-sandbox', helper)
         for forbidden in ('chmod 4755', '--no-sandbox', 'fuse', 'apparmor_parser -r'):

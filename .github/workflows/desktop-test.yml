@@ -57,6 +57,11 @@ jobs:
       - name: Build the unsigned Linux package
         if: ${{ !cancelled() }}
         run: scripts/ci/desktop-first-run-package.sh
+      - name: Record AppArmor diagnostics before loading
+        id: diagnostics-before
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: scripts/ci/desktop-first-run-apparmor-diagnostics.sh before-load
       - name: Load the run-scoped Chromium user-namespace profile
         id: sandbox-load
         if: ${{ !cancelled() }}
@@ -69,6 +74,11 @@ jobs:
         env:
           PERSONA_DESKTOP_TEST_PACKAGE: ${{ github.workspace }}/desktop/release/linux-unpacked/persona-desktop
         run: xvfb-run -a scripts/ci/desktop-first-run.sh desktop/release/first-run
+      - name: Record AppArmor diagnostics after loading
+        id: diagnostics-loaded
+        if: ${{ always() && steps.sandbox-load.outcome != 'skipped' }}
+        continue-on-error: true
+        run: scripts/ci/desktop-first-run-apparmor-diagnostics.sh after-load
       - name: Record the packaged first-run result
         id: first-run-result
         if: ${{ always() && steps.sandbox-load.outcome == 'success' }}
@@ -94,11 +104,22 @@ jobs:
           else
             scripts/ci/desktop-first-run-apparmor.sh cleanup-owned
           fi
+      - name: Record AppArmor diagnostics after cleanup
+        id: diagnostics-cleanup
+        if: ${{ always() && steps.sandbox-cleanup.outcome != 'skipped' }}
+        continue-on-error: true
+        run: scripts/ci/desktop-first-run-apparmor-diagnostics.sh after-cleanup
       - name: Preserve sandbox receipts
         if: ${{ always() && steps.sandbox-load.outcome != 'skipped' }}
+        env:
+          DIAGNOSTIC_PHASE: ${{ steps.diagnostics-cleanup.outcome != 'skipped' && 'after-cleanup' || steps.diagnostics-loaded.outcome != 'skipped' && 'after-load' || 'before-load' }}
         run: |
           destination="$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$destination"
+          diagnostics="$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.diagnostics"
+          if [ -d "$diagnostics" ]; then
+            cp -R -- "$diagnostics" "$destination/diagnostics-$DIAGNOSTIC_PHASE"
+          fi
           for suffix in run.json cleanup.json apparmor policy ownership; do
             if [ -f "$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.$suffix" ]; then
               cp -- "$RUNNER_TEMP/persona-first-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.$suffix" "$destination/$suffix"
@@ -111,7 +132,14 @@ jobs:
           FIRST_RUN_OUTCOME: ${{ steps.first-run.outcome }}
           RECORD_OUTCOME: ${{ steps.first-run-result.outcome }}
           CLEANUP_OUTCOME: ${{ steps.sandbox-cleanup.outcome }}
+          DIAGNOSTICS_BEFORE_OUTCOME: ${{ steps.diagnostics-before.outcome }}
+          DIAGNOSTICS_LOADED_OUTCOME: ${{ steps.diagnostics-loaded.outcome }}
+          DIAGNOSTICS_CLEANUP_OUTCOME: ${{ steps.diagnostics-cleanup.outcome }}
         run: |
+          if [ "$DIAGNOSTICS_BEFORE_OUTCOME" != success ] || [ "$DIAGNOSTICS_LOADED_OUTCOME" != success ] || [ "$DIAGNOSTICS_CLEANUP_OUTCOME" != success ]; then
+            printf 'read-only diagnostics failed: before=%s loaded=%s cleanup=%s\n' "$DIAGNOSTICS_BEFORE_OUTCOME" "$DIAGNOSTICS_LOADED_OUTCOME" "$DIAGNOSTICS_CLEANUP_OUTCOME" >&2
+            exit 1
+          fi
           if [ "$LOAD_OUTCOME" != success ]; then
             printf 'sandbox load failed: %s\n' "$LOAD_OUTCOME" >&2
             exit 1

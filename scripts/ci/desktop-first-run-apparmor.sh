@@ -19,11 +19,10 @@ profiles_file=/sys/kernel/security/apparmor/profiles
 receipt_helper="$GITHUB_WORKSPACE/scripts/ci/desktop_first_run_apparmor_receipt.py"
 [[ "$receipt_helper" =~ ^/[A-Za-z0-9._/-]+$ && -f "$receipt_helper" && ! -L "$receipt_helper" ]] || exit 2
 
-# Read-only NAME (mode) presence is not proof that a concurrently replaced definition is ours.
+# The maintainer separately approved read-only sudo grep for this exact profile list.
 profile_state() {
   local query_status
-  [[ -f "$profiles_file" && ! -L "$profiles_file" && -r "$profiles_file" ]] || { printf 'error\n'; return; }
-  grep -E -q -e "^${name} \\([^)]*\\)$" -- "$profiles_file" 2>/dev/null && { printf 'present\n'; return 0; }
+  sudo grep -E -q -e "^${name} \\([^)]*\\)$" -- "$profiles_file" 2>/dev/null && { printf 'present\n'; return 0; }
   query_status=$?
   case "$query_status" in
     0) printf 'present\n' ;;

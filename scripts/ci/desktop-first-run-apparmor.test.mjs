@@ -24,6 +24,14 @@ production = production.replace('[[ "${GITHUB_ACTIONS:-}" == true && "${CI:-}" =
 production = production.replace('profiles_file=/sys/kernel/security/apparmor/profiles', 'profiles_file="${PERSONA_APPARMOR_PROFILES_FILE:?synthetic profile list required}"');
 production = production.replace('receipt_helper="$GITHUB_WORKSPACE/scripts/ci/desktop_first_run_apparmor_receipt.py"', `receipt_helper=${JSON.stringify(helper)}`);
 production = production.replaceAll('"${sudo_cmd[@]}"', '"$PERSONA_APPARMOR_TEST_DOUBLE"');
+const queryLine = production.split("\n").filter(line => line.includes("sudo grep")).at(-1);
+if (!queryLine.startsWith('  sudo grep -E -q -e "^${name} ') || !queryLine.endsWith('" -- "$profiles_file" 2>/dev/null && { printf \'present\\n\'; return 0; }')) throw new Error("The read-only sudo profile query changed");
+production = production.replace("profile_state() {", `sudo() {
+  if [[ "$1" != grep || "$2" != -E || "$3" != -q || "$4" != -e || "$6" != -- || "$7" != "$profiles_file" || "$#" -ne 7 ]]; then return 97; fi
+  shift
+  command grep "$@"
+}
+profile_state() {`);
 if (!production.includes('sudo apparmor_parser --abort-on-error -K -T -B -a "$compiled"')) throw new Error("The approved load command changed");
 production = production.replace('if ! sudo apparmor_parser --abort-on-error -K -T -B -a "$compiled"; then', 'if ! "$PERSONA_APPARMOR_TEST_DOUBLE" apparmor_parser --abort-on-error -K -T -B -a "$compiled"; then');
 if (!production.includes('sudo apparmor_parser --abort-on-error -R "$profile"')) throw new Error("The approved removal command changed");
@@ -31,6 +39,8 @@ production = production.replace('if ! sudo apparmor_parser --abort-on-error -R "
 production = production.replace("  apparmor_parser -Q -K -T -o", '  "$PERSONA_APPARMOR_TEST_DOUBLE" -Q -K -T -o');
 assert.equal(production.includes("apparmor_compile"), false);
 await writeFile(script, production, { mode: 0o700 });
+const syntax = spawnSync("bash", ["-n", script], { encoding: "utf8" });
+if (syntax.status !== 0) throw new Error(`Isolated shell syntax: ${syntax.stderr}`);
 await copyFile(receiptSource, helper);
 for (const name of Object.values(doubles)) {
   const target = join(fixtureRoot, name.replace("desktop-first-run", "persona-7702"));
@@ -201,7 +211,7 @@ test("rejects path, run identity and CI injection before emitting a rule", async
   assert.match(await readFile(source, "utf8"), /profiles_file=\/sys\/kernel\/security\/apparmor\/profiles/);
   assert.doesNotMatch(await readFile(source, "utf8"), /PERSONA_APPARMOR|apparmor_compile|PERSONA_APPARMOR_SUDO/);
   const registration = await readFile(join(sourceDirectory, "desktop.sh"), "utf8");
-  assert.ok(registration.includes("node --test scripts/ci/desktop-first-run-apparmor.test.mjs"));
+  assert.ok(registration.includes("node --test scripts/ci/desktop-first-run-apparmor.test.mjs scripts/ci/desktop-first-run-apparmor-diagnostics.test.mjs"));
 });
 
 test("a foreign profile is preserved through both failed load and always-cleanup", async t => {
