@@ -11,11 +11,19 @@ export async function sha256File(file) {
 
 /** Record the source identity used for this build without treating unrelated untracked files as source changes. */
 export function sourceIdentity(root, runGit = args => execFileSync("git", args, { cwd: root, encoding: "utf8" })) {
-  const head = runGit(["rev-parse", "HEAD"]).trim();
-  const sourceTree = runGit(["rev-parse", "HEAD^{tree}"]).trim();
-  const trackedDiff = runGit(["diff", "HEAD", "--"]);
-  const untracked = runGit(["ls-files", "--others", "--exclude-standard"]);
-  return { sourceCommit: head, sourceTree, sourceMatchesHead: trackedDiff.length === 0 && untracked.length === 0, untrackedFilesPresent: untracked.length > 0 };
+  const run = args => {
+    try { return runGit(args); }
+    catch (error) {
+      // `git diff --quiet` uses 1 only for an actual tracked difference, not for a Git execution failure.
+      if (args[0] === "diff" && args[1] === "--quiet" && error?.status === 1) return 1;
+      throw error;
+    }
+  };
+  const head = run(["rev-parse", "HEAD"]).trim();
+  const sourceTree = run(["rev-parse", "HEAD^{tree}"]).trim();
+  const trackedDiff = run(["diff", "--quiet", "HEAD", "--"]);
+  const untracked = run(["ls-files", "--others", "--exclude-standard"]);
+  return { sourceCommit: head, sourceTree, sourceMatchesHead: !trackedDiff && untracked.length === 0, untrackedFilesPresent: untracked.length > 0 };
 }
 
 export function appAsarPath(platform, file, desktop) {

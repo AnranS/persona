@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +10,9 @@ test("first-run evidence uses the source tree and distinguishes tracked edits fr
   const commands = [];
   const runGit = args => {
     commands.push(args);
+    if (args[0] === "diff" && args[1] === "--quiet") return 1;
     if (args[0] === "rev-parse" && args[1] === "HEAD") return "267b61a01dcf07a659a8ab3b14b9e8d8bd3fc513\n";
     if (args[0] === "rev-parse") return "561e17b34257ae795394be2324800aae398009db\n";
-    if (args[0] === "diff") return " desktop/src/main.ts | 1 +\n";
     return "desktop/scripts/probe-first-run.mjs\n";
   };
   const identity = sourceIdentity("/synthetic/repository", runGit);
@@ -19,19 +20,42 @@ test("first-run evidence uses the source tree and distinguishes tracked edits fr
   assert.equal(identity.sourceTree, "561e17b34257ae795394be2324800aae398009db");
   assert.equal(identity.sourceMatchesHead, false);
   assert.equal(identity.untrackedFilesPresent, true);
-  assert.deepEqual(commands[2], ["diff", "HEAD", "--"]);
+  assert.deepEqual(commands[2], ["diff", "--quiet", "HEAD", "--"]);
   assert.equal(appAsarPath("linux", "/ignored", "/synthetic/repository/desktop"), join("/synthetic/repository/desktop", "release", "linux-unpacked", "resources", "app.asar"));
 });
 
 test("first-run evidence rejects untracked code even when tracked files match", () => {
   const identity = sourceIdentity("/synthetic/repository", args => {
+    if (args[0] === "diff" && args[1] === "--quiet") return 0;
     if (args[0] === "rev-parse" && args[1] === "HEAD") return "267b61a01dcf07a659a8ab3b14b9e8d8bd3fc513\n";
     if (args[0] === "rev-parse") return "561e17b34257ae795394be2324800aae398009db\n";
-    if (args[0] === "diff") return "";
     return "desktop/src/untracked-dependency.ts\n";
   });
   assert.equal(identity.sourceMatchesHead, false);
   assert.equal(identity.untrackedFilesPresent, true);
+});
+
+test("first-run provenance checks status without buffering a large patch or accepting staged edits", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "persona-first-run-git-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const git = args => execFileSync("git", args, { cwd: directory, encoding: "utf8" });
+  const file = join(directory, "source.txt");
+  git(["init", "--quiet"]);
+  git(["config", "user.name", "Test Fixture"]);
+  git(["config", "user.email", "test@example.invalid"]);
+  await writeFile(file, "initial\n");
+  git(["add", "source.txt"]);
+  git(["commit", "--quiet", "-m", "fixture"]);
+  assert.equal(sourceIdentity(directory).sourceMatchesHead, true);
+  await writeFile(file, "x".repeat(2 * 1024 * 1024));
+  git(["add", "source.txt"]);
+  assert.equal(sourceIdentity(directory).sourceMatchesHead, false, "staged-only edits must not certify the HEAD tree");
+  git(["restore", "--staged", "source.txt"]);
+  git(["restore", "source.txt"]);
+  await writeFile(join(directory, "probe.mjs"), "// retained untracked probe\n");
+  const untracked = sourceIdentity(directory);
+  assert.equal(untracked.sourceMatchesHead, false);
+  assert.equal(untracked.untrackedFilesPresent, true);
 });
 
 test("first-run evidence hashes the real artifact contents", async t => {

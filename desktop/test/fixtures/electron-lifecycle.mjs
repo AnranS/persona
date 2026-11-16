@@ -37,7 +37,10 @@ export const ipcMain = {
   on() {}, removeAllListeners() {}, removeHandler() {},
   handle(name, callback) { if (name === "desktop:hub-set") connect = callback; },
 };
-export const nativeImage = { createFromDataURL: () => ({ resize() { events.push("icon-resized"); return this; } }) };
+export const nativeImage = {
+  createFromDataURL: () => ({ resize() { events.push("icon-resized"); return this; } }),
+  createFromPath: () => ({}),
+};
 export const Menu = { buildFromTemplate: () => ({}) };
 export const Tray = class extends EventEmitter {
   static instances = [];

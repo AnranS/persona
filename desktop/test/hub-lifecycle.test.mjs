@@ -46,6 +46,12 @@ async function run(name) {
       if (!setup) throw new Error("setup was not created");
       const response = await electron.connect({sender: setup.webContents, senderFrame: setup.webContents}, "https://old.example/");
       if (!response.ok) throw new Error("prefix-to-root replacement failed");
+    ` : name === "destroyed-load" ? `
+      electron.windows[0].destroy();
+      electron.controls.get("reject-old")(new Error("ERR_ABORTED: destroyed during a current-generation load"));
+    ` : name === "geometry-failure" ? `
+      (await import("./fixtures/lifecycle-store.mjs")).scenario.failWindowSave = true;
+      electron.windows[0].emit("resize");
     ` : name === "tray-failure" ? `
       electron.scenario.oldSucceeds = true;
       await electron.importMain();
@@ -84,6 +90,17 @@ test("a genuine current-generation load failure still rejects and destroys its w
   assert.equal(events.some(value => value.title === "Persona could not start"), true);
   assert.equal(events.includes("app.quit"), true);
   assert.equal(windows[0].destroyed, true);
+});
+
+test("destroying a current-generation pending load cannot hide its failure", async () => {
+  const { events } = await run("destroyed-load");
+  assert.equal(events.some(value => value.title === "Persona could not start"), true, JSON.stringify(events));
+  assert.equal(events.includes("app.quit"), true);
+});
+
+test("a geometry-save rejection stays local and does not become an unhandled rejection", async () => {
+  const { unhandled } = await run("geometry-failure");
+  assert.deepEqual(unhandled, []);
 });
 
 test("same-origin prefix-to-root replaces the window, partition and saved hub", async () => {
