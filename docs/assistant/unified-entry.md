@@ -612,10 +612,14 @@ lineage's previous / next cards and cancellation reason (#5732); the full plan-c
 
 **Lineage.** A task that takes over from another gives `continues` (that task's to-do id) and `continues_why` in
 `task_plan`: a retry on another computer, a rework round, a new Agent after the first failed, a part split off. It
-works for the same brief (`brief.id`), with the criteria and expected time as they stand; its prompt is its own. The
-earlier to-do is linked as superseded with the reason. `agent_supervise` after a closed card and an Agent replacement use
-the same link: the old card exposes `superseded_by`, the new card exposes `continues`, and both navigate to each other in
-the clients (#5732). Reusing an existing Agent link does not duplicate the card. Without `continues`, when `task_plan`'s "Possible duplicates"
+runs on the original to-do and keeps its brief (`brief.id`), with the criteria and expected time as they stand. The
+replacement prompt supplies the goal, authorization boundaries, and new information; the manager adds the effective
+criteria once. For an owner-authorized change, call `task_scope` first and pass its `scope_revision` with `continues`.
+A stale revision is refused at planning, and the manager rechecks the planned revision at Start and before dispatch.
+Replan a refused continuation from the current brief. The original request, scope log, and to-do survive a failed start.
+`agent_supervise` after a closed card and an Agent replacement use the same link, with the reason: the old card exposes
+`superseded_by`, the new card exposes `continues`, and both navigate to each other in the clients (#5732). Reusing an
+existing Agent link does not duplicate the card. Without `continues`, when `task_plan`'s "Possible duplicates"
 fires, the answer tells the assistant to plan again with `continues` or say why the work is different. A to-do's
 `lineage` is the chain, oldest first: to-do id, title, Agent, machine, session, `started`, `ended`, `why` it stopped,
 `continues`, `superseded_by`. The to-do that joined the brief last carries the work: the clock, the result and the briefing go by
@@ -629,7 +633,8 @@ and `agent_send` with a `task` on one's own task go through the same code. A cha
 a step from the hub's risky words (deploy, merge, release, send, comment, delete, pay, production: `riskyWords`; the
 Agent's own pushes aside) that the work did not name before is refused, with a pointer to ask the owner. It is taken
 when the owner's own message started the turn that makes it, and that message is kept on the entry (`approval`). At
-most 40 scope changes per brief.
+most 40 scope changes per brief. The response distinguishes the original brief, effective criteria and dropped
+criteria, and reports the new revision.
 
 **The clock.** A brief runs to `max(expect_minutes × 3, 24 h)` from when the work was handed out (of the brief, not of
 the latest take-over), or from its latest scope change. Past that with no end (not done, not waiting for review, not

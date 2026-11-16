@@ -69,6 +69,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			return nil, planInvalid{err}
 		}
 		s.resolveTaskRepo(ctx, &p.Tasks[i]) // where it runs after the card's edits (its workspace, not the plan's cwd)
+		task := &p.Tasks[i]
+		if task.Continues != "" && task.Brief == nil {
+			// Cards saved before briefs must bind the current scope before they can start.
+			if err := s.planBriefs(ctx, "", p.Conversation, p.Tasks[i:i+1]); err != nil {
+				return nil, planInvalid{err}
+			}
+		}
+		if err := s.checkContinuationScope(task); err != nil {
+			return nil, planInvalid{err}
+		}
 	}
 	p.State = planStarted
 	for i := range p.Tasks {
@@ -126,14 +136,14 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				if t.ReuseTodo == "" && sup != p.Conversation {
 					s.taskCard(ctx, sup, todo.ID, "")
 				}
-				if err := s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes); err != nil {
+				if err := s.supervisePlanTask(ctx, todo.ID, sup, t); err != nil {
 					s.failPlanSupervision(ctx, todo, t, err)
 					continue
 				}
 			}
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
-			if err := s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes); err != nil {
+			if err := s.supervisePlanTask(ctx, todo.ID, p.Conversation, t); err != nil {
 				s.failPlanSupervision(ctx, todo, t, err)
 			}
 			continue
@@ -176,6 +186,26 @@ func (s *Service) failPlanSupervision(ctx context.Context, todo Todo, t *PlanTas
 		t.admissionRelease()
 		t.admissionRelease = nil
 	}
+}
+
+// supervisePlanTask keeps a continuation's ledger in step with its brief even
+// if the scope changed between accepting the card and preparing dispatch.
+func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) error {
+	if t.Continues == "" {
+		return s.superviseTodo(ctx, id, supervisor, t.DoneWhen, t.ExpectMinutes)
+	}
+	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		brief, ok := s.briefOfTodo(t.Continues)
+		if !ok {
+			return false
+		}
+		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectNow
+		return true
+	})
+	if err != nil {
+		s.logf("task %s: supervision: %v", id, err)
+	}
+	return err
 }
 
 // notReusable is the refusal of a todo_id: it says why, so the assistant can plan again without it.
@@ -265,6 +295,9 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 	if task.Continues == id {
 		var todo Todo
 		todo, err = s.taskTodoForConversation(conversation, id)
+		if err == nil && task.Brief != nil {
+			err = s.checkContinuationScope(&task)
+		}
 		if err == nil {
 			stopped, err = s.stopContinuedTaskAgents(ctx, todo)
 		}
