@@ -128,11 +128,17 @@ func directOwnerMarker(lower, marker string) bool {
 		}
 		i += from
 		before := strings.TrimSpace(lower[:i])
-		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise") || ownerMarkerAfterContrast(lower, i)
+		afterContrast := ownerMarkerAfterContrast(lower, i)
+		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise") || afterContrast
 		terminatorBefore := strings.TrimRight(before, "\"”") // a closing quote does not hide the sentence's own terminator
 		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
 		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
-		if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
+		if afterContrast {
+			end := strings.LastIndexAny(before, ownerSentenceEnds)
+			// A contrast does not close a leading if-sentence. A trailing condition, by contrast, owns only its own
+			// clause, so the marker after its `but` remains an independent requirement.
+			direct = !ownerConditionalOpen(strings.TrimSpace(before[end+1:]))
+		} else if strings.HasSuffix(before, ",") || strings.HasSuffix(before, ":") {
 			clause := before
 			end := strings.LastIndexAny(clause, ownerSentenceEnds)
 			conditional := strings.TrimSpace(clause[end+1:])

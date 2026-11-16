@@ -19,6 +19,8 @@ func TestOwnerMarkerConditionalAndQuotedOccurrences(t *testing.T) {
 		{"trailing if does not hide an independent requirement", "You need to roll it back if the release fails. Otherwise, you need to approve the release.", verdictNeedsUser},
 		{"condition on a contrasted clause does not hide the first requirement", "The work is complete. You need to approve the release, but roll it back if it fails.", verdictNeedsUser},
 		{"condition after the first requirement does not hide the contrasted demand", "The work is complete. You need to roll it back if the release fails, but you need to notify the owner.", verdictNeedsUser},
+		{"but inside a leading conditional stays conditional", "If the release fails, the rollback is automatic, but you need to notify the owner.", verdictDone},
+		{"but inside an even-if sentence stays direct", "Even if the release fails, the rollback is automatic, but you need to notify the owner.", verdictNeedsUser},
 		{"last but only if does not hide an earlier unconditional contrast", "The work is complete. You need to approve the release, but roll it back, but only if it fails.", verdictNeedsUser},
 		{"contrast without a comma keeps the first requirement direct", "The work is complete. You need to approve the release but roll it back if it fails.", verdictNeedsUser},
 		{"modifier after the governing verb keeps the if-question direct", "The work is complete. You need to check carefully if the release failed.", verdictNeedsUser},
