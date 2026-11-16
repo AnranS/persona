@@ -26,6 +26,13 @@ final class CallPersonaShortcutTests: XCTestCase {
 
     @MainActor private var springboard: XCUIApplication { XCUIApplication(bundleIdentifier: "com.apple.springboard") }
 
+    /// The shortcut's answer card outlives the app, its uninstall and the suite: left up, it covers the top of the next
+    /// test's screen (VoiceModeTests' Back tapped it instead and the call outlived its page). Every test leaves none.
+    override func tearDown() {
+        MainActor.assumeIsolated { Self.dismissShortcutsAnswer(within: 3, quiet: true) }
+        super.tearDown()
+    }
+
     private func starts(_ hub: String) throws -> [[String: Any]] {
         let data = try Data(contentsOf: URL(string: hub + "/mock/voice2")!)
         let log = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -123,10 +130,11 @@ final class CallPersonaShortcutTests: XCTestCase {
 
     /// The shortcut's answer ("Calling Persona" and Done, the system's) stays over the top of the screen, the call
     /// page's Minimise included, until Done.
-    @MainActor private func dismissShortcutsAnswer() {
+    @MainActor private static func dismissShortcutsAnswer(within seconds: TimeInterval = 8, quiet: Bool = false) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let owners = [springboard, XCUIApplication(bundleIdentifier: "com.apple.Spotlight")]
         let done = NSPredicate(format: "label IN %@", ["Done", "完成"])
-        let deadline = Date.now.addingTimeInterval(8)
+        let deadline = Date.now.addingTimeInterval(seconds)
         while Date.now < deadline {
             if let button = owners.lazy.map({ $0.buttons.matching(done).firstMatch }).first(where: \.exists) {
                 button.tap()
@@ -135,7 +143,7 @@ final class CallPersonaShortcutTests: XCTestCase {
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        print("call-persona: no answer to dismiss\n\(springboard.debugDescription)")
+        if !quiet { print("call-persona: no answer to dismiss\n\(springboard.debugDescription)") }
     }
 
     /// Call Persona with the app left on `args`' page: the call's page comes up over it and connects; Minimise goes back
@@ -154,7 +162,7 @@ final class CallPersonaShortcutTests: XCTestCase {
         XCTAssertTrue(element(app, "call-duration").waitForExistence(timeout: 30), "the call never connected\n\(app.debugDescription)")
         Thread.sleep(forTimeInterval: 1.5)
         shot(name + "-call")
-        dismissShortcutsAnswer()
+        Self.dismissShortcutsAnswer()
         app.buttons["call-minimise"].tap()
         let bar = app.buttons["call-return-bar"]
         XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call\n\(app.debugDescription)")
