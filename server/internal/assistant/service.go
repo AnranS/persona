@@ -69,10 +69,14 @@ type Service struct {
 	nodeAnswering atomic.Int64
 	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
 	taskStarting atomic.Int64
+	// leaderStarts counts leaders through linking: only legacy one-shot discovery waits for them (task_leader.go).
+	leaderStarts atomic.Int64
 	// mcpChanges wakes tool discovery when task membership or leader rights change.
 	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.
+	startDefaultsFor func(ctx context.Context, facts StartFacts) (StartDefaults, bool, error)
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
 	// trans reaches the transcription contributions (meeting_transcribe_ext.go): the extensions' when they offer it
@@ -127,7 +131,9 @@ type Service struct {
 	// (backgroundSignedOut).
 	born  time.Time
 	pubMu sync.Mutex
-	seq   uint64
+	// urgentWake wakes urgentLoop (urgent_call_loop.go): a call rang.
+	urgentWake chan struct{}
+	seq        uint64
 
 	startingAssistants assistantStarts // machine_privacy.go
 
@@ -240,6 +246,9 @@ type Service struct {
 
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
+	// taken up (tests).
+	sendsSettleHook func()
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
 
@@ -259,7 +268,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig}
+		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	if s.store == nil {
 		s.store = func() Store { return nil }
@@ -277,9 +286,12 @@ func New(o Options) *Service {
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
+	s.urgentCallRoutes() // urgent_call.go
 	s.reporterRoutes()
 	s.directionRoutes()
 	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
+	s.startPresetRoutes()
+	s.startDefaultsRoutes() // start_defaults_routes.go
 	s.directionTreeRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
