@@ -74,6 +74,7 @@ test("a retired write is skipped inside the store's serialized commit", async t 
   assert.deepEqual(await readdir(directory), ["desktop-state.json"]);
 });
 
+test("a failed update leaves the original state and permits a later serialized write", async t => {
   const directory = await mkdtemp(join(tmpdir(), "persona-store-failure-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = join(directory, "desktop-state.json");
