@@ -90,6 +90,32 @@ func ownerNoAction(rest string) bool {
 	return false
 }
 
+// ownerContrastOffsets returns unquoted, word-boundary `but` conjunctions in [at,end). A comma before one is
+// optional. Keeping these boundaries occurrence-local lets a condition govern only its own clause.
+func ownerContrastOffsets(lower string, at, end int) []int {
+	var out []int
+	for from := at; from < end; {
+		i := strings.Index(lower[from:end], "but")
+		if i < 0 {
+			break
+		}
+		i += from
+		left := i > at && (lower[i-1] == ' ' || lower[i-1] == '\t' || lower[i-1] == ',')
+		right := i+3 < end && (lower[i+3] == ' ' || lower[i+3] == '\t')
+		if left && right && !ownerMarkerQuoted(lower, i) {
+			out = append(out, i)
+		}
+		from = i + 3
+	}
+	return out
+}
+
+// ownerMarkerAfterContrast reports an owner marker immediately following an unquoted `but`, with optional whitespace.
+func ownerMarkerAfterContrast(lower string, at int) bool {
+	contrasts := ownerContrastOffsets(lower, 0, at)
+	return len(contrasts) > 0 && strings.TrimSpace(lower[contrasts[len(contrasts)-1]+3:at]) == ""
+}
+
 // directOwnerMarker reports whether any unquoted occurrence of marker starts a direct requirement at the line or a
 // sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
 // skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
@@ -102,7 +128,7 @@ func directOwnerMarker(lower, marker string) bool {
 		}
 		i += from
 		before := strings.TrimSpace(lower[:i])
-		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise")
+		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise") || ownerMarkerAfterContrast(lower, i)
 		terminatorBefore := strings.TrimRight(before, "\"”") // a closing quote does not hide the sentence's own terminator
 		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
 		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
@@ -163,11 +189,18 @@ func ownerTrailingConditional(lower string, at int) bool {
 		i += from
 		predicateText := lower[at:i]
 		predicate := strings.TrimSpace(predicateText)
-		condition := strings.TrimSpace(lower[i+len(marker) : end])
+		conditionEnd := end
+		if contrasts := ownerContrastOffsets(lower, i+len(marker), end); len(contrasts) > 0 {
+			conditionEnd = contrasts[0]
+		}
+		condition := strings.TrimSpace(lower[i+len(marker) : conditionEnd])
 		if predicate != "" && condition != "" && !ownerMarkerQuoted(lower, i) {
-			if j := strings.LastIndex(predicateText, ", but "); j >= 0 && !ownerMarkerQuoted(lower, at+j) &&
-				!strings.HasSuffix(predicate, ", but only") {
-				return false // the condition belongs to the contrasted clause, not the requirement before it
+			contrasts := ownerContrastOffsets(lower, at, i)
+			if len(contrasts) > 0 {
+				last := contrasts[len(contrasts)-1]
+				if len(contrasts) > 1 || strings.TrimSpace(lower[last+3:i]) != "only" {
+					return false // the condition belongs to a contrasted clause, not an earlier requirement
+				}
 			}
 			words := strings.Fields(predicate)
 			last := words[len(words)-1]
@@ -184,23 +217,44 @@ func ownerTrailingConditional(lower string, at int) bool {
 	return false
 }
 
-// ownerIfQuestionPredicate reports a predicate made only of interrogative verbs and their modifiers. The final word
-// must be a verb whose if-clause is its object; an object noun ("add a test", "check the test") is not such a verb.
+// ownerIfQuestionPredicate reports a predicate made only of interrogative verbs and their modifiers. The last
+// non-modifier must be a verb whose if-clause is its object; an object noun ("add a test", "check the test") is not
+// such a verb. Modifiers may appear before or after the governing verb.
 func ownerIfQuestionPredicate(predicate string) bool {
 	words := strings.Fields(predicate)
 	if len(words) == 0 {
 		return false
 	}
-	switch words[len(words)-1] {
-	case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess":
-	default:
+	verb := func(word string) bool {
+		switch word {
+		case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess":
+			return true
+		}
+		return false
+	}
+	modifier := func(word string) bool {
+		switch word {
+		case "and", "or", "also", "carefully", "quickly", "first", "then", "now", "just", "please", "again", "manually", "explicitly", "thoroughly", "immediately":
+			return true
+		}
+		return false
+	}
+	lastVerb := false
+	for i := len(words) - 1; i >= 0; i-- {
+		if modifier(words[i]) {
+			continue
+		}
+		if !verb(words[i]) {
+			return false
+		}
+		lastVerb = true
+		break
+	}
+	if !lastVerb {
 		return false
 	}
 	for _, word := range words {
-		switch word {
-		case "check", "decide", "determine", "verify", "confirm", "evaluate", "test", "see", "review", "ask", "inspect", "assess",
-			"and", "or", "also", "carefully", "quickly", "first", "then", "now", "just", "please", "again", "manually", "explicitly", "thoroughly", "immediately":
-		default:
+		if !verb(word) && !modifier(word) {
 			return false
 		}
 	}
