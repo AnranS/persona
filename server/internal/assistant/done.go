@@ -124,13 +124,18 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 	local := ""
 	if len(before) > 0 {
 		local = strings.Trim(before[len(before)-1], ",:")
-		if local == "else" && len(before) > 1 {
-			local = strings.Trim(before[len(before)-2], ",:")
+		if len(before) > 1 {
+			previous := strings.Trim(before[len(before)-2], ",:")
+			if local == "else" {
+				local = previous
+			} else if local == "one" && previous == "no" {
+				local = "no one"
+			}
 		}
 	}
 	switch local {
 	case "nothing", "anything", "everything", "something",
-		"everyone", "anyone", "someone", "everybody", "anybody", "somebody", "all", "both":
+		"everyone", "anyone", "someone", "everybody", "anybody", "somebody", "nobody", "none", "noone", "no one", "all", "both":
 		// A local exception phrase; a finite clause below can still make it a contrast.
 	default:
 		return true
@@ -139,20 +144,87 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 	if len(words) == 0 {
 		return true
 	}
+	return ownerFiniteClauseShape(words)
+}
+
+// ownerFiniteClauseShape looks for a predicate after the subject, rather than treating every inflected token as a
+// verb. A non-final lexical verb may take an object; a final intransitive must be unambiguous or agree with a plural
+// subject. This keeps "the final reports" a noun phrase and "the rollbacks need approval" a finite clause.
+func ownerFiniteClauseShape(words []string) bool {
+	if len(words) == 0 {
+		return false
+	}
 	start := 0
 	switch words[0] {
 	case "the", "a", "an":
 		if len(words) < 3 {
 			return false
 		}
-		start = 1
+		start = 2
+	default:
+		switch words[0] {
+		case "you", "we", "he", "she", "they", "it", "this", "that", "these", "those":
+			start = 1
+		default:
+			return false
+		}
 	}
-	for _, word := range words[start:] {
-		if ownerFiniteInflection(word) {
+	for i := start; i < len(words); i++ {
+		word := words[i]
+		if i < len(words)-1 && ownerLexicalVerb(word) {
 			return true
+		}
+		if i == len(words)-1 {
+			if ownerFinalIntransitive(word) {
+				return true
+			}
+			if i > start && ownerBaseIntransitive(word) && ownerPluralNoun(words[i-1]) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func ownerLexicalVerb(word string) bool {
+	if ownerFiniteInflection(word) {
+		return true
+	}
+	switch word {
+	case "need", "wait", "fail", "work", "remain", "stay", "go", "come", "run", "stop", "start", "finish",
+		"complete", "continue", "approve", "reject", "roll", "notify", "check", "verify", "decide", "determine",
+		"review", "ask", "inspect", "assess", "require", "block", "allow", "depend", "expect", "include", "contain",
+		"show", "say", "tell", "report", "return", "look", "seem", "appear", "make", "take", "use", "get", "give",
+		"want", "read", "succeed", "deploy", "merge", "publish", "ship", "restart", "retry", "cancel", "delete",
+		"create", "write", "update", "edit", "fix", "build", "test", "execute", "install", "remove", "send", "save",
+		"commit", "push", "pull", "open", "close":
+		return true
+	}
+	return false
+}
+
+func ownerFinalIntransitive(word string) bool {
+	switch word {
+	case "am", "is", "are", "was", "were", "be", "been", "being",
+		"do", "does", "did", "have", "has", "had", "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+		"waits", "fails", "remains", "stays", "goes", "comes", "runs", "stops", "starts", "finishes", "completes",
+		"continues", "rolls", "depends", "looks", "seems", "appears", "succeeds":
+		return true
+	}
+	return false
+}
+
+func ownerBaseIntransitive(word string) bool {
+	switch word {
+	case "wait", "fail", "remain", "stay", "go", "come", "run", "stop", "start", "finish", "complete", "continue",
+		"roll", "depend", "look", "seem", "appear", "succeed":
+		return true
+	}
+	return false
+}
+
+func ownerPluralNoun(word string) bool {
+	return strings.HasSuffix(word, "s") && !strings.HasSuffix(word, "ss") && word != "this" && word != "is"
 }
 
 func ownerFiniteInflection(word string) bool {
