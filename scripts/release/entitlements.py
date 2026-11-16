@@ -44,6 +44,10 @@ TIME_SENSITIVE = "com.apple.developer.usernotifications.time-sensitive"
 # The same for HealthKit background delivery (config.json app.health_background_delivery): without it a workout report
 # waits for Persona to open, while Settings says it comes right after the workout (#2526).
 HEALTH_BACKGROUND = "com.apple.developer.healthkit.background-delivery"
+# The same for Siri (config.json app.siri_calls, docs/operations/release.md "Siri calls"): without it Siri never hands
+# "call Persona using Persona" to the app's extension. Asked only of a target whose entitlements have it, so a build
+# with the switch off is checked as before.
+SIRI = "com.apple.developer.siri"
 
 
 def targets():
@@ -187,6 +191,9 @@ def check(path):
             if ents.get(HEALTH_BACKGROUND) and not have.get(HEALTH_BACKGROUND):
                 problems.append("%s: %s missing (workout reports wait for Persona to open; allow it on the App ID's profile)"
                                 % (name, HEALTH_BACKGROUND))
+            if ents.get(SIRI) and not have.get(SIRI):
+                problems.append("%s: %s missing (Siri can't call Persona; enable SIRIKIT with asc_signing.py --only, "
+                                "docs/operations/release.md \"Siri calls\")" % (name, SIRI))
             for k in (k for k in APS if k in ents):
                 if k not in have:
                     problems.append("%s: %s missing (no push)" % (name, k))

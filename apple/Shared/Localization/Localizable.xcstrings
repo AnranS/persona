@@ -31692,6 +31692,29 @@
       },
       "extractionState" : "manual"
     },
+    "Call Persona on your main chat, like a phone call: it keeps going when you switch apps or lock this device, and you hang up from the call or your headphones." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call Persona on your main chat, like a phone call: it keeps going when you switch apps or lock this device, and you hang up from the call or your headphones."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインのチャットで、電話のようにPersonaに電話します。ほかのアプリに切り替えても、このデバイスをロックしても通話は続き、通話画面やヘッドフォンから切れます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "像打电话一样，在主对话里打给 Persona：切到别的 App 或锁上这台设备，通话都不会断；在通话里或用耳机挂断。"
+          }
+        }
+      }
+    },
     "Call Persona · %@" : {
       "localizations" : {
         "en" : {
@@ -31759,6 +31782,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Calling Persona" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calling Persona"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaに電話しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打给 Persona"
+          }
+        }
+      }
     },
     "Calling this iPhone. Lock it to see how a call looks." : {
       "localizations" : {
@@ -149567,29 +149613,6 @@
         }
       }
     },
-    "Start a continuous, hands-free voice chat with Persona on CarPlay: you talk, it answers, and you can cut in anytime." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Start a continuous, hands-free voice chat with Persona on CarPlay: you talk, it answers, and you can cut in anytime."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "CarPlayでPersonaとハンズフリーで続けて音声チャットを始めます。話すと答え、いつでも割り込めます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在 CarPlay 上开始和 Persona 连续、免提的语音对话：你说，它答，你随时可以插话。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Start a meeting recording with one tap. [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -155947,6 +155970,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会議で Persona と話す"
+          }
+        }
+      }
+    },
+    "Talk with Persona hands-free: on CarPlay, a continuous voice chat on the car's screen; elsewhere, a call to Persona on this device. You talk, it answers, and you can cut in anytime." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Talk with Persona hands-free: on CarPlay, a continuous voice chat on the car's screen; elsewhere, a call to Persona on this device. You talk, it answers, and you can cut in anytime."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハンズフリーでPersonaと話します。CarPlayでは車の画面で続けて音声チャット、それ以外ではこのデバイスでPersonaに電話します。話すと答え、いつでも割り込めます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免提和 Persona 聊：在 CarPlay 上，是车机屏幕上的连续语音对话；不在车里时，是在这台设备上打给 Persona 的一通电话。你说，它答，你随时可以插话。"
           }
         }
       }
@@ -196464,6 +196510,29 @@
         }
       }
     },
+    "call" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打电话"
+          }
+        }
+      }
+    },
     "central directory" : {
       "comment" : "A document's part or an xlsx error, shown in Compare and the table viewer (PersonaKit, #5575)",
       "localizations" : {
@@ -199247,6 +199316,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "phone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "phone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "電話"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电话"
+          }
+        }
+      }
     },
     "picker.machine" : {
       "extractionState" : "extracted_with_value",

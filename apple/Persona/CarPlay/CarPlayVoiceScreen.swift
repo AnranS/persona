@@ -45,7 +45,11 @@ nonisolated enum CarPlayTalk: Equatable, Sendable {
         return foreground ? .start : .notOnScreen
     }
 
-    /// What Siri says back.
+    /// No car: on the phone it is a call to Persona instead (#9290). Not with CarPlay connected and Persona elsewhere
+    /// on the car's screen: that still says to open it there, since the call would need the phone unlocked.
+    var callsOnThePhone: Bool { self == .notConnected }
+
+    /// What Siri says back (on the phone `.notConnected` calls instead; the Vision app says it).
     var sentence: String {
         switch self {
         case .start: String(localized: "OK, let's keep talking on CarPlay")

@@ -369,6 +369,29 @@
         }
       }
     },
+    "NSSiriUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona uses Siri so you can call Persona by saying “Call Persona using Persona”. Siri passes the call to Persona, which calls the assistant on your hub; Persona shares nothing else with Siri."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「PersonaでPersonaに電話して」と言うだけでPersonaに電話できるよう、PersonaはSiriを使います。Siriは通話をPersonaに渡し、Personaがハブのアシスタントに電話します。PersonaがSiriにほかの情報を渡すことはありません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 使用 Siri，让你说“用 Persona 打给 Persona”就能打给 Persona。Siri 把这通电话交给 Persona，由它打给 hub 上的助手；Persona 不会把其他任何内容交给 Siri。"
+          }
+        }
+      }
+    },
     "NSSpeechRecognitionUsageDescription": {
       "extractionState": "manual",
       "localizations": {

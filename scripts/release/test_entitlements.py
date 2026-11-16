@@ -1,5 +1,5 @@
 """entitlements.py check and the apps' entitlements: time-sensitive notifications on the iPhone and
-Apple Vision Pro (#1572, #1655, #2435), and no binary linking CallKit (#9290).
+Apple Vision Pro (#1572, #1655, #2435), Siri only with app.siri_calls, and no binary linking CallKit (#9290).
 
     python3 scripts/release/test_entitlements.py
 """
@@ -71,6 +71,49 @@ class CheckAMacApp(MacApp):
     def test_signed_with_it_is_ok(self):
         self.check({"application-identifier": "TEAM." + BUNDLE, "com.apple.developer.aps-environment": "development",
                     ents.TIME_SENSITIVE: True})
+
+
+class SiriCalls(MacApp):
+    """The Siri entitlement (config.json app.siri_calls, #9290) is checked only for a target whose entitlements ask for
+    it: the tracked ones never do, so a build with the switch off is checked as before."""
+
+    SIGNED = {"application-identifier": "TEAM." + BUNDLE, "com.apple.developer.aps-environment": "development",
+              ents.TIME_SENSITIVE: True}
+
+    def ask_for_siri(self):
+        path = Path(self.targets[(BUNDLE, "macosx")]["PROJECT_DIR"]) / "PersonaMac.entitlements"
+        with open(path, "rb") as f:
+            wanted = plistlib.load(f)
+        with open(path, "wb") as f:
+            plistlib.dump({**wanted, ents.SIRI: True}, f)
+
+    def check(self, signed, printed=None):
+        printed = [] if printed is None else printed
+        with patch.object(ents, "targets", return_value=self.targets), patch.object(ents, "signed", return_value=signed), \
+                patch.object(ents.check_no_callkit, "scan", return_value=(1, [])), \
+                patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            ents.check(str(self.app))
+        return printed
+
+    def test_off_by_default(self):
+        with open(APPLE / "Persona/Resources/Persona.entitlements", "rb") as f:
+            self.assertNotIn(ents.SIRI, plistlib.load(f))
+
+    def test_off_a_build_without_it_is_ok(self):
+        self.assertIn("entitlements ok: 1 bundles in Persona.app", self.check(self.SIGNED))
+
+    def test_on_signed_without_it_is_a_problem(self):
+        self.ask_for_siri()
+        printed = []
+        with self.assertRaises(SystemExit) as stop:
+            self.check(self.SIGNED, printed)
+        self.assertIn("1 problem", str(stop.exception))
+        self.assertEqual(len(printed), 1)
+        self.assertTrue(printed[0].startswith("Persona.app: %s missing (Siri can't call Persona" % ents.SIRI), printed)
+
+    def test_on_signed_with_it_is_ok(self):
+        self.ask_for_siri()
+        self.assertIn("entitlements ok: 1 bundles in Persona.app", self.check({**self.SIGNED, ents.SIRI: True}))
 
 
 class CheckLinksNoCallKit(MacApp):

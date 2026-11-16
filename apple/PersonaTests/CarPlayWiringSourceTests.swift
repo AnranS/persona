@@ -53,6 +53,37 @@ struct CarPlayWiringSourceTests {
         #expect(foreground.contains("CarPlayVoicePresence.isForeground = true"))
     }
 
+    /// Talk to Persona with no car is a call to Persona on the phone (#9290): only for `.notConnected`, in front first
+    /// (the system takes a call's Start only from an app in front), the way Call Persona places it. The car's path is
+    /// as it was: the same check, the same delayed start of the car's session.
+    @Test func withoutACarSiriCallsPersonaOnThePhone() throws {
+        let lines = try Self.code("Persona/Intents/TalkToPersonaIntent.swift")
+        let perform = try #require(Self.body(lines, "func perform() async throws"))
+        let phone = try #require(Self.body(perform.components(separatedBy: "\n"), "if talk.callsOnThePhone"))
+        let foreground = try #require(phone.range(of: "try await continueInForeground(alwaysConfirm: false)"))
+        let place = try #require(phone.range(of: "CallPersonaIntent.place()"))
+        #expect(foreground.upperBound < place.lowerBound, "in front before the call's Start")
+        #expect(!phone.contains("CarPlayVoiceSession"))
+        let car = try #require(perform.range(of: "guard talk == .start else"))
+        #expect(perform.range(of: "if talk.callsOnThePhone").map { $0.upperBound < car.lowerBound } == true)
+        let start = try #require(Self.body(perform.components(separatedBy: "\n"), "Task { @MainActor in"))
+        #expect(start.contains("try? await Task.sleep(for: .seconds(1.5))"))
+        #expect(start.contains("guard CarPlayVoicePresence.talk == .start else { return }"))
+        #expect(start.contains("_ = await CarPlayVoiceSession.start()"))
+        let all = lines.joined(separator: "\n")
+        #expect(all.contains("supportedModes: IntentModes { [.background, .foreground(.dynamic)] }"), "the car's path stays in the background")
+    }
+
+    /// Call Persona and Talk to Persona on the phone place the call as Siri's (`.siri`), so the Start waits for the app
+    /// to be active: one started while it still comes to the front is refused (LiveCommunicationKit's code 6).
+    @Test func siriCallsWaitForTheAppToBeActive() throws {
+        let intent = try Self.code("Persona/Intents/CallPersonaIntent.swift").joined(separator: "\n")
+        #expect(intent.contains("supportedModes: IntentModes { .foreground(.immediate) }"))
+        #expect(intent.contains("PersonaCalls.shared.callPersona(origin: .siri)"))
+        let place = try #require(Self.body(try Self.code("Persona/Calls/OwnerCall.swift"), "func place("))
+        #expect(place.contains("if origin != .app { await Self.waitUntilActive() }"))
+    }
+
     /// CarPlay ignores state switches before the template is on screen: `show` never switches directly.
     @Test func statesSwitchOnlyOnceTheTemplateIsPresented() throws {
         let lines = try Self.code(Self.delegate)

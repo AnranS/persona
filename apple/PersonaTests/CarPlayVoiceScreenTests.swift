@@ -108,6 +108,15 @@ struct CarPlayVoiceScreenTests {
         #expect(CarPlayTalk.decide(connected: false, foreground: true) == .notConnected)
     }
 
+    /// Only with no car connected is Talk to Persona a call on the phone (#9290); with CarPlay connected and Persona not on
+    /// its screen Siri still says to open it there (a call would need the phone unlocked while driving).
+    @Test func onlyNoCarCallsOnThePhone() {
+        #expect(CarPlayTalk.notConnected.callsOnThePhone)
+        #expect(!CarPlayTalk.notOnScreen.callsOnThePhone)
+        #expect(!CarPlayTalk.start.callsOnThePhone)
+        #expect(CarPlayTalk.decide(connected: false, foreground: true).callsOnThePhone)
+    }
+
     @Test func siriSaysSomethingDifferentForEachCase() {
         let sentences = [CarPlayTalk.start, .notConnected, .notOnScreen].map(\.sentence)
         #expect(Set(sentences).count == 3)

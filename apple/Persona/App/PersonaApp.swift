@@ -118,6 +118,7 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
                 #endif
             } else if new == .background {
                 #if os(iOS)
