@@ -22,7 +22,7 @@ test("an explicit hub change closes the old window before making its own session
   assert.ok(change.indexOf("await closed;") < change.indexOf("mainWindow = undefined;"));
   const connect = main.slice(main.indexOf("connect: async"), main.indexOf("await setup.loadURL"));
   assert.ok(connect.indexOf("const generation = hubWindow.generation") < connect.indexOf("await showMain()"));
-  assert.ok(connect.indexOf("await showMain()") < connect.indexOf("await store().update({ hub: next.url.href })"));
+  assert.ok(connect.indexOf("await showMain()") < connect.indexOf("await store().update({ hub: next.url.href }, current)"));
   assert.ok(connect.indexOf("await store().update({ hub: next.url.href }, current)") < connect.indexOf("setup.close()"));
   assert.match(connect, /generation !== hubWindow\.generation \|\| hub\?\.url\.href !== next\.url\.href/);
   assert.match(connect, /Could not save the hub connection/);
