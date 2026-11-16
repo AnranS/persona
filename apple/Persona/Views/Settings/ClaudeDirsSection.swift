@@ -201,15 +201,12 @@ struct ClaudeDirsSection: View {
 
     private func load() async {
         guard let api = model.api(ref.group) else {
-            state = nil
             error = L.noHub
             return
         }
+        // Computer changes reset via `.id(ref)` in ClaudeSettingsView; do not clear state / busy here —
+        // this also runs on navigation back and Retry, and wiping busy would allow a double submit (#9276).
         let target = ref.id
-        // Drop the previous computer's rows before the new list arrives so a tap cannot use them (#9276).
-        state = nil
-        error = nil
-        busy = nil
         loading = true
         defer { loading = false }
         do {
