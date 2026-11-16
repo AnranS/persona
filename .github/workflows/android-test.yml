@@ -43,7 +43,6 @@ jobs:
           target = root / 'android/app/build/outputs/apk/debug/app-debug.apk'
           target.parent.mkdir(parents=True, exist_ok=True)
           shutil.copy2(apk, target)
-          shutil.copy2(apk, '/tmp/handset-feature.apk')
           out = Path('/tmp/handset-8742'); out.mkdir(exist_ok=True)
           shutil.copy2(downloaded / 'tmp/handset-8742/source.txt', out / 'apk-source.txt')
           for result in downloaded.rglob('TEST-persona.feature.assistant.AssistantMenuTest.xml'):
@@ -53,62 +52,31 @@ jobs:
           build = '    ./gradlew -q -PpersonaApplicationId="$APP_ID" -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug'
           assert original.count(directory) == 1 and original.count(build) == 1
           replay = original.replace(directory, 'cd "$PERSONA_TEST_ROOT"', 1).replace(build, '    # Reuse the source- and checksum-verified APK from run 43800447241.', 1)
+          original_close = '      cleanup_step "$ADB" -s "$SERIAL" shell am force-stop "$APP_ID"'
+          assert replay.count(original_close) == 1
+          replay = replay.replace(original_close, '      if [ "$original_status" -ne 0 ]; then\n        timeout --kill-after=3s 10s "$ADB" -s "$SERIAL" exec-out screencap -p >"$OUTPUT/failure-before-app-close.png" || true\n        timeout --kill-after=3s 10s "$ADB" -s "$SERIAL" shell dumpsys activity activities >"$OUTPUT/activities-before-app-close.txt" || true\n      fi\n      cleanup_step "$ADB" -s "$SERIAL" shell am force-stop "$APP_ID"', 1)
           Path('/tmp/verified-handset-shots.sh').write_text(replay)
-          import json
-          scene = json.loads((root / 'scripts/app/android_adaptive_scenes/voice-handset-8742.json').read_text())
-          scene['id'] = 'voice-handset-baseline'
-          scene['description'] = 'Compare the unmodified APK at the identical first failing startup and composer capture.'
-          scene['steps'] = scene['steps'][:2]
-          Path('/tmp/handset-startup-smoke.json').write_text(json.dumps(scene))
           print('Verified hosted APK source, Android tree and SHA256; canonical UI commands retained')
           PY_REUSE
           python3 -m unittest discover -s scripts/app -p test_android_adaptive_shots.py
           cat > /tmp/handset-native-all.sh <<'SH_NATIVE'
           #!/usr/bin/env bash
           set -euo pipefail
-          stage=baseline
           diagnose() {
             result=$?
             if [ "$result" -ne 0 ]; then
-              timeout --kill-after=3s 10s adb -s emulator-5554 logcat -d > /tmp/handset-8742/${stage}-failure-logcat.txt 2>&1 || true
-              timeout --kill-after=3s 10s adb -s emulator-5554 shell dumpsys activity activities > /tmp/handset-8742/${stage}-failure-activities.txt 2>&1 || true
-              timeout --kill-after=3s 10s adb -s emulator-5554 shell dumpsys dropbox --print data_app_anr > /tmp/handset-8742/${stage}-anr.txt 2>&1 || true
-              timeout --kill-after=3s 10s adb -s emulator-5554 exec-out screencap -p > /tmp/handset-8742/${stage}-failure.png || true
+              timeout --kill-after=3s 10s adb -s emulator-5554 logcat -d > /tmp/handset-8742/failure-logcat.txt 2>&1 || true
+              timeout --kill-after=3s 10s adb -s emulator-5554 shell dumpsys activity activities > /tmp/handset-8742/failure-activities.txt 2>&1 || true
+              timeout --kill-after=3s 10s adb -s emulator-5554 exec-out screencap -p > /tmp/handset-8742/desktop-after-cli-cleanup.png || true
             fi
             exit "$result"
           }
           trap diagnose EXIT
           export PERSONA_TEST_ROOT="$GITHUB_WORKSPACE"
-          cp /tmp/handset-baseline.apk android/app/build/outputs/apk/debug/app-debug.apk
-          SHOTS_STYLE=glass SHOTS_PLUGINS=1 bash /tmp/verified-handset-shots.sh shots-live -s emulator-5554 --scenario /tmp/handset-startup-smoke.json --theme light --out /tmp/handset-8742/baseline-smoke 2>&1 | tee /tmp/handset-8742/baseline-run.log
-          stage=feature
-          timeout --kill-after=3s 10s adb -s emulator-5554 uninstall com.example.persona.shots
-          cp /tmp/handset-feature.apk android/app/build/outputs/apk/debug/app-debug.apk
           for style in glass brief board; do
             SHOTS_STYLE=$style SHOTS_PLUGINS=1 bash /tmp/verified-handset-shots.sh shots-live -s emulator-5554 --scenario scripts/app/android_adaptive_scenes/voice-handset-8742.json --theme both --out /tmp/handset-8742/$style 2>&1 | tee /tmp/handset-8742/$style-run.log
           done
           SH_NATIVE
-      - uses: actions/checkout@v4
-        with:
-          ref: 11913685cb7eb146535ea0e3161b385462313897
-          path: baseline
-          persist-credentials: false
-      - name: Install the pinned baseline build toolchains
-        run: |
-          sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-          rustup toolchain install 1.98.0 --profile minimal
-          rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: true
-      - name: Build one unmodified APK for the failing startup comparison
-        working-directory: baseline/android
-        run: |
-          test "$(git rev-parse HEAD)" = 11913685cb7eb146535ea0e3161b385462313897
-          ./gradlew --max-workers=2 -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process -PpersonaApplicationId=com.example.persona.shots :app:assembleDebug
-          ./gradlew --stop
-          cp app/build/outputs/apk/debug/app-debug.apk /tmp/handset-baseline.apk
-          git rev-parse HEAD HEAD:android > /tmp/handset-8742/baseline-source.txt
       - name: Enable KVM access
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
