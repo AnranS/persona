@@ -203,6 +203,8 @@ data class Todo(
      *  that review (web #4874, docs/protocol/protocol.md `GET /api/v1/todos`); null otherwise and from an older hub. */
     @SerialName("decision_review") val decisionReview: DecisionReview? = null,
     @SerialName("pr_url") val prUrl: String? = null,
+    @SerialName("pr_status") val prStatus: TodoPRStatus? = null,
+    @SerialName("other_prs") val otherPrs: List<TodoPRStatus>? = null,
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
     @SerialName("cancelled_reason") val cancelledReason: String? = null,
     /** Takeover history, oldest first; null from an older hub or for a task with no lineage. */
@@ -306,6 +308,19 @@ data class TodoAsk(
 /** One option of a decision: its [label], which is the answer, and what choosing it leads to. */
 @Serializable
 data class AskOption(val label: String = "", @SerialName("leads_to") val leadsTo: String? = null)
+
+/** Fresh observed facts for one PR of a task (#7935); older hubs omit them. */
+@KeepGeneratedSerializer
+@Serializable(with = TodoPRStatusSerializer::class)
+data class TodoPRStatus(
+    val url: String = "",
+    val state: String = "",
+    val draft: Boolean = false,
+    val review: String = "",
+    val checks: String = "",
+    val conflicts: Boolean = false,
+    @WireTime @SerialName("checked_at") val checkedAt: String? = null,
+)
 
 /**
  * How far a task's finished work went out (#3306, docs/assistant/todos.md"Delivery"): [state] live, pr, merged, off or none (kept as
@@ -547,6 +562,7 @@ object FeedItemSerializer : WireSerializer<FeedItem>(FeedItem.generatedSerialize
 object TodoSpaceSerializer : WireSerializer<TodoSpace>(TodoSpace.generatedSerializer())
 object TodoAgentSerializer : WireSerializer<TodoAgent>(TodoAgent.generatedSerializer())
 object TodoLineageStepSerializer : WireSerializer<TodoLineageStep>(TodoLineageStep.generatedSerializer())
+object TodoPRStatusSerializer : WireSerializer<TodoPRStatus>(TodoPRStatus.generatedSerializer())
 object TodoSerializer : WireSerializer<Todo>(Todo.generatedSerializer())
 object ReviewCheckSerializer : WireSerializer<ReviewCheck>(ReviewCheck.generatedSerializer())
 object TaskReviewSerializer : WireSerializer<TaskReview>(TaskReview.generatedSerializer())

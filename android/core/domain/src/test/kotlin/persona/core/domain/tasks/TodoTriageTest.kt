@@ -16,6 +16,7 @@ import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoDelivery
+import persona.core.contracts.TodoPRStatus
 import persona.core.contracts.TodoState
 
 // The same cases as web/src/lib/todo-triage.test.ts (docs/assistant/todo-status-sop.md, decision table), so the clients
@@ -33,11 +34,11 @@ class TodoTriageTest {
     private fun todo(
         id: String, title: String = id, updated: Int = 1, doneAt: String? = null, agents: List<TodoAgent> = emptyList(),
         origin: String? = "conv", supervision: Supervision? = null, ask: TodoAsk? = null, delivery: TodoDelivery? = null,
-        prUrl: String? = null, reopenedAt: String? = null, dueDate: String? = null, startError: String? = null, quiet: Boolean = false,
+        prUrl: String? = null, prStatus: TodoPRStatus? = null, reopenedAt: String? = null, dueDate: String? = null, startError: String? = null, quiet: Boolean = false,
         planId: String? = null,
     ) = Todo(
         id = id, title = title, createdAt = hoursAgo(300), updatedAt = hoursAgo(updated), doneAt = doneAt, agents = agents,
-        origin = origin, supervision = supervision, ask = ask, delivery = delivery, prUrl = prUrl, reopenedAt = reopenedAt,
+        origin = origin, supervision = supervision, ask = ask, delivery = delivery, prUrl = prUrl, prStatus = prStatus, reopenedAt = reopenedAt,
         dueDate = dueDate, startError = startError, quiet = quiet, planId = planId,
     )
 
@@ -69,6 +70,8 @@ class TodoTriageTest {
 
     private fun atShared(td: Todo, vararg sessions: Session) = td.triage(lookupOf(*sessions), now, zone = zone)
 
+    private fun openPr(url: String) = TodoPRStatus(url = url, state = "open", checkedAt = Instant.ofEpochMilli(now).toString())
+
     private fun sharedTodo(
         id: String,
         title: String,
@@ -81,13 +84,14 @@ class TodoTriageTest {
         supervision: Supervision? = null,
         delivery: TodoDelivery? = null,
         prUrl: String? = null,
+        prStatus: TodoPRStatus? = null,
         stage: String? = null,
         seenAt: String? = null,
         startError: String? = null,
         planId: String? = null,
     ) = Todo(
         id = id, title = title, kind = kind, createdAt = createdAt, updatedAt = updatedAt, doneAt = doneAt, doneBy = doneBy,
-        agents = agents, origin = "main", supervision = supervision, delivery = delivery, prUrl = prUrl, stage = stage,
+        agents = agents, origin = "main", supervision = supervision, delivery = delivery, prUrl = prUrl, prStatus = prStatus, stage = stage,
         seenAt = seenAt, startError = startError, planId = planId,
     )
 
@@ -152,7 +156,7 @@ class TodoTriageTest {
     fun r4ConcernKeepsFinishedUnseenAndOpenPrRules() {
         val unseen = at(todo("unseen", agents = listOf(agent("unseen"))).withKind("concern"))
         assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, unseen.section to unseen.rule)
-        val pr = at(todo("pr", updated = 300, agents = listOf(agent("old")), delivery = TodoDelivery(state = "pr")).withKind("concern"))
+        val pr = at(todo("pr", updated = 300, agents = listOf(agent("old")), delivery = TodoDelivery(state = "pr"), prUrl = "https://example.com/pull/1", prStatus = openPr("https://example.com/pull/1")).withKind("concern"))
         assertEquals(TriageSection.Pr to TriageRule.PrOpen, pr.section to pr.rule)
     }
 
@@ -290,7 +294,7 @@ class TodoTriageTest {
     @Test fun concernPrOpenSharedCase() {
         val t = atShared(sharedTodo(
             "concern-pr", "Answer the merge question", "2026-11-01T00:00:00.000Z", "2026-11-04T10:00:00.000Z",
-            prUrl = "https://example.com/pull/7", stage = "review",
+            prUrl = "https://example.com/pull/7", prStatus = openPr("https://example.com/pull/7"), stage = "review",
         ))
         assertEquals(TriageSection.Pr to TriageRule.PrOpen, t.section to t.rule)
     }
@@ -519,9 +523,26 @@ class TodoTriageTest {
     @Test
     fun anOpenPRIsPrToMergeHoweverOldAMergedOneIsNot() {
         val old = listOf(agent("old"))
-        assertEquals(TriageSection.Pr, at(todo("t", updated = 300, agents = old, delivery = TodoDelivery(state = "pr"))).section)
-        assertEquals(TriageSection.Pr, at(todo("t", updated = 300, agents = old, prUrl = "https://example.com/pull/1")).section)
+        assertEquals(TriageSection.Pr, at(todo("t", updated = 300, agents = old, delivery = TodoDelivery(state = "pr"), prUrl = "https://example.com/pull/1", prStatus = openPr("https://example.com/pull/1"))).section)
+        assertEquals(TriageSection.Pr, at(todo("t", updated = 300, agents = old, prUrl = "https://example.com/pull/1", prStatus = openPr("https://example.com/pull/1"))).section)
         assertEquals(TriageSection.Shelved, at(todo("t", updated = 300, agents = old, prUrl = "https://example.com/pull/1", delivery = TodoDelivery(state = "merged"))).section)
+    }
+
+    @Test
+    fun prFactsMustBePresentFreshOpenMatchingAndNonDraft() {
+        val url = "https://example.com/pull/1"
+        val old = listOf(agent("old"))
+        fun section(facts: TodoPRStatus?) = at(todo("t", updated = 300, agents = old, delivery = TodoDelivery(state = "pr"), prUrl = url, prStatus = facts)).section
+        assertEquals(TriageSection.Pr, section(openPr(url)))
+        assertEquals(TriageSection.Shelved, section(null))
+        for (facts in listOf(
+            openPr(url).copy(state = "merged"),
+            openPr(url).copy(draft = true),
+            openPr(url).copy(checkedAt = hoursAgo(1)),
+            openPr("https://example.com/pull/2"),
+        )) {
+            assertEquals(TriageSection.Shelved, section(facts))
+        }
     }
 
     @Test
@@ -623,8 +644,8 @@ class TodoTriageTest {
         val list = listOf(
             todo("fix", title = "Fix #412 lost pushes", agents = listOf(agent("run"))),
             todo("test", title = "#412 lost pushes: regression test", updated = 100, agents = listOf(agent("old"))),
-            todo("pr-a", title = "A", prUrl = "https://example.com/pull/9", agents = listOf(agent("old2")), updated = 120),
-            todo("pr-b", title = "B", prUrl = "https://example.com/pull/9/", agents = listOf(agent("old2")), updated = 121),
+            todo("pr-a", title = "A", prUrl = "https://example.com/pull/9", prStatus = openPr("https://example.com/pull/9"), agents = listOf(agent("old2")), updated = 120),
+            todo("pr-b", title = "B", prUrl = "https://example.com/pull/9/", prStatus = openPr("https://example.com/pull/9/"), agents = listOf(agent("old2")), updated = 121),
             todo("lone", title = "Something else", updated = 1),
         )
         val r = triageTodos(list, groupLookup, now, zone = zone)
@@ -733,7 +754,7 @@ class TodoTriageTest {
         assertEquals(TriageSection.Done to TriageRule.Seen, seen.section to seen.rule)
         val movedSince = at(todo("t", agents = listOf(agent("unseen"))).copy(seenAt = hoursAgo(2)))
         assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, movedSince.section to movedSince.rule)
-        val pr = at(todo("t", agents = listOf(agent("unseen")), prUrl = "https://example.com/pull/1").copy(seenAt = minutesAgo(30)))
+        val pr = at(todo("t", agents = listOf(agent("unseen")), prUrl = "https://example.com/pull/1", prStatus = openPr("https://example.com/pull/1")).copy(seenAt = minutesAgo(30)))
         assertEquals(TriageSection.Pr to TriageRule.PrOpen, pr.section to pr.rule)
         // seen, it is no longer open work
         assertEquals(TodoBucket.Closed, todo("t", agents = listOf(agent("unseen"))).copy(seenAt = minutesAgo(30)).bucket(lookup, now))

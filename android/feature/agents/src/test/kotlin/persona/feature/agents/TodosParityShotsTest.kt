@@ -30,6 +30,7 @@ import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
 import persona.core.contracts.TodoDelivery
 import persona.core.contracts.TodoLineageStep
+import persona.core.contracts.TodoPRStatus
 import persona.core.contracts.TodoSpace
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
@@ -65,6 +66,7 @@ class TodosParityShotsTest {
                 TodoAgent("mac", "s2", title = "补测试", cwd = "/code/app", source = "spawned", via = "mac/s1"))),
         // Done as asked, held at its PR (#3306): the row and the page say where and who can unhold it.
         Todo("t2", title = "写发布说明", notes = "这周合并的 PR 都要提到", createdAt = ago(300), spaces = emptyList(), origin = "conv",
+            prUrl = "https://example.com/pull/2", prStatus = TodoPRStatus(url = "https://example.com/pull/2", state = "open", checkedAt = ago(0)),
             delivery = TodoDelivery("pr", gate = "等你批准合并", unblock = "user", at = ago(20))),
         Todo("t3", title = "轮换 API Key", createdAt = ago(400), spaces = emptyList()),
         Todo("t5", title = "验证交付状态", createdAt = ago(390), updatedAt = ago(8), spaces = emptyList(), origin = "conv",

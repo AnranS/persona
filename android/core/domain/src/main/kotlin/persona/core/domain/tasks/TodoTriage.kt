@@ -6,6 +6,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAsk
+import persona.core.contracts.TodoPRStatus
 import persona.core.contracts.parseTime
 
 // The To-dos page's sections (#3156, #3206, docs/assistant/todo-status-sop.md): each to-do's place comes from real signals
@@ -31,6 +32,7 @@ data class Triage(val section: TriageSection, val rule: TriageRule, val last: Lo
 /** No activity for this long, nothing of it running: shelved. */
 const val SHELVE_AFTER_MS: Long = 48 * 3_600_000L
 private const val JUST_DONE_MS: Long = 24 * 3_600_000L
+private const val PR_STATUS_FRESH_MS: Long = 15 * 60_000L
 
 private fun ms(at: String?): Long = parseTime(at)?.toEpochMilli() ?: 0L
 
@@ -99,16 +101,27 @@ fun Todo.lastActivity(lookup: (SessionKey) -> Session?, restoredAt: Long = 0): L
     return last
 }
 
-/** The PR its work stopped at, still to merge: the delivery stopped at a PR, or a PR is known and no delivery state is past it. */
-val Todo.hasOpenPR: Boolean
-    get() {
-        val d = delivery?.state
-        if (d == "pr") return true
-        return !prUrl.isNullOrBlank() && (d.isNullOrEmpty() || d == "none") && stageIndex(stage) < stageIndex("merge")
-    }
+private fun normalizedPR(url: String?): String =
+    url.orEmpty().trim().replace(Regex("[#?].*$"), "").trimEnd('/').lowercase()
 
-private val triageStages = listOf("plan", "develop", "review", "merge", "deploy", "verify")
-private fun stageIndex(stage: String?): Int = triageStages.indexOf(stage).let { if (it < 0) 0 else it }
+/** Its PRs with fresh facts saying open and non-draft: the current one first, then earlier ones (#7935). */
+private fun Todo.openMergePRs(now: Long): List<TodoPRStatus> {
+    fun fresh(facts: TodoPRStatus): Boolean {
+        val checked = ms(facts.checkedAt)
+        return checked > 0 && now - checked >= 0 && now - checked <= PR_STATUS_FRESH_MS && facts.state == "open" && !facts.draft
+    }
+    val out = mutableListOf<TodoPRStatus>()
+    prStatus?.let { current ->
+        if (normalizedPR(prUrl) == normalizedPR(current.url) && normalizedPR(prUrl).isNotEmpty() && fresh(current)) out += current
+    }
+    for (facts in otherPrs.orEmpty()) {
+        if (normalizedPR(facts.url) != normalizedPR(prUrl) && fresh(facts)) out += facts
+    }
+    return out
+}
+
+/** Fresh facts are required: stale, absent, mismatched, draft, merged or closed facts do not imply waiting for merge. */
+fun Todo.hasOpenPR(now: Long): Boolean = openMergePRs(now).isNotEmpty()
 
 /** A task (an agent was linked, or a conversation handed it out) with no due date ahead: the user's own reminders never shelve. */
 private fun Todo.shelvable(now: Long, zone: ZoneId): Boolean {
@@ -181,7 +194,7 @@ fun Todo.triage(
     val finished = status == TriageStatus.Unread || review == "pending_review" || (ask != null && ask.outcome.isNullOrEmpty()) || ask?.outcome == "done"
     val acceptanceRequired = !seenCanFile
     if (finished && (!seen(last) || acceptanceRequired)) return at(TriageSection.JustDone, TriageRule.FinishedUnseen)
-    if (hasOpenPR) return at(TriageSection.Pr, TriageRule.PrOpen)
+    if (hasOpenPR(now)) return at(TriageSection.Pr, TriageRule.PrOpen)
     // seen since it last moved, and no PR waits on the owner; an open concern is never Done
     if (finished && !concern) return at(TriageSection.Done, TriageRule.Seen)
     if (shelvable(now, zone) && now - last >= SHELVE_AFTER_MS) return at(TriageSection.Shelved, TriageRule.Stale)
