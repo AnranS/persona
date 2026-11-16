@@ -365,6 +365,35 @@ func TestDecisionAskedWhileAPleaseVerifyIsWritten(t *testing.T) {
 	}
 }
 
+// A session-list failure is a transient lookup, not proof that no Agent exists: the decision must stay retryable.
+func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
+	reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
+	agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.sessionsListCalls("box")
+	f.sessionsFail["box"] = 1000
+	result, err := s.chooseOption(context.Background(), todo.ID, "", "直接全量")
+	if err == nil || result.taken || noAgentCanTake(err) {
+		t.Fatalf("a failed session list took the decision: result=%+v err=%v", result, err)
+	}
+	if f.sessionsListCalls("box")-calls != agentReachAttempts+1 {
+		t.Fatalf("session list calls = %d, want initial lookup plus %d retries", f.sessionsListCalls("box")-calls, agentReachAttempts)
+	}
+	key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if pending && g.Key == key || told || listedAsk(t, s, todo.ID) == nil {
+		t.Fatalf("the lookup failure ended the decision: %+v", g)
+	}
+}
+
 // A decision on priority has a default and a date without the review setting any: after a day unanswered the
 // recommendation is taken as the owner's OK would take it.
 func TestPriorityDecisionIsTakenAtItsDefaultTime(t *testing.T) {
@@ -742,6 +771,7 @@ func TestDecisionWithoutLiveAgentIsRecordedForSupervisor(t *testing.T) {
 				if (!pending || g.Key != key || !strings.Contains(g.Detail, option)) && !told {
 					t.Fatalf("supervisor not told: %+v (told %v)", g, told)
 				}
+				s.waitWorkEvents() // do not let the next database fixture truncate an event still in flight
 			})
 		}
 	}

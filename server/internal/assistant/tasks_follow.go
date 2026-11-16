@@ -751,6 +751,15 @@ func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text,
 	}
 	agents := s.taskAgents(ctx, t)
 	if len(agents) == 0 {
+		// A failed session list is not an answer. Retry with reachability before deciding that the task genuinely has
+		// no Agent, or a transient lookup could end a decision as if the Agent were gone.
+		reachedAgents, reached := s.taskAgentsReached(ctx, t)
+		if !reached {
+			return FeedItem{}, i18n.Err("assistant-tasks.route_offline")
+		}
+		agents = reachedAgents
+	}
+	if len(agents) == 0 {
 		return FeedItem{}, agentUnavailable("assistant-tasks.route_no_agent")
 	}
 	live, last := liveTaskAgents(agents)
