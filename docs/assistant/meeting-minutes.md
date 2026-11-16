@@ -647,7 +647,7 @@ The system prompt is one fixed template that takes only the owner's name, today'
 - Uploads an attending recording at once, ahead of other pending uploads and outside the save debounce, then streams finished sentences with `…/live`, resuming from `next` after a reconnect or a `409 live_gap`.
 - Shows that an AI is attending, on the recording screen and in the Live Activity, for as long as the role is not `off`.
 - Asks with a tap: typed on the recording screen, or with no text from the Live Activity. Shows the answer (on the recording screen, and the latest one in the Live Activity; the hub posts no notification for answers), and in a participant meeting says it aloud through the voice route (headset, else the loudspeaker): in the voice of an extension's `speech` contribution when one runs and reads (#8712, [extensions.md](../extensions/extensions.md) "Speech": the built-in Volcengine speech's); else in the realtime voice of voice chats, with the model and voice the owner uses, when the hub's voice extension lists `speak` (#5004); in the phone's on-device voice when neither does, it fails or hasn't started within 8 seconds.
-- Keeps Persona's echo out of the transcript and the live log (required): a sentence that overlaps a span when the phone was speaking and says the words Persona said there ("Persona's echo" below). It stays on the recording, marked, and goes up marked to a hub that lists `meeting_echo`. Echo cancellation is optional, set only when a recording starts as `participant` and never switched mid-recording. Persona's answers stay on the hub as `asks`, not as transcript lines.
+- Keeps Persona's echo out of the transcript and the live log (required): a sentence that overlaps a span when the phone was speaking and says the words Persona said there ("Persona's echo" below). It stays on the recording, marked, and goes up marked to a hub that lists `meeting_echo`. Echo cancellation is optional, set when a recording starts as `participant`. Turning it on when the speaker turns on mid-recording is an iPhone experiment behind Settings › Meetings › Experimental (#8731 B2, off by default): the microphone stops for a moment, and it stays on to the end. Persona's answers stay on the hub as `asks`, not as transcript lines.
 
 ### Persona's echo (#5905)
 
@@ -781,7 +781,7 @@ A meeting Persona is not in still gets its live view. Since #8731 a meeting star
   - `POST …/ask` answers `409 not_attending`, as for `off`. An ask accepted before the switch still gets its answer.
   - The phone runs no meeting call and no Talk.
 - **Inviting and removing.** Inviting Persona switches the same room to `listener` or `participant`; removing it switches the room back to `notes`. The room is never replaced.
-- **Default.** `meeting_attendance_default` keeps its three values. When it is `off` and the hub lists `meeting_notes`, the phone starts a meeting in `notes`.
+- **Default.** `meeting_attendance_default` keeps its three values. When it is `off` and the hub lists `meeting_notes`, the phone starts a meeting in `notes`. The iPhone (#8731) shows it as one switch, Invite Persona Automatically (on: `listener`), and its quick start invites Persona per meeting ([recording.md](../apple/recording.md) "Persona in meetings").
 - **Older managers.** An older manager after a rollback reads `notes` as an unknown role, so the meeting is stored `off`: no live view, and minutes as usual. A hub-mode timeline that names `notes` is ignored whole there, like any malformed timeline.
 
 #### The room conversation
