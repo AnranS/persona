@@ -90,7 +90,7 @@ test("quitting while setup is the only window does not open setup again (#9458)"
   const main = await source("main.ts");
   const closed = main.slice(main.indexOf('setup.once("closed"'), main.indexOf("const removeIPC = installSetupIPC"));
   assert.ok(closed.includes("if (quitting) return;"), "setup's closed handler must stop once the app is quitting");
-  assert.ok(closed.indexOf("if (quitting) return;") < closed.indexOf("showMain()"), "the quitting check must come before reopening");
+  assert.ok(closed.indexOf("if (quitting) return;") < closed.indexOf("recoverSetupAfterClose()"), "the quitting check must come before recovering setup");
   // Every quit (menu, Dock, signal, tray) passes before-quit, which runs before windows close.
   assert.match(main, /app\.on\("before-quit", \(\) => \{ quitting = true;/);
 });
