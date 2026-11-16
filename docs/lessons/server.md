@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Validate the APNs signing curve before a push (#9438)
+
+ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
+
 ## A transport made for one request opens a connection for one request (2026-11-16, #9202)
 
 The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
@@ -1447,7 +1451,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 - **Headers must travel the whole chain**: nginx `proxy_protocol on;` without headers from the preceding tunnel writes the tunnel client's `127.0.0.1` as source, still appearing local to hub.
   Hub logs once when "loopback upstream claims loopback source"; make the preceding layer send headers too, using nginx `listen … proxy_protocol` + `set_real_ip_from`.
 - **Don't read headers in Accept**: one silent connection stalls all connections. Read in the connection's goroutine on first Read / Write / RemoteAddr
-  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Preserve any earlier caller read deadline and restore it afterward, never overwrite or clear it permanently.
+  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Apply caller deadline changes to a pending header read using the earlier of the caller's deadline and the fixed header limit, then restore the caller's current deadline on success. A header timeout still refuses and closes that connection; extending it later cannot retry the header (#9445).
 - **Don't enable it for loopback on plaintext ports**: `hub pair`, `hub admin`, and plugins connect over loopback plaintext without headers. If `from` includes loopback and `listeners` includes `http`, refuse startup.
 - **Tests mustn't assume Accept returns their own connection**: other developer-machine processes scan loopback ports (a test once accepted an unfamiliar connection starting `GET`, causing intermittent failures).
   Identify the dialed connection by its socket peer address.
