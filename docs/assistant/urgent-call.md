@@ -66,6 +66,15 @@ After two unanswered calls: a time-sensitive push "Missed urgent call: <title>",
 
 Calls ring like ordinary calls: aloud in ring mode, vibration only in silent mode.
 
+Answered, the call sounds like a phone call: from the earpiece, or the Bluetooth headset or car that is connected, never
+the loudspeaker by itself (owner decision, 2026-11-17; it was the loudspeaker before #9290). The call page's **Speaker**
+and the system's call UI move it to the loudspeaker and back; while Bluetooth, a car or headphones can take the call the
+page's **Audio** opens the system's route picker instead. The page has the call screen's round controls under what the
+call is about (`docs/design/DESIGN_SYSTEM.md` "Call screen"): Mute, Speaker or Audio, Resume when the call is on hold and
+its sound did not come back, and Hang Up; its line says On Hold or Muted when it is. The app's one call manager sets the
+same audio category for both kinds of call (`.playAndRecord`, `.voiceChat`, Bluetooth hands-free and A2DP, no
+`.defaultToSpeaker`).
+
 ### Voice approval
 
 On the call the owner may approve the call's own card, plans and tool permissions included, by voice: Persona reads the decision back and it counts only after the owner says "confirm". Every other card still needs a tap.

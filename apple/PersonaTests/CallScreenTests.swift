@@ -155,6 +155,18 @@ struct CallScreenTests {
         #expect(strip.contains("PersonaCalls.shared.callPersona(group: group, origin: .app)"))
     }
 
+    /// Urgent calls start on the earpiece as calls to Persona do (owner decision 2026-11-17): the call's category, with
+    /// no loudspeaker by default; the urgent page has the Speaker control that moves it.
+    @Test func anUrgentCallStartsOnTheEarpiece() throws {
+        let calls = try Self.code("Persona/Calls/PersonaCalls.swift")
+        let prepare = try #require(calls.range(of: "func prepareUrgentAudio()"))
+        let body = String(calls[prepare.upperBound...].prefix(400))
+        #expect(body.contains("PhoneVoiceAudio.callSessionOptions") && !body.contains("PhoneVoiceAudio.sessionOptions"))
+        #expect(!PhoneVoiceAudio.callSessionOptions.contains(.defaultToSpeaker))
+        let page = try Self.code("Persona/Calls/UrgentCallView.swift")
+        #expect(page.contains("calls.setSpeaker(") && page.contains("CallAudioRouteControl("))
+    }
+
     /// The page is the app's, over everything, next to the urgent call's cover.
     @Test func theCoverIsTheAppsNextToTheUrgentCalls() throws {
         let app = try Self.code("Persona/App/PersonaApp.swift").components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }

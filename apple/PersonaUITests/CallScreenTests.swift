@@ -155,12 +155,15 @@ final class CallScreenTests: XCTestCase {
         sleep(1)
     }
 
-    /// The urgent call's page has the call screen's Mute; on, it fills.
+    /// The urgent call's page has the call screen's Mute and Speaker (off: the earpiece by default); Mute on, it fills
+    /// and the line says so.
     @MainActor func testTheUrgentCallsMute() throws {
         let app = try launch(Self.main + ["-showUrgentCallSample", "YES"])
         let mute = app.buttons["urgentCall.mute"]
         XCTAssertTrue(mute.waitForExistence(timeout: 30), "no Mute on the urgent call\n\(app.debugDescription)")
         XCTAssertTrue(app.buttons["urgentCall.hangUp"].exists, "no 挂断")
+        XCTAssertTrue(app.buttons["urgentCall.speaker"].exists && !app.buttons["urgentCall.speaker"].isSelected,
+                      "no 扬声器 off by default on the urgent call")
         mute.tap()
         XCTAssertTrue(mute.isSelected, "Mute did not turn on")
         XCTAssertTrue(app.staticTexts["已静音"].waitForExistence(timeout: 5), "the line does not say 已静音\n\(app.debugDescription)")

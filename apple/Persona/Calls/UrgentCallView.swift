@@ -139,7 +139,8 @@ private struct UrgentCallCaptions: View {
 }
 
 /// Whether Persona is speaking or listening (or the call is on hold), and the call screen's round controls (#9290): Mute,
-/// Resume when the call offers it, and Hang Up. Mute and Resume go through `PersonaCalls`, so the system's call UI and
+/// Speaker (or Audio, the system's route picker, while Bluetooth, a car or headphones are there: the call starts on the
+/// earpiece), Resume when the call offers it, and Hang Up. They go through `PersonaCalls`, so the system's call UI and
 /// AirPods say the same; Hang Up ends the call with the system as before (`UrgentCallCenter.hangUp`).
 private struct UrgentCallFooter: View {
     let session: UrgentCallSession
@@ -153,29 +154,68 @@ private struct UrgentCallFooter: View {
             line(held: held, muted: muted)
                 .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 .accessibilityIdentifier("urgentCall.state")
-            HStack(alignment: .top, spacing: Theme.Space.xl) {
-                CallControl(symbol: muted ? Theme.Icon.voiceUnmute : Theme.Icon.voiceMute, label: String(localized: "Mute [Voice Bar 7db2e1]"),
-                            id: "urgentCall.mute", kind: .toggle(on: muted)) {
-                    if let call {
-                        calls.setMuted(!muted, call.id)
-                    } else {
-                        // No system call behind the page (the DEBUG sample): the session alone.
-                        session.setMuted(!muted)
-                    }
+            // One row while the controls fit it (four with Resume, at a large text size, do not): else Mute and Speaker
+            // over Resume and Hang Up.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: Theme.Space.xl) {
+                    mute(call, muted: muted)
+                    speaker
+                    resume(call)
+                    hangUp
                 }
-                if let call, call.resumeOffered {
-                    CallControl(symbol: Theme.Icon.resume, label: String(localized: "Resume [Call Control]"), id: "urgentCall.resume",
-                                hint: String(localized: "Takes the call off hold")) {
-                        calls.resume(call.id)
+                VStack(spacing: Theme.Space.l) {
+                    HStack(alignment: .top, spacing: Theme.Space.xl) {
+                        mute(call, muted: muted)
+                        speaker
                     }
-                }
-                CallControl(symbol: Theme.Icon.voiceEnd, label: String(localized: "Hang Up"), id: "urgentCall.hangUp", kind: .end) {
-                    UrgentCallCenter.shared.hangUp()
+                    HStack(alignment: .top, spacing: Theme.Space.xl) {
+                        resume(call)
+                        hangUp
+                    }
                 }
             }
             .disabled(session.phase == .ended)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func mute(_ call: PersonaCall?, muted: Bool) -> some View {
+        CallControl(symbol: muted ? Theme.Icon.voiceUnmute : Theme.Icon.voiceMute, label: String(localized: "Mute [Voice Bar 7db2e1]"),
+                    id: "urgentCall.mute", kind: .toggle(on: muted)) {
+            if let call {
+                calls.setMuted(!muted, call.id)
+            } else {
+                // No system call behind the page (the DEBUG sample): the session alone.
+                session.setMuted(!muted)
+            }
+        }
+    }
+
+    /// Speaker, or Audio (the system's route picker) while Bluetooth, a car or headphones can take the call.
+    @ViewBuilder private var speaker: some View {
+        if calls.route.external {
+            CallAudioRouteControl(route: calls.route)
+        } else {
+            CallControl(symbol: Theme.Icon.callSpeaker, label: String(localized: "Speaker [Call Control]"), id: "urgentCall.speaker",
+                        kind: .toggle(on: calls.route.speakerOn)) {
+                calls.setSpeaker(!calls.route.speakerOn)
+            }
+        }
+    }
+
+    @ViewBuilder private func resume(_ call: PersonaCall?) -> some View {
+        if let call, call.resumeOffered {
+            CallControl(symbol: Theme.Icon.resume, label: String(localized: "Resume [Call Control]"), id: "urgentCall.resume",
+                        hint: String(localized: "Takes the call off hold")) {
+                calls.resume(call.id)
+            }
+        }
+    }
+
+    private var hangUp: some View {
+        CallControl(symbol: Theme.Icon.voiceEnd, label: String(localized: "Hang Up"), id: "urgentCall.hangUp", kind: .end) {
+            UrgentCallCenter.shared.hangUp()
+        }
     }
 
     /// On hold first; muted while Persona listens (it hears nothing); else what the call is doing.

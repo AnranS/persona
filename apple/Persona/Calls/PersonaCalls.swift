@@ -427,11 +427,12 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         dispatch(call, .engineEnded(failed: false))
     }
 
-    /// The urgent call's audio category, before the system activates the session for it. Not while a call to Persona
-    /// is on: its session is set already, and the urgent call's loudspeaker would move it.
+    /// The urgent call's audio category, before the system activates the session for it: a call's, as a call to
+    /// Persona's (the earpiece when nothing is connected; the page's Speaker and the system's call UI move it, owner
+    /// decision 2026-11-17). Not while a call to Persona is on: its session is set already.
     func prepareUrgentAudio() async {
         guard !ownerInProgress else { return }
-        let options = PhoneVoiceAudio.sessionOptions
+        let options = PhoneVoiceAudio.callSessionOptions
         await Task.detached {
             try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: options)
         }.value
