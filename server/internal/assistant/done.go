@@ -129,10 +129,9 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 		}
 	}
 	switch local {
-	case "nothing", "anything", "everything", "something":
-		return false // the local "nothing (else) … but …" exception idiom
-	case "everyone", "anyone", "someone", "everybody", "anybody", "somebody", "all", "both":
-		// An indefinite-pronoun exception phrase; a finite clause below can still make it a contrast.
+	case "nothing", "anything", "everything", "something",
+		"everyone", "anyone", "someone", "everybody", "anybody", "somebody", "all", "both":
+		// A local exception phrase; a finite clause below can still make it a contrast.
 	default:
 		return true
 	}
@@ -140,29 +139,32 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 	if len(words) == 0 {
 		return true
 	}
+	start := 0
 	switch words[0] {
 	case "the", "a", "an":
 		if len(words) < 3 {
 			return false
 		}
+		start = 1
 	}
-	return ownerFiniteVerb(words[len(words)-1])
+	for _, word := range words[start:] {
+		if ownerFiniteInflection(word) {
+			return true
+		}
+	}
+	return false
 }
 
-func ownerFiniteVerb(word string) bool {
+func ownerFiniteInflection(word string) bool {
 	switch word {
 	case "am", "is", "are", "was", "were", "be", "been", "being",
 		"do", "does", "did", "have", "has", "had",
 		"can", "could", "will", "would", "shall", "should", "may", "might", "must",
-		"need", "needs", "wait", "waits", "fail", "fails", "work", "works", "remain", "remains", "stay", "stays",
-		"go", "goes", "come", "comes", "run", "runs", "stop", "stops", "start", "starts", "finish", "finishes",
-		"complete", "completes", "continue", "continues", "approve", "approves", "reject", "rejects", "roll", "rolls",
-		"notify", "notifies", "check", "checks", "verify", "verifies", "decide", "decides", "determine", "determines",
-		"review", "reviews", "ask", "asks", "inspect", "inspects", "assess", "assesses", "require", "requires",
-		"block", "blocks", "allow", "allows", "depend", "depends", "expect", "expects", "include", "includes",
-		"contain", "contains", "show", "shows", "say", "says", "tell", "tells", "report", "reports", "return", "returns",
-		"look", "looks", "seem", "seems", "appear", "appears", "make", "makes", "take", "takes", "use", "uses",
-		"get", "gets", "give", "gives", "want", "wants", "read", "reads", "succeed", "succeeds":
+		"needs", "waits", "fails", "works", "remains", "stays", "goes", "comes", "runs", "stops", "starts",
+		"finishes", "completes", "continues", "approves", "rejects", "rolls", "notifies", "checks", "verifies",
+		"decides", "determines", "reviews", "asks", "inspects", "assesses", "requires", "blocks", "allows",
+		"depends", "expects", "includes", "contains", "shows", "says", "tells", "reports", "returns", "looks",
+		"seems", "appears", "makes", "takes", "uses", "gets", "gives", "wants", "reads", "succeeds":
 		return true
 	}
 	return false
