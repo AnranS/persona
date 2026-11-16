@@ -41,7 +41,7 @@ internal fun DevicesPage(
     }
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
-    loginRequest?.let { request -> if (connect != null) BrowserLoginApproval(connect, request, scope) { loginRequest = null } }
+    loginRequest?.let { request -> if (connect != null) BrowserLoginApproval(connect, request, scope) { if (loginRequest == request) loginRequest = null } }
     var pending by remember { mutableStateOf<PairedDevice?>(null) }
     var connecting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(controller) { if (available) controller.loadDevices() }
