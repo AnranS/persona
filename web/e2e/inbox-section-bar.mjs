@@ -103,15 +103,18 @@ try {
       await p.waitForTimeout(200);
       assert.equal(await p.locator("[data-inbox-bar]").evaluate((el) => el.getBoundingClientRect().top), top, `${tag}: the bar stays in sight`);
       await shot(p, `bar-needs-you-scrolled-${tag}`);
+      const allAt = () => p.locator('[data-bar-choice="all"]').evaluate((el) => Math.round(el.getBoundingClientRect().left));
+      const allX = await allAt();
       for (const id of ["working", "fyi", "done"]) {
         await p.locator(`[data-bar-choice="${id}"]`).click();
         await p.waitForTimeout(400);
         assert.deepEqual(await sections(p), [id], `${tag}: ${id} alone`);
         assert.equal(await p.locator(`main [data-section="${id}"] > div > button[aria-expanded]:not([aria-haspopup])`).count(), 0, `${tag}: ${id}'s title doesn't fold`);
         assert.equal(await p.locator("[data-inbox-list-scroll]").evaluate((el) => el.scrollTop), 0, `${tag}: ${id} from its top`);
-        // the grouping stays where it is (off where the choice isn't grouped), so the row doesn't move between choices
+        // the grouping is hidden where the choice isn't grouped, its place kept, so All doesn't move between choices
         fits(`${tag} ${id}`, await barShape(p));
-        assert.equal(await p.locator('[data-inbox-bar] button[aria-label="Group by"]').isDisabled(), id !== "fyi", `${tag}: ${id}'s grouping`);
+        assert.equal(await p.locator('[data-inbox-bar] button[aria-label="Group by"]').isVisible(), id === "fyi", `${tag}: ${id}'s grouping`);
+        assert.equal(await allAt(), allX, `${tag}: ${id} leaves All in place`);
         await shot(p, `bar-${id}-${tag}`);
       }
       await p.locator('[data-bar-choice="all"]').click();

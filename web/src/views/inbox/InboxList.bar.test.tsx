@@ -222,9 +222,18 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(sections()).toEqual(["done"]);
   });
 
-  it("has the grouping in its trailing menu, off (but in place) where the choice is not grouped", async () => {
+  // hidden, not greyed (docs/assistant/inbox.md "Section bar"): neither In progress nor Done is grouped by source or time;
+  // its place stays, so All doesn't move under the pointer
+  it("has the grouping in its trailing menu, hidden (its place kept) where the choice is not grouped", async () => {
     await show();
     const grouping = () => host.querySelector<HTMLButtonElement>('[data-inbox-bar] button[aria-label="分组方式"]')!;
+    const hidden = () => {
+      const box = grouping().closest("[data-bar-grouping]")!;
+      const out = box.hasAttribute("inert");
+      expect(box.classList.contains("invisible")).toBe(out);
+      return out;
+    };
+    expect(hidden()).toBe(false);
     expect(grouping().disabled).toBe(false);
     // a menu, said so; its own mark, not the filters'
     expect(grouping().getAttribute("aria-haspopup")).toBe("menu");
@@ -234,11 +243,13 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(grouping().getAttribute("aria-expanded")).toBe("true");
     act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     pick("done");
-    expect(grouping().disabled).toBe(true);
+    expect(hidden()).toBe(true);
     pick("working");
-    expect(grouping().disabled).toBe(true);
+    expect(hidden()).toBe(true);
+    pick("fyi");
+    expect(hidden()).toBe(false);
     pick("all");
-    expect(grouping().disabled).toBe(false);
+    expect(hidden()).toBe(false);
   });
 
   // blank text in the field searches nothing (the rows don't narrow), so the bar doesn't take it as a search either

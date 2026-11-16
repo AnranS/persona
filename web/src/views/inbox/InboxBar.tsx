@@ -50,7 +50,8 @@ function useBeyond(ref: RefObject<HTMLElement | null>, key: string): { left: num
 }
 
 /** `grouping`: the list's grouping, chosen in the menu at the row's end; `groupable`: false where the choice is not grouped
- *  (Done, In progress), which leaves the menu's button there but off, so the row doesn't move between choices. */
+ *  (Done, In progress), which hides the menu's button (out of sight, the keyboard's and screen readers' reach) but keeps
+ *  its place, so All doesn't move under the pointer between choices. */
 export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGrouping }: { entries: BarEntry[]; chosen: BarChoice; onPick: (choice: BarChoice) => void; grouping: Grouping; groupable: boolean; onGrouping: (g: Grouping) => void }) {
   const pills = useRef<(HTMLButtonElement | null)[]>([]);
   const strip = useRef<HTMLDivElement>(null);
@@ -126,9 +127,11 @@ export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGroup
         </div>
         {all && pill(all)}
       </div>
-      <span aria-hidden className="h-4 w-px shrink-0 bg-line-strong" />
-      <IconButton icon="grouping" label={t("inbox-inboxlist.grouping")} onClick={menu.open} active={Boolean(menu.anchor)} menu disabled={!groupable} size={24} iconSize={13} />
-      {menu.anchor && (
+      <div inert={!groupable} className={cx("flex shrink-0 items-center gap-0.5", !groupable && "invisible")} data-bar-grouping>
+        <span aria-hidden className="h-4 w-px shrink-0 bg-line-strong" />
+        <IconButton icon="grouping" label={t("inbox-inboxlist.grouping")} onClick={menu.open} active={Boolean(menu.anchor)} menu size={24} iconSize={13} />
+      </div>
+      {menu.anchor && groupable && (
         <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={180} header={t("inbox-inboxlist.grouping")}
           items={(["source", "time"] as const).map((g) => ({
             key: g,
