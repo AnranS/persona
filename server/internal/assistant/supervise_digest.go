@@ -234,6 +234,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	background := to != here.Main && to == here.BackgroundSupervisor // old work only; also scopes its closeout grant
+	delivered := kept
 	accepted := false
 	defer func() {
 		if !accepted {
@@ -244,6 +245,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			s.rememberLegacyBackground(to, kept)
 		}
 		s.ackSupervisePending(list)
+		s.ackSupervisionDedupLocked(ctx, delivered)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
@@ -282,6 +284,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		signals := slices.Clone(all)
 		msg.Signals = &signals
 		if s.replaceQueuedSupervise(to, msg) {
+			delivered = all
 			accepted = true
 			b.mu.Lock()
 			b.setQueuedLocked(to, all)

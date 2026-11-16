@@ -116,8 +116,8 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 		key, hash := digestFingerprint(entry, signals[i])
 		current, undelivered := pending[signals[i].id()]
 		if seen, ok := next[key]; ok && seen.Hash == hash && (seen.Permanent || seen.Todo != "" || now.Sub(seen.At) < superviseDedupWindow) {
-			if seen.Permanent {
-				continue // a PR head is told once for good; a failed dispatch releases its reservation instead
+			if seen.Permanent && seen.Key == "" {
+				continue // a delivered PR head is told once for good; a reserved Key still owes a delivery
 			}
 			retry := undelivered && current.Key == signals[i].Key &&
 				(seen.Key == signals[i].Key || slices.Contains(current.PendingPredecessors, seen.Key))
@@ -151,6 +151,44 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 			}
 		}
 	}, nil
+}
+
+// ackSupervisionDedupLocked marks permanent PR-head reservations as delivered. An empty Key distinguishes a head told
+// for good from one whose process stopped after reservation but before delivery or queue admission (#5732). dedupMu is held by sendDigest.
+func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal) {
+	b := &s.supervise
+	history := b.dedup
+	st := s.store()
+	if st != nil {
+		if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
+			s.logf("supervise: could not read deduplication history for delivery acknowledgment: %v", err)
+			return
+		}
+	}
+	next := maps.Clone(history)
+	changed := false
+	for _, g := range signals {
+		if g.Kind != sigPRConflict && g.Kind != sigDraftPR {
+			continue
+		}
+		key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
+		if seen, ok := next[key]; ok && seen.Permanent && seen.Key != "" && seen.Key == g.Key {
+			seen.Key = ""
+			next[key] = seen
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if st != nil {
+		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
+			// The message already went out. Keep the in-memory ACK even when its durable copy fails; a later restart may
+			// retry the head, which is safer than rolling back an actual delivery and losing the obligation instead.
+			s.logf("supervise: could not persist delivery acknowledgment: %v", err)
+		}
+	}
+	b.dedup = next
 }
 
 // forgetSupervision takes the signals' fingerprints out of the deduplication history: their message was queued for a
