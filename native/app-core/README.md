@@ -35,8 +35,8 @@ emulator results never fill the physical-device column.
 | `transport` / `wire_envelope` | 17 wire cases plus the 64 source-derived Envelope cases and nested-scalar regressions (#8955, #8995, #9082, #9187) | Full wire runtime plus diagnostic Envelope replay | Partial: `persona_core_transport_frame` covers the shared-scalar gate and Other routing, not the complete wire corpus | No raw-transport Swift binding/replay implemented; generic action codecs are not a full wire replay | Full wire decoder plus selected production Envelope refusals | Generic runtime NAPI unexecuted; separate wire/Envelope NAPI projection not implemented | Native everywhere; no production client sends `WirePayload` | No domain-specific physical run; acceptance blocked |
 | `sort` / `state` / `recents` | 30 sort, 13 state and 21 recents cases | Sort 30; state/recents not implemented | Sort smoke only; state/recents not implemented | Sort 30 on macOS (#8952); state/recents not implemented | Sort 30 + state 13; recents not implemented | Sort is compiled for OHOS but its actual NAPI invocation is not measured; state/recents have no NAPI export | Native / native + DEBUG sort shadow (#8954) / **core Agents-list sort in production** (#8957, #8966, #9066); no state/recents migration | No domain-specific physical run; acceptance blocked |
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker and inline source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 80 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming, and the draft each click leaves (#9238) | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker, inline and math-end source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary, 6 explicit math end + 57 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 80 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
 
 `scripts/ci/core.sh` exercises the cargo, C ABI and ArkTS-host columns, including generated-codec and OHOS declaration
@@ -47,10 +47,10 @@ cannot rerun them. Those reports used later Xcode versions, so Xcode 26.0 remain
 generated Swift type, a compiled OHOS feature or a host fake is not itself a replay result.
 
 The StreamRepair boundary is deliberately narrower than full Markdown repair: fence recognition/repair, the bounded
-table scanner, final unfinished block-marker hold-back and scalar inline repair have cargo and real host-JNI evidence.
-Their C ABI and ArkTS-host replays (#9241) cover the named fence/table/marker inputs, including inherited inline
-expectations. The `.math` end state, `plainOpenFence`, rendering, timing/coalescing and production adapters remain out
-of scope; no SwiftPM or real-NAPI repair replay exists. #8227 was a duplicate-key snapshot correctness bug and is
+table scanner, final unfinished block-marker hold-back, scalar inline repair and math-end classification have cargo
+and real host-JNI evidence. Their C ABI and ArkTS-host replays (#9241) cover the named fence/table/marker inputs,
+including inherited inline expectations; they do not replay the complete inline or math corpora. `plainOpenFence`,
+rendering, timing/coalescing and production adapters remain out of scope; no SwiftPM or real-NAPI repair replay exists. #8227 was a duplicate-key snapshot correctness bug and is
 closed. It does not close
 the separate Android performance follow-up: #9048's lock-free dispatch and owned-JNI-byte hand-off have overlapping
 host A/B distributions, and the original emulator / device go/no-go evidence remains unresolved as recorded in the plan.
@@ -82,14 +82,15 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 `scripts/ci/core.sh` runs all of these, plus formatting and clippy. On Linux, `scripts/test-c-abi.sh` compiles
 `tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
 `libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
-unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
+unchanged fixtures through every pure C projection: sort's `empty_list` and the three iOS-derived held cases (#9033),
+`persona_core_project_answer` and
 `persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 22 fence + 19 marker/boundary + 39
 table/boundary complete `{repaired, end}` objects stated independently from the Apple tests/source and existing JNI
 replay,
 `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
-applied by the client (62 complete turn objects across the 54 non-empty cases), and
+applied by the client (73 complete turn objects across the 54 non-empty cases), and
 `persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
 `persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
 folded line, plus `persona_core_transport_frame` for the shared-scalar Envelope gate and Other routing (20 named
@@ -124,8 +125,11 @@ lazy-line exclusion. Inline repair (#9286) replays all 51 explicit Apple inline-
 source-derived boundary controls. Its scalar scanner follows emphasis/strikethrough flanking, code spans,
 links/images, escapes, bare/autolinks and inline-formula skipping. All 342 Unicode-scalar prefixes of Apple's mixed
 reply are replayed through real stream-chunks JNI into stream-repair JNI, preserving each completed-line prefix and
-leaving the finished reply unchanged. Display math is recognized to keep inline repair
-out of it. The `.math` end state and `plainOpenFence` are not implemented.
+leaving the finished reply unchanged. Math end (#9395) adds Apple's six explicit math assertions and 45 source-derived
+controls for open/closed blocks, one-line display formulas, inline formulas in prose, money, code spans, CJK, trailing
+indentation and the 400-Character plausibility boundary. It follows the distinction between scalar-based inline repair
+and `MathMarkdown.display`'s extended-grapheme indexing; it does not implement `MathMarkdown.rewrite`, rendering or
+`plainOpenFence`.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. #9233 adds a ninth recommendation for newline / NBSP / TAB
@@ -204,12 +208,12 @@ and counts/flags/enum values: never titles, paths, queries, identifiers or excep
 The core's `state`, `machine` and `space` projections compare complete published outputs. `Repo` and `MachineSpace`
 use the core's `space` projection for their inner list and separately report the unsupported outer repository/computer
 headers; to-do, direction and history extensions are not silently called parity. Input conversion preserves multi-hub
-identity and includes the core's `held` field from the shell's visible Agent chat when the row remains Unread. The
-production Kotlin path still owns range preprocessing, `retainOpenedRows`, history and children. A caller-supplied
-instant makes `since:` searches deterministic. The 30 checked-in `agents_list` fixtures pass through both production
-Kotlin and the real host JNI projection; additional real-JNI cases found #9027 (multi-hub pin identity in the core)
-and #9033 (Android does not yet implement iOS's `heldInList`). Those differences are recorded, not hidden or changed
-to match Rust.
+identity and includes the core's `held` field from the shell's visible Agent chat and its entry-time Unread capture
+while its held row remains open. The production Kotlin path still owns range preprocessing, `retainOpenedRows`, history
+and children. A caller-supplied
+instant makes `since:` searches deterministic. The 33 checked-in `agents_list` fixtures pass through both production
+Kotlin and the real host JNI projection, including three State, Space and quiet-fold cases for the production
+`heldInList` behavior aligned with iOS (#9033). The separate multi-hub pin identity issue is #9027.
 
 Release has no sort-shadow implementation and its native library does not export `Java_..._projectSort`. The app still
 packages the other core entry points for the existing packaging work: this is a strict boundary for this shadow, not a
@@ -217,7 +221,8 @@ claim that the whole native library is absent. `buildAndroidReleaseCore` builds 
 ABIs with `scripts/check-android-sort-shadow.py`; Release JVM tests additionally prove that no shadow class is on the
 classpath and the factory remains Kotlin even when the debug property is set. Conversion, redaction, native failure,
 production entry and old-vs-new Kotlin behavior have focused JVM tests. This is host and packaged-artifact evidence,
-not a physical-device shadow run, UI change, Rust promotion or iOS behavior change.
+not a physical-device shadow run, Rust promotion or iOS behavior change. The production held-row alignment changes
+which existing row and section the Android list displays; its host Compose captures are not device evidence.
 ## HarmonyOS Agents-list core (#8957, #8966)
 
 `CoreAgentListAdapter` calls the synchronous pure `coreProjectSort` NAPI function directly. It is the only production
@@ -233,9 +238,10 @@ and exposes the existing failure state instead of presenting an empty successful
 sorter or debug-only native fallback; an older build is the rollback boundary while no HAP/device evidence is available.
 
 `harmony/tests/core-host/agent-sort-adapter.test.mjs` drives the production adapter's real native-import contract and
-the real core through all 30 unchanged `agents_list` fixtures. The complete expected objects match **30/30**. Host
-workspace tests also exercise frozen-reading identity, explicit folds, filters and offline-history membership. The
-portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
+the real core through all 33 checked-in `agents_list` fixtures, including the three held cases (#9033). The complete
+expected objects match **33/33**. Host workspace tests also exercise frozen-reading identity, explicit folds, filters
+and offline-history membership. The portable suite provides a synchronous fake for the same NAPI boundary, not
+evidence of an actual HAP NAPI callback.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
 ## Android answer adapter and shadow (#9143)
@@ -263,8 +269,19 @@ The replay compares all 15 `questions.json` and 9 `recommended.json` complete ex
 current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted
 as differences, not hidden by editing fixtures or the current production result. This is host/JVM and DEBUG observer
 evidence, not hub delivery, UI timing or a physical-device run; Release's two answer JNI exports are checked absent on
-both packaged ABIs. The U+200B display boundary was independently fixed by #9189 and is included in the ninth case;
-the retained `other` draft distinction found by the stricter multi-step shadow is #9238 and is not normalized here.
+both packaged ABIs. The U+200B display boundary was independently fixed by #9189 and is included in the ninth case.
+
+The retained `other` draft that the stricter shadow reports as `other-state` (#9238) was decided with the iOS oracle, not
+from either implementation. iOS's `QuestionForm.pick` leaves an emptied entry (`other[q.question] = ""`: the key stays),
+and Advance, Submit and `send` change neither map. The core does exactly that, so it is unchanged; Android's
+`AnswerBuilder`, which removes the key, is the side that differs. Every answer, page and resolution agrees, and iOS reads a
+missing entry and an empty one alike, but Android's form draws its Other field while the key exists. An adapter that
+stores the core's draft must therefore drop an emptied entry first, or the form must test the text instead of the key.
+Until then the shadow keeps reporting `other-state` for each accepted single choice: that is this known difference, not
+noise to filter out. `answer_projection.rs` asserts the rule for all 24 cases and for the issue's two-question chain, and
+`TestResolutionFixturesIOS` (macOS, `PERSONA_VERIFY_IOS_FIXTURES=1`) asserts it against iOS's own code for every question
+case and for that chain. The shared `expected` objects carry answers, not the draft, so no fixture or replay manifest
+changed.
 
 ## Reproducing phase-1 evidence
 
@@ -310,7 +327,7 @@ The `ohos`-feature NAPI projection exports are `coreProjectSort`, `coreProjectAn
 generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option label, while the other six take
 JSON documents.
 `harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
-all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
+all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 73 complete
 turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
 same generated ArkTS codec and existing registry dispatch/flush/drain commands replay four operation cases at all 10
 checkpoints, with exact item IDs and 13 complete turn objects; an existing burst is also replayed through the

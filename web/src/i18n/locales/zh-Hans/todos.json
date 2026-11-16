@@ -272,7 +272,7 @@
   "cancelled_section": "已取消 · {count}",
   "section_cancelled": "已取消",
   "section_waiting": "等你处理",
-  "section_parked": "已搁置",
+  "section_parked": "搁置",
   "ask_chat_route": "回答决定：{title}",
   "ask_chat_hint": "下一条消息会作为这项决定的答案保存到任务。只想讨论、还不决定时，请先取消此定向。"
 }

@@ -2,13 +2,14 @@
 // agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it last moved —
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
-import { acceptanceStands, latestReview, reviewState } from "./supervision";
+import { acceptanceStands, decisionDismissed, latestReview, reviewState } from "./supervision";
 import { isCancelled, openAsk, todoDueBy, todoStatus, waitsForOwner, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
-/** Where a to-do shows, in the page's order (#5707): explicit parked work stays open (#5929), cancelled apart from Done (#5732). */
-export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr" | "other" | "shelved" | "done" | "cancelled";
+/** Where a to-do shows: merge waits join explicit holds on the web (#9325); cancelled stays apart from Done (#5732). */
+export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done" | "cancelled";
 
-export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "parked", "other", "just_done", "shelved", "done", "cancelled"];
+/** The page's order (#5707): unfinished work stays open; cancelled folds separately after Done (#5732). */
+export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done", "cancelled"];
 
 /** Sections that start folded: unfinished to-dos stay open (#5707); cancelled folds apart from Done (#5732). */
 export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(TRIAGE_SECTIONS.slice(-3));
@@ -40,7 +41,7 @@ export function waitingForMerge(todo: Todo, lookup: SessionLookup | undefined, n
   if (todo.done_at || !openMergePRs(todo, now).length) return false;
   const status = todoStatus(todo, lookup);
   if (status === "failed" || status === "needs_you" || status === "interrupted" || status === "working" || status === "waiting") return false;
-  if (waitsForOwner(todo)) return false;
+  if (!decisionDismissed(todo) && waitsForOwner(todo)) return false;
   return true;
 }
 
@@ -130,11 +131,11 @@ function shelvable(todo: Todo, now: number): boolean {
  *  3. owner_decides   review says needs_user, or a decision / "cannot" ask → Waiting on you
  *  4. agent_running   an agent is working or starting                   → Working
  *  5. closed          done_at set                                       → Done immediately
- *  5a. parked         an explicit unexpired wait                         → Parked; expired → Other open
+ *  5a. parked         an explicit hold                                   → Parked until the hub changes its state
  *  6. accepted        the latest review accepted it (even reopened)     → Done immediately
  *  7. finished_unseen its delivery is live, not accepted                → Delivered · awaiting review, with no timeout
  *  8. finished_unseen an agent finished unseen, awaits review, or a done ask → Delivered · awaiting review
- *  9. pr_open         fresh matching open non-draft PR facts, nothing active or awaiting owner → Waiting for merge
+ *  9. pr_open         fresh matching open non-draft PR facts, nothing active or awaiting owner → Parked (merge wait)
  *  9a. seen           rule 8 without supervision, seen since it last moved, no PR open → Done
  *
  * Seen (#5707) files only an unsupervised finished turn. A supervised task or an unaccepted live delivery remains
@@ -165,21 +166,19 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     return at("done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
-  if (waitsForOwner(todo)) return at("waiting", "owner_decides");
+  // a decision the owner chose Don't handle on no longer waits on them (decisionDismissed)
+  if (!decisionDismissed(todo) && waitsForOwner(todo)) return at("waiting", "owner_decides");
   // rule 8's signals, read here so rule 9 yields to them: a turn or review still awaiting acceptance stays Just finished
   const finished = status === "unread" || review === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   const acceptanceRequired = review === "pending_review" || Boolean(todo.supervision?.supervisor);
   // a parked hold is its supervisor's reading of the latest turn: an agent session left unread does not hide its PR
   // accepted or delivered work keeps its finished semantics whatever its PR facts say (#7614, #5732)
   const settled = !concern && (acceptanceStands(todo) || todo.delivery?.state === "live");
-  if (!settled && !(finished && (!seen(last) || acceptanceRequired) && review !== "parked") && waitingForMerge(todo, lookup, now)) return at("pr", "pr_open");
+  if (!settled && !(finished && (!seen(last) || acceptanceRequired) && review !== "parked") && waitingForMerge(todo, lookup, now)) return at("parked", "pr_open");
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(todo.kind === "concern" && fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
-  // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
-  if (review === "parked") {
-    const until = ms(todo.supervision?.parked?.until);
-    return at(until && until <= now ? "other" : "parked", "parked");
-  }
+  // A fallback date is not a state transition: keep overdue waits visible until the hub actually wakes them.
+  if (review === "parked") return at("parked", "parked");
   if (!concern && acceptanceStands(todo)) return at("done", "accepted");
   // Live is delivery, not acceptance: an unreviewed live task stays open and awaiting review, however old or seen (#5732).
   if (!concern && todo.delivery?.state === "live") return at("just_done", "finished_unseen");

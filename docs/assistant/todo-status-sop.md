@@ -50,11 +50,11 @@ The first rule that holds wins.
 | 3 | `owner_decides` | Open, and the review says `needs_user`, or its ask is a decision or "cannot be done" | Waiting for you |
 | 4 | `agent_running` | An agent is working or starting | Working |
 | 5 | `closed` | `done_at` is set | Done immediately, regardless of age or Seen; explicit completion is never left open |
-| 5a | `parked` (web) | Open and the current review is parked | Parked until its `until`; after that, Other open while awaiting review, never Done just because its agent stopped |
+| 5a | `parked` (web) | Open and the current review is parked | Parked until the hub changes its state, including past its fallback `until`; never Done just because its agent stopped |
 | 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Done immediately, regardless of review age or Seen; acceptance is never left open |
 | 7 | `finished_unseen` | `delivery.state` is `live`, but the task has not been accepted | Delivered · awaiting review, open until main-chat acceptance or explicit user completion; no 24-hour or 48-hour timeout, including after Seen |
 | 8 | `finished_unseen` | An agent finished a turn nobody has seen, the review is pending, or its ask says done / please verify; either not seen or acceptance is still required | Delivered · awaiting review |
-| 9 | `pr_open` | Fresh facts of one of its PRs (`pr_status` matching `pr_url`, or an earlier PR in `other_prs`, #7935) say open and non-draft; no active agent or owner decision, and not accepted or delivered (rules 6 and 7 keep their finished semantics whatever its PR facts say; an open concern, which those rules skip, still waits for merge). Stale, absent or mismatched facts do not imply waiting for merge; merged/closed facts suppress legacy `delivery.state=pr` | Waiting for merge |
+| 9 | `pr_open` | Fresh facts of one of its PRs (`pr_status` matching `pr_url`, or an earlier PR in `other_prs`, #7935) say open and non-draft; no active agent or owner decision, and not accepted or delivered (rules 6 and 7 keep their finished semantics whatever its PR facts say; an open concern, which those rules skip, still waits for merge). Stale, absent or mismatched facts do not imply waiting for merge; merged/closed facts suppress legacy `delivery.state=pr` | Parked (merge wait) on the web; Waiting for merge on other clients |
 | 9a | `seen` | Rule 8's signals, seen by the owner since it last moved (see "Seen"), with no supervisor and no pending acceptance; an open PR takes precedence | Done |
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |
@@ -74,7 +74,7 @@ A closed concern (`done_at` set by its report) follows rule 5 like any closed to
 carries one neutral **Concern** tag next to its title, using the client's existing tag component; other rows do not change.
 A client whose older hub does not send `kind` keeps its previous behavior.
 
-On the web, the header's Parked count is the number of to-dos in the Parked section (included in open). Waiting for merge is another display section, not a lifecycle state: its to-dos remain open and count toward the existing open total.
+On the web, the header's Parked count is the number of to-dos in the Parked section (included in open). It contains both explicit holds and ready merge waits (#9325). The `pr_open` rule and PR freshness/precedence are unchanged; only its web display section changes from `pr` to `parked`. Shared fixture expectations retain the legacy `pr` name for the hub and native clients; the web fixture reader maps that label explicitly, preserving the same rules and open total. The conversation tray and All board use this same web classification. A fallback date alone does not move a hold to Other open; an actual wake/review does.
 Inactive counts only automatic 48-hour shelving. Cancelled has its own count and is never included in Done / completed.
 The Parked section and review badge use the same localized name.
 Apple (`apple/Shared/TodoTriage.swift`) and Android (`TodoTriage.kt` in `android/core/domain`) still need this
@@ -232,7 +232,7 @@ The web's header reads "N open · N parked · N inactive · N done · N cancelle
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted and not shelved: Waiting for you, Working,
-Waiting for merge, Parked, Other open, and every unaccepted Delivered · awaiting review row, including `live` (a finished turn or delivery
+Parked (including merge waits on the web), Other open, and every unaccepted Delivered · awaiting review row, including `live` (a finished turn or delivery
 is not acceptance; only a review or the user closes it). An ordinary unsupervised finished turn files under Done once seen.
 **Parked**, **inactive**, **done** and **cancelled** count the to-dos in their respective sections, so the header and each
 section's title say the same number. **Done** counts non-cancelled closed and accepted ones plus those seen ordinary turns;
