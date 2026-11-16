@@ -107,8 +107,64 @@ final class CallScreenTests: XCTestCase {
         for id in ["call-mute", "call-speaker", "call-end", "call-minimise"] {
             XCTAssertTrue(app.buttons[id].isHittable, "\(id) is not on screen")
         }
+        assertOnScreen(app, ["call-mute", "call-speaker", "call-end", "call-minimise"], "connected, largest")
         shot("call-connected-ax", app)
         app.terminate()
+    }
+
+    /// On hold with Resume at the largest text size, Persona's caption on two lines: every control inside the screen,
+    /// frame and all, and the line (On Hold) and the caption in sight between Minimise and the controls. Run on a short
+    /// phone too (an iPhone SE, 375 × 667), where the page was taller than the screen and Minimise and End went past its
+    /// edges; there the orb gives way and the controls stay.
+    @MainActor func testResumeAtTheLargestTextSize() throws {
+        let app = try sample("resume", largest: true)
+        let controls = ["call-mute", "call-speaker", "call-resume", "call-end"]
+        assertOnScreen(app, ["call-minimise"] + controls, "resume, largest")
+        let top = element(app, "call-minimise").frame.maxY - 0.5
+        let bottom = controls.map { element(app, $0).frame.minY }.min()! + 0.5
+        for id in ["call-state", "call-caption"] {
+            let frame = element(app, id).frame
+            XCTAssertTrue(element(app, id).exists && frame.minY >= top && frame.maxY <= bottom,
+                          "\(id) at \(frame) is not between Minimise and the controls (\(top)…\(bottom))\n\(app.debugDescription)")
+        }
+        let screen = app.windows.firstMatch.frame
+        shot("call-held-resume-ax-\(Int(screen.width))x\(Int(screen.height))", app)
+        app.terminate()
+    }
+
+    /// Settings › Text Size reaches the call screen and the bar back to it, both drawn outside the app's root view: one
+    /// step up (Large) grows the round controls as the text grows (body 17 → 19 pt), one step down (Small) shrinks them
+    /// (UIFontMetrics' own curve: about 0.96 ×), and the bar grows with the text at the larger size. Without it both
+    /// stayed the system size's (72 and 44 pt).
+    @MainActor func testTheAppsTextSizeReachesTheCallScreenAndTheBar() throws {
+        let large = try sample("connected", args: Self.main + ["-ui.textSize", "large"])
+        XCTAssertEqual(large.buttons["call-end"].frame.width, Self.control * 19 / 17, accuracy: 1.5, "Large did not reach the call screen")
+        large.buttons["call-minimise"].tap()
+        let bar = large.buttons["call-return-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call\n\(large.debugDescription)")
+        XCTAssertGreaterThanOrEqual(bar.frame.height, Self.tapTarget * 19 / 17 - 1, "Large did not reach the bar")
+        Thread.sleep(forTimeInterval: 1)
+        shot("call-minimised-bar-large", large)
+        large.terminate()
+
+        let small = try sample("connected", args: Self.main + ["-ui.textSize", "small"])
+        let width = small.buttons["call-end"].frame.width
+        XCTAssertTrue(width < Self.control - 1.5 && width > Self.control * 15 / 17, "Small did not reach the call screen: \(width)")
+        small.terminate()
+    }
+
+    /// `Theme.Size.callControl` and `tapTarget` at the default text size (the UI tests do not link the app's tokens).
+    private static let control: CGFloat = 72
+    private static let tapTarget: CGFloat = 44
+
+    /// Each control inside the app's window, its whole frame: `isHittable` passes for one half off the screen.
+    @MainActor private func assertOnScreen(_ app: XCUIApplication, _ ids: [String], _ what: String) {
+        let screen = app.windows.firstMatch.frame.insetBy(dx: -0.5, dy: -0.5)
+        for id in ids {
+            let control = element(app, id)
+            XCTAssertTrue(control.exists, "\(what): no \(id)\n\(app.debugDescription)")
+            XCTAssertTrue(screen.contains(control.frame), "\(what): \(id) at \(control.frame) is outside the screen \(screen)")
+        }
     }
 
     /// Minimise leaves the call for a bar at the top of the main conversation; a tap on it opens the call again.

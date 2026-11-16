@@ -39,8 +39,8 @@ nonisolated extension Theme.Size {
     /// The call screen's orb (`VoiceOrb` at this size), where the Phone app shows the caller's picture: the box, halo
     /// included.
     static let callOrb: CGFloat = 160
-    /// The most of the call screen's height the orb takes: on a short screen or at a large text size it gives way, so
-    /// the name, the line, the caption and the controls keep their room (never under the voice bar's orb).
+    /// The most of the call screen's height the orb takes. It also gives way to the name, the line and the caption (the
+    /// controls always keep their room), down to the voice bar's orb; where even that does not fit, it is not drawn.
     static let callOrbShare: CGFloat = 0.22
 }
 

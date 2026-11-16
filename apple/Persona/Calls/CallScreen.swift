@@ -52,14 +52,13 @@ nonisolated struct CallScreenState: Equatable, Sendable {
 /// The call to Persona's page: Minimise at the top; Persona's orb (moving with the voice), its name, one line of where
 /// the call is and Persona's latest words in the middle; the round controls at the bottom. VoiceOver's escape
 /// minimises. When the call ends its line says why for a moment (the call stays `PersonaCalls.endedStays`), then the
-/// page goes.
+/// page goes. Minimise and the controls always keep their room: the middle takes what they leave (`CallScreenMiddle`).
 struct CallScreen: View {
     let call: PersonaCall
     @State private var calls = PersonaCalls.shared
     /// The page's height, for the orb's size (`orbSize`).
     @State private var height: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let state = Self.state(call)
@@ -68,19 +67,7 @@ struct CallScreen: View {
                 minimise
                 Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
-            VStack(spacing: Theme.Space.l) {
-                CallScreenOrb(call: call, phase: state.orb, size: Self.orbSize(height: height, scale: Theme.sizeScale(typeSize)))
-                VStack(spacing: Theme.Space.s) {
-                    Text(verbatim: CallHandle.persona)
-                        .font(Theme.Font.display)
-                        .lineLimit(1)
-                        .accessibilityAddTraits(.isHeader)
-                    CallStateLine(line: state.line)
-                }
-                CallCaptionLine(call: call)
-            }
-            Spacer(minLength: 0)
+            CallScreenMiddle(call: call, state: state, page: height)
             CallScreenControls(call: call, route: calls.route)
         }
         .padding(.horizontal, Theme.Space.page)
@@ -97,12 +84,14 @@ struct CallScreen: View {
         .modifier(CallAnnouncements(state: state))
     }
 
-    /// The orb's size at the default text size (`VoiceOrb` grows it by `scale`): `callOrb`, but at most
-    /// `callOrbShare` of the page's height once grown, and never under the voice bar's orb.
-    static func orbSize(height: CGFloat, scale: CGFloat) -> CGFloat {
-        guard height > 0, scale > 0 else { return Theme.Size.callOrb }
-        let points = min(Theme.Size.callOrb * scale, height * Theme.Size.callOrbShare)
-        return max(points, Theme.Size.voiceOrb * scale) / scale
+    /// The orb's size at the default text size (`VoiceOrb` grows it by `scale`): `callOrb`, but at most `callOrbShare`
+    /// of the page's height and `free` (the middle's height less its words and the gap to them) once grown. Nil where
+    /// not even the voice bar's orb fits: the words say where the call is, the orb gives way to them.
+    static func orbSize(page: CGFloat, free: CGFloat, scale: CGFloat) -> CGFloat? {
+        guard page > 0, scale > 0 else { return Theme.Size.callOrb }
+        let points = min(Theme.Size.callOrb * scale, page * Theme.Size.callOrbShare, free)
+        guard points >= Theme.Size.voiceOrb * scale else { return nil }
+        return points / scale
     }
 
     static func state(_ call: PersonaCall) -> CallScreenState {
@@ -131,6 +120,51 @@ struct CallScreen: View {
         .accessibilityLabel("Minimise [Call Screen]")
         .accessibilityHint("The call goes on; the bar at the top returns to it")
         .accessibilityIdentifier("call-minimise")
+    }
+}
+
+/// The middle of the call screen: Persona's orb, the name, the call's line and the latest caption, in the height Minimise
+/// and the controls leave it, centred. The orb gives way to the words (`CallScreen.orbSize`), down to the voice bar's
+/// orb and then altogether (a short phone at the largest text size); where the words alone do not fit, they scroll, and
+/// the controls stay. The caption keeps its two lines' room, so nothing moves as Persona's words come.
+private struct CallScreenMiddle: View {
+    let call: PersonaCall
+    let state: CallScreenState
+    /// The page's height (the orb takes a share of it at most).
+    let page: CGFloat
+    /// The height the middle has, and what its words take of it.
+    @State private var room: CGFloat = 0
+    @State private var words: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        let free = room > 0 ? room - words - Theme.Space.l : .infinity
+        ScrollView {
+            VStack(spacing: Theme.Space.l) {
+                if let size = CallScreen.orbSize(page: page, free: free, scale: Theme.sizeScale(typeSize)) {
+                    CallScreenOrb(call: call, phase: state.orb, size: size)
+                }
+                VStack(spacing: Theme.Space.l) {
+                    VStack(spacing: Theme.Space.s) {
+                        Text(verbatim: CallHandle.persona)
+                            .font(Theme.Font.display)
+                            .lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                        CallStateLine(line: state.line)
+                    }
+                    CallCaptionLine(call: call)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    if abs(words - h) >= 1 { words = h }
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: room)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.hidden)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+            if abs(room - h) >= 1 { room = h }
+        }
     }
 }
 
@@ -191,7 +225,7 @@ private struct CallCaptionLine: View {
         Text(text ?? " ")
             .font(Theme.Font.secondary)
             .foregroundStyle(.secondary)
-            .lineLimit(2)
+            .lineLimit(2, reservesSpace: true)
             .multilineTextAlignment(.center)
             .frame(maxWidth: Theme.Size.readable)
             .opacity(text == nil ? 0 : 1)
@@ -210,7 +244,9 @@ private struct CallCaptionLine: View {
 }
 
 /// Mute, Speaker (or Audio, the system's route picker, while Bluetooth, a car or headphones are there) and Resume when
-/// the call offers it, in a row; End under them. Each goes through `PersonaCalls`.
+/// the call offers it in a row, End under them; where the three do not fit one row (a narrow window at a large text
+/// size: iPad's Split View or Slide Over), Mute and Speaker over Resume and End, as the urgent call's page does. Each
+/// goes through `PersonaCalls`.
 private struct CallScreenControls: View {
     let call: PersonaCall
     let route: CallRoute
@@ -218,33 +254,61 @@ private struct CallScreenControls: View {
 
     var body: some View {
         let live = call.phase.isLive
-        VStack(spacing: Theme.Space.xl) {
-            HStack(alignment: .top, spacing: Theme.Space.xl) {
-                CallControl(symbol: call.muted ? Theme.Icon.voiceUnmute : Theme.Icon.voiceMute, label: String(localized: "Mute [Voice Bar 7db2e1]"),
-                            id: "call-mute", kind: .toggle(on: call.muted)) {
-                    calls.setMuted(!call.muted, call.id)
+        ViewThatFits(in: .horizontal) {
+            VStack(spacing: Theme.Space.xl) {
+                HStack(alignment: .top, spacing: Theme.Space.xl) {
+                    mute
+                    speaker
+                    resume
                 }
-                if route.external {
-                    CallAudioRouteControl(route: route)
-                } else {
-                    CallControl(symbol: Theme.Icon.callSpeaker, label: String(localized: "Speaker [Call Control]"), id: "call-speaker",
-                                kind: .toggle(on: route.speakerOn)) {
-                        calls.setSpeaker(!route.speakerOn)
-                    }
-                }
-                if call.resumeOffered {
-                    CallControl(symbol: Theme.Icon.resume, label: String(localized: "Resume [Call Control]"), id: "call-resume",
-                                hint: String(localized: "Takes the call off hold")) {
-                        calls.resume(call.id)
-                    }
-                }
+                end
             }
-            CallControl(symbol: Theme.Icon.voiceEnd, label: String(localized: "End"), id: "call-end", kind: .end,
-                        hint: String(localized: "Hangs up the call")) {
-                calls.hangUp(call.id)
+            VStack(spacing: Theme.Space.l) {
+                HStack(alignment: .top, spacing: Theme.Space.xl) {
+                    mute
+                    speaker
+                }
+                HStack(alignment: .top, spacing: Theme.Space.xl) {
+                    resume
+                    end
+                }
             }
         }
         .disabled(!live)
+    }
+
+    private var end: some View {
+        CallControl(symbol: Theme.Icon.voiceEnd, label: String(localized: "End"), id: "call-end", kind: .end,
+                    hint: String(localized: "Hangs up the call")) {
+            calls.hangUp(call.id)
+        }
+    }
+
+    private var mute: some View {
+        CallControl(symbol: call.muted ? Theme.Icon.voiceUnmute : Theme.Icon.voiceMute, label: String(localized: "Mute [Voice Bar 7db2e1]"),
+                    id: "call-mute", kind: .toggle(on: call.muted)) {
+            calls.setMuted(!call.muted, call.id)
+        }
+    }
+
+    @ViewBuilder private var speaker: some View {
+        if route.external {
+            CallAudioRouteControl(route: route)
+        } else {
+            CallControl(symbol: Theme.Icon.callSpeaker, label: String(localized: "Speaker [Call Control]"), id: "call-speaker",
+                        kind: .toggle(on: route.speakerOn)) {
+                calls.setSpeaker(!route.speakerOn)
+            }
+        }
+    }
+
+    @ViewBuilder private var resume: some View {
+        if call.resumeOffered {
+            CallControl(symbol: Theme.Icon.resume, label: String(localized: "Resume [Call Control]"), id: "call-resume",
+                        hint: String(localized: "Takes the call off hold")) {
+                calls.resume(call.id)
+            }
+        }
     }
 }
 
@@ -289,11 +353,11 @@ struct PersonaCallCover: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .top) { CallReturnBar() }
+            .overlay(alignment: .top) { CallReturnBar().modifier(AppTextSize(model: model)) }
             // Nothing dismisses the cover but the call (Minimise, the call over, an urgent call's page): no swipe.
             .fullScreenCover(item: Binding(get: { shown }, set: { _ in }), onDismiss: { coverUp = false; showRefusal() }) { call in
                 CallScreen(call: call)
-                    .modifier(CoverLook())
+                    .modifier(CoverLook(model: model))
                     .onAppear { coverUp = true }
             }
             .onChange(of: calls.refusal != nil) { _, refused in if refused, !coverUp { showRefusal() } }
@@ -319,10 +383,29 @@ struct PersonaCallCover: ViewModifier {
 }
 
 /// What `RootView` gives every screen and a cover attached outside it would miss: the accent as the tint, the style's
-/// font design and BeautifulUI's theme.
+/// font design, the app's text size and BeautifulUI's theme.
 private struct CoverLook: ViewModifier {
+    let model: AppModel
+
     func body(content: Content) -> some View {
-        content.tint(Theme.accent).fontDesign(AppStyle.current.fontDesign).buiTheme(.persona())
+        content.tint(Theme.accent).fontDesign(model.style.fontDesign).modifier(AppTextSize(model: model)).buiTheme(.persona())
+    }
+}
+
+/// The app's text size as `RootView` gives its pages: the system's, moved by Settings › Text Size (Small / Standard /
+/// Large), where the interface stops (`Theme.interfaceTypeSize`). For what is drawn outside RootView, which would take
+/// the window's size (the system's, capped: `WindowTextSize`) instead: the call's page and the bar back to it.
+private struct AppTextSize: ViewModifier {
+    let model: AppModel
+    /// The system's size, not the window's (which `WindowTextSize` caps).
+    @State private var system = WindowTextSize.system
+
+    func body(content: Content) -> some View {
+        content
+            .dynamicTypeSize(Theme.interfaceTypeSize(model.textSize.applied(to: system)))
+            .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
+                system = WindowTextSize.system
+            }
     }
 }
 

@@ -308,9 +308,16 @@ nonisolated struct CallMachine: Equatable, Sendable {
             out += end(.failed, report: true)
 
         case .known:
+            guard !known else { return [] }
             known = true
             out += pending.map(CallEffect.report)
             pending = []
+            // Muted before the system had the conversation (Mute while it dialled: the system refused it, so it applied
+            // here): the system hears it now, so its call UI and AirPods say the same. Its echo is the owner's.
+            if muted, phase.isLive {
+                requestedMute = true
+                out.append(.performMute(true))
+            }
 
         case .audioActivated, .sessionActivated:
             guard phase.isLive else { return [] }

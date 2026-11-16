@@ -149,6 +149,25 @@ struct CallMachineTests {
         #expect(m.handle(.muteRefused(true), at: at(10.2)).isEmpty)
     }
 
+    /// Mute while it dials, before the system has the conversation (it refuses the mute): applied here, and asked of the
+    /// system again once it has the conversation, whose echo changes nothing. Unmuted, the system is asked nothing.
+    @Test func aMuteBeforeTheSystemHasTheCallReachesItOnceItDoes() {
+        var m = owner()
+        #expect(m.handle(.muteTapped(true), at: at(0)) == [.performMute(true)])
+        #expect(m.handle(.muteRefused(true), at: at(0.1)) == [.mute(true)])
+        #expect(m.muted)
+        _ = m.handle(.startAction, at: at(1))
+        let known = m.handle(.known, at: at(1.1))
+        #expect(reports(known) == [.startedConnecting(at(1)), .pausable] && known.last == .performMute(true))
+        #expect(m.handle(.muteAction(true), at: at(1.12)) == [.fulfil], "its echo")
+        #expect(m.muted && m.requestedMute == nil)
+        #expect(m.handle(.known, at: at(1.2)).isEmpty, "said once")
+
+        var unmuted = owner()
+        _ = unmuted.handle(.startAction, at: at(1))
+        #expect(!unmuted.handle(.known, at: at(1.1)).contains(.performMute(true)))
+    }
+
     @Test func aSystemMuteWhileTheEngineStartsIsIgnoredAndTheOwnersMuteAssertedOnce() {
         var m = owner()
         _ = m.handle(.startAction, at: at(0))

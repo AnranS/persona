@@ -204,8 +204,12 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         return call
     }
 
+    /// `engine` runs `call` from now on. What the call already is goes with it before anything starts: muted or held while
+    /// it dialled (the page's Mute works from "Calling…", before the engine exists), so its first buffer is silent.
     func attach(_ engine: any CallEngine, to call: PersonaCall) {
         call.engine = engine
+        if call.machine.muted { engine.setMuted(true) }
+        if call.machine.engineHeld { engine.setHeld(true) }
         engine.events = { [weak self, weak call] event in
             guard let self, let call else { return }
             self.heard(event, from: call)

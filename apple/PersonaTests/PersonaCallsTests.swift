@@ -79,13 +79,18 @@ import Testing
     /// A call to Persona the system was asked to start (it has not handed Start back yet).
     func dial() async -> PersonaCall {
         let call = calls.add(kind: .owner(group: voice.key.group), direction: .outgoing)
+        attachEngine(call)
+        await calls.place(call, origin: .app)
+        return call
+    }
+
+    /// The call's voice engine, as `callPersona` attaches it once the hub, the extension and the microphone said yes.
+    func attachEngine(_ call: PersonaCall) {
         let deps = calls.ownerDeps
         let key = voice.key
         let engine = OwnerCallEngine(key: key, extensionID: "voice", recent: [], audio: voice.audio, calls: voiceCalls,
                                      deps: { audio, events in deps(key.group, audio, events) })
         calls.attach(engine, to: call)
-        await calls.place(call, origin: .app)
-        return call
     }
 
     /// Started by the system, its audio activated and the voice ready.
@@ -235,6 +240,33 @@ struct PersonaCallsTests {
         rig.calls.setMuted(true)
         await rig.voice.waitUntil { call.muted }
         #expect(call.muted && call.voice?.muted == true)
+    }
+
+    /// Mute on "Calling…", before the call's engine was attached and before the system had the conversation (it
+    /// refuses the mute then): it applies here; the engine attached after starts muted, so the microphone sends silence
+    /// from its first buffer, and the system hears the mute once it has the conversation.
+    @Test func aMuteWhileItDialsKeepsTheMicrophoneMuted() async throws {
+        let rig = CallRig()
+        let call = rig.calls.add(kind: .owner(group: rig.voice.key.group), direction: .outgoing)
+        rig.system.requestError = CallSystemStandIn.refused // no conversation yet: nothing to mute
+        rig.calls.setMuted(true)
+        await rig.voice.waitUntil { call.muted }
+        rig.system.requestError = nil
+        rig.attachEngine(call)
+        await rig.calls.place(call, origin: .app)
+        rig.system.act(.start, call.id)
+        await rig.voice.waitUntil { rig.voice.socket != nil }
+        rig.system.activate()
+        let socket = try #require(rig.voice.socket)
+        socket.ready(rig.voice.key)
+        await rig.voice.waitUntil { call.connectedSince != nil }
+        #expect(call.muted && call.voice?.muted == true, "the page says Mute and the voice is muted")
+        rig.voice.audio.capture(.pcm(320, 5000))
+        #expect(socket.audio.last == Data(count: 640), "the microphone sends silence")
+        await rig.settle()
+        #expect(rig.system.requests == [.mute(true), .mute(true)], "the system hears the mute once it has the conversation")
+        rig.system.act(.mute(true), call.id)
+        #expect(call.muted && rig.system.fulfilled.last == .mute(true), "its echo changes nothing")
     }
 
     @Test func aSystemMuteAsTheEngineStartsIsIgnored() async {

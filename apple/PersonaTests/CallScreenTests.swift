@@ -1,5 +1,7 @@
 import Foundation
+import SwiftUI
 import Testing
+import UIKit
 @testable import Persona
 
 /// The call to Persona's page (#9290, docs/design/DESIGN_SYSTEM.md "Call screen"): its one line and its orb from the
@@ -97,14 +99,102 @@ struct CallScreenTests {
         #expect(agent.flatMap(\.rows).allSatisfy { $0.id != "composer-menu-call" })
     }
 
-    /// The orb gives way on a short page or at a large text size, never below the voice bar's orb.
-    @Test func theOrbGivesWayToTheControls() {
-        #expect(CallScreen.orbSize(height: 0, scale: 1) == Theme.Size.callOrb)
-        #expect(CallScreen.orbSize(height: 900, scale: 1) == Theme.Size.callOrb)
-        let large = CallScreen.orbSize(height: 740, scale: 1.4)
+    /// The orb gives way on a short page or at a large text size: to its share of the page, then to the words around it
+    /// (the room the middle has less theirs); where not even the voice bar's orb fits, it goes and the words stay.
+    @Test func theOrbGivesWayToTheControlsAndTheWords() throws {
+        #expect(CallScreen.orbSize(page: 0, free: 0, scale: 1) == Theme.Size.callOrb, "not measured yet")
+        #expect(CallScreen.orbSize(page: 900, free: .infinity, scale: 1) == Theme.Size.callOrb)
+        let large = try #require(CallScreen.orbSize(page: 740, free: .infinity, scale: 1.4))
         #expect(large * 1.4 <= 740 * Theme.Size.callOrbShare + 0.01 && large < Theme.Size.callOrb)
-        #expect(CallScreen.orbSize(height: 100, scale: 1) == Theme.Size.voiceOrb)
+        #expect(CallScreen.orbSize(page: 900, free: 90, scale: 1) == 90, "what the words leave")
+        let grown = try #require(CallScreen.orbSize(page: 900, free: 90, scale: 1.25))
+        #expect(abs(grown * 1.25 - 90) < 0.01)
+        #expect(CallScreen.orbSize(page: 900, free: Theme.Size.voiceOrb, scale: 1) == Theme.Size.voiceOrb)
+        #expect(CallScreen.orbSize(page: 900, free: Theme.Size.voiceOrb - 1, scale: 1) == nil, "no room for even the smallest orb")
+        #expect(CallScreen.orbSize(page: 100, free: .infinity, scale: 1) == nil)
     }
+
+    #if DEBUG
+    /// Every control stays on the page whatever the window, at the largest interface text size with Resume offered and a
+    /// two-line caption, and the call's line and the caption stay in sight between Minimise and the controls: the
+    /// narrowest iPad window (Slide Over or Split View on an iPad mini in landscape, 320 × 720 under the status bar; Mute,
+    /// Speaker and Resume did not fit one row) and a short phone (an iPhone SE's 375 × 647 under its status bar; the page
+    /// was taller than the screen). The page is hosted in a window of exactly that room and read as XCUITest reads it
+    /// (`RuntimeCLI.elements`).
+    @Test(arguments: [CGSize(width: 320, height: 720), CGSize(width: 375, height: 647)])
+    func everyControlStaysOnThePage(window size: CGSize) async throws {
+        let rig = CallRig()
+        rig.calls.showSample(.resume)
+        let call = try #require(rig.calls.ownerCall)
+        #expect(call.resumeOffered && call.sampleCaption != nil)
+        try automation(true)
+        defer { try? automation(false) }
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        window.frame = CGRect(origin: CGPoint(x: 0, y: 100), size: size)
+        let host = UIHostingController(rootView: CallScreen(call: call).dynamicTypeSize(.xxxLarge))
+        // The window is the room under the status bar: the test screen's own insets (its island, its home bar) are not.
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.isHidden = false
+        window.layoutIfNeeded()
+
+        let controls = ["call-minimise", "call-mute", "call-speaker", "call-resume", "call-end"]
+        let ids = controls + ["call-state", "call-caption"]
+        func frames() -> [String: CGRect] {
+            try? automation(true) // again: a test hosting its own page may have turned it off meanwhile
+            var out: [String: CGRect] = [:]
+            for e in RuntimeCLI.elements(matching: [:]) where ids.contains(e.id) && RuntimeCLI.view(of: e.object)?.window === window {
+                out[e.id] = e.frame
+            }
+            return out
+        }
+        var found = frames()
+        for _ in 0..<30 where found.count < ids.count {
+            try? await Task.sleep(for: .milliseconds(100))
+            found = frames()
+        }
+        // The page measures itself once (the orb's room): its second layout.
+        try? await Task.sleep(for: .milliseconds(300))
+        found = frames()
+        let page = window.frame.insetBy(dx: -0.5, dy: -0.5)
+        for id in controls {
+            let frame = try #require(found[id], "\(id) is not on the page (\(size))")
+            #expect(page.contains(frame), "\(id) at \(frame) is outside the \(size) window \(window.frame)")
+        }
+        // The line and the caption in sight: under Minimise, over the controls, not scrolled away.
+        let top = try #require(found["call-minimise"]).maxY - 0.5
+        let bottom = controls.dropFirst().compactMap { found[$0]?.minY }.min() ?? page.maxY
+        for id in ["call-state", "call-caption"] {
+            let frame = try #require(found[id], "\(id) is not on the page (\(size))")
+            #expect(frame.minY >= top && frame.maxY <= bottom + 0.5, "\(id) at \(frame) is not between Minimise and the controls (\(top)…\(bottom))")
+        }
+        for (a, b) in [("call-mute", "call-speaker"), ("call-speaker", "call-resume"), ("call-mute", "call-resume"), ("call-resume", "call-end")] {
+            if let fa = found[a], let fb = found[b] { #expect(!fa.insetBy(dx: 1, dy: 1).intersects(fb), "\(a) over \(b)") }
+        }
+        shot(window, "call-held-resume-\(Int(size.width))x\(Int(size.height))-ax")
+    }
+
+    /// The hosted page's picture, for a person to look at (`PERSONA_SHOTS`, as the UI tests').
+    private func shot(_ window: UIWindow, _ name: String) {
+        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? image.pngData()?.write(to: URL(fileURLWithPath: dir + "/\(name).png"))
+    }
+
+    /// With no assistive technology running SwiftUI builds no accessibility elements: on as XCUITest turns it on, and off
+    /// again after, for the tests that follow in this process (as `QueueStripHintTests`).
+    private func automation(_ on: Bool) throws {
+        let handle = try #require(dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW))
+        let set = try #require(dlsym(handle, "_AXSSetAutomationEnabled"))
+        typealias Enable = @convention(c) (Int32) -> Void
+        unsafeBitCast(set, to: Enable.self)(on ? 1 : 0)
+    }
+    #endif
 
     @Test func theAudioControlNamesTheRoute() {
         #expect(CallAudioRouteControl.name(.bluetooth("AirPods Pro")) == "AirPods Pro")
