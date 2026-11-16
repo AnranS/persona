@@ -236,6 +236,11 @@ test("independent review path counterexamples stay private without swallowing ev
   assert.equal(sanitize("C:\\Other Private\\secret.txt /tmp/private/secret", "C:\\Temp\\run"), "<path> <path>");
   assert.equal(sanitize("open D:\\Private, CustomerName\\secret.txt failed", "C:\\Temp\\run"), "open <path> failed");
   assert.equal(sanitize("Error: ENOENT: no such file or directory, open \"D:\\Private\\secret.txt\"", "C:\\Temp\\run"), "Error: ENOENT: no such file or directory, open \"<path>\"");
+  assert.equal(sanitize("/tmp/run/file key=/tmp/private/file", "/tmp/run"), "<run>/file key=<path>");
+  assert.equal(sanitize("cwd=/tmp/run/file stderr=/tmp/private/file", "/tmp/run"), "cwd=<run>/file stderr=<path>");
+  assert.equal(sanitize("/tmp/run/file (/tmp/private/file)", "/tmp/run"), "<run>/file (<path>)");
+  assert.equal(sanitize("/tmp/run/file stdout=/tmp/run/good stderr=/tmp/private/file", "/tmp/run"), "<run>/file stdout=<run>/good stderr=<path>");
+  assert.equal(sanitize("/tmp/run/file, /tmp/private/file", "/tmp/run"), "<run>/file, <path>");
   assert.equal(sanitize("open /tmp/run/private;secret-next-token/child detail=keep", "/tmp/run"), "open <path> detail=keep");
 });
 

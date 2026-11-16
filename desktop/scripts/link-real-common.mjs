@@ -107,7 +107,7 @@ function redactOnePath(text, run) {
   const windows = windowsToken !== null;
   const embedded = windows ? token[0].slice(1).search(/\/\/[?.]\/|\/\/[^/]+\/[^/]+\//) : -1;
   const first = embedded >= 1 ? token[0].slice(0, embedded) : token[0];
-  const structural = first.search(/[\r\n"'`\[\]()]|[,;](?=\s)|:(?=\s)/);
+  const structural = first.search(/[\r\n"'`\[\]()]/);
   const pathText = structural >= 0 ? first.slice(0, structural) : first;
   const trailing = trimTrailing(pathText).replace(/[,:]+$/, "");
   const core = trailing.replace(/[\\/]+$/, "") || trailing;
@@ -125,16 +125,18 @@ function redactOnePath(text, run) {
     }
     token[0] = token[0].slice(0, separator);
   }
-  const nextAbsolute = /[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
+  const nextAbsolute = /[\s,;][\w.-]*=[\[(]?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))|[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
   const candidates = [first, ...Array.from(first.matchAll(/[\s,;:]/g), match => first.slice(0, match.index)).reverse()];
   for (const candidate of candidates) {
     if (nextAbsolute && candidate.length > nextAbsolute.index) continue;
+    if (structural >= 0 && candidate.length > structural) continue;
     const trimmed = candidate.replace(/[,:]+$/, "");
-    const replacement = ownedReplacement(run, candidate) ?? ownedReplacement(run, trimmed);
+    const candidateEnd = candidate.length;
+    const replacement = ownedReplacement(run, trimmed) ?? ownedReplacement(run, candidate);
     if (replacement) {
       if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, candidate, replacement, consumed: candidate.length }));
-      const trailing = candidate.slice(trimmed.length) + (first.slice(candidate.length).match(/^[,:;]+/)?.[0] ?? "");
-      const consumed = candidate.length + trailing.length - candidate.slice(trimmed.length).length;
+      const trailing = candidate.slice(trimmed.length);
+      const consumed = candidateEnd;
       if (windowsToken === null && first[candidate.length] === ";" && !/^\s/.test(first[candidate.length + 1] ?? "")) return { replacement: "<path>", consumed: first.length };
       return { replacement: replacement + trailing, consumed };
     }
@@ -144,8 +146,9 @@ function redactOnePath(text, run) {
   const boundary = Math.min(field?.index ?? first.length, phrase?.index ?? first.length);
   const nextPath = /\s+(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
   const consumed = Math.min(boundary, nextPath?.index ?? first.length);
+  const bracket = first[consumed - 1] === ")" || first[consumed - 1] === "]";
   if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, token: token[0], first, boundary, nextPath: nextPath?.index, consumed }));
-  return { replacement: "<path>", consumed: Math.max(1, consumed - (first[consumed - 1] === "]" ? 1 : 0)) };
+  return { replacement: "<path>", consumed: Math.max(1, consumed - (bracket ? 1 : 0)) };
 }
 
 /** Redact every path token in a receipt string; arbitrary encodings are outside this contract. */
