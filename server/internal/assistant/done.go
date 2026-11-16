@@ -121,20 +121,20 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 		return true
 	}
 	before := strings.Fields(lower[at:i])
-	exception, idiom := false, false
-	for _, word := range before {
-		switch word {
-		case "nothing", "anything", "everything", "something":
-			exception, idiom = true, true
-		case "everyone", "anyone", "someone", "everybody", "anybody", "somebody", "all", "both":
-			exception = true
+	local := ""
+	if len(before) > 0 {
+		local = strings.Trim(before[len(before)-1], ",:")
+		if local == "else" && len(before) > 1 {
+			local = strings.Trim(before[len(before)-2], ",:")
 		}
 	}
-	if !exception {
+	switch local {
+	case "nothing", "anything", "everything", "something":
+		return false // the local "nothing (else) … but …" exception idiom
+	case "everyone", "anyone", "someone", "everybody", "anybody", "somebody", "all", "both":
+		// An indefinite-pronoun exception phrase; a finite clause below can still make it a contrast.
+	default:
 		return true
-	}
-	if idiom {
-		return false
 	}
 	words := strings.Fields(suffix)
 	if len(words) == 0 {

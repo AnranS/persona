@@ -31,6 +31,7 @@ func TestOwnerMarkerConditionalAndQuotedOccurrences(t *testing.T) {
 		{"last but only if does not hide an earlier unconditional contrast", "The work is complete. You need to approve the release, but roll it back, but only if it fails.", verdictNeedsUser},
 		{"contrast without a comma keeps the first requirement direct", "The work is complete. You need to approve the release but roll it back if it fails.", verdictNeedsUser},
 		{"contrasted imperative outside the verb list stays direct", "The work is complete. You need to approve the release but deploy it if it fails.", verdictNeedsUser},
+		{"earlier indefinite object does not hide a finite contrast", "The work is complete. You need to write everything down, but the rollback waits if it fails.", verdictNeedsUser},
 		{"verb-like modifier in an exception noun phrase stays conditional", "The work is complete. You need to notify everyone but the review owner if the release fails.", verdictDone},
 		{"nothing else but keeps the exception idiom conditional", "The work is complete. You need to do nothing else but approve if the release fails.", verdictDone},
 		{"quoted period before a trailing condition does not end the scan", `The work is complete. You need to approve the release, per the "Stop." note, if the build fails.`, verdictDone},
