@@ -285,6 +285,64 @@ describe("Inbox history-entry view memory", () => {
     expect(chosen()).toBe("action");
   });
 
+  // what the landing changed is undone with it: Collapsed folds again and the list scrolls back where it was
+  it("folds Collapsed again and puts the scroll back when the list goes back from a landing", async () => {
+    calls.items = [...calls.items, item("n1", "noise")];
+    await act(async () => { await (await import("../../lib/inbox")).reloadInbox(); });
+    await flush();
+    await act(async () => {
+      listScroll().scrollTop = 120;
+      listScroll().dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => history.pushState(null, "", "/inbox/n1"));
+    await show("n1");
+    expect(chosen()).toBe("all");
+    expect(host.querySelector('[data-section="noise"] button[aria-expanded]')?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => {
+      listScroll().scrollTop = 400;
+      listScroll().dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => popped(() => history.back()));
+    await show();
+    expect(chosen()).toBe("action");
+    expect(listScroll().scrollTop).toBe(120);
+    await act(async () => barChoice("all").click());
+    expect(host.querySelector('[data-section="noise"] button[aria-expanded]')?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  // a search typed after a landing takes over from it: the item closing leaves the search on All, and clearing the
+  // search goes back to the choice the reader had, not to the one the item moved the list to
+  it("lets a search typed after a landing put aside the choice the reader had before it", async () => {
+    calls.items = [...calls.items, { ...item("d1", "action"), done_at: "2026-11-09T05:00:00Z", done_by: "user" }];
+    await act(async () => { await (await import("../../lib/inbox")).reloadInbox(); });
+    await flush();
+    await act(async () => history.pushState(null, "", "/inbox/d1"));
+    await show("d1");
+    expect(chosen()).toBe("done");
+    await setSearch("chat");
+    expect(chosen()).toBe("all");
+    await act(async () => popped(() => history.back()));
+    await show();
+    expect(search().value).toBe("chat");
+    expect(chosen()).toBe("all");
+    await setSearch("");
+    expect(chosen()).toBe("action");
+  });
+
+  // an old done item sits in a group Done keeps folded at first: the landing opens it, so its row is in sight
+  it("opens the folded group a landed item is in", async () => {
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+    calls.items = [...calls.items, { ...item("d0", "action"), done_at: daysAgo(0), done_by: "user" }, { ...item("d40", "action"), done_at: daysAgo(40), done_by: "user" }];
+    await act(async () => { await (await import("../../lib/inbox")).reloadInbox(); });
+    await flush();
+    await act(async () => history.pushState(null, "", "/inbox/d40"));
+    await show("d40");
+    expect(chosen()).toBe("done");
+    const row = host.querySelector('[data-item="d40"]')!;
+    expect(row.closest("[inert]")).toBeNull();
+    expect(row.closest("[data-group]")!.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("does not replace history for search, folds, scrolling, chain expansion, or original expansion", async () => {
     await openItem("a1");
     const replace = vi.spyOn(history, "replaceState");

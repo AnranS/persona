@@ -174,6 +174,9 @@ function useNarrowItemFocus(id: string | undefined, manager: string | undefined,
       el.scrollIntoView?.({ block: "nearest" });
       return;
     }
+    // none of them drawn any more (the list went back to the section it showed before the item moved it, #9053): the
+    // section bar's choice, at the top of the list the reader is back on
+    list?.querySelector<HTMLElement>('[data-bar-choice][aria-checked="true"]')?.focus({ preventScroll: true });
   });
 }
 

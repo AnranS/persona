@@ -216,8 +216,9 @@ export function useInboxView(): InboxViewMemory {
   return shared ?? own.current;
 }
 
-/** Put a list back where its entry was, retrying while late items grow its content. The reader can take over at once. */
-function restoreList(el: HTMLElement, target: number): (() => void) | undefined {
+/** Put a list back where its entry was, retrying while late items grow its content. The reader can take over at once.
+ *  Also the Inbox list going back to where it was before an opened item moved it to another section (#9053). */
+export function restoreListScroll(el: HTMLElement, target: number): (() => void) | undefined {
   el.scrollTop = target;
   if (target === 0 || el.scrollTop >= target - 1) return undefined;
   let ro: ResizeObserver | undefined;
@@ -265,7 +266,7 @@ export function useInboxListScroll(
   useLayoutEffect(() => {
     const el = box.current;
     if (!el || !restoring.current) return;
-    return restoreList(el, view.listScroll());
+    return restoreListScroll(el, view.listScroll());
   }, [box, view, selectedKey]);
 
   useEffect(() => {

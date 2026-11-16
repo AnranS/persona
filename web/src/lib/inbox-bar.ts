@@ -107,7 +107,8 @@ export interface BarSearch {
 /** The search text becomes `query`; a choice tapped; the Inbox entered with this search text. */
 export type BarStep = { query: string } | { pick: BarChoice } | { enter: string };
 
-const hasText = (q: string) => q.trim() !== "";
+/** Whether the search field's text searches: blank text matches everything (`matches` trims it), so it is no search. */
+export const searching = (query: string) => query.trim() !== "";
 
 /**
  * A search looks through the whole Inbox: text appearing puts the choice aside and shows All, a choice tapped meanwhile
@@ -116,20 +117,10 @@ const hasText = (q: string) => q.trim() !== "";
  */
 export function barStep(s: BarSearch, step: BarStep): BarSearch {
   if ("pick" in step) return { ...s, chosen: step.pick };
-  if ("enter" in step) return hasText(step.enter) ? { chosen: "all", saved: "action", query: step.enter } : { chosen: "action", saved: null, query: step.enter };
-  const was = hasText(s.query);
-  const now = hasText(step.query);
+  if ("enter" in step) return searching(step.enter) ? { chosen: "all", saved: "action", query: step.enter } : { chosen: "action", saved: null, query: step.enter };
+  const was = searching(s.query);
+  const now = searching(step.query);
   if (!was && now) return { chosen: "all", saved: s.chosen, query: step.query };
   if (was && !now) return { chosen: s.saved ?? "action", saved: null, query: step.query };
   return { ...s, query: step.query };
-}
-
-/** The choice an arrow key (or Home / End) moves to from `i` among `n`, as the Team panel's pills; undefined for any
- *  other key. */
-export function nextChoice(i: number, key: string, n: number): number | undefined {
-  if (key === "ArrowRight") return (i + 1) % n;
-  if (key === "ArrowLeft") return (i - 1 + n) % n;
-  if (key === "Home") return 0;
-  if (key === "End") return n - 1;
-  return undefined;
 }

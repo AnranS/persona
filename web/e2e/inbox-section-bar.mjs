@@ -1,7 +1,8 @@
 // The Inbox's section bar in a real browser (#9053, docs/assistant/inbox.md "Section bar"): it opens on Needs you, stays in
-// sight over the scrolling list, keeps to one row that scrolls sideways on a phone (its words never wrap, in every
-// language), shows a choice's section alone, keeps the grouping in its trailing menu, moves to a linked item's choice,
-// and screenshots each at 1280 and 390, light and dark.
+// sight over the scrolling list, keeps to one row (its words never wrap, in every language) with All and the grouping
+// always in full and the choice made in sight, its sections scrolling sideways (faded, a mouse's wheel too) where they
+// don't fit, shows a choice's section alone, keeps the grouping in its trailing menu, moves to a linked item's choice
+// with its row unfolded, and screenshots each at 1280 and 390, light and dark.
 // Usage: node web/e2e/inbox-section-bar.mjs <loopback-web-origin> <artifact-directory>
 // The origin is an exclusively owned web server whose hub is scripts/mock/mock_hub.py started with
 // MOCK_INBOX_MANY=action:30,working:6,fyi:40,noise:20,done:25 MOCK_MANAGERS=0 (only the mock's invented data).
@@ -42,12 +43,38 @@ async function page(theme, lang, { width = 1280, height = 820, touch = false } =
 const shot = (p, name) => p.screenshot({ path: join(output, `${name}.png`) });
 const chosen = (p) => p.locator('[data-bar-choice][aria-checked="true"]').getAttribute("data-bar-choice");
 const sections = (p) => p.locator("main [data-section]").evaluateAll((els) => els.map((el) => el.getAttribute("data-section")));
-// the bar's choices: one row, none taller than a pill (a wrapped word would be), and the page itself never scrolls sideways
+// the bar's choices: one row, none taller than a pill (a wrapped word would be), and the page itself never scrolls sideways;
+// All and the grouping wholly in the bar, the choice made wholly in the sections' row, and that row faded while it
+// scrolls sideways (`cut`: the choices only partly in sight then)
 const barShape = (p) => p.evaluate(() => {
-  const bar = document.querySelector('[role="radiogroup"][data-inbox-bar], [data-inbox-bar] [role="radiogroup"]');
-  const pills = [...bar.querySelectorAll("[data-bar-choice]")].map((el) => el.getBoundingClientRect());
-  return { rows: new Set(pills.map((r) => Math.round(r.top))).size, tallest: Math.max(...pills.map((r) => r.height)), sideways: bar.scrollWidth > bar.clientWidth, pageWidth: document.documentElement.scrollWidth, width: innerWidth };
+  const bar = document.querySelector("[data-inbox-bar]");
+  const group = bar.querySelector('[role="radiogroup"]');
+  const strip = bar.querySelector("[data-bar-strip]");
+  const within = (el, box) => {
+    const r = el.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    return r.left >= b.left - 0.5 && r.right <= b.right + 0.5;
+  };
+  const pills = [...group.querySelectorAll("[data-bar-choice]")];
+  const rects = pills.map((el) => el.getBoundingClientRect());
+  const on = group.querySelector('[data-bar-choice][aria-checked="true"]');
+  return {
+    rows: new Set(rects.map((r) => Math.round(r.top))).size,
+    tallest: Math.max(...rects.map((r) => r.height)),
+    pageWidth: document.documentElement.scrollWidth,
+    width: innerWidth,
+    allIn: within(group.querySelector('[data-bar-choice="all"]'), bar) && within(bar.querySelector('button[aria-haspopup="menu"]'), bar),
+    chosenIn: strip.contains(on) ? within(on, strip) : within(on, bar),
+    sideways: strip.scrollWidth > strip.clientWidth,
+    faded: Boolean(strip.style.maskImage || strip.style.webkitMaskImage),
+    cut: pills.filter((el) => strip.contains(el) && !within(el, strip)).map((el) => el.dataset.barChoice),
+  };
 });
+const fits = (tag, shape) => {
+  assert.ok(shape.rows === 1 && shape.tallest <= 24 && shape.pageWidth <= shape.width, `${tag}: one row, no choice wraps, the page doesn't scroll sideways ${JSON.stringify(shape)}`);
+  assert.ok(shape.allIn && shape.chosenIn, `${tag}: All, the grouping and the choice made in full ${JSON.stringify(shape)}`);
+  assert.ok(!shape.sideways || shape.faded, `${tag}: a row that scrolls sideways is faded where it goes on ${JSON.stringify(shape)}`);
+};
 
 try {
   browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -63,8 +90,8 @@ try {
       assert.deepEqual(await sections(p), ["action"], `${tag}: Needs you alone`);
       assert.equal(await p.locator("[data-inbox-list-scroll] [data-inbox-bar]").count(), 0, `${tag}: the bar is outside the scroller`);
       const shape = await barShape(p);
-      assert.equal(shape.rows, 1, `${tag}: one row of choices ${JSON.stringify(shape)}`);
-      assert.ok(shape.tallest <= 24 && shape.pageWidth <= shape.width, `${tag}: no choice wraps, the page doesn't scroll sideways ${JSON.stringify(shape)}`);
+      fits(tag, shape);
+      results[`${tag}-cut`] = shape.cut;
       const names = await p.locator("[data-bar-choice]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? el.textContent));
       results[`${tag}-names`] = names;
       assert.match(names[0], /^Needs you, \d+$/, `${tag}: the count is in Needs you's spoken name`);
@@ -81,6 +108,9 @@ try {
         assert.deepEqual(await sections(p), [id], `${tag}: ${id} alone`);
         assert.equal(await p.locator(`main [data-section="${id}"] > div > button[aria-expanded]:not([aria-haspopup])`).count(), 0, `${tag}: ${id}'s title doesn't fold`);
         assert.equal(await p.locator("[data-inbox-list-scroll]").evaluate((el) => el.scrollTop), 0, `${tag}: ${id} from its top`);
+        // the grouping stays where it is (off where the choice isn't grouped), so the row doesn't move between choices
+        fits(`${tag} ${id}`, await barShape(p));
+        assert.equal(await p.locator('[data-inbox-bar] button[aria-label="Group by"]').isDisabled(), id !== "fyi", `${tag}: ${id}'s grouping`);
         await shot(p, `bar-${id}-${tag}`);
       }
       await p.locator('[data-bar-choice="all"]').click();
@@ -111,19 +141,36 @@ try {
       await context.close();
     }
   }
-  // the words of every language keep to one row on a phone
+  // the words of every language keep to one row, on a phone and in the wide page's 380px list column; where a section
+  // is cut, choosing it brings it into sight, and a mouse's wheel scrolls the row
   for (const lang of ["zh-Hans", "ja"]) {
     for (const theme of ["light", "dark"]) {
-      const tag = `390-${theme}-${lang}`;
-      const { context, p } = await page(theme, lang, { width: 390, height: 844, touch: true });
-      await p.goto(`${origin}/inbox`);
-      await p.locator("main [data-item]").first().waitFor({ timeout: 60_000 });
-      await p.waitForTimeout(600);
-      const shape = await barShape(p);
-      assert.ok(shape.rows === 1 && shape.tallest <= 24 && shape.pageWidth <= shape.width, `${tag}: one row ${JSON.stringify(shape)}`);
-      results[`${tag}-names`] = await p.locator("[data-bar-choice]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? el.textContent));
-      await shot(p, `bar-needs-you-${tag}`);
-      await context.close();
+      for (const [width, height, touch] of [[1280, 820, false], [390, 844, true]]) {
+        const tag = `${width}-${theme}-${lang}`;
+        const { context, p } = await page(theme, lang, { width, height, touch });
+        await p.goto(`${origin}/inbox`);
+        await p.locator("main [data-item]").first().waitFor({ timeout: 60_000 });
+        await p.waitForTimeout(600);
+        const shape = await barShape(p);
+        fits(tag, shape);
+        results[`${tag}-cut`] = shape.cut;
+        results[`${tag}-names`] = await p.locator("[data-bar-choice]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label") ?? el.textContent));
+        await shot(p, `bar-needs-you-${tag}`);
+        if (shape.cut.length && !touch) {
+          await p.locator("[data-bar-strip]").hover();
+          await p.mouse.wheel(0, 120);
+          await p.waitForTimeout(200);
+          assert.ok(await p.locator("[data-bar-strip]").evaluate((el) => el.scrollLeft > 0), `${tag}: the wheel scrolls the row sideways`);
+          await p.locator("[data-bar-strip]").evaluate((el) => { el.scrollLeft = 0; });
+        }
+        for (const id of shape.cut) {
+          await p.locator(`[data-bar-choice="${id}"]`).click();
+          await p.waitForTimeout(300);
+          fits(`${tag} ${id}`, await barShape(p));
+          await shot(p, `bar-${id}-${tag}`);
+        }
+        await context.close();
+      }
     }
   }
   // a link to a done item moves the list to Done, with the item's row marked; Back returns to Needs you
@@ -140,6 +187,7 @@ try {
     await p.waitForTimeout(800);
     assert.equal(await chosen(p), "done", "a done item's link lands on Done");
     assert.equal(await p.locator(`main [data-section="done"] [data-item="${done}"] a[aria-current="page"]`).count(), 1, "its row is marked");
+    assert.equal(await p.locator(`main [data-item="${done}"]`).evaluate((el) => el.closest("[inert]") === null), true, "its row is not in a folded group");
     await shot(p, "bar-landed-done-1280-light");
     await p.goBack();
     await p.waitForTimeout(600);

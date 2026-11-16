@@ -170,11 +170,14 @@ def inbox_filters(page, tag, shots):
       const tops = new Set([...t.children].filter(c => c.getClientRects().length).map(c => { const r = c.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 2); }));
       return { rows: tops.size, docW: document.documentElement.scrollWidth, W: innerWidth }; }""")
     check(res["rows"] == 1 and res["docW"] <= res["W"], f"{tag}: the inbox filters keep to one row that scrolls sideways", res)
-    # the section bar above them (#9053): one row of choices too, its words never wrapping
+    # the section bar above them (#9053): one row of choices too, its words never wrapping, with All (the reset) in full
     res = page.evaluate("""() => { const t = document.querySelector('[role=radiogroup][aria-label="分段"]');
-      const tops = new Set([...t.children].map(c => { const r = c.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 2); }));
-      return { rows: tops.size, tall: Math.max(...[...t.children].map(c => c.getBoundingClientRect().height)), docW: document.documentElement.scrollWidth, W: innerWidth }; }""")
-    check(res["rows"] == 1 and res["tall"] <= 24 and res["docW"] <= res["W"], f"{tag}: the inbox section bar keeps to one row", res)
+      const pills = [...t.querySelectorAll('[data-bar-choice]')];
+      const tops = new Set(pills.map(c => { const r = c.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 2); }));
+      const all = t.querySelector('[data-bar-choice="all"]').getBoundingClientRect(), box = t.getBoundingClientRect();
+      return { rows: tops.size, tall: Math.max(...pills.map(c => c.getBoundingClientRect().height)), allIn: all.left >= box.left - 0.5 && all.right <= box.right + 0.5,
+        docW: document.documentElement.scrollWidth, W: innerWidth }; }""")
+    check(res["rows"] == 1 and res["tall"] <= 24 and res["allIn"] and res["docW"] <= res["W"], f"{tag}: the inbox section bar keeps to one row", res)
     shot(page, shots, f"inbox_{tag}")
     page.get_by_role("button", name="更多操作").tap()
     item = page.get_by_role("menuitem", name="全部清理")

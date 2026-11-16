@@ -1,18 +1,18 @@
 // The inbox list (docs/assistant/inbox.md"App"): the section bar on top (Needs you, In progress, FYI, Done or All;
 // "Section bar", #9053), filters by source and kind, search, then the section chosen; under All every section stacked,
 // Needs you (agents waiting on you first), In progress, FYI, Collapsed and Done, each opening / closing from its title.
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
 import { nowText, rowMeta } from "../../lib/inbox-now";
 import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
-import { barLanding, barRows, barSectionOf, barStep, inboxBar, type BarChoice } from "../../lib/inbox-bar";
+import { barLanding, barRows, barSectionOf, barStep, inboxBar, searching, type BarChoice } from "../../lib/inbox-bar";
 import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
 import { openedItemState } from "../../lib/inbox-nav";
-import { useInboxListScroll, useInboxView } from "../../lib/inbox-view-memory";
+import { restoreListScroll, useInboxListScroll, useInboxView } from "../../lib/inbox-view-memory";
 import { useInboxSources } from "../../lib/inbox-sources";
 import { subscriptionsHref, useInboxSourcesShown, useSubscriptionsShown } from "../../lib/subscriptions";
 import { type Manager } from "../../lib/managers";
@@ -122,11 +122,15 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
   const setQuery = (value: string) => {
     setQueryState(value);
     view.setListQuery(value);
-    // a search looks through the whole Inbox: its text shows All, and clearing it brings back the choice put aside
+    // a search looks through the whole Inbox: its text shows All, and clearing it brings back the choice put aside. It
+    // takes over from an opened item's way back (below): what it puts aside is the choice the reader had before that item
+    // moved the list, and closing the item then leaves the search where it is
     setBar((b) => {
       const next = barStep({ ...b, query }, { query: value });
-      return next.chosen === b.chosen && next.saved === b.saved ? b : { ...b, chosen: next.chosen, saved: next.saved };
+      if (next.chosen === b.chosen && next.saved === b.saved) return b;
+      return { chosen: next.chosen, saved: b.landedFrom && searching(value) ? b.landedFrom : next.saved, landedFrom: null };
     });
+    if (searching(value) !== searching(query)) setLanding(null);
   };
   const foldersShown = useFoldersShown(items);
   // folders hidden (turned off, nothing filed): a folder picked before does not filter what can't be seen
@@ -213,7 +217,16 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
   const now = useMemo(() => Date.now(), [items, history]);
   const order = ["lark", ...chips.map((a) => `mail:${a.id}`), ...connectors.map((c) => `c:${c.id}`)];
   const mailName = (account: string) => chips.find((a) => a.id === account)?.email ?? account;
-  const groupOpen = (group: string, section: string, key: string) => folds[`${group}|${section}|${key}`] ?? openAtFirst(section, key);
+  // the group an opened item's landing opened (below) is open until it is folded or the list goes back
+  const [landOpen, setLandOpen] = useState("");
+  const groupOpen = (group: string, section: string, key: string) => {
+    const id = `${group}|${section}|${key}`;
+    return id === landOpen || (folds[id] ?? openAtFirst(section, key));
+  };
+  const putGroupFold = (id: string, open: boolean) => {
+    if (id === landOpen) setLandOpen("");
+    putFold(id, open);
+  };
   // Done's groups (#2969). With the hub's day counts (#2967) every group they name is listed with its count, loaded or not,
   // and loads its own items when it opens; filtered or searched, the counts are of what is loaded ("n+" until the group
   // is complete). Without them, as before: what the history has loaded, "n+" on the last group while there is more.
@@ -258,7 +271,7 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
     rows: barRows(here.sec, here.ags.length, here.done.length),
     chosen: choice,
     chips: chipsOn,
-    search: Boolean(query),
+    search: searching(query),
     doneDays: hereDays ? Object.values(hereDays).reduce((n, c) => n + c, 0) : undefined,
   });
   // a section drawn open: under a choice, the one chosen, which doesn't fold; under All, as its title left it (In
@@ -353,34 +366,67 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
       const next = barStep({ ...b, query }, { pick: c });
       return { chosen: next.chosen, saved: next.saved, landedFrom: null };
     });
+    setLanding(null);
     if (listBox.current) listBox.current.scrollTop = 0;
   };
   // An item opened from outside the list (a link, ⌘K, another item's line) moves the list to its choice when the list
-  // doesn't show it: Done for a done one, All with Collapsed open for a collapsed one. Closing it goes back to the choice
-  // it moved from. Once per item opened, so an item marked done from its own page doesn't take the list along to Done;
-  // a returned entry keeps the choice it had.
+  // doesn't show it: Done for a done one, All with Collapsed open for a collapsed one; a folded group it is in opens.
+  // Closing it goes back to where the list was: the choice it moved from, Collapsed folded again, the same scroll. Once
+  // per item opened, so an item marked done from its own page doesn't take the list along to Done; a returned entry keeps
+  // the choice it had.
   const [landedFor, setLandedFor] = useState(() => (view.restored ? selectedKey : ""));
   const [landings, setLandings] = useState(0);
+  // what landings changed besides the choice, to put back with it: the list's scroll before them, Collapsed opened
+  const [landing, setLanding] = useState<{ top: number; noise: boolean } | null>(null);
+  // the scroll to put back once the list has gone back
+  const [goneBack, setGoneBack] = useState<{ top: number } | null>(null);
+  // the folded group the item is in, by its fold's id; "" when it is in none
+  const foldOf = (it: InboxItem) => {
+    const section = barSectionOf(it);
+    const groups = section === "done" ? (here.doneGroups.length > 1 ? here.doneGroups : []) : here.tiers.find((x) => x.tier.key === section && x.titled)?.groups ?? [];
+    const g = groups.find((x) => x.items.some((y) => sameItem(y, it)));
+    return g && !groupOpen(here.group, section, g.key) ? `${here.group}|${section}|${g.key}` : "";
+  };
   if (landedFor !== selectedKey && (!selectedKey || (ready && routed))) {
     setLandedFor(selectedKey);
     const group = here.group;
     if (!selectedKey) {
       if (bar.landedFrom) setBar({ ...bar, chosen: bar.landedFrom, landedFrom: null });
-    } else if (routed && !sectionOpen(group, barSectionOf(routed))) {
-      const land = barLanding(routed);
-      if (land.choice !== choice) setBar({ ...bar, chosen: land.choice, landedFrom: bar.landedFrom ?? choice });
-      if (land.openCollapsed && !isOpen(group, "noise")) toggle(group, "noise");
-      setLandings((n) => n + 1);
-    } else if (bar.landedFrom) {
-      // opened from the list under the choice it moved to: that is where the reader is now
-      setBar({ ...bar, landedFrom: null });
+      if (landing?.noise && isOpen(group, "noise")) toggle(group, "noise");
+      if (landing || bar.landedFrom) setGoneBack({ top: landing?.top ?? 0 });
+      setLanding(null);
+      setLandOpen("");
+    } else if (routed) {
+      const moves = !sectionOpen(group, barSectionOf(routed));
+      if (moves) {
+        const land = barLanding(routed);
+        if (land.choice !== choice) setBar({ ...bar, chosen: land.choice, landedFrom: bar.landedFrom ?? choice });
+        const noise = land.openCollapsed && !isOpen(group, "noise");
+        if (noise) toggle(group, "noise");
+        setLanding({ top: landing?.top ?? view.listScroll(), noise: noise || Boolean(landing?.noise) });
+      } else if (bar.landedFrom || landing) {
+        // opened from the list under the choice it moved to: that is where the reader is now
+        if (bar.landedFrom) setBar({ ...bar, landedFrom: null });
+        setLanding(null);
+      }
+      const fold = foldOf(routed);
+      if (fold) setLandOpen(fold);
+      if (moves || fold) setLandings((n) => n + 1);
     }
   }
-  // the list moved to it: its row in sight, as when it is opened from the list (a row that came later, read by id)
+  // the list moved to it: its row in sight, as when it is opened from the list (a row that came later, read by id), and
+  // again once a group opened in place has unfolded
   useEffect(() => {
-    if (landings) showSelected();
+    if (!landings) return;
+    showSelected();
+    const again = setTimeout(showSelected, 350);
+    return () => clearTimeout(again);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [landings]);
+  // gone back: the list where it was before the item moved it, as its rows come in
+  useLayoutEffect(() => {
+    if (goneBack && listBox.current) return restoreListScroll(listBox.current, goneBack.top);
+  }, [goneBack]);
   // Agents have no source: picking one leaves the Agent filter, and the Agent filter leaves the source.
   const pickSource = (v: string) => {
     setSource(source === v ? "" : v);
@@ -399,10 +445,11 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-    {/* the section bar stays in sight over the list's scroller, with the counts of the choices not shown */}
-    <div className="shrink-0 px-3 pt-3 sm:px-4">
+    {/* the section bar stays in sight over the list's scroller, with the counts of the choices not shown; its trailing
+        grouping button's mark, not its box, lines up with the search field's end */}
+    <div className="shrink-0 px-3 pt-3 sm:pl-4">
       <div className="mx-auto max-w-[760px]">
-        <InboxBar entries={sectionBar.bar} chosen={choice} onPick={pickChoice} grouping={choice === "done" || choice === "working" ? null : grouping} onGrouping={(g) => setGrouping(g === "source" ? "" : g)} />
+        <InboxBar entries={sectionBar.bar} chosen={choice} onPick={pickChoice} grouping={grouping} groupable={choice !== "done" && choice !== "working"} onGrouping={(g) => setGrouping(g === "source" ? "" : g)} />
       </div>
     </div>
     {/* `overflow-y-auto` alone makes this a scroll container on both axes, so a row or a long chip (a connector's name)
@@ -477,7 +524,7 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
           </div>
         )}
         {!ready && <div className="mt-6 px-1"><Loading /></div>}
-        {ready && failed && empty && emptyKind && (
+        {ready && failed && empty && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center" role="status" data-inbox-failed>
             <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
               <Icon name="inbox" size={17} />
@@ -490,8 +537,8 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
             </Button>
           </div>
         )}
-        {away && offline && emptyKind && <OfflineState offline={offline} className="mt-10" />}
-        {ready && empty && !failed && !away && unconnected && emptyKind && (
+        {away && offline && <OfflineState offline={offline} className="mt-10" />}
+        {ready && empty && !failed && !away && unconnected && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center" data-inbox-no-sources>
             <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
               <Icon name="inbox" size={17} />
@@ -537,7 +584,7 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
             const id = `${group}|${section}|${g.key}`;
             const n = picking && opts.pickable ? g.items.filter((it) => picked.has(itemKey(it))).length : 0;
             return (
-              <Group key={id} id={id} title={g.title} count={opts.count ?? g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putFold(id, open)}
+              <Group key={id} id={id} title={g.title} count={opts.count ?? g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putGroupFold(id, open)}
                 pick={picking && opts.pickable ? { state: n === 0 ? "none" : n === g.items.length ? "all" : "some", picked: n, run: () => pickGroup(g.items) } : undefined}>
                 {body}
               </Group>
@@ -572,7 +619,7 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
                 <Section k="done" title={t("inbox-inboxlist.done")} count={more ? { text: `${doneCount}+`, label: `${doneCount}+` } : sectionCount(doneCount, 0)} open={sectionOpen(group, "done")} onToggle={choice === "all" ? () => toggle(group, "done") : undefined}
                   menu={dg.length > 1 ? [
                     ...dg.map((g) => ({ key: `jump:${g.key}`, label: g.title, hint: g.plus ? `${g.count}+` : String(g.count), onSelect: () => jumpTo(group, g.key) })),
-                    { key: "fold-all", label: t("inbox-inboxlist.fold_all"), divider: true, onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, false)) },
+                    { key: "fold-all", label: t("inbox-inboxlist.fold_all"), divider: true, onSelect: () => dg.forEach((g) => putGroupFold(`${group}|done|${g.key}`, false)) },
                     { key: "unfold-all", label: t("inbox-inboxlist.unfold_all"), onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, true)) },
                   ] : undefined}>
                   {dg.length > 1 ? dg.map((g) => {

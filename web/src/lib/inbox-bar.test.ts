@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentMutes } from "./agent-groups";
 import { sections, waitingAgents, type InboxFilter, type InboxItem } from "./inbox";
-import { barLanding, barRows, barStep, inboxBar, nextChoice, type BarChoice, type BarSearch, type BarStep } from "./inbox-bar";
+import { barLanding, barRows, barStep, inboxBar, searching, type BarChoice, type BarSearch, type BarStep } from "./inbox-bar";
 import type { Interaction, Session } from "./types";
 
 const fixture = <T,>(name: string) => JSON.parse(readFileSync(join(__dirname, "../../../spec/fixtures/inbox", name), "utf8")) as { operation: string; cases: T[] };
@@ -37,7 +37,7 @@ function replay({ items, interactions, sessions, mutes, settings, done_days_tota
   const filter: InboxFilter = { source: settings.source, kind: settings.kind, query: settings.query };
   const agents = waitingAgents(interactions, byMachine, mutes, filter);
   const rows = barRows(sections(items, filter), agents.length);
-  return inboxBar({ rows, chosen: settings.chosen, chips: Boolean(settings.source || settings.kind), search: settings.query.trim() !== "", doneDays: done_days_total });
+  return inboxBar({ rows, chosen: settings.chosen, chips: Boolean(settings.source || settings.kind), search: searching(settings.query), doneDays: done_days_total });
 }
 
 describe("the section bar (spec/fixtures/inbox/bar.json)", () => {
@@ -76,14 +76,4 @@ describe("how a search moves between choices (bar_search.json)", () => {
       expect(after).toEqual(c.expected.after);
     });
   }
-});
-
-describe("the bar's arrow keys", () => {
-  it("wrap around, and Home / End go to the ends", () => {
-    expect(nextChoice(0, "ArrowLeft", 4)).toBe(3);
-    expect(nextChoice(3, "ArrowRight", 4)).toBe(0);
-    expect(nextChoice(2, "Home", 4)).toBe(0);
-    expect(nextChoice(1, "End", 4)).toBe(3);
-    expect(nextChoice(1, "ArrowDown", 4)).toBeUndefined();
-  });
 });

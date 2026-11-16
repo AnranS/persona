@@ -21,16 +21,8 @@ import { PanelHeader } from "../../ui/PanelHeader";
 import { StatusMark } from "../../ui/StatusMark";
 import { t } from "../../i18n";
 import { scrollBehavior } from "../../ui/stream/motion";
+import { nextTab } from "../../ui/roving";
 import { ChatView } from "./ChatView";
-
-/** The pill an arrow key (or Home / End) moves to from `i` among `n`; undefined for any other key. */
-export function nextTab(i: number, key: string, n: number): number | undefined {
-  if (key === "ArrowRight") return (i + 1) % n;
-  if (key === "ArrowLeft") return (i - 1 + n) % n;
-  if (key === "Home") return 0;
-  if (key === "End") return n - 1;
-  return undefined;
-}
 
 /** How far one press of a strip's arrow scrolls it (cindy's `workerTabsScrollStep`): most of what is in view. */
 export function stripStep(width: number): number {

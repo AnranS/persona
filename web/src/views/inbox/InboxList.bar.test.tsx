@@ -27,6 +27,7 @@ vi.mock("../../lib/store", async (orig) => {
 });
 
 import { InboxList } from "./InboxList";
+import { barFade } from "./InboxBar";
 import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { resetMailForTests } from "../../lib/mail";
 
@@ -203,17 +204,58 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(sections()).toEqual(["done"]);
   });
 
-  it("has the grouping in its trailing menu, not where the choice is not grouped", async () => {
+  it("has the grouping in its trailing menu, off (but in place) where the choice is not grouped", async () => {
     await show();
-    const grouping = () => host.querySelector('[data-inbox-bar] button[aria-label="分组方式"]');
-    expect(grouping()).not.toBeNull();
+    const grouping = () => host.querySelector<HTMLButtonElement>('[data-inbox-bar] button[aria-label="分组方式"]')!;
+    expect(grouping().disabled).toBe(false);
+    // a menu, said so; its own mark, not the filters'
+    expect(grouping().getAttribute("aria-haspopup")).toBe("menu");
+    expect(grouping().getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector('[role="radiogroup"][aria-label="分组方式"]')).toBeNull(); // no row of its own
+    act(() => grouping().click());
+    expect(grouping().getAttribute("aria-expanded")).toBe("true");
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     pick("done");
-    expect(grouping()).toBeNull();
+    expect(grouping().disabled).toBe(true);
     pick("working");
-    expect(grouping()).toBeNull();
+    expect(grouping().disabled).toBe(true);
     pick("all");
-    expect(grouping()).not.toBeNull();
+    expect(grouping().disabled).toBe(false);
+  });
+
+  // blank text in the field searches nothing (the rows don't narrow), so the bar doesn't take it as a search either
+  it("takes blank search text as no search", async () => {
+    hub.items = [];
+    hub.waiting = false;
+    await show();
+    await typeSearch("   ");
+    expect(chosen()).toBe("action");
+    expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
+    expect(host.textContent).toContain("都处理完了");
+  });
+
+  // a row a few px too long keeps what is in sight legible; a pill half out still reads as going on
+  it("fades the sections' row over as much as is past each edge, up to the usual fade", () => {
+    expect(barFade(0, 0)).toBeUndefined();
+    expect(barFade(0, 3)).toBe("linear-gradient(90deg,transparent,#000 0px,#000 calc(100% - 3px),transparent)");
+    expect(barFade(0, 300)).toContain("calc(100% - 44px)");
+    expect(barFade(120, 0)).toContain("#000 28px,");
+  });
+
+  it("keeps All beside the grouping, out of the row of sections that scrolls sideways", async () => {
+    await show();
+    const strip = host.querySelector<HTMLElement>("[data-bar-strip]")!;
+    expect([...strip.querySelectorAll<HTMLElement>("[data-bar-choice]")].map((b) => b.dataset.barChoice)).toEqual(["action", "working", "fyi", "done"]);
+    expect(strip.contains(choice("all"))).toBe(false);
+    expect(choice("all").closest('[role="radiogroup"]')).toBe(strip.closest('[role="radiogroup"]'));
+    expect(choice("all").textContent).toBe("全部");
+    // the arrows go on from the row to All, and End reaches it
+    choice("action").focus();
+    key(choice("action"), "End");
+    expect(chosen()).toBe("all");
+    expect(document.activeElement).toBe(choice("all"));
+    key(choice("all"), "ArrowRight");
+    expect(chosen()).toBe("action");
   });
 
   it("caps a count at 99+ and still says the exact number", async () => {

@@ -212,4 +212,18 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
     await render("a1");
     expect(document.activeElement).toBe(link);
   });
+
+  // an item opened from outside the list (a link, ⌘K) moved the list to Done (#9053); back on the list, which is on
+  // Needs you again, nothing of Done is drawn to return to: the focus goes to the section bar's choice, not the page
+  it("comes back to the section bar's choice when the list goes back from the section an opened item moved it to", async () => {
+    narrow();
+    await act(async () => history.pushState(null, "", "/inbox/d1"));
+    await render("d1");
+    expect(host.querySelector('[data-bar-choice="done"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement).toBe(title());
+    await act(async () => popped(() => history.back()));
+    await render();
+    expect(location.pathname).toBe("/inbox");
+    expect(document.activeElement).toBe(host.querySelector('[data-bar-choice="action"]'));
+  });
 });

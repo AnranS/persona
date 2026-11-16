@@ -6,11 +6,14 @@ export interface Edges {
   right: boolean;
 }
 
+/** How far each edge fades, in px: what scrolls under it is only half there. */
+export const FADE = { left: 28, right: 44 } as const;
+
 /** The mask for `edges`: a fade of 28 px on the left, 44 on the right, where there is more to scroll to. */
 export function edgeMask(edges: Edges): string | undefined {
-  if (edges.left && edges.right) return "linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 44px),transparent)";
-  if (edges.right) return "linear-gradient(90deg,#000 calc(100% - 44px),transparent)";
-  if (edges.left) return "linear-gradient(90deg,transparent,#000 28px)";
+  if (edges.left && edges.right) return `linear-gradient(90deg,transparent,#000 ${FADE.left}px,#000 calc(100% - ${FADE.right}px),transparent)`;
+  if (edges.right) return `linear-gradient(90deg,#000 calc(100% - ${FADE.right}px),transparent)`;
+  if (edges.left) return `linear-gradient(90deg,transparent,#000 ${FADE.left}px)`;
   return undefined;
 }
 

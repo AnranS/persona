@@ -19,7 +19,8 @@ vi.mock("./ChatView", () => ({
 import { applyCompleteSessions, reset } from "../../lib/store";
 import { getPanel, openPanel } from "../../lib/panel";
 import type { Session } from "../../lib/types";
-import { nextTab, stripStep, TeamPanel, workerHint } from "./TeamPanel";
+import { nextTab } from "../../ui/roving";
+import { stripStep, TeamPanel, workerHint } from "./TeamPanel";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
