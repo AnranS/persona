@@ -59,6 +59,10 @@ const show = async (id?: string) => {
 const rowLink = (id: string) => host.querySelector<HTMLAnchorElement>(`[data-item="${id}"] a`)!;
 const search = () => host.querySelector<HTMLInputElement>('input[aria-label]')!;
 const fyiToggle = () => host.querySelector<HTMLButtonElement>('[data-section="fyi"] > div > button[aria-expanded]')!;
+// the section bar (#9053): its choices, and the one chosen
+const barChoice = (id: string) => host.querySelector<HTMLButtonElement>(`[data-bar-choice="${id}"]`)!;
+const chosen = () => host.querySelector<HTMLElement>('[data-bar-choice][aria-checked="true"]')?.dataset.barChoice;
+const sectionsShown = () => [...host.querySelectorAll<HTMLElement>("[data-section]")].map((el) => el.dataset.section);
 const chainToggle = () => host.querySelector<HTMLButtonElement>("[data-chain-toggle]")!;
 const chainRows = () => host.querySelectorAll("[data-chain-entry]");
 const originalToggle = () => host.querySelector<HTMLButtonElement>('[data-testid="inbox-original-row-toggle"]')!;
@@ -167,6 +171,9 @@ describe("Inbox history-entry view memory", () => {
     await act(async () => history.pushState(null, "", "/inbox/a1"));
     await show("a1");
     expect(search().value).toBe("");
+    // on Needs you, the section bar's start (#9053); All has FYI open as at first
+    expect(chosen()).toBe("action");
+    await act(async () => barChoice("all").click());
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("true");
     expect(chainRows()).toHaveLength(3);
     expect(listScroll().scrollTop).toBe(0);
@@ -176,6 +183,8 @@ describe("Inbox history-entry view memory", () => {
     root = createRoot(host);
     await show("a1");
     expect(search().value).toBe("");
+    expect(chosen()).toBe("action");
+    await act(async () => barChoice("all").click());
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("true");
     expect(chainRows()).toHaveLength(3);
   });
@@ -230,6 +239,50 @@ describe("Inbox history-entry view memory", () => {
     expect(search().value).toBe("chat");
     expect(fyiToggle().getAttribute("aria-expanded")).toBe("false");
     expect(chainRows()).toHaveLength(3);
+  });
+
+  // the section bar (#9053): its choice is the entry's, as the search is
+  it("keeps the section bar's choice with the entry: Back brings it back, a fresh navigation opens on Needs you", async () => {
+    expect(chosen()).toBe("action");
+    expect(sectionsShown()).toEqual(["action"]);
+    await act(async () => barChoice("fyi").click());
+    expect(sectionsShown()).toEqual(["fyi"]);
+    await openItem("f1");
+    expect(chosen()).toBe("fyi"); // kept while the Inbox is open
+
+    await leaveForChat();
+    await backToItem("f1");
+    expect(chosen()).toBe("fyi");
+
+    await leaveForChat();
+    await act(async () => history.pushState(null, "", "/inbox"));
+    await show();
+    expect(chosen()).toBe("action");
+  });
+
+  // a link, ⌘K or another item's line opens an item the list doesn't show: the list moves to its choice, and Back
+  // returns it to where it was
+  it("moves the list to an item opened from outside it, and back to where it was on Back", async () => {
+    calls.items = [...calls.items, { ...item("d1", "action"), done_at: "2026-11-09T05:00:00Z", done_by: "user" }, item("n1", "noise")];
+    await act(async () => { await (await import("../../lib/inbox")).reloadInbox(); });
+    await flush();
+    expect(chosen()).toBe("action");
+    await act(async () => history.pushState(null, "", "/inbox/d1"));
+    await show("d1");
+    expect(chosen()).toBe("done");
+    expect(host.querySelector('[data-section="done"] [data-item="d1"] a')?.getAttribute("aria-current")).toBe("page");
+    await act(async () => popped(() => history.back()));
+    await show();
+    expect(chosen()).toBe("action");
+
+    // a collapsed one: All, with Collapsed open
+    await act(async () => history.pushState(null, "", "/inbox/n1"));
+    await show("n1");
+    expect(chosen()).toBe("all");
+    expect(host.querySelector('[data-section="noise"] button[aria-expanded]')?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => popped(() => history.back()));
+    await show();
+    expect(chosen()).toBe("action");
   });
 
   it("does not replace history for search, folds, scrolling, chain expansion, or original expansion", async () => {

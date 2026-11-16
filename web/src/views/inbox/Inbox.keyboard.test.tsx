@@ -60,6 +60,8 @@ const title = () => detail().querySelector<HTMLElement>("h2[data-item-title]")!;
 // Done in the opened item's header, which goes back to the list
 const headerDone = () => [...detail().querySelectorAll("button")].find((b) => b.textContent?.trim() === "已处理")!;
 const doneSection = () => host.querySelector<HTMLElement>('[data-section="done"]')!;
+// the section bar opens on Needs you (#9053); All stacks Done under the open sections, where it folds
+const showAll = () => act(() => host.querySelector<HTMLButtonElement>('[data-bar-choice="all"]')!.click());
 // narrow: the opened item and the list take turns, and what is in the hidden one is not drawn
 const narrow = () => {
   drawn = (el) => (location.pathname !== "/inbox" ? !list().contains(el) : !detail().contains(el));
@@ -157,8 +159,10 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
   });
 
   // Done from the item files it under Done: its row there is a new one. The focus goes to the row now in its place, not
-  // after it into Done, and the list does not scroll there (with Done open, it jumped to the Done section)
-  it.each([["open"], ["folded"]])("after Done in the item's header, with Done %s, comes back to the row now in its place", async (fold) => {
+  // after it into Done, and the list does not scroll there (with Done open, it jumped to the Done section); under the
+  // Needs you choice, where Done is not drawn, the list stays on Needs you
+  it.each([["open"], ["folded"], ["not shown"]])("after Done in the item's header, with Done %s, comes back to the row now in its place", async (fold) => {
+    if (fold !== "not shown") showAll();
     if (fold === "open") {
       await act(async () => doneSection().querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
       await flush();
@@ -175,11 +179,17 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
     expect(location.pathname).toBe("/inbox");
     if (fold === "open") expect(doneSection().querySelector('[data-item="a1"]')).not.toBeNull();
     expect(document.activeElement).toBe(rowLink("a2"));
+    if (fold === "not shown") {
+      expect(host.querySelector('[data-bar-choice="action"]')?.getAttribute("aria-checked")).toBe("true");
+      expect(doneSection()).toBeNull();
+      return;
+    }
     const scrolled = vi.mocked(Element.prototype.scrollIntoView).mock.contexts as Element[];
     expect(scrolled.filter((el) => doneSection().contains(el))).toEqual([]);
   });
 
   it("leaves a wide page's list alone after Done in the item's header, with Done open", async () => {
+    showAll();
     await act(async () => doneSection().querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
     await flush();
     act(() => rowLink("a1").click());
