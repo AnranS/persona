@@ -111,42 +111,42 @@ func ownerContrastOffsets(lower string, at, end int) []int {
 	return out
 }
 
-// ownerButStartsClause reports a genuine clause after `but`, rather than an exception noun phrase. An immediately
-// following owner marker has no words in this slice and is a clause by construction. "Nothing … but …" is the
-// exception idiom even when a bare verb follows; an article plus a noun phrase is not a finite clause.
+// ownerButStartsClause distinguishes a genuine contrast from an exception phrase. An immediately following owner
+// marker has no words in this slice and is a clause by construction. Otherwise `but` is a contrast by default, except
+// for an indefinite-pronoun exception phrase or the "nothing … but …" idiom; a finite verb at the end of a
+// determiner-led subject keeps that subject a clause, while a verb-like noun modifier does not create one.
 func ownerButStartsClause(lower string, at, i, end int) bool {
 	suffix := strings.TrimSpace(lower[i+3 : end])
 	if suffix == "" {
 		return true
 	}
 	before := strings.Fields(lower[at:i])
-	if len(before) > 0 {
-		switch before[len(before)-1] {
+	exception, idiom := false, false
+	for _, word := range before {
+		switch word {
 		case "nothing", "anything", "everything", "something":
-			return false
+			exception, idiom = true, true
+		case "everyone", "anyone", "someone", "everybody", "anybody", "somebody", "all", "both":
+			exception = true
 		}
+	}
+	if !exception {
+		return true
+	}
+	if idiom {
+		return false
 	}
 	words := strings.Fields(suffix)
 	if len(words) == 0 {
-		return false
-	}
-	if words[0] == "only" {
 		return true
 	}
-	start := 0
 	switch words[0] {
 	case "the", "a", "an":
 		if len(words) < 3 {
 			return false
 		}
-		start = 1
 	}
-	for _, word := range words[start:] {
-		if ownerFiniteVerb(word) {
-			return true
-		}
-	}
-	return false
+	return ownerFiniteVerb(words[len(words)-1])
 }
 
 func ownerFiniteVerb(word string) bool {
@@ -196,6 +196,30 @@ func ownerWithoutQuotes(text string) string {
 		}
 		return r
 	}, text)
+}
+
+// ownerSentenceEnd returns the first unquoted sentence terminator at or after at, preserving original byte offsets.
+func ownerSentenceEnd(lower string, at int) int {
+	straight, curly := false, 0
+	for i := at; i < len(lower); {
+		r, size := utf8.DecodeRuneInString(lower[i:])
+		switch r {
+		case '"':
+			straight = !straight
+		case '“':
+			curly++
+		case '”':
+			if curly > 0 {
+				curly--
+			}
+		default:
+			if !straight && curly == 0 && strings.ContainsRune(ownerSentenceEnds, r) {
+				return i
+			}
+		}
+		i += size
+	}
+	return len(lower)
 }
 
 // directOwnerMarker reports whether any unquoted occurrence of marker starts a direct requirement at the line or a
@@ -265,10 +289,7 @@ func ownerConditionalOpen(clause string) bool {
 // requirement's own object ("check if …") is not a condition, and "even if" leaves the requirement unconditional;
 // either owns later coordinated if-clauses. Quoted if-clauses are history, not conditions on an unquoted requirement.
 func ownerTrailingConditional(lower string, at int) bool {
-	end := len(lower)
-	if i := strings.IndexAny(lower[at:], ownerSentenceEnds); i >= 0 {
-		end = at + i
-	}
+	end := ownerSentenceEnd(lower, at)
 	const marker = " if "
 	for from := at; from < end; {
 		i := strings.Index(lower[from:end], marker)
