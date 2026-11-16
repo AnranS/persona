@@ -51,6 +51,9 @@ jobs:
       - name: Linux Electron acceptance smoke (headless)
         if: ${{ !cancelled() && env.FIRST_RUN_ONLY != 'true' }}
         run: scripts/ci/desktop-smoke.sh
+      - name: Install desktop dependencies for the packaged first-run
+        if: ${{ !cancelled() }}
+        run: npm --prefix desktop ci --ignore-scripts
       - name: Build the unsigned Linux package
         if: ${{ !cancelled() }}
         run: scripts/ci/desktop-first-run-package.sh

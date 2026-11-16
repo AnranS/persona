@@ -340,6 +340,9 @@ class DesktopWorkflowTests(unittest.TestCase):
         linux = workflow['jobs']['linux']
         steps = {step.get('id', step.get('name')): step for step in linux['steps']}
         package = linux['steps'].index(next(step for step in linux['steps'] if step.get('name') == 'Build the unsigned Linux package'))
+        dependencies = linux['steps'].index(next(step for step in linux['steps'] if step.get('name') == 'Install desktop dependencies for the packaged first-run'))
+        self.assertLess(dependencies, package)
+        self.assertEqual(linux['steps'][dependencies]['run'], 'npm --prefix desktop ci --ignore-scripts')
         load = steps['sandbox-load']
         run = steps['first-run']
         record = next(step for step in linux['steps'] if step.get('name') == 'Record the packaged first-run result')
