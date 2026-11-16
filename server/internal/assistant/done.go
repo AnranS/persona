@@ -123,14 +123,14 @@ func ownerButStartsClause(lower string, at, i, end int) bool {
 	before := strings.Fields(lower[at:i])
 	local := ""
 	if len(before) > 0 {
-		local = strings.Trim(before[len(before)-1], ",:")
-		if len(before) > 1 {
-			previous := strings.Trim(before[len(before)-2], ",:")
-			if local == "else" {
-				local = previous
-			} else if local == "one" && previous == "no" {
-				local = "no one"
-			}
+		index := len(before) - 1
+		local = strings.Trim(before[index], ",:")
+		if local == "else" && index > 0 {
+			index--
+			local = strings.Trim(before[index], ",:")
+		}
+		if local == "one" && index > 0 && strings.Trim(before[index-1], ",:") == "no" {
+			local = "no one"
 		}
 	}
 	switch local {
@@ -171,14 +171,14 @@ func ownerFiniteClauseShape(words []string) bool {
 	}
 	for i := start; i < len(words); i++ {
 		word := words[i]
-		if i < len(words)-1 && ownerLexicalVerb(word) {
+		if i < len(words)-1 && ownerLexicalVerb(word) && ownerPredicateAgrees(words[i-1], word) {
 			return true
 		}
 		if i == len(words)-1 {
 			if ownerFinalIntransitive(word) {
 				return true
 			}
-			if i > start && ownerBaseIntransitive(word) && ownerPluralNoun(words[i-1]) {
+			if ownerBaseIntransitive(word) && ownerBaseSubject(words[i-1]) {
 				return true
 			}
 		}
@@ -225,6 +225,43 @@ func ownerBaseIntransitive(word string) bool {
 
 func ownerPluralNoun(word string) bool {
 	return strings.HasSuffix(word, "s") && !strings.HasSuffix(word, "ss") && word != "this" && word != "is"
+}
+
+// ownerBaseSubject reports a subject that takes a base-form lexical verb: a plural noun or one of the pronouns that
+// uses base-form agreement. Singular nouns and this/that/it take an inflected verb instead.
+func ownerBaseSubject(word string) bool {
+	switch word {
+	case "you", "we", "they", "these", "those":
+		return true
+	}
+	return ownerPluralNoun(word)
+}
+
+func ownerAuxiliary(word string) bool {
+	switch word {
+	case "am", "is", "are", "was", "were", "be", "been", "being",
+		"do", "does", "did", "have", "has", "had", "can", "could", "will", "would", "shall", "should", "may", "might", "must":
+		return true
+	}
+	return false
+}
+
+// ownerPredicateAgrees rejects a verb-like noun modifier whose number does not agree with the subject before it.
+func ownerPredicateAgrees(subject, verb string) bool {
+	if ownerAuxiliary(verb) {
+		switch verb {
+		case "is", "was", "does", "has":
+			return !ownerPluralNoun(subject)
+		case "are", "were", "do", "have":
+			return ownerBaseSubject(subject)
+		default:
+			return true
+		}
+	}
+	if ownerFiniteInflection(verb) {
+		return !ownerPluralNoun(subject)
+	}
+	return ownerBaseSubject(subject)
 }
 
 func ownerFiniteInflection(word string) bool {
