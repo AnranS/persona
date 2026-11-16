@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -36,10 +37,17 @@ type fakeHub struct {
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
 	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
-	hello         Hello
-	settings      *Settings
-	launcherList  []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
-	zshrc         map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
+	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
+	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
+	// answered. No lock held. sendHangs: session.send is never answered while the link stays up, and ends with the
+	// call's context, after beforeSend (a request that went out).
+	beforeSend   func()
+	afterList    map[string]func()
+	sendHangs    bool
+	hello        Hello
+	settings     *Settings
+	launcherList []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
+	zshrc        map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
 	// hostLaunchers: a machine's launchers.list for a start in its engine host (the call names a host), answered as an
 	// engine that runs only its own launchers would (host_runtime, #8140).
 	hostLaunchers map[string][]proto.Launcher
@@ -77,6 +85,7 @@ type fakeHub struct {
 	larkCLI       bool
 	slowSnapshots time.Duration // the connectors' live states come this late (nothing: there are none)
 	liveStates    []any         // the connectors' live states (connectors.snapshots), when they come at once
+	liveDelay     time.Duration // liveStates come this late instead (the ask's deadline still holds)
 	snapshotAsks  int           // connectors.snapshots calls
 	hungChannel   string        // the channel whose program never answers a send (hangChannel)
 	replies       []string      // the model's answers, in turn (the last one again when they run out)
@@ -100,6 +109,7 @@ type fakeHub struct {
 	offline      map[string]bool
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -149,7 +159,8 @@ type fakeHub struct {
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
-	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
+	// refuseConfigDir: assistant.send or assistant.warm with a config_dir fails as the hub refuses it for a node too old
+	// for one
 	refuseConfigDir bool
 	// elsewhere: the conversations in another profile than meetingProfile, by id: a resume that asks for a config_dir
 	// fails, as the node refuses to move a conversation to another profile
@@ -223,8 +234,31 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			hook() // what happens while a card is being made: its "where" reads the machines
 		}
 	}
+	if p.Method == DeviceSessionSend {
+		f.mu.Lock()
+		hook, hangs := f.beforeSend, f.sendHangs
+		f.beforeSend = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		if hangs {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
 	if p.Method != DeviceSessionItems {
-		return f.deviceCall(ctx, p)
+		out, err := f.deviceCall(ctx, p)
+		if p.Method == DeviceSessionsList {
+			f.mu.Lock()
+			hook := f.afterList[p.Device]
+			delete(f.afterList, p.Device)
+			f.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
+		}
+		return out, err
 	}
 	f.mu.Lock()
 	f.itemReads++
@@ -261,6 +295,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
+	if p.Method == DeviceAssistantWarm && f.refuseConfigDir && strings.Contains(string(p.Params), `"config_dir"`) {
+		return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+	}
+	if p.Method == DeviceAssistantWarm {
+		var w struct {
+			Launcher  string `json:"launcher"`
+			ConfigDir string `json:"config_dir"`
+		}
+		_ = json.Unmarshal(p.Params, &w)
+		if w.ConfigDir != "" && launcherAgent(w.Launcher) != "claude" { // node/assistant_spare.go's preflight
+			return nil, errors.New(assistantwire.ConfigDirClaudeOnly)
+		}
+	}
 	if p.Method == "session.interrupt" && f.failInterrupt != nil {
 		return nil, f.failInterrupt
 	}
@@ -496,6 +543,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.refuseUltra != nil && a["ultracode"] == true {
 			return nil, f.refuseUltra
 		}
+		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
+			return nil, f.refuseGoal
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -599,8 +649,15 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	if p.AppID == AppConnectors && p.Method == ConnectorsSnapshots {
 		f.mu.Lock()
 		f.snapshotAsks++
-		slow, live := f.slowSnapshots, f.liveStates
+		slow, live, delay := f.slowSnapshots, f.liveStates, f.liveDelay
 		f.mu.Unlock()
+		if slow == 0 && delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		if slow == 0 {
 			if live == nil {
 				live = []any{}
@@ -1017,6 +1074,9 @@ func storelessService(t testing.TB, f *fakeHub) *Service {
 // newServiceOn is an assistant on f with st as its database.
 func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 	t.Helper()
+	if database, ok := st.(*db.DB); ok {
+		st = repositorystore.New(database)
+	}
 	return withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
 }
 
