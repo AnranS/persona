@@ -12,7 +12,7 @@ import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
-import { openedItemState } from "../../lib/inbox-nav";
+import { openedInInbox, openedItemState } from "../../lib/inbox-nav";
 import { restoreListScroll, useInboxListScroll, useInboxView } from "../../lib/inbox-view-memory";
 import { useInboxSources } from "../../lib/inbox-sources";
 import { subscriptionsHref, useInboxSourcesShown, useSubscriptionsShown } from "../../lib/subscriptions";
@@ -84,10 +84,12 @@ const SECTION_EMPTY: Record<Exclude<BarChoice, "all">, string> = {
 
 /** Selecting (#2059): the picked items' keys (itemKey), null when not selecting. */
 type Picked = Set<string> | null;
+const alwaysBeside = () => true;
 
 /** `selected`: the item opened (its id and manager); `routed`: that item, once the list or the hub has it. `picked` /
- *  `onPicked`: selecting, from the page's "Select". */
-export function InboxList({ selected, routed, picked = null, onPicked }: { selected?: { id: string; manager?: string }; routed?: InboxItem; picked?: Picked; onPicked?: Dispatch<SetStateAction<Picked>> }) {
+ *  `onPicked`: selecting, from the page's "Select". `listBeside`: whether the list is drawn beside an opened item (a wide
+ *  page) rather than hidden under it; a list on its own is in sight. */
+export function InboxList({ selected, routed, picked = null, onPicked, listBeside = alwaysBeside }: { selected?: { id: string; manager?: string }; routed?: InboxItem; picked?: Picked; onPicked?: Dispatch<SetStateAction<Picked>>; listBeside?: () => boolean }) {
   const view = useInboxView();
   // with several assistants the list is the current one's (docs/assistant/managers.md "Clients"); one: every item
   const mine = useScope();
@@ -370,14 +372,16 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
     setLanding(null);
     if (listBox.current) listBox.current.scrollTop = 0;
   };
-  // An item opened from outside the list (a link, ⌘K, another item's line) moves the list to its choice when the list
-  // doesn't show it: Done for a done one, All with Collapsed open for a collapsed one; a folded group it is in opens.
-  // Closing it goes back to where the list was: the choice it moved from, Collapsed folded again, the same scroll. Once
-  // per item opened, so an item marked done from its own page doesn't take the list along to Done; a returned entry keeps
-  // the choice it had.
+  // An item the list doesn't show lands the list on its choice (docs/assistant/inbox.md "Section bar"): Done for a done
+  // one, All with Collapsed open for a collapsed one; a folded group it is in opens. Opened from outside the Inbox (a
+  // link, ⌘K, a Needs-you line elsewhere), that is where the list stays when the item closes, so a link lands where its
+  // item lives. Opened from inside (another item's chain or relations), only a list beside the item moves, and closing
+  // the item goes back to where the list was: the choice it moved from, Collapsed folded again, the same scroll; a list
+  // hidden under the item is left as it is. Once per item opened, so an item marked done from its own page doesn't take
+  // the list along to Done; a returned entry keeps the choice it had.
   const [landedFor, setLandedFor] = useState(() => (view.restored ? selectedKey : ""));
   const [landings, setLandings] = useState(0);
-  // what landings changed besides the choice, to put back with it: the list's scroll before them, Collapsed opened
+  // what inside landings changed besides the choice, to put back with it: the list's scroll before them, Collapsed opened
   const [landing, setLanding] = useState<{ top: number; noise: boolean } | null>(null);
   // the scroll to put back once the list has gone back
   const [goneBack, setGoneBack] = useState<{ top: number } | null>(null);
@@ -392,25 +396,36 @@ export function InboxList({ selected, routed, picked = null, onPicked }: { selec
     setLandedFor(selectedKey);
     const group = here.group;
     if (!selectedKey) {
+      // an outside landing has nothing to go back to: the list stays where the item lives, its group open
       if (bar.landedFrom) setBar({ ...bar, chosen: bar.landedFrom, landedFrom: null });
       if (landing?.noise && isOpen(group, "noise")) toggle(group, "noise");
-      if (landing || bar.landedFrom) setGoneBack({ top: landing?.top ?? 0 });
+      if (landing || bar.landedFrom) {
+        setGoneBack({ top: landing?.top ?? 0 });
+        setLandOpen("");
+      }
       setLanding(null);
-      setLandOpen("");
     } else if (routed) {
-      const moves = !sectionOpen(group, barSectionOf(routed));
+      const shows = sectionOpen(group, barSectionOf(routed));
+      const outside = !openedInInbox(window.history.state); // the browser's: `history` in this list is Done's
+      const moves = !shows && (outside || listBeside());
       if (moves) {
         const land = barLanding(routed);
-        if (land.choice !== choice) setBar({ ...bar, chosen: land.choice, landedFrom: bar.landedFrom ?? choice });
         const noise = land.openCollapsed && !isOpen(group, "noise");
         if (noise) toggle(group, "noise");
-        setLanding({ top: landing?.top ?? view.listScroll(), noise: noise || Boolean(landing?.noise) });
-      } else if (bar.landedFrom || landing) {
+        if (outside) {
+          // for good, over any way back an earlier item left
+          if (land.choice !== choice || bar.landedFrom) setBar({ ...bar, chosen: land.choice, landedFrom: null });
+          setLanding(null);
+        } else {
+          if (land.choice !== choice) setBar({ ...bar, chosen: land.choice, landedFrom: bar.landedFrom ?? choice });
+          setLanding({ top: landing?.top ?? view.listScroll(), noise: noise || Boolean(landing?.noise) });
+        }
+      } else if (shows && (bar.landedFrom || landing)) {
         // opened from the list under the choice it moved to: that is where the reader is now
         if (bar.landedFrom) setBar({ ...bar, landedFrom: null });
         setLanding(null);
       }
-      const fold = foldOf(routed);
+      const fold = shows || moves ? foldOf(routed) : "";
       if (fold) setLandOpen(fold);
       if (moves || fold) setLandings((n) => n + 1);
     }

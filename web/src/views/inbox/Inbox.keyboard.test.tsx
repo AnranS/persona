@@ -28,7 +28,7 @@ vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined
 vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
 vi.mock("./LarkThread", () => ({ LarkThread: () => null, chatOfItem: () => ({}) }));
 
-import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
+import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { settleRosterDefault } from "../../lib/manager-choice";
 import { t } from "../../i18n";
 import { Inbox } from "./Inbox";
@@ -213,9 +213,9 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
     expect(document.activeElement).toBe(link);
   });
 
-  // an item opened from outside the list (a link, ⌘K) moved the list to Done (#9053); back on the list, which is on
-  // Needs you again, nothing of Done is drawn to return to: the focus goes to the section bar's choice, not the page
-  it("comes back to the section bar's choice when the list goes back from the section an opened item moved it to", async () => {
+  // an item opened from outside the Inbox (a link, ⌘K) lands the list on Done, where it lives, and the list stays there
+  // (#9053): back on it, the focus is on the item's row in Done
+  it("comes back to the item's row in the section an item from outside landed the list on", async () => {
     narrow();
     await act(async () => history.pushState(null, "", "/inbox/d1"));
     await render("d1");
@@ -224,6 +224,23 @@ describe("the opened item and its row by keyboard on a narrow page (audit item 7
     await act(async () => popped(() => history.back()));
     await render();
     expect(location.pathname).toBe("/inbox");
-    expect(document.activeElement).toBe(host.querySelector('[data-bar-choice="action"]'));
+    expect(host.querySelector('[data-bar-choice="done"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement).toBe(rowLink("d1"));
+  });
+
+  // its row gone from the section the list landed on (moved back out of Done while open), nothing of it is drawn to
+  // return to: the focus goes to the section bar's choice, not the page
+  it("comes back to the section bar's choice when the item's row is no longer in the section shown", async () => {
+    narrow();
+    await act(async () => history.pushState(null, "", "/inbox/d1"));
+    await render("d1");
+    expect(host.querySelector('[data-bar-choice="done"]')?.getAttribute("aria-checked")).toBe("true");
+    calls.items = calls.items.map((it) => ((it as InboxItem).id === "d1" ? { ...(it as InboxItem), done_at: undefined, done_by: undefined } : it));
+    await act(async () => { await reloadInbox(); });
+    await flush();
+    await act(async () => popped(() => history.back()));
+    await render();
+    expect(location.pathname).toBe("/inbox");
+    expect(document.activeElement).toBe(host.querySelector('[data-bar-choice="done"]'));
   });
 });

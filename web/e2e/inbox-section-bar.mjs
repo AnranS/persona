@@ -1,8 +1,9 @@
 // The Inbox's section bar in a real browser (#9053, docs/assistant/inbox.md "Section bar"): it opens on Needs you, stays in
 // sight over the scrolling list, keeps to one row (its words never wrap, in every language) with All and the grouping
 // always in full and the choice made in sight, its sections scrolling sideways (faded, a mouse's wheel too) where they
-// don't fit, shows a choice's section alone, keeps the grouping in its trailing menu, moves to a linked item's choice
-// with its row unfolded, and screenshots each at 1280 and 390, light and dark.
+// don't fit, shows a choice's section alone, keeps the grouping in its trailing menu, lands on a linked item's choice
+// with its row unfolded and stays there, moves only a list beside an item opened from inside and goes back with it, and
+// screenshots each at 1280 and 390, light and dark.
 // Usage: node web/e2e/inbox-section-bar.mjs <loopback-web-origin> <artifact-directory>
 // The origin is an exclusively owned web server whose hub is scripts/mock/mock_hub.py started with
 // MOCK_INBOX_MANY=action:30,working:6,fyi:40,noise:20,done:25 MOCK_MANAGERS=0 (only the mock's invented data).
@@ -173,16 +174,25 @@ try {
       }
     }
   }
-  // a link to a done item moves the list to Done, with the item's row marked; Back returns to Needs you
+  // the landing (docs/assistant/inbox.md "Section bar"): a link to a done item, from outside the Inbox, lands the list on
+  // Done with the item's row marked, and the list stays there when the item closes; one opened from inside (another
+  // item's Related line, the mock's first Needs-you item names the first done one) moves only a list beside the item,
+  // and Back returns that list to the choice it had
+  const done = "many:done:0";
+  const opener = "many:action:0";
+  // the mock's done and collapsed items share their made-up titles: the Related line is picked by its place, the done
+  // one first (scripts/mock/test_inbox_many_mock.py)
+  const related = (p) => p.locator("[data-event-related] button").first();
   {
     const { context, p } = await page("light", "en");
     await p.goto(`${origin}/inbox`);
     await p.locator("main [data-item]").first().waitFor({ timeout: 60_000 });
-    const done = await p.evaluate(async () => {
-      const r = await fetch("/api/v1/inbox", { headers: { Authorization: "Bearer mock" } });
-      return (await r.json()).items.find((it) => it.done_at)?.id;
-    });
-    assert.ok(done, "the mock has a done item");
+    const relates = await p.evaluate(async (id) => {
+      const r = await fetch("/api/v1/inbox?sources=all", { headers: { Authorization: "Bearer mock" } });
+      return (await r.json()).items.find((it) => it.id === id)?.related?.[0]?.id ?? "";
+    }, opener);
+    assert.equal(relates, done, "the mock's first Needs-you item names its first done item first");
+    // ⌘K over the list: a new entry with no list under it
     await p.evaluate((id) => { history.pushState(null, "", `/inbox/${encodeURIComponent(id)}`); dispatchEvent(new PopStateEvent("popstate")); }, done);
     await p.waitForTimeout(800);
     assert.equal(await chosen(p), "done", "a done item's link lands on Done");
@@ -191,7 +201,45 @@ try {
     await shot(p, "bar-landed-done-1280-light");
     await p.goBack();
     await p.waitForTimeout(600);
-    assert.equal(await chosen(p), "action", "Back returns to Needs you");
+    assert.equal(await chosen(p), "done", "from outside, Back leaves the list where the item lives");
+    // from inside, beside the list: Needs you, its first item, then that item's Related line to the done one
+    await p.locator('[data-bar-choice="action"]').click();
+    await p.locator(`main [data-item="${opener}"] > a`).click();
+    await related(p).waitFor({ timeout: 10_000 });
+    assert.equal(await chosen(p), "action", "a row opened from the list doesn't move it");
+    await related(p).click();
+    await p.waitForTimeout(800);
+    assert.equal(await chosen(p), "done", "from inside, a list beside the item moves to its choice");
+    assert.equal(await p.locator(`main [data-section="done"] [data-item="${done}"] a[aria-current="page"]`).count(), 1, "its row is marked");
+    await shot(p, "bar-inside-done-1280-light");
+    await p.goBack();
+    await p.waitForTimeout(600);
+    assert.equal(await chosen(p), "action", "Back returns the list beside the item to the choice it had");
+    await context.close();
+  }
+  // a phone: the item takes the list's place. From a link, ‹ shows the list where the item lives; from inside, the list
+  // under the item is left alone, and ‹ shows it on its own choice
+  {
+    const { context, p } = await page("light", "en", { width: 390, height: 844, touch: true });
+    await p.goto(`${origin}/inbox/${encodeURIComponent(done)}`);
+    const back = p.getByRole("button", { name: "Back to Inbox" });
+    await back.waitFor({ timeout: 60_000 });
+    await p.waitForTimeout(600);
+    await back.click();
+    await p.waitForTimeout(600);
+    assert.equal(await chosen(p), "done", "a phone: closing a linked item shows the list where it lives");
+    assert.equal(await p.locator(`main [data-section="done"] [data-item="${done}"]`).isVisible(), true, "its row is in sight");
+    await shot(p, "bar-landed-done-390-light");
+    await p.locator('[data-bar-choice="action"]').click();
+    await p.locator(`main [data-item="${opener}"] > a`).click();
+    await related(p).click();
+    await p.waitForTimeout(800);
+    assert.match(new URL(p.url()).pathname, /^\/inbox\/many/, "the related item is open");
+    await back.click();
+    await p.waitForTimeout(600);
+    assert.equal(new URL(p.url()).pathname, "/inbox");
+    assert.equal(await chosen(p), "action", "a phone: the list under an item opened from inside keeps its choice");
+    await shot(p, "bar-inside-back-390-light");
     await context.close();
   }
   assert.deepEqual(errors, []);

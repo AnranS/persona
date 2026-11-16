@@ -82,7 +82,7 @@ describe("a long list mounts in steps (audit item 34)", () => {
     expect([...host.querySelectorAll("[data-item]")].map((r) => r.getAttribute("data-item"))).toEqual(hub.items.map((it) => (it as InboxItem).id));
   });
 
-  // opened from outside the list, it moves the list to its choice (FYI here) and is there from the start
+  // opened from outside the Inbox, it lands the list on its choice (FYI here) and is there from the start
   it("has the opened item from the start, so the list can show it", async () => {
     act(() => root.render(<InboxList selected={{ id: "m090" }} routed={hub.items[90] as InboxItem} />));
     await flush();
@@ -94,7 +94,7 @@ describe("a long list mounts in steps (audit item 34)", () => {
   // the keyboard comes back to the opened item's row when it closes (audit item 74): closed before the next step, the
   // row is still there to take it
   it("keeps the opened item's row once it is there, when the item closes before the next step", async () => {
-    // opened from the list on FYI (one opened from outside goes back to where the list was when it closes)
+    // opened from the list on FYI
     act(() => root.render(<InboxList />));
     await flush();
     showFyi();
