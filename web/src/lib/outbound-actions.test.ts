@@ -193,6 +193,138 @@ describe("outboundAction: fail toward warning", () => {
   });
 });
 
+describe("outboundAction: reviewer probe list — every outward family must leave the quiet path", () => {
+  it("tags hosted-CLI write subcommands that a readable-name default used to pass", () => {
+    expect(classify("Bash", { command: "gh pr create --fill" })).not.toBeNull();
+    expect(classify("Bash", { command: "gh issue create --title x" })).not.toBeNull();
+    expect(classify("Bash", { command: "gh issue close 5" })).not.toBeNull();
+    expect(classify("Bash", { command: "gh issue comment 5 -b hi" })).not.toBeNull();
+    expect(classify("Bash", { command: "gh repo create x" })).not.toBeNull();
+    expect(classify("Bash", { command: "gh repo edit --private" })).not.toBeNull();
+    expect(classify("Bash", { command: "gh release create v1" })).not.toBeNull();
+    expect(classify("Bash", { command: "glab mr create" })).not.toBeNull();
+    expect(classify("Bash", { command: "hub pull-request -m x" })).not.toBeNull();
+    expect(classify("Bash", { command: "tea pulls create" })).not.toBeNull();
+  });
+
+  it("tags every curl write-verb spelling, including no-space, equals, lowercase and --json", () => {
+    expect(classify("Bash", { command: "curl -XPOST https://example.com/y" })).toBe("send");
+    expect(classify("Bash", { command: "curl --request=POST https://example.com/y" })).toBe("send");
+    expect(classify("Bash", { command: "curl -X post https://example.com/y" })).toBe("send");
+    expect(classify("Bash", { command: "curl --json @p.json https://example.com/y" })).toBe("send");
+    expect(classify("Bash", { command: "curl -sSd 'a=b' https://example.com/y" })).toBe("send");
+    // the same verbs on wget and httpie
+    expect(classify("Bash", { command: "wget --method=PUT https://example.com/y" })).toBe("send");
+    expect(classify("Bash", { command: "http --method=DELETE https://example.com/y" })).toBe("send");
+    expect(classify("Bash", { command: "xh PATCH https://example.com/y" })).toBe("send");
+  });
+
+  it("no longer treats wget's debug and timeout flags as curl body flags", () => {
+    expect(classify("Bash", { command: "wget -d https://example.com/f" })).toBeNull();
+    expect(classify("Bash", { command: "wget -T 30 https://example.com/f" })).toBeNull();
+    expect(classify("Bash", { command: "wget --post-data 'a=b' https://example.com/submit" })).toBe("send");
+  });
+
+  it("warns on remote shells and file transfers, which have no confidently local form", () => {
+    expect(classify("Bash", { command: "ssh host 'systemctl restart x'" })).toBe("unknown");
+    expect(classify("Bash", { command: "ssh prod uptime" })).toBe("unknown");
+    expect(classify("Bash", { command: "scp f.txt host:/srv/" })).toBe("unknown");
+    expect(classify("Bash", { command: "rsync -a ./d host:/srv/" })).toBe("unknown");
+    expect(classify("Bash", { command: "rsync -a ./a ./b" })).toBeNull();
+    expect(classify("Bash", { command: "rclone copy ./a ./b" })).toBeNull();
+    expect(classify("Bash", { command: "rclone copy ./a remote:bucket/a" })).toBe("unknown");
+  });
+
+  it("tags cloud and hosting CLIs that change a remote target", () => {
+    expect(classify("Bash", { command: "aws s3 cp ./f s3://b/f" })).toBe("deploy");
+    expect(classify("Bash", { command: "gcloud app deploy" })).toBe("deploy");
+    expect(classify("Bash", { command: "firebase deploy" })).toBe("deploy");
+    expect(classify("Bash", { command: "netlify deploy --prod" })).toBe("deploy");
+    expect(classify("Bash", { command: "git send-email --to a@b.c *.patch" })).toBe("send");
+  });
+
+  it("tags other registry and VCS families the blacklist originally missed", () => {
+    expect(classify("Bash", { command: "gem push pkg.gem" })).toBe("deploy");
+    expect(classify("Bash", { command: "twine upload dist/*" })).toBe("deploy");
+    expect(classify("Bash", { command: "podman push r/app:1" })).toBe("deploy");
+    expect(classify("Bash", { command: "hg push" })).toBe("push");
+    expect(classify("Bash", { command: "svn commit -m x" })).toBe("push");
+  });
+});
+
+describe("outboundAction: allowlist default — readable but unlisted names warn", () => {
+  it("warns on any readable command name outside the known-local set or a tool policy", () => {
+    expect(classify("Bash", { command: "ssh host" })).toBe("unknown");
+    expect(classify("Bash", { command: "ping example.com" })).toBe("unknown");
+    expect(classify("Bash", { command: "dig example.com" })).toBe("unknown");
+    expect(classify("Bash", { command: "./scripts/custom" })).toBe("unknown");
+    expect(classify("Bash", { command: "my-team-deploy --yes" })).toBe("unknown");
+  });
+
+  it("keeps the pinned local development flows on the one-tap path", () => {
+    expect(classify("Bash", { command: "git status && git fetch" })).toBeNull();
+    expect(classify("Bash", { command: "git remote -v" })).toBeNull();
+    expect(classify("Bash", { command: "go test ./..." })).toBeNull();
+    expect(classify("Bash", { command: "swift test" })).toBeNull();
+    expect(classify("Bash", { command: "npm run build" })).toBeNull();
+    expect(classify("Bash", { command: "npm ci" })).toBeNull();
+    expect(classify("Bash", { command: "kubectl get pods -n team" })).toBeNull();
+    expect(classify("Bash", { command: "terraform plan -out tf.plan" })).toBeNull();
+    expect(classify("Bash", { command: "curl https://example.com/status" })).toBeNull();
+    expect(classify("Bash", { command: "gh api /repos/o/r/issues" })).toBeNull();
+    expect(classify("Bash", { command: "pip list" })).toBeNull();
+    expect(classify("Bash", { command: "wrangler dev" })).toBeNull();
+    expect(classify("Bash", { command: "pulumi preview" })).toBeNull();
+    expect(classify("Bash", { command: "systemctl --user status pairfob" })).toBeNull();
+    expect(classify("Bash", { command: "rm -r build && make test" })).toBeNull();
+  });
+
+  it("fails closed on the write side of every multi-mode policy tool", () => {
+    expect(classify("Bash", { command: "git remote add origin https://example.com/r" })).toBe("unknown");
+    expect(classify("Bash", { command: "git submodule update --remote" })).toBe("unknown");
+    expect(classify("Bash", { command: "go generate ./..." })).toBe("unknown");
+    expect(classify("Bash", { command: "go mod tidy" })).toBe("unknown");
+    expect(classify("Bash", { command: "terraform force-unlock abc" })).toBe("unknown");
+    expect(classify("Bash", { command: "terraform state push bad.tfstate" })).toBe("unknown");
+    expect(classify("Bash", { command: "kubectl label pod p app=v2" })).toBe("unknown");
+    expect(classify("Bash", { command: "kubectl exec p -- sh" })).toBe("unknown");
+    expect(classify("Bash", { command: "docker login registry.example.com" })).toBe("unknown");
+    expect(classify("Bash", { command: "wrangler secret put TOKEN" })).toBe("unknown");
+    expect(classify("Bash", { command: "vercel" })).toBe("unknown");
+    expect(classify("Bash", { command: "pip install requests" })).toBe("unknown");
+    expect(classify("Bash", { command: "apt update" })).toBe("unknown");
+    expect(classify("Bash", { command: "systemctl -H host restart nginx" })).toBe("unknown");
+    expect(classify("Bash", { command: "curl -K curl.cfg https://example.com" })).toBe("unknown");
+  });
+
+  it("treats long-form and runtime-specific inline code as unparseable", () => {
+    expect(classify("Bash", { command: 'node --eval "fetch(\'https://example.com\')"' })).toBe("unknown");
+    expect(classify("Bash", { command: 'deno eval "Deno.exit(0)"' })).toBe("unknown");
+    expect(classify("Bash", { command: 'php -r "phpinfo();"' })).toBe("unknown");
+  });
+
+  it("unwraps wrapper options, but fails closed on an option it does not know", () => {
+    expect(classify("Bash", { command: "sudo -u root ls -la /tmp" })).toBeNull();
+    expect(classify("Bash", { command: "env -i PATH=/usr/bin npm test" })).toBeNull();
+    expect(classify("Bash", { command: "sudo --bogus-option ls" })).toBe("unknown");
+  });
+
+  it("keeps redirection-only and redirection-suffixed segments local", () => {
+    expect(classify("Bash", { command: "echo line > f.txt" })).toBeNull();
+    expect(classify("Bash", { command: "make test 2>&1 | tee log" })).toBeNull();
+  });
+
+  it("reads shell loop and condition keywords instead of treating them as unknown commands", () => {
+    expect(classify("Bash", { command: "until gh pr checks 7 --watch\ndo sleep 60; done" })).toBeNull();
+    expect(classify("Bash", { command: "for f in a b c; do echo $f; done" })).toBeNull();
+    expect(classify("Bash", { command: "if make test; then echo ok; fi" })).toBeNull();
+    // a dynamic substitution inside a loop header still cannot be proven local
+    expect(classify("Bash", { command: "for f in $(curl https://example.com/list); do echo $f; done" })).toBe("unknown");
+    // the body of an otherwise-local loop still has to pass the allowlist on its own
+    expect(classify("Bash", { command: "for f in a b; do ssh host $f; done" })).toBe("unknown");
+  });
+});
+
 describe("outboundAction facade around the lazy classifier", () => {
   it("answers the warning bucket for every request until the lazy chunk registers the classifier", () => {
     // A fresh module graph has no registration yet: a rule match and a local-only tool both read as "unknown" so a

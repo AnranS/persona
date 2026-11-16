@@ -94,8 +94,18 @@ describe("a Persona conversation's own approval card (#4883)", () => {
 
   it("ends once allowed, and the chat goes on", async () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    // The card's command reaches another host over ssh, so #8166 puts Allow behind a warning plus a second
+    // confirmation. Load that lazy chunk the same way the card's mount effect does, then let the effect commit.
+    await act(async () => { await import("./OutboundConfirm"); });
+    for (let i = 0; i < 20; i++) await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
     await flush();
+    // the first Allow only arms the confirmation and sends nothing
     act(() => button(t("chat-interactions.allow"))!.click());
+    await flush();
+    expect(resolves().length).toBe(0);
+    expect(button(t("outbound-confirm.outbound_confirm_allow"))).toBeTruthy();
+    // the confirming Allow ends the card
+    act(() => button(t("outbound-confirm.outbound_confirm_allow"))!.click());
     await flush();
     expect(resolves().length).toBe(1);
     expect(JSON.parse(String((resolves()[0][1] as RequestInit).body))).toMatchObject({ allow: true });
