@@ -124,9 +124,10 @@ After acceptance, workspaces are **silently retained**: no cleanup, recycling, o
 
 ### Needs you and In progress: each thing once (#3387)
 
-Above the Assistant's composer there are two entries. **Needs you** lists everything the user has to act on; **In
-progress** everything running that does not need them. Each thing is one row in exactly one entry, Needs you first, and
-each count is its rows:
+Above the Assistant's composer, **Needs you** lists the user's turn and **In progress** the work that does not need
+them. On the web, **Parked** is their peer for external waits, including ready review/merge waits (#9325), not a fold
+inside active work. Each thing is one row in exactly one entry, Needs you first; task badges use the shared open-count
+rule below. Native clients keep their existing two-entry presentation until they adopt this grouping:
 
 - **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
   for a decision that is the owner's (an open `ask`; `needs_user` on an open task; on Android and Apple also a
@@ -146,8 +147,8 @@ each count is its rows:
     long the review has waited and whether or not the hub sends `pending_since`. The entry is there only while one
     waits (or its tray is open), is drawn neutral (a grey `ink-3` dot and `ink-2` label, never the attention or
     working colour) since nothing in it is the user's, and counts its rows like the others. Its rows say "Supervisor
-    reviewing" (zh 督办验收中, ja 監督の確認待ち) and open the task. It comes before Waiting for merge: a task under
-    review whose PR is open and waits for a maintainer is here, not there (`supervisor_review_with_open_pr`). A
+    reviewing" (zh 督办验收中, ja 監督の確認待ち) and open the task. A task under
+    review whose PR is open and waits for a maintainer is here, not in Parked (`supervisor_review_with_open_pr`). A
     review whose agent is at work again is In progress with it. Until #8678 the web put a review overdue by an hour
     (or with no `pending_since`) in Needs you, as Android and Apple still do: users opened such a row, found only the
     Agent's finished conversation and nothing to answer, and could not tell what was wanted of them. The entry keeps a
@@ -159,18 +160,20 @@ each count is its rows:
     each client re-reads the clock once a minute, and a task under review with an open PR is In progress, not Waiting
     for merge, until the review is overdue. `spec/fixtures/entries` pins this split and, in `web_review`, the rows the
     web lists under Persona reviewing instead.
-- **Waiting for merge** (web only, #7614): a task whose fresh, open, non-draft PR waits for a maintainer with nothing
-  of it active and nothing the owner's (the To-dos page's `pr_open` rule, `docs/assistant/todo-status-sop.md`) is a
-  third group shown only when it has rows, outside In progress and its count. Needs you and a supervisor's review
-  (Persona reviewing) come first. Android and iOS do not read `pr_status` and keep such a task in In progress.
-- **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened by
-  hand. A task its supervisor parked (#3804, "Supervision" below) is here on the web, saying "Parked until <time> ·
-  <reason>", however long it has been still (never folded under shelved); it is never in Needs you for being parked.
-  Android and iOS do not know the state yet and file it by its other facts; `spec/fixtures/entries` has no parked case. A task's agents are never rows of their own: the task's row carries their state and progress meter, and opens the
-  task's details, which switch between its agents' chats. Shelved tasks fold under one uncounted line. A row can stay
-  visible while the To-dos page no longer counts it open (a parked task past 48 h, a seen review): the chip badge reads
-  the row's `data-counts-open` flag, so the counted to-dos across the entries (Needs you, In progress, and on the web
-  Persona reviewing and Waiting for merge) equal the To-dos header's "Not done".
+- **Parked** (web only, #9325): explicit supervisor holds and ready review/merge waits share one peer group. A fresh,
+  matching open non-draft PR with nothing active or awaiting the owner keeps the existing `pr_open` rule, now displayed
+  inside Parked. Generic person-reply holds do not become merge waits. The To-dos status list and All board use the
+  same classification. Multiple PRs keep their own links/blockers but the task has one row and count. Overdue holds stay
+  here until the hub actually wakes/reviews them, never auto-shelved or silently filed as finished. The entry appears
+  while it has rows or its tray is open; a hold's neutral clock replaces the Agent's finished-turn check. This slice
+  keeps the existing until/reason line; contact evidence, waiting age/order and reminders are separate work in #9289.
+  Android and iOS still use their earlier presentation and do not adopt this web group in this PR.
+- **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened
+  by hand. A task's agents are never rows of their own. Shelved tasks fold under one uncounted line. A row may remain
+  visible without being counted open (a seen supervisor review); its `data-counts-open` flag keeps counted task rows
+  across Needs you, In progress, Parked and Persona reviewing equal to the To-dos header's "Not done", for the same
+  scope. Live questions, owner decisions and active work outrank both types of wait; the supervisor's review keeps its
+  own entry. Existing acceptance/deployed precedence and PR freshness are unchanged.
 - Finished tasks (done, cancelled, accepted) are in neither; the board (**All**) has them. An answered card moves its task
   back to In progress. An entry with nothing counted (no number on it), Needs you or In progress, is grey and still opens:
   to the rows it lists uncounted, or to its line ("All caught up", "Nothing in progress"); the web drew such an In
@@ -431,6 +434,8 @@ lines, and in the user's own color and alignment they read as something the user
   (dismiss the sheet, switch to Agents, and open this Agent with the normal tab bar).
 - If a task has multiple Agents, add ⌄ beside the title. Tapping the title lists the task's Agents for switching (plus "Session Info"; web does the same, #3333).
 - Without an Agent (starting or failed to start), there is no chat page; the sheet uses its own header: state, task name, ⋯, Close.
+- On the web, that header and the empty panel say Starting only for a pending dispatch, using the same rule as the task tray.
+  Without one, the panel explains that no Agent is currently working on the task; a start failure keeps its reason and retry controls.
 - **What a dispatch opens (#3700, #3711, contract in #3718, card since #5569, one card per Agent #5110)**: each Agent a dispatch started or a task took over is one hand-off card
   (iOS `DispatchHandoffCard`, in a `DispatchHandoffCards` list; no "Dispatched N" heading). These cards name only that dispatch's Agents,
   never the whole In Progress tray. The ids are already on the client: a standalone `task` feed item's `ref` is the
@@ -568,7 +573,7 @@ Who does the follow-up: by default the **background supervisor** (#4927, "Backgr
   - **Handing work to a running agent**: `agent_send` with `task {title?, done_when?, expect_minutes?}`, main conversation only. A `task` that says nothing (null, or an object of only those keys with no `title`, no non-blank `done_when` and no positive `expect_minutes`, which runtimes that fill in every field of a tool's schema send for a reply) is no task (#3386): the send is a plain one from any conversation and changes no to-do. Anything else stays a hand-off, with its refusals: another type, a wrongly typed field, or a key the task does not have (a misspelled `title`). Otherwise the agent is adopted as above before the text is sent (the text is the new todo's notes; with `title` empty it is named from the text as `task_plan` tasks are: cleaned at once, then named by the model, `docs/assistant/todos.md` "To-do titles"); the task card and a `routed` line with the text go into the feed once it is sent. An agent already on one of the conversation's own tasks stays on it when `title` is empty or that task's title (no second todo; `done_when` / `expect_minutes` are written after the send); another title is refused, so other work is not filed under a task that may be closed without it. An agent on the user's own todo or another conversation's task, a non-main conversation, and a text of only `/exit` / `/quit` are refused before the user is asked to confirm; nothing is sent. If the send fails, the todo made for it is deleted (a closed task would keep the agent and retire it later), unless the machine only did not answer in time (a resume can go on after the wait): then the task stays, with its card. Work the agent passes on follows the task without a new tool when its launcher passes the herdr marker on (`persona_from`) or it dispatches through `botmux dispatch` (`docs/assistant/todos.md` "Following spawned Agents"): every agent it starts that way while it is on the task joins it, for this work or not, and only once the node has written the marker to its pane (sent when the link changes, reconciled every 30 seconds). Any other agent is moved onto the task by a link by hand (`PUT /api/v1/todos/{id}/agents/{mid}/{sid}`). The handing agent stays linked until the task is closed, so a long-lived agent is on one task at a time; when the task is closed, it is stopped like any task's agent if Persona started it, its terminal kept (read-only from then on: the user's Resume or the assistant's explicit resume, `agent_send` with `resume`, brings it back), while one the user started by hand is left running (`docs/assistant/todos.md` "Stop Agents of completed tasks").
   - **Agents report to their supervisor**: agents get the MCP tool `report_to_supervisor {kind: progress|question|blocked|done, text, evidence?, step?, steps?, urgent?}`. Only an agent of a supervised task has someone to receive it; any other gets "nobody receives this" (not an error). With Agent tasks on ("Agent tasks" below) an agent on any open to-do has a receiver, and only an agent on no to-do gets that answer. A question with `urgent: false` is no signal: it waits in the queue for the next morning or evening briefing (`docs/extensions/bots.md` ("Questions that can wait")). A report becomes the supervisor signal `report`: `question` / `blocked` / `done` are triage (the 2-minute cadence), while `progress` is info and never creates a main-chat wake; reports of the same kind waiting for the same message are joined (both questions kept, evidence merged) instead of replacing each other; the message lists the kind, the step, what it said and its evidence. `done` does not mark the task pending review (the hub's judge still decides). At most 10 reports per session in 10 minutes. Only Claude Code agents with the Persona MCP have the tool (Codex does not), so task prompts do not mention it.
   - **Progress and the feed** (step 2): the latest report is the task's progress, `supervision.progress {kind, step?, steps?, text, line?, detail?, at}` on the todo the apps get (`line` and `detail`: "Progress tray" above). It is a live reading kept in memory only (the next report brings it back after a restart) and written apart from the ledger: no database write, and `updated_at`, which names the review a task waits for, does not move. The snapshot's task line says "它最近向你汇报（N 分钟前）：…，第 3/5 步：…". `question` / `blocked` / `done` reports also go into the supervisor's conversation as a feed item of kind `report` (body: `kind`, `text`, `evidence`, `step`, `steps`), so the user can follow the handoff; progress reports only update the card. An `agent_interrupt` with `then` on an agent of one of the conversation's tasks adds a `routed` line with `interrupted: true` (a bare stop adds nothing). Clients that don't know the `report` kind skip it (web, iOS and Android all draw nothing for an unknown kind); those that don't know `interrupted` show the line as an ordinary message to the task. The web draws the progress under the task card's current step (`progressLine`), the report as "「任务」向 Persona 汇报" with the text and evidence, and the interrupting line with a stop icon. Mock: `MOCK_TASKS=1 MOCK_TASKS_REPORTS=1`. Without a report, the agent's own task list is the default progress (#5302, `Session.plan`, docs/integrations/agent-goal.md "Plan"): the snapshot's task line says "计划 3/5：<current>" and the card has a "3/5 · current" line; a report newer than the plan stands alone.
-  - **Whose call it is**: an agent's MCP server has no session id of its own. `personad mcp` passes its pane (`HookPane`) to the node, and **only for the agents' own tools** (`report_to_supervisor`, `todo_decisions`, `todo_decision_add`, `todo_bind_thread`, and a task leader's `task_plan`: `callerTools`) the node resolves the session from it (`node/hooks.go` `paneCaller`: the agent the host shows in the pane now, else the hooks' binding). Other tools still call without a session (a connector's approval card is not attached to the agent). An agent run by a runtime without a pane gets "nobody receives this".
+  - **Whose call it is**: an agent's MCP server has no session id of its own. `personad mcp` passes its pane (`HookPane`) to the node, and **only for the agents' own tools** (`report_to_supervisor`, the to-do's `todo_decisions`, `todo_decision_add`, `todo_bind_thread` and repository tools, from the list the manager reads too, `assistantwire.AgentToolNames`, #9089; dispatch and a task leader's `task_plan`: `callerTools`) the node resolves the session from it (`node/hooks.go` `paneCaller`: the agent the host shows in the pane now, else the hooks' binding). Other tools still call without a session (a connector's approval card is not attached to the agent). An agent run by a runtime without a pane gets "nobody receives this".
 - **Attachments** (#2437, `assistant/attachments.go`): pictures and files the user gave the assistant reach the agent through `attachments` on a `task_plan` task, `agent_start` or `agent_send`: absolute paths on the computer the conversation runs on. Only paths the user gave in that conversation are accepted: the directory where Claude Code saved the conversation's pictures (`…/<conversation id>/images/`), the node's `uploads` directory, or a path one of the user's messages carries (the app puts a file sent with Files there). Anything else is refused, so the tool cannot move arbitrary files between computers. On the same computer the paths go as they are. On another one the manager copies each file there first (`file.chunk` from the assistant's node, `file.upload.*` with `dest=terminal` on the agent's: `uploads/terminal/<date>/`, swept after 7 days), at most 8 and 50 MB each, also to computers marked `work`. A `task_plan` task's are checked when the plan is made (`PlanTask.Attachments`, from `AttachFrom`, the conversation's computer) and copied when it starts. A model does not always use the parameter, so a path the prompt or text names counts too when it is where the user's files land (the conversation's pictures, the node's `uploads`, or a file the app uploaded, `<name>-YYYYMMDD-HHMMSS`, that a message of the user's carries; never any other path the user wrote, which may be a repository's file the agent should open where it is). The text then names the copies. The agent's first message (or the sent text) ends with the files, the named ones that could not come and why, and the pictures in an `<attached_images>` block, as a picture sent straight to an agent ends. A copy that fails never stops the hand-off; the tool's answer says what was handed.
 - **Clients**: web and Android task cards / to-do details show acceptance criteria and review state; iOS / Mac are separate work (sub-issues of #3124). Clients unaware of `supervision` continue normally, showing pending-review tasks as "Stopped / Unread."
 - **Cancelling stops the agents** (#3133): `task_review` `cancelled` closes each agent still on the task in the background (`session.close`: its tab and process go, its transcript stays, and where its engine can resume it a message does), ends the cards it still waits on (cancelled in the history), and archives it once its list shows it closed (reversible: `agent_unarchive` or Archived in the apps; nothing is deleted). A cancelled task's permission or question cards no longer sit in "Needs you". Left alone: an agent that works for another open task by then, an assistant conversation, a session its machine does not list; one that still reads busy 30 seconds after the close stays unarchived (logged).
@@ -795,7 +800,7 @@ App API (the conversation's manager, with full-access role):
 DELETE is idempotent; deleting a missing entry keeps the revision. A concurrent update returns 409 and the caller
 refreshes before retrying; storage unavailable returns 503, and insufficient role returns 403. There is no HTTP grant
 creation endpoint: additions use the main conversation's approval flow. The empty default list authorizes nothing.
-The one other way a grant is made is the owner's **Always** on a suggested rule, below.
+The one other way a grant is made is the owner's **Always** on a suggested rule, below. Apple (#7002) and Android (#9247) list and revoke standing authorizations from Settings and the assistant's profile; the web app does too.
 
 #### A rule after the same answer three times (#4929)
 
@@ -836,8 +841,9 @@ call; nothing is turned on for the owner without the tap.
   sends those cards again, so the line is gone on every device.
 - **Drawn by**: the Apple apps (#5802's Apple part, `docs/apple/ios.md` "Suggested standing rule and held decisions"):
   one line under the plan card, the to-do's decision and the question card, with what Always creates, Always and Not
-  Now, and after Always where the rule is listed and removed. They have no list of standing authorizations, so that
-  result names the web app's. Android draws it too (#5802, `docs/android/android.md` "Rule suggestions, held
+  Now, and after Always where the rule is listed and removed. Apple lists them on the assistant's profile and in
+  Settings (#7002), and Android lists them the same way (#9247); after Always, those apps say where that list is.
+  Android draws the suggestion line too (#5802, `docs/android/android.md` "Rule suggestions, held
   decisions, recommended setup and purpose descriptions"). No event is sent for a plan when its suggestion is
   answered, so the Apple apps take the line off the plans they hold themselves (`TasksStore.ruleSuggestionSettled`).
 - **Two taps on Always at once** make one rule: the grant is stored only if no standing authorization covers the
