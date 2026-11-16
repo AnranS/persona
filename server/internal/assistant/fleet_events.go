@@ -18,6 +18,9 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 		s.launchersChanged(machine)
 		return false
 	}
+	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
+		return false
+	}
 	if !s.fleetOn() {
 		return true
 	}
@@ -91,6 +94,9 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 
 // NodeRequest answers what of a node's requests is the manager's (devices.Options.Answer, with NodeAnswer's).
 func (s *Service) NodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
+		return nil, true, err
+	}
 	if !s.fleetOn() {
 		return nil, false, nil
 	}
@@ -156,9 +162,10 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			Assistant bool   `json:"assistant"`
 			SessionID string `json:"session_id"`
 			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Revision  string `json:"revision"`
 		}
 		_ = json.Unmarshal(params, &p)
-		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest)}, true, nil
+		return s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision), true, nil
 	case "mcp.call":
 		var p struct {
 			Name        string          `json:"name"`

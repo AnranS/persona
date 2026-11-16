@@ -61,24 +61,43 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		if cwd == "" {
 			cwd = identity.AssistantDir(n.home)
 		}
-		if _, err := n.assistantAgent(ctx, launcher); err != nil {
-			return err
+		if !proto.IsExternalLauncher(launcher) {
+			if _, err := n.assistantAgent(ctx, launcher); err != nil {
+				return err
+			}
+			n.stopAssistant(id)
 		}
-		n.stopAssistant(id)
 		var err error
 		// A guest (a meeting's room too) starts as on any resume: spawnClaude reads its tools and kind from its record
 		// (no built-in tools, strict MCP config, project setting sources, its own settings and profile), and
 		// spawnAssistant refuses one whose launcher runs another agent by now.
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain}
+		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, Runtime: st.Runtime, IsMain: st.IsMain, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions}
+		resolved, current := n.assistantModel(ctx, id)
 		if proto.IsExternalLauncher(launcher) {
-			resolved, current := n.assistantModel(ctx, id)
 			if resolved != launcher || current.External == nil {
 				return externalRefusal(ctx, "adapter_scope_required")
 			}
-			execution = current
+			// Refresh execution authority, not the conversation's saved profile or unresolved policy.
+			execution.Model, execution.Effort = current.Model, current.Effort
+			execution.UseEffort, execution.Fingerprint = current.UseEffort, current.Fingerprint
+			execution.Runtime, execution.IsMain, execution.External = current.Runtime, current.IsMain, current.External
+			if err := n.checkExternalAssistant(ctx, id, launcher, execution, false); err != nil {
+				return err
+			}
+			if _, err := n.assistantAgent(ctx, launcher); err != nil {
+				return err
+			}
+			n.stopAssistant(id)
+		}
+		if current.SupervisionResolved {
+			execution.SupervisionInstructions = current.SupervisionInstructions
 		}
 		if p, err = n.spawnAssistant(id, cwd, launcher, true, false, execution); err != nil {
 			return err
+		}
+		if st.SupervisionInstructions != execution.SupervisionInstructions {
+			st.SupervisionInstructions = execution.SupervisionInstructions
+			n.state.put(id, st)
 		}
 	}
 	p.mu.Lock()

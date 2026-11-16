@@ -105,6 +105,42 @@ func TestExternalUnavailableUsesExistingProjection(t *testing.T) {
 	}
 }
 
+func TestExternalDirectoryNameStaysTheSameWhenUnavailable(t *testing.T) {
+	s, f, l := externalPickFixture(t)
+	l.DisplayName = "Another display label"
+	for _, available := range []bool{true, false} {
+		if !available {
+			l.External.CredentialState = "missing"
+		}
+		setExternalAdvertisement(f, l)
+		r := appRequest(t, s, "GET", "/api/v1/machines/server/launchers?purpose=assistant", "", "en")
+		var out struct {
+			Launchers   []ConfiguredLauncher  `json:"launchers"`
+			Unavailable []unavailableLauncher `json:"unavailable"`
+		}
+		if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &out) != nil {
+			t.Fatalf("directory: %d %s", r.Code, r.Body.String())
+		}
+		name := ""
+		if available {
+			for _, item := range out.Launchers {
+				if item.Name == l.Name {
+					name = item.DisplayName
+				}
+			}
+		} else {
+			for _, item := range out.Unavailable {
+				if item.Name == l.Name {
+					name = item.DisplayName
+				}
+			}
+		}
+		if name != l.External.Name {
+			t.Fatalf("available %v: display name %q, want %q", available, name, l.External.Name)
+		}
+	}
+}
+
 func TestExternalModelListKeepsDirectoryOrderWithoutGuessedModels(t *testing.T) {
 	s, f, l := externalPickFixture(t)
 	if err := s.putSetting(t.Context(), launchersCustomModelsKey, []customModel{{Machine: "server", Launcher: l.Name, Model: "vendor/typed-old"}}); err != nil {
@@ -123,6 +159,55 @@ func TestExternalModelListKeepsDirectoryOrderWithoutGuessedModels(t *testing.T) 
 		if model.ID != l.External.Models[i].ID || model.Name != l.External.Models[i].Name || model.Default != l.External.Models[i].Default {
 			t.Fatalf("external model order/identity changed: %+v", res.Models)
 		}
+	}
+}
+
+func TestExternalLaunchersChangedDoesNotWaitForConversationReads(t *testing.T) {
+	st := &memStore{}
+	s := &Service{store: func() Store { return st }}
+	// Block Store reads as a stalled tombstone read would. A machine-level
+	// directory invalidation neither reads nor forwards a conversation's data.
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	s.models.zshrcRefreshing = true // the existing refresher owns the next inventory pass
+	done := make(chan bool, 1)
+	go func() {
+		done <- s.NodeEvent("server", "launchers.changed", json.RawMessage(`{}`))
+	}()
+	select {
+	case forwarded := <-done:
+		if forwarded {
+			t.Fatal("manager-owned launcher event was forwarded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("directory invalidation waited for an unrelated conversation read")
+	}
+	s.models.zshrcMu.Lock()
+	again := s.models.zshrcRefreshAgain
+	s.models.zshrcMu.Unlock()
+	if !again {
+		t.Fatal("directory invalidation did not schedule another inventory pass")
+	}
+}
+
+func TestExternalDirectoryInvalidationKeepsDeletedSessionEventsBlocked(t *testing.T) {
+	s, _, _ := externalPickFixture(t)
+	if err := s.deleteConversation(t.Context(), "server", "side"); err != nil {
+		t.Fatal(err)
+	}
+	s.models.zshrcMu.Lock()
+	s.models.zshrcRefreshing = true
+	s.models.zshrcMu.Unlock()
+	if s.NodeEvent("server", "launchers.changed", json.RawMessage(`{}`)) {
+		t.Fatal("manager-owned launcher event was forwarded")
+	}
+	for _, event := range []string{"session.items", "session.delta", "session.screen"} {
+		if s.NodeEvent("server", event, json.RawMessage(`{"session_id":"side","text":"Synthetic old content"}`)) {
+			t.Fatalf("deleted conversation's %s was forwarded after directory invalidation", event)
+		}
+	}
+	if !s.NodeEvent("server", "session.delta", json.RawMessage(`{"session_id":"main","text":"Synthetic current content"}`)) {
+		t.Fatal("directory invalidation blocked an unrelated current conversation")
 	}
 }
 

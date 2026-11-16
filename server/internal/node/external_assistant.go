@@ -128,7 +128,7 @@ func sameExternalProcessModel(p *assistantProc, launcher, model string) bool {
 }
 
 // pinExternalExecution keeps catalog refreshes from restarting an existing process.
-// An explicit change of model, effort, launcher or runtime still gets its normal restart.
+// An explicit change of model, effort, launcher, runtime or resolved role policy still gets its normal restart.
 func pinExternalExecution(p *assistantProc, launcher string, execution modelExecution) modelExecution {
 	if p == nil || !p.alive() || p.launcher != launcher || execution.External == nil {
 		return execution
@@ -137,6 +137,7 @@ func pinExternalExecution(p *assistantProc, launcher string, execution modelExec
 	defer p.mu.Unlock()
 	old := p.model
 	if old.External == nil || old.Model != execution.Model || old.Effort != execution.Effort ||
+		old.SupervisionInstructions != execution.SupervisionInstructions ||
 		assistantRuntimeOf(old.Runtime) != assistantRuntimeOf(execution.Runtime) || old.Fingerprint != execution.Fingerprint ||
 		old.External.Scope != execution.External.Scope || old.External.SessionID != execution.External.SessionID ||
 		old.External.AdapterID != execution.External.AdapterID || old.External.TargetID != execution.External.TargetID {
