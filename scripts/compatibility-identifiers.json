@@ -517,6 +517,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "harmony/tests/native-ui-fixture.py": {
+      "reason": "Native UI fixture accepts the existing operation-id compatibility header used by older clients.",
+      "tokens": [
+        "X-Jarvis-Op-Id"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "integrations/antigravity/lib/compat.js": {
       "reason": "Dedicated adapter for a versioned runtime, protocol or persisted identity.",
       "tokens": [
