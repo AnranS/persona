@@ -140,7 +140,17 @@ function redactOnePath(text, run) {
       if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, candidate, replacement, consumed: candidate.length }));
       const trailing = candidate.slice(trimmed.length);
       const consumed = candidateEnd;
-      if (first[candidate.length] === ";" && !/^\s/.test(first[candidate.length + 1] ?? "")) return { replacement: "<path>", consumed: first.length };
+      if (first[candidate.length] === ";" && !/^\s/.test(first[candidate.length + 1] ?? "")) {
+        // The ambiguous continuation is private, but its closing wrapper and later diagnostic fields are not path text.
+        let end = structural >= 0 ? structural : first.length;
+        for (const boundary of first.matchAll(/[\s,;][A-Za-z][\w.-]*=/g)) {
+          if (boundary.index > candidateEnd) { end = Math.min(end, boundary.index); break; }
+        }
+        for (const boundary of first.matchAll(/[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/g)) {
+          if (boundary.index > candidateEnd) { end = Math.min(end, boundary.index); break; }
+        }
+        return { replacement: "<path>", consumed: end };
+      }
       return { replacement: replacement + trailing, consumed };
     }
   }

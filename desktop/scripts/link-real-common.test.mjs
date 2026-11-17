@@ -234,6 +234,19 @@ test("Windows-owned paths fail closed on semicolon continuations", () => {
   }
 });
 
+test("Windows semicolon redaction retains closing wrappers and later diagnostics", () => {
+  const roots = [String.raw`C:\owned\root`, String.raw`\\server\share\owned`, String.raw`\\?\C:\owned\root`, String.raw`\\?\UNC\server\share\owned`];
+  for (const root of roots) {
+    const secret = `${root};private-child\\secret.txt`;
+    for (const [open, close] of [["[", "]"], ["(", ")"], ["{", "}"], ["<", ">"]]) {
+      assert.equal(sanitize(`path=${open}${secret}${close} detail=keep`, root), `path=${open}<path>${close} detail=keep`);
+    }
+    assert.equal(sanitize(`[${secret}], next=keep`, root), "[<path>], next=keep");
+    assert.equal(sanitize(`[${secret}] detail=keep D:\\outside\\private`, root), "[<path>] detail=keep <path>");
+    assert.equal(sanitize(`[${secret}] PERSONA_TOKEN=example-secret`, root), "[<path>] PERSONA_TOKEN=<redacted>");
+  }
+});
+
 test("POSIX ownership uses POSIX semantics even on a Windows host", async () => {
   const source = await readFile(new URL("./link-real-common.mjs", import.meta.url), "utf8");
   const windowsSource = source.replace(
