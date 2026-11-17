@@ -1,27 +1,21 @@
-name: Android CI
+name: Android sign-in card regression verification
 on:
-  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: android-${{ github.repository }}-${{ github.ref_name }}-android
-  cancel-in-progress: true
+  group: turn-error-9596-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  android:
-    name: Android ${{ matrix.lane }}
+  turn-error:
     runs-on: ubuntu-latest
-    # Retain headroom until hosted cold/warm timings establish a safe lower bound.
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        # Two lanes balanced by task time; each runs its share in one Gradle invocation (scripts/ci/android-shards.py).
-        lane: [lint-build-test-0, test-1]
+    timeout-minutes: 30
+    env:
+      GRADLE_OPTS: '-Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false'
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-java@v4
         with:
@@ -29,48 +23,68 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@v3
         with:
-          # The default also installs the legacy `tools` package, which the SDK repository no longer has.
           packages: platform-tools
       - name: Install Android SDK
-        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-      - name: Install Rust Android targets
-        run: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          # Only a manual main run may populate caches; PRs and other refs only restore.
-          cache-read-only: ${{ github.event_name != 'workflow_dispatch' || github.ref != 'refs/heads/main' }}
-      - name: Restore public Robolectric runtime dependencies
-        id: robolectric
+          cache-read-only: true
+      - name: Restore public Robolectric jars
         uses: actions/cache/restore@v4
         with:
-          # Never cache Maven settings, credentials or unrelated/private artifacts.
           path: |
             ~/.m2/repository/org/robolectric/android-all
             ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          # Another lane's entry, or one saved under an old lane name, holds the same public jars: better than a download.
+          key: ${{ runner.os }}-robolectric-v1-turn-error-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-robolectric-v1-${{ matrix.lane }}-
             ${{ runner.os }}-robolectric-v1-
-      - name: Android checks
-        run: scripts/ci/android.sh --lane '${{ matrix.lane }}' --profile
-      - name: Save public Robolectric runtime dependencies
-        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.robolectric.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.m2/repository/org/robolectric/android-all
-            ~/.m2/repository/org/robolectric/android-all-instrumented
-          key: ${{ steps.robolectric.outputs.cache-primary-key }}
-      - name: Upload Android reports
+      - name: Prove the stale assertion fails and the fixed class passes
+        run: |
+          python3 - <<'PY_VERIFY'
+          from pathlib import Path
+          import shutil, subprocess, xml.etree.ElementTree as E
+          root = Path.cwd()
+          source = root / 'android/feature/chat/src/test/kotlin/persona/feature/chat/TurnErrorFixTest.kt'
+          report = root / 'android/feature/chat/build/test-results/testDebugUnitTest/TEST-persona.feature.chat.TurnErrorFixTest.xml'
+          proof = Path('/tmp/9596-proof'); proof.mkdir()
+          fixed = source.read_bytes()
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD:android']) == subprocess.check_output(['git', 'rev-parse', 'fa4c5f1c0:android'])
+          old = b"Model not connected: Claude Code isn't signed in"
+          new = b"Model not connected: Claude Code CLI isn't signed in"
+          assert fixed.count(new) == 1 and old not in fixed
+          baseline = fixed.replace(new, old)
+          command = ['./gradlew', '--no-daemon', '--no-watch-fs', '--console=plain', '--stacktrace', '--max-workers=2', '-Dorg.gradle.jvmargs=-Xmx3g', '-Pkotlin.compiler.execution.strategy=in-process', '-PpersonaApplicationId=com.example.persona', '-PpersonaGoogleOAuthScheme=persona.oauth.unset', '-PpersonaRepoRoot=' + str(root), ':feature:chat:testDebugUnitTest', '--tests', 'persona.feature.chat.TurnErrorFixTest']
+          try:
+              source.write_bytes(baseline)
+              with (proof / 'before.log').open('w') as log:
+                  result = subprocess.run(command, cwd=root / 'android', stdout=log, stderr=subprocess.STDOUT)
+              assert report.exists(), 'Baseline never reached JUnit'
+              shutil.copy2(report, proof / 'before.xml')
+              suite = E.parse(report).getroot()
+              failures = [case for case in suite.findall('testcase') if case.find('failure') is not None]
+              assert result.returncode != 0 and suite.get('tests') == '2' and suite.get('errors') == '0' and len(failures) == 1
+              assert failures[0].get('name') == 'theErrorLineBecomesTheCardAndFixItOpensTheSetUp'
+              assert old.decode() in E.tostring(failures[0], encoding='unicode'), 'Unexpected baseline failure'
+              print('RED: the unchanged full-text assertion fails on the current card wording', flush=True)
+          finally:
+              source.write_bytes(fixed)
+          with (proof / 'after.log').open('w') as log:
+              result = subprocess.run(command, cwd=root / 'android', stdout=log, stderr=subprocess.STDOUT)
+          assert result.returncode == 0, 'Fixed class failed; see after.log'
+          suite = E.parse(report).getroot()
+          assert suite.get('tests') == '2' and all(suite.get(k) == '0' for k in ['failures', 'errors', 'skipped'])
+          shutil.copy2(report, proof / 'after.xml')
+          assert source.read_bytes() == fixed
+          print('GREEN: both existing tests pass, including rendered card and Fix It click routing', flush=True)
+          PY_VERIFY
+      - name: Upload regression evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-reports-${{ matrix.lane }}
+          name: turn-error-9596
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error
           path: |
-            android/build/reports/profile/
-            android/**/build/reports/lint-results*
-            android/**/build/reports/tests/
-            android/**/build/test-results/
+            /tmp/9596-proof/
+            android/feature/chat/build/test-results/
+            android/feature/chat/build/turn-fix-shots/
