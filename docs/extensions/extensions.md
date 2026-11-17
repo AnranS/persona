@@ -2713,6 +2713,90 @@ tiles keep the grid's columns (`max_columns`, at least 150 px each), so a phone 
 **iOS and Android** have the field in their generated types and still send 8: the hub draws them the tile without its ring until
 they draw version 9 (their own changes, after #9337).
 
+## UI version 10 (#9727)
+
+A canvas for graph-shaped data: work handed out to agents that splits into parts, parts that split again, the same task tried
+several ways, hundreds of parts in a wide fan-out; a plan whose steps wait for others. The person sees the shape at a glance,
+drags and zooms, taps a node to open it, folds what they do not need, and watches states change while the work runs. The app
+sends `10` in `context.ui_version`; `hub.extension_points.ui` is `10`; there is no new `features` entry (an older hub holds the
+app's version to its own, and the extension sees that). One new component, `graph`, authoritative in
+`schema/extension/view.schema.json` (`GraphComponent`, `GraphNode`, `GraphEdge`, `x-since: 10`); examples are
+`schema/extension/examples/View.v10-*.json`. **An app sends 10 only when it draws all of the below** (and all of 9).
+
+Extensions still run no code in the app: they say what the nodes and edges are, and each app lays them out and draws them with
+its own design system, so light and dark, every interface style and every theme color are right without the extension knowing
+them (`docs/design/PRINCIPLES.md`, principle 4).
+
+| Field | What it does |
+| --- | --- |
+| `nodes` (1–300) | `{id, title, subtitle?, badge?, tone? \| color?, icon?, progress?, group?, action?}`. Each node counts as one of the page's 300 components. `tone` (a role color) or `color` (a named color), never both, colors the node's edge and state dot, never its text; `progress` (0–1) is a thin bar along its foot; `action` is a row's (confirm, push, values) |
+| `edges` (0–600) | `{from, to}`: `from` is the parent. A node's children are in the edges' order |
+| `layout` | `tree` (the default): at most one parent each, a parent centred beside its children. `layered`: several parents allowed, each node one layer past its furthest parent |
+| `direction` | `right` (the default: roots at the start, children after them, so a wide fan-out reads down the screen like an outline) or `down` |
+| `group` (on a node) | Nodes with the same parents and the same `group` sit next to each other inside one quiet frame titled with it (the same task tried several ways) |
+| `selected` | A node drawn as selected; the canvas opens centred on it |
+| `folded` | Nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for this `key` |
+| `key` | As every component's: keeps the person's pan, zoom and folding across redraws |
+
+The layout rules are exact and shared: `spec/fixtures/graph-layout/README.md` states them, `scripts/gen/graph_layout.py` is the
+reference and writes the cases every app and the hub check themselves against. A layout is in slots (a node and its gap); each
+app multiplies by its own node size.
+
+**The hub's checks** (`sdk/go/wire`, as for other components; the whole page is refused otherwise): ids unique within the graph; every
+edge names known nodes, never one node twice (`from` = `to`) and never the same pair twice; no cycle; in a `tree`, no node with two
+parents; `selected` and every `folded` id name a node; not both `tone` and `color` on a node; the page's components, each node
+counted, at most 300. A graph's nodes' actions are the view's actions (`wire.Actions`): their `push` is checked as any other, an
+assistant-only action is taken out of an extension's view.
+
+**Drawing, on every app:**
+
+- **A node** is a box of one size (the app's graph node token, about 224 × 64 at the default text size, growing with the text): the
+  icon at the start, the title on one line, the subtitle under it in the quiet ink, the badge at the end of the title's line, the
+  progress bar along the foot; `tone` / `color` as a 3-wide bar on its leading edge and the state dot; a selected node has the
+  accent's ring. Text that does not fit ends in an ellipsis; the whole of it is read out and shown on hover (web) or long press.
+- **A fold control** sits on the side of a node with children where they leave it: a chevron while open; once folded, the number
+  hidden (`+12`). It is its own control, at least 44 × 44 pt (48 dp) to touch, and does not press the node.
+- **Edges** are thin curves in the quiet ink from the parent's children side to the child's parent side; **a group's frame** is a
+  rounded quiet fill behind its members with its title above, in the caption style.
+- **The canvas** is the page's background. Drag (or scroll, on the web and a trackpad) pans; pinch, ⌘ / Ctrl + wheel and the
+  buttons zoom, from 25% to 200%; a floating group at the bottom end holds Zoom out, Zoom in, Fit and Full screen. It opens at
+  the fitted scale held to 50%–100%, centred on `selected` when there is one, else with the first root at the top start; Fit
+  fits everything (down to 25%). Full screen covers the window with the same canvas (its position, zoom and folds), closed by its
+  close button, Esc or Back.
+- **On a page** the canvas is 70% of the page's visible height, at least 320 and at most 900 pt / dp / px, and the page scrolls
+  around it. **In a card** (`compact`, an overview card, a launcher or computer section, an assistant card) it is a still preview
+  fitted into 200 tall: no buttons, no gestures, no node presses; pressing it opens Full screen.
+- **Redraws:** the layout follows from the nodes, edges and folds alone, so a redraw that changes only states keeps every node in
+  place; the app keeps the position and zoom for the `key`, unless the person has not moved the canvas since it opened, when it
+  takes the opening view again. New and changed nodes fade their state in; with Reduce Motion nothing moves.
+- **Reading it without seeing it:** the canvas is a list of its visible nodes in reading order (`order` in the shared cases). Each
+  reads its title, then its badge, subtitle and progress ("40%"), then "under <parent's title>"; it is a button when it has an
+  action. Its fold control reads "Fold" or "Show 12 hidden". On the web every node is reachable with Tab in reading order and
+  pressed with Enter or Space, a focused node is panned into view, and with the canvas focused the arrow keys pan, `+` / `-` zoom
+  and `0` fits.
+
+### Compatibility
+
+The hub draws version 10 for an older app (`downgrade10`, `server/internal/extension/ui_v10.go`, before the older downgrades), so
+the same titles, states and actions are there, as a list:
+
+| Version 10 | Version 1–9 |
+| --- | --- |
+| `graph` | one `row` per visible node (the view's `folded` applied) in reading order, indented by its depth: `│ ` for each level above its parent's and `└ ` before its title, as extensions drew trees by hand |
+| a node's `subtitle`, `badge`, `icon`, `color`, `action` | the row's `subtitle`, `badge`, `icon`, `icon_color`, `action` |
+| a node's `progress` | the row's `value`, the percentage (`40%`) |
+| a folded node | its row's `value` gains `+12` (the nodes it hides), after the percentage with ` · ` when it has one; what it hides has no row |
+| `tone`, `group`, `selected`, `layout`, `direction`, `key` | left out (a row's key is `key/id` when the graph has a key and that is free on the page) |
+
+Below versions 6 and 3 the rows then lose what those versions did not have (`icon_color`, `icon`), as any row. A native stream's
+client (whose components never include `graph`) gets the same rows. Extensions may still draw an older app differently (`ui_version`).
+
+**The web** (#9727): see `web/src/views/extensions/ViewBody10.tsx`.
+
+**iOS** (#9727): see `apple/Persona/Views/Settings/ExtensionGraph.swift`.
+
+**Android** (#9727): see `ExtensionGraph.kt` in `android/feature/settings`.
+
 ## System-level placements (#1858)
 
 Extension content **outside the app**: Home Screen widgets, Lock Screen and Apple Watch complications (the `ui` slot `widget`), actions in Shortcuts and Siri (extension point `shortcuts`),
