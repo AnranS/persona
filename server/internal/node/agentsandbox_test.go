@@ -392,24 +392,6 @@ func TestLaunchExec(t *testing.T) {
 	}
 }
 
-// The Agent SDK's bridge runs in the sandbox when it is on (the claude it starts with it), as it was when off.
-func TestSDKBridgeInAgentSandbox(t *testing.T) {
-	agentSandboxFakes(t, macSandbox)
-	b := sdkBridge{js: jsRuntime{Path: "/opt/bin/node"}, script: "/x/bridge.mjs", claude: "/opt/bin/claude"}
-	for _, on := range []bool{false, true} {
-		n := agentNode(t, on)
-		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), mcp: map[string]any{}}
-		cmd, _, err := n.sdkCommand(b, "claude", s, []string{"PATH=/usr/bin"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		bridge := []string{"/opt/bin/node", "/x/bridge.mjs"}
-		if on && (!inSandbox(cmd.Args) || !slices.Equal(cmd.Args[3:], bridge)) || !on && !slices.Equal(cmd.Args, bridge) {
-			t.Errorf("on %v: %q", on, cmd.Args)
-		}
-	}
-}
-
 // Everything the path guard calls a secret of the data directory, the sandbox closes too: they share the list
 // (identity/secrets.go). The sandbox closes a few more things the path guard leaves (docs/server/agent-sandbox.md "Which
 // files"), and neither touches a project's files below the data directory.

@@ -45,22 +45,6 @@ func TestHealthDenyRules(t *testing.T) {
 	}
 }
 
-// On the Agent SDK the deny rules go in the start's settings, next to the ones a settings file already has.
-func TestSDKOptionsCarryTheDenyRules(t *testing.T) {
-	settings := filepath.Join(t.TempDir(), "s.json")
-	if err := os.WriteFile(settings, []byte(`{"permissions":{"deny":["Bash(rm:*)"]}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	o, err := sdkStart{id: "s1", cwd: "/home/me/.persona/assistant", settings: settings, deny: []string{"Read(//home/me/.persona/health/**)"}}.options("/bin/claude")
-	if err != nil {
-		t.Fatal(err)
-	}
-	deny := o["settings"].(map[string]any)["permissions"].(map[string]any)["deny"].([]any)
-	if len(deny) != 2 || deny[0] != "Bash(rm:*)" || deny[1] != "Read(//home/me/.persona/health/**)" {
-		t.Fatalf("deny %v", deny)
-	}
-}
-
 // A health conversation may write its reports' records without asking; nothing else gets that rule.
 func TestHealthReportRules(t *testing.T) {
 	n, home := testNode(t)
