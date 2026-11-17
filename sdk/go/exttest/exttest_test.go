@@ -112,6 +112,8 @@ func TestCheckView(t *testing.T) {
 		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a"}, {"id": "a", "title": "b"}]}]}]}`, false, "twice"},
 		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a", "tone": "positive", "color": "green"}]}]}]}`, false, "a tone or a color"},
 		{`{"sections": [{"items": [{"type": "graph", "nodes": [` + strings.Join(nodes, ",") + `]}, {"type": "text", "text": "one more"}]}]}`, false, "300"},
+		// a card draws the graph as one of its 12, however many nodes
+		{`{"sections": [{"items": [{"type": "graph", "nodes": [` + strings.Join(nodes[:13], ",") + `]}]}]}`, true, ""},
 	} {
 		err := exttest.CheckView(json.RawMessage(c.view), c.compact)
 		if c.bad == "" && err != nil || c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)) {

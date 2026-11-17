@@ -27,7 +27,12 @@ const graphRowKeyHashMost = 16
 // key, group, tone, selected, layout and direction are left out; a row's key is the graph's key and the node's id
 // when that is free on the page. A native stream needs a key on every row, so its taken or overlong `key/id` becomes a
 // free digest of the id instead.
-func downgrade10(v *View, native bool) {
+//
+// A card has at most CompactItems items and a graph is one of them (Fit's compact count); its rows have to fit in what
+// the card's other items leave, so the rows are cut to the room left, in reading order, the rest left out. Each graph
+// keeps at least its first row, and one row is kept back for every graph still to come, so a card with several graphs
+// does not overflow.
+func downgrade10(v *View, native, compact bool) {
 	// every key on the page: a section's and an item's, and every item's tile keys share the page's one key space
 	used := make(map[string]bool)
 	for i := range v.Sections {
@@ -46,6 +51,22 @@ func downgrade10(v *View, native bool) {
 			}
 		}
 	}
+	// room is how many graph rows a card can still take; graphs left to come keep one row each
+	room := CompactItems
+	graphsLeft := 0
+	if compact {
+		for i := range v.Sections {
+			for j := range v.Sections[i].Items {
+				e := &v.Sections[i].Items[j]
+				if e.Type == wire.ComponentGraph {
+					graphsLeft++
+				} else {
+					room -= max(1, len(e.Tiles))
+				}
+			}
+		}
+		room -= max(graphsLeft-1, 0)
+	}
 	for i := range v.Sections {
 		s := &v.Sections[i]
 		items := make([]UIElem, 0, len(s.Items))
@@ -60,7 +81,13 @@ func downgrade10(v *View, native bool) {
 			for k := range e.Nodes {
 				nodes[e.Nodes[k].ID] = &e.Nodes[k]
 			}
-			for _, id := range order {
+			take := len(order)
+			if compact {
+				graphsLeft--
+				take = min(take, max(room, 1))
+				room -= take
+			}
+			for _, id := range order[:take] {
 				n := nodes[id]
 				row := UIElem{Type: wire.ComponentRow, Title: n.Title, Subtitle: n.Subtitle, Badge: n.Badge,
 					Icon: n.Icon, IconColor: n.Color, Action: n.Action}

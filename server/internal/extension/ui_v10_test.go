@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -89,8 +90,9 @@ func TestFitV10WorkTreeRows(t *testing.T) {
 		if row.Title != indent+node.Title {
 			t.Errorf("row %d: title %q, want %q", k, row.Title, indent+node.Title)
 		}
-		if row.Subtitle != node.Subtitle || row.Icon != node.Icon || row.IconColor != node.Color {
-			t.Errorf("row %d (%s): %+v, want the node's subtitle, icon and color", k, id, row)
+		if row.Subtitle != node.Subtitle || !reflect.DeepEqual(row.Badge, node.Badge) ||
+			row.Icon != node.Icon || row.IconColor != node.Color {
+			t.Errorf("row %d (%s): %+v, want the node's subtitle, badge, icon and color", k, id, row)
 		}
 		switch {
 		case node.Progress != nil && row.Value != gaugePercent(*node.Progress):
@@ -244,20 +246,58 @@ func TestFitV10RowKeysOnlyWhenFree(t *testing.T) {
 	}
 }
 
-// A graph's nodes count toward a card's 12 components as tiles do: 13 nodes are one too many.
-func TestFitV10CardCountsNodes(t *testing.T) {
+// A graph in a card is one of its 12 items, not one per node: 200 nodes stay a graph at 10, and below 10 they become
+// the card's rows, cut to what its 12 items leave, the first in reading order. A graph beside 12 other items is one
+// too many at 10.
+func TestFitV10CardGraph(t *testing.T) {
 	card, _ := Slot("overview_card")
-	nodes := make([]wire.GraphNode, 13)
+	nodes := make([]wire.GraphNode, 200)
+	edges := make([]wire.GraphEdge, 199)
 	for k := range nodes {
-		nodes[k] = wire.GraphNode{ID: strconv.Itoa(k), Title: "n"}
+		nodes[k] = wire.GraphNode{ID: "n" + strconv.Itoa(k), Title: "n"}
 	}
-	v := &View{Sections: []Section{{Items: []UIElem{{Type: wire.ComponentGraph, Nodes: nodes}}}}}
+	for k := range edges {
+		edges[k] = wire.GraphEdge{From: "n" + strconv.Itoa(k), To: "n" + strconv.Itoa(k+1)}
+	}
+	fresh := func() *View {
+		return &View{Sections: []Section{{Items: []UIElem{{Type: wire.ComponentGraph, Key: "g", Nodes: nodes, Edges: edges}}}}}
+	}
+
+	v := fresh()
+	want, _ := json.Marshal(v)
+	if _, err := Fit(v, card, 10); err != nil {
+		t.Fatalf("200 nodes in a card at 10: %v", err)
+	}
+	if got, _ := json.Marshal(v); string(got) != string(want) {
+		t.Errorf("an app of 10 gets the card changed\nwant %s\n got %s", want, got)
+	}
+
+	v = fresh()
+	order, depth := newGraphWalk(graphOf(t, v)).readingOrder()
+	if _, err := Fit(v, card, 9); err != nil {
+		t.Fatalf("200 nodes in a card at 9: %v", err)
+	}
+	rows := items(v)
+	if len(rows) != CompactItems {
+		t.Fatalf("%d rows, want the card's %d", len(rows), CompactItems)
+	}
+	for k, row := range rows {
+		id := order[k]
+		want := "n"
+		if depth[id] > 0 {
+			want = strings.Repeat("│ ", depth[id]-1) + "└ n"
+		}
+		if row.Type != wire.ComponentRow || row.Title != want {
+			t.Errorf("row %d is %q (%s), want the reading order's %q", k, row.Title, row.Type, want)
+		}
+	}
+
+	v = &View{Sections: []Section{{Items: []UIElem{{Type: wire.ComponentGraph, Nodes: nodes[:1]}}}}}
+	for k := range CompactItems {
+		v.Sections[0].Items = append(v.Sections[0].Items, UIElem{Type: "text", Text: "x" + strconv.Itoa(k)})
+	}
 	if _, err := Fit(v, card, 10); err == nil || !strings.Contains(err.Error(), "12 items") {
-		t.Fatalf("13 nodes in a card: %v", err)
-	}
-	nodes = nodes[:12]
-	if _, err := Fit(&View{Sections: []Section{{Items: []UIElem{{Type: wire.ComponentGraph, Nodes: nodes}}}}}, card, 10); err != nil {
-		t.Fatalf("12 nodes in a card: %v", err)
+		t.Fatalf("a graph beside %d items in a card: %v", CompactItems, err)
 	}
 }
 

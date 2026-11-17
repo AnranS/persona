@@ -2765,7 +2765,8 @@ assistant-only action is taken out of an extension's view.
   close button, Esc or Back.
 - **On a page** the canvas is 70% of the page's visible height, at least 320 and at most 900 pt / dp / px, and the page scrolls
   around it. **In a card** (`compact`, an overview card, a launcher or computer section, an assistant card) it is a still preview
-  fitted into 200 tall: no buttons, no gestures, no node presses; pressing it opens Full screen.
+  fitted into 200 tall: no buttons, no gestures, no node presses; pressing it opens Full screen. The graph is one of the
+  card's 12 items, however many nodes it has (its nodes still count toward the page's 300).
 - **Redraws:** the layout follows from the nodes, edges and folds alone, so a redraw that changes only states keeps every node in
   place; the app keeps the position and zoom for the `key`, unless the person has not moved the canvas since it opened, when it
   takes the opening view again. New and changed nodes fade their state in; with Reduce Motion nothing moves.
@@ -2782,7 +2783,7 @@ the same titles, states and actions are there, as a list:
 
 | Version 10 | Version 1–9 |
 | --- | --- |
-| `graph` | one `row` per visible node (the view's `folded` applied) in reading order, indented by its depth: `│ ` for each level above its parent's and `└ ` before its title, as extensions drew trees by hand |
+| `graph` | one `row` per visible node (the view's `folded` applied) in reading order, indented by its depth: `│ ` for each level above its parent's and `└ ` before its title, as extensions drew trees by hand; in a card, only the rows that fit its 12 items, in reading order |
 | a node's `subtitle`, `badge`, `icon`, `color`, `action` | the row's `subtitle`, `badge`, `icon`, `icon_color`, `action` |
 | a node's `progress` | the row's `value`, the percentage (`40%`) |
 | a folded node | its row's `value` gains `+12` (the nodes it hides), after the percentage with ` · ` when it has one; what it hides has no row |

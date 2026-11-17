@@ -69,7 +69,7 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 	}
 	// a native stream's components never include a graph, even at 10: it gets the rows always
 	if native || uiVersion < 10 {
-		downgrade10(v, native)
+		downgrade10(v, native, compact)
 	}
 	if uiVersion < 9 {
 		downgrade9(v)
@@ -124,7 +124,8 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 		for _, s := range v.Sections {
 			n += len(s.Items)
 			for _, e := range s.Items {
-				n += max(len(e.Tiles)+len(e.Nodes)-1, 0)
+				// a graph is one item of the card; its nodes still count toward the page's 300 (wire.CheckView)
+				n += max(len(e.Tiles)-1, 0)
 				if e.Type == "field" || e.Type == "composer" {
 					return dropped, errors.New("a card has no fields: open a page for them")
 				}
