@@ -264,6 +264,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         sidebarOverlayShown.value = false
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    persona.android.navigation.TrackDevScreen(selected, stacks.getValue(selected).lastOrNull(), settingsOpened, settingsSheetStack.lastOrNull())
     fun showAssistantHome() {
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
         selected = AppTab.Persona

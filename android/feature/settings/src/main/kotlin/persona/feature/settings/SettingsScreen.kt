@@ -564,8 +564,9 @@ private fun SettingsPageContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
+        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = { page = "about" }) }
         "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
-            item { AboutSettingsPage() }
+            item { AboutSettingsPage(developing = services.developing, onExport = { page = "about-export" }) }
             item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), subtitle = updateSubtitle, subtitleLines = 6, value = when {
                     busy -> stringResource(R.string.settings_update_checking)
