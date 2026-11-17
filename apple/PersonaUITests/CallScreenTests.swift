@@ -32,6 +32,11 @@ final class CallScreenTests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(zh-Hans)", "-UIPreferredContentSizeCategoryName",
                                largest ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"] + args
         app.launchPinned()
+        // A fresh install asks once to send notifications; the prompt would cover the call screen in the shots.
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for label in ["允许", "Allow"] where board.buttons[label].waitForExistence(timeout: 2) { // i18n-ignore: the system's own button
+            board.buttons[label].tap()
+        }
         return app
     }
 
