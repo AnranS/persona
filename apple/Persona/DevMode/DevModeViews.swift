@@ -13,7 +13,7 @@ struct DevModeSection: View {
 
     var body: some View {
         Section {
-            Toggle(isOn: Binding(get: { dev.isOn }, set: switched)) {
+            Toggle(isOn: Binding(get: { dev.isOn }, set: { on in switched(on) })) {
                 Text("Developing Persona").lineLimit(1)
             }
             .accessibilityIdentifier("dev-mode-switch")
