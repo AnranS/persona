@@ -135,6 +135,13 @@ describe("default palette contrast", () => {
     it(`${scheme}: Needs you is the blue every client uses (spec/tokens/color.status.json)`, () => {
       expect([t.needs, t["needs-ink"]]).toEqual(scheme === "light" ? ["#007aff", "#0064c8"] : ["#0a84ff", "#409cff"]);
     });
+    it(`${scheme}: inline code's ink (--ink and --ink-2 mixed, #9477) reads on every background, between the two`, () => {
+      expect(css).toContain("color: color-mix(in srgb, var(--ink) 55%, var(--ink-2))");
+      const ink = mix(t.ink, t["ink-2"], 0.45);
+      for (const bg of BACKGROUNDS) expect(contrast(ink, t[bg]), `on --${bg}`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(ink, t.surface)).toBeLessThan(contrast(t.ink, t.surface));
+      expect(contrast(ink, t.surface)).toBeGreaterThan(contrast(t["ink-2"], t.surface));
+    });
     it(`${scheme}: --ink-3 stays a step quieter than --ink-2`, () => {
       expect(contrast(t["ink-3"], t.surface)).toBeLessThan(contrast(t["ink-2"], t.surface));
     });
