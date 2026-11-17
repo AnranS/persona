@@ -123,9 +123,10 @@ func (n *Node) runtimeTranscriptCall(ctx context.Context, h *runtimeConn, method
 			return nil, err, true
 		}
 		if !sub {
-			n.runtimes.watch(h, p.SessionID, 0, connCtx)
+			attempt := n.runtimes.watch(h, p.SessionID, 0, connCtx)
 			if _, err := call("session.watch", map[string]any{"session_id": p.SessionID, "since_seq": 0, "transcript": true}); err != nil {
 				n.logf("runtime %s: watch %s: %v", h.id(), p.SessionID, err)
+				n.runtimes.watchFailed(h, p.SessionID, attempt.token)
 			}
 		}
 		return okResult(nil), nil, true
@@ -173,7 +174,12 @@ func (n *Node) transcriptMoved(h *runtimeConn, id string) {
 			n.logf("runtime %s: watch %s's transcript: %v", h.id(), id, err)
 		}
 	}
-	go n.runtimeWatch(h, id, 0)
+	attempt := n.runtimes.watch(h, id, 0, parent)
+	go func() {
+		if err := n.runtimeWatch(h, id, attempt.since); err != nil {
+			n.runtimes.watchFailed(h, id, attempt.token)
+		}
+	}()
 }
 
 // forgetFile drops what was read of session id's transcript (it moved to another file).
@@ -238,7 +244,18 @@ func (n *Node) mergeRuntimeTranscript(s *proto.Session) string {
 	}
 	own := s.Background
 	n.setBackground(s, m) // as for a pane's session: its workflows, and the background tasks not shown as them
-	s.Background = append(s.Background, own...)
+	// Paseo's native inventory can name the same Claude task as the transcript. Keep the transcript's richer
+	// details (including its local output file), and add only work it does not already describe.
+	seen := make(map[string]bool, len(s.Background)+len(own))
+	for _, task := range s.Background {
+		seen[task.ID] = true
+	}
+	for _, task := range own {
+		if !seen[task.ID] {
+			s.Background = append(s.Background, task)
+			seen[task.ID] = true
+		}
+	}
 	s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 	s.Subagents = n.subagents(s.SessionID)
 	return t

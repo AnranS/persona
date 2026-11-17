@@ -344,6 +344,7 @@ struct ChatView: View {
             // floats a bar over the chat (Persona's conversation, `MessageLiftHost`, #3188).
             .liftBlur(menu)
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
+            .devScreen(style == .assistant ? "assistant-chat" : "chat")
             .onAppear { liftHost?.menu = menu }
             .onDisappear { if liftHost?.menu === menu { liftHost?.menu = nil } }
             .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
@@ -822,6 +823,7 @@ struct ChatView: View {
         .confirmDeleteSession($deleting)
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
+        .stackSegment()
         .sheet(item: $file) { ref in
             FileViewer(ref: ref, key: key)
                 .environment(\.showInFiles, (session?.cwd ?? "").isEmpty ? nil : { target in
@@ -830,6 +832,7 @@ struct ChatView: View {
                     withAnimation(Theme.Motion.standard) { pane = .files }
                 })
         }
+        .stackSegment()
         .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
@@ -1666,7 +1669,85 @@ struct ChatView: View {
 
     /// A landing is over: near the newest end it follows (a line in the last screenful lands there: what arrived after
     /// it was held back with no ↓, TestFlight 50/51), further up it reads (#597), by the geometry.
-    private func landed() { setFollow { $0.landed() } }
+    private func landed() {
+        setFollow { $0.landed() }
+        mendMisplacedStartSoon()
+    }
+
+    /// The end sentinel (`bottomID`), the lazy stack's first row, was laid out `y` from the stack's top: 0 when the stack
+    /// placed its rows from its start.
+    private func startPlaced(at y: CGFloat) {
+        guard abs(scratch.startY - y) > 0.5 else { return }
+        scratch.startY = y
+        mendMisplacedStartSoon()
+    }
+
+    /// The newest line was laid out `y` from the stack's top: past the sentinel by the rows' spacing at least.
+    private func newestPlaced(_ id: String, at y: CGFloat) {
+        if let last = scratch.newestLineY, last.id == id, abs(last.y - y) <= 0.5 { return }
+        scratch.newestLineY = (id, y)
+        mendMisplacedStartSoon()
+    }
+
+    /// The stack placed its newest end by estimate (#7382): the sentinel off the stack's top, the newest line over it, or,
+    /// with nothing drawn between them, the newest line further than the rows' spacing past it.
+    private var startMisplaced: Bool {
+        if abs(scratch.startY) > Self.startSlack { return true }
+        guard let newest = scratch.newestLineY, newest.id == scratch.lines.last?.id else { return false } // the lines last built
+        let after = newest.y - scratch.startY - Theme.Space.l
+        return after < -Self.startSlack || (after > Self.startSlack && newestAlone)
+    }
+
+    /// Nothing is drawn between the end sentinel and the newest line (`chatRows`): no streamed words, typing line,
+    /// unsent message, error or call captions. Read loosely: anything that might be there counts.
+    private var newestAlone: Bool {
+        shownPending.isEmpty && sendPhase == nil && store.error == nil && (frozen?.text ?? store.liveText).isEmpty
+            && !(viewing == nil && VoiceCalls.shared.isBound(to: key))
+    }
+
+    /// How far off the newest end may be placed before the list is built again (rounding, a pixel).
+    static let startSlack: CGFloat = 1
+
+    /// `mendMisplacedStart` a moment later, if the stack still has it so then: rows coming in or going out at the newest
+    /// end are placed over a few frames.
+    private func mendMisplacedStartSoon() {
+        guard startMisplaced else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            mendMisplacedStart()
+        }
+    }
+
+    /// The lazy stack placed its newest rows away from where its content starts (#7382, #1942). After a landing far from
+    /// the newest end (a saved place, a search hit, a quote), SwiftUI places what is between there and the newest end by
+    /// estimated heights, and a finger that then scrolls back to the newest end gets those rows where the estimates put
+    /// them, never corrected: rows taller than estimated (a long Markdown answer) put the newest line over the sentinel,
+    /// before the scroll view's end, so the answer's last lines stayed under the capsules and the composer and a drag
+    /// there sprang back (590 pt of it, measured); shorter ones left thousands of points of blank room before it, and
+    /// rows out of order. ↓ was gone (the offset said the list was at its end), and only building the list again places
+    /// the rows from its start. Done once the newest line is on screen (the list was taken to the newest end, so it goes
+    /// there) and nothing moves the list: not under a finger, in a glide, a jump, a landing or a held row; otherwise the
+    /// next time the list comes to rest. Logged (category `chat-landing`) with numbers only.
+    private func mendMisplacedStart() {
+        guard startMisplaced, !scratch.userDragging, entry == nil, landing == nil, !pin.holding,
+              let newest = currentLines().last, scratch.drawnLines.contains(newest.id) else { return }
+        #if os(iOS) || os(visionOS)
+        if let list = pin.list, list.isTracking || list.isDecelerating || jumpRun.running { return }
+        #endif
+        // A list that keeps reporting a misplaced start is left alone after one try a second: never a loop of builds.
+        guard Date.now.timeIntervalSince(scratch.startMendedAt) > 1 else { return }
+        scratch.startMendedAt = .now
+        let start = Int(scratch.startY), placed = Int(scratch.newestLineY?.y ?? 0)
+        scratch.startY = 0
+        scratch.newestLineY = nil
+        #if DEBUG
+        scratch.startMends += 1
+        #endif
+        Self.landingLog.notice("misplaced newest end: sentinel at \(start, privacy: .public), newest line at \(placed, privacy: .public) pt; built again")
+        listBuild += 1
+        setFollow { $0.follow() }
+        position.scrollTo(edge: .top)
+    }
 
     /// Opened again at the place it was left, a chat on a phone showed only its header, ↓ and the composer, no line
     /// drawn anywhere, until it was closed (#1386; never on a simulator). A landing that leaves no line in the viewport
@@ -2217,6 +2298,8 @@ struct ChatView: View {
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
         .frame(minHeight: .zero, maxHeight: .infinity)
+        // A floating keyboard floats over the page: the composer stays at the bottom, the list keeps its height (#2565).
+        .keepsHeightUnderUndockedKeyboard()
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
         }
@@ -2247,6 +2330,7 @@ struct ChatView: View {
                 guard let api = model.api(shownKey.group) else { throw CancellationError() }
                 return try await api.catalogPrices(ids)
             }))
+        .stackSegment()
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
@@ -2256,6 +2340,7 @@ struct ChatView: View {
             guard let sid = model.revealChild?.sessionID, let group = ChildSessionLines.group(of: sid, in: currentLines()) else { return }
             openWork.insert(group)
         }
+        .stackSegment()
         .environment(\.workflowChat, key)
         .environment(\.chatActions, actions)
         .environment(\.subagentParent, key)
@@ -2550,7 +2635,9 @@ struct ChatView: View {
                                            near: follow.near, mode: "\(follow.mode)", arrow: arrowShows, gap: Int(scratch.newestGap.rounded()),
                                            dragging: scratch.userDragging, held: pin.holding, blank: scratch.blankLandings,
                                            glideTaps: scratch.glideTaps, jumpMs: scratch.jumpMs, slips: scratch.jumpSlips,
-                                           listGap: listGap, lastShown: lastShown, storedRow: position.viewID(type: String.self) != nil))
+                                           listGap: listGap, lastShown: lastShown, storedRow: position.viewID(type: String.self) != nil,
+                                           newestY: scratch.newestLineY.flatMap { $0.id == order.last ? Int($0.y.rounded()) : nil },
+                                           startMends: scratch.startMends))
         }
     }
 
@@ -2652,13 +2739,16 @@ struct ChatView: View {
     private var pendingCards: [PendingCards.Card] {
         let parentPage = style == .dev && host == nil
         var cards = model.interactions(for: key).compactMap { ix -> PendingCards.Card? in
+            // Answerable exactly when nothing blocks it (`canAnswer`); what does is said under the card (#6868).
+            let blocked = model.answerBlock(ix)
             // A side session's card (#7944), here by its `folded_under` as every folded child's: "From Side Session ·
             // <title>", and not while that side's own page is the one shown, which has it.
             if parentPage, ix.sessionKey != key, let side = model.sideChat(of: ix) {
                 guard side != sideUI.shown else { return nil }
-                return PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix), from: Self.sideCardSource(side, ix, model))
+                return PendingCards.Card(
+                    interaction: ix, enabled: blocked == nil, blocked: blocked, from: Self.sideCardSource(side, ix, model))
             }
-            return PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix))
+            return PendingCards.Card(interaction: ix, enabled: blocked == nil, blocked: blocked)
         }
         // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
         if let move = model.screenMoves[key], !cards.contains(where: { $0.interaction.kind == .screen }) {
@@ -2790,6 +2880,9 @@ struct ChatView: View {
                     #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     #endif
+                } else if session == nil, let reason = model.missingSessionReason(key) {
+                    // Opened outside the current manager's filtered list and the hub could not supply the row (#8748).
+                    Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
@@ -2873,6 +2966,7 @@ struct ChatView: View {
     /// The list's rows, newest first: apart from `chatScroll`, which as one expression Swift 6.2 could not type-check in time.
     private func chatRows(store: ChatStore, lines: [ChatLine], pending: [PendingMessage]) -> some View {
         let rows = store.rows
+        let newestID = lines.last?.id
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
@@ -2880,6 +2974,7 @@ struct ChatView: View {
             Color.clear
                 .frame(height: Theme.Size.line)
                 .padding(.bottom, -Theme.Size.line)
+                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(ChatPin.space)).minY }) { y in startPlaced(at: y) }
                 .id(Self.bottomID)
             // A voice call's captions, the thread's last rows while it is bound here (docs/assistant/voice.md 6.2): they read the
             // call themselves; the page only asks whether one is bound.
@@ -2931,9 +3026,6 @@ struct ChatView: View {
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
             // Every message, timer line, tool count and answer is its own lazy row (a running turn can hold
             // hundreds of steps; one stack of them froze the page).
-            // The oldest dozen lines start loading the page before them: by the time you reach the top it is
-            // usually there (pages with screenshots run to megabytes and take seconds).
-            let prefetch = Set(lines.prefix(12).map(\.id))
             let openRecap = ChatLines.openRecap(lines, pending: viewing == nil ? pendingRecap : nil)
             ForEach(lines.reversed()) { line in
                 Group {
@@ -2945,9 +3037,12 @@ struct ChatView: View {
                     .background { if let flash = quoteFlash, flash.line == line.id { QuoteFlash(hold: flash.hold).id(flash.id) } }
                     .flippedBack()
                     .debugLineY(line.id, scratch)
+                    // In the list's content, which scrolling does not change: reported only when the stack places it.
+                    .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(ChatPin.space)).minY }) { y in
+                        if line.id == newestID { newestPlaced(line.id, at: y) }
+                    }
                     .landingFrame(line.id == landing, scratch)
                     .id(line.id)
-                    .onAppear { if prefetch.contains(line.id) { prefetchOlder() } }
                     .zIndex(menu.selected != nil && line.holds(menu.selected) ? 1 : 0)
                 // Upside down: drawn after the line is drawn above it, where it was written.
                 ForEach((placed.before[line.id] ?? []).reversed()) { msg in
@@ -3023,7 +3118,13 @@ struct ChatView: View {
         }
         // Any part of a row on screen: `visibleLines` counts a row once half of it is, and a line taller than two
         // screens never is. None at all after a landing is a blank page (`mendBlankLanding`).
-        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+            scratch.drawnLines = ids
+            // The oldest dozen lines start loading the page before them: by the time you reach the top it is usually
+            // there (pages with screenshots run to megabytes and take seconds). Here, not an `onAppear` on every row:
+            // each row the lazy list made while scrolling then ran an action and an update of the page for nothing.
+            if lines.prefix(12).contains(where: { ids.contains($0.id) }) { prefetchOlder() }
+        }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
         // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has the
@@ -3100,6 +3201,7 @@ struct ChatView: View {
                 // Where the user's scrolling stopped decides (nothing if it was the app's). A tap (down and up, the list
                 // never scrolled) is no scrolling: deciding there ended the hold on a row just opened (#3005).
                 setFollow { if old == .tracking { $0.tapped() } else { $0.released() } }
+                mendMisplacedStartSoon()
             }
             // On this upside-down list (`flippedBack`) `.scrollDismissesKeyboard(.interactively)` never put the keyboard
             // away while scrolling (#1823). A real drag does it; a touch that may still be a tap (.tracking) does not, so
@@ -3282,9 +3384,12 @@ struct ChatView: View {
 
     // Out of the modifier chain: inline, Swift 6.3 timed out type-checking the Release build.
     private var prewarmSource: String { "\(shownKey.machineID)/\(shownKey.sessionID)|\(store.resets)" }
-    private var prewarmKey: String { "\(prewarmSource)|\(store.version)" }
+    /// In the background it changes too, so leaving cancels a prewarm between rows and coming back runs it again.
+    private var prewarmKey: String { "\(prewarmSource)|\(store.version)|\(RowMemo.prewarms(in: scenePhase))" }
 
     private func prewarmRows() async {
+        // Not while the app is in the background (#9108): a recording may be keeping it running, under iOS's CPU limit.
+        guard RowMemo.prewarms(in: scenePhase) else { return }
         let source = prewarmSource
         if scratch.prewarmSource != source {
             scratch.prewarmSource = source
@@ -3375,6 +3480,7 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(backLabel)
+            .modifier(SidebarButtonID(active: backShowsList))
             .noBackWhen(hidesBack)
             Spacer(minLength: 0)
             Button { Haptics.tap(); showChrome() } label: {
@@ -4085,8 +4191,16 @@ struct ChatView: View {
     }
 
     /// The header's leading button: back to the chat from files / Git; on the chat ‹, or a hosting page's ✕ / ‹.
-    private var backSymbol: String { pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back }
-    private var backLabel: String { pane == .git || pane == .files ? String(localized: "Back [Task Sheets 572cf4]") : host?.leaveLabel ?? String(localized: "Back [Task Sheets 572cf4]") }
+    /// A root picked in the list, with the list closed (#8603): the sidebar's button, as on the main conversation, not a ‹
+    /// that opened the sidebar. Only a page pushed from inside another has ‹.
+    private var backSymbol: String {
+        if backShowsList { return split?.drawer == true ? Theme.Icon.sidebarMenu : Theme.Icon.sidebar }
+        return pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back
+    }
+    private var backLabel: String {
+        if backShowsList { return String(localized: "Show Sidebar") }
+        return pane == .git || pane == .files ? String(localized: "Back [Task Sheets 572cf4]") : host?.leaveLabel ?? String(localized: "Back [Task Sheets 572cf4]")
+    }
 
     /// The open header's ‹. Inside the row's glass container `noBackWhen` does not hide it: the container draws the
     /// button's glass and symbol itself, so a disabled ‹ that did nothing showed on every chat that is a split's first
@@ -4105,6 +4219,12 @@ struct ChatView: View {
             #else
             headerBackButton
             #endif
+        } else if backShowsList {
+            // A root picked in the list, with the list closed (#8603): the sidebar's button (`backSymbol`) with how many
+            // Agents need the user, as on the main conversation.
+            headerBackButton
+                .modifier(SidebarButtonID(active: true))
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
         } else {
             headerBackButton
         }
@@ -6460,8 +6580,8 @@ nonisolated enum QueueOrder {
 /// Input typed while Claude works and not yet taken, shown above the composer instead of in the chat.
 /// Folded to its one-line summary by default; opened, it shows about three rows and scrolls past them.
 /// Editing pulls it back (like ↑ in the terminal); the other queued messages are re-queued in order.
-/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, after a confirmation that says
-/// what happens to what it is doing), and each moves up or down.
+/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, at one tap since #7169; its
+/// VoiceOver hint says what happens to what it is doing), and each moves up or down.
 struct QueueStrip: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey
@@ -6483,7 +6603,6 @@ struct QueueStrip: View {
     private var agent: String { persona ?? agentName }
     @State private var busy = false
     @State private var expanded = false
-    @State private var confirmSend = false
     /// Messages from other conversations collapse into one line until the owner opens them (#6394).
     @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
@@ -6528,15 +6647,6 @@ struct QueueStrip: View {
             .contentShape(.rect)
         }
         .tint(.secondary)
-        .confirmationDialog(String(localized: "Send the queued messages now? [Queue Strip]"), isPresented: $confirmSend, titleVisibility: .visible) {
-            Button("Send Now [Queue Strip]") { sendNow() }.accessibilityIdentifier("queue-send-now-confirm")
-        } message: {
-            if let persona {
-                Text("\(persona) gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]")
-            } else {
-                Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
-            }
-        }
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -6557,18 +6667,28 @@ struct QueueStrip: View {
     }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
-    /// handed over.
+    /// handed over. It sends at one tap, as on the web (#7169, #7154): nothing is lost, the messages only go now rather
+    /// than at the next step, and Delete and Stop act at one tap too (`docs/design/DESIGN_SYSTEM.md` 4.4).
     @ViewBuilder private var sendNowButton: some View {
         if busy {
             ProgressView().controlSize(.mini)
         } else if steers, own > 0 {
-            Button { confirmSend = true } label: {
+            Button(action: sendNow) {
                 Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
+            .accessibilityHint(sendNowHint)
             .accessibilityIdentifier("queue-send-now")
         }
+    }
+
+    /// What sending now does to the step under way, which a confirmation used to say before #7169.
+    private var sendNowHint: Text {
+        if let persona {
+            return Text("\(persona) gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]")
+        }
+        return Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
     }
 
     /// A message of this phone's not yet reported queued (#1461): its words, and what became of the send.
@@ -6931,12 +7051,13 @@ struct SessionInfoSheet: View {
                     let started = info.startedAt.flatMap { $0.isMeaningful ? $0 : nil }
                     if counted || usage != nil || started != nil {
                         Section("Usage") {
-                            if counted { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens) + " tokens") }
+                            // The context is left out while unknown: 0 before the first reply and right after a compaction (#9207).
+                            if counted, info.contextTokens > 0 { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens)) }
                             if let usage { ContextUsageRow(usage: usage) }
                             if counted, info.compactions > 0 { row(Theme.Icon.collapseAll, String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
                             if counted {
                                 row(Theme.Icon.conversation, String(localized: "Chat"), String(localized: "\(info.turns) turns"))
-                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens) + " tokens")
+                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens))
                             }
                             if let started {
                                 row(Theme.Icon.time, String(localized: "Started"), started.formatted(date: .abbreviated, time: .shortened))
@@ -7074,13 +7195,8 @@ struct SessionInfoSheet: View {
     /// The coding agent in the pane: Claude Code unless the session names another agent.
     private var agent: String { session.map { $0.isClaude ? "Claude Code" : $0.agentLabel } ?? "Claude Code" }
 
-    static func tokens(_ n: Int) -> String {
-        switch n {
-        case 1_000_000...: String(format: "%.2fM", Double(n) / 1_000_000)
-        case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
-        default: "\(n)"
-        }
-    }
+    /// "1.25K tokens": the count as the Machines page and the web write it (TokenFormat), with a localized unit (#9205).
+    static func tokens(_ n: Int) -> String { String(localized: "\(TokenFormat.count(n)) tokens") }
 }
 
 /// A finished exchange: messages, the folded process, the answer.
@@ -7923,7 +8039,7 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
                 .offset(y: -c)
                 .opacity(Double(1 - min(1, p * 1.5)))
                 .allowsHitTesting(p < 0.5)
-                .modifier(GoneWhen(gone: p * 1.5 >= 1))
+                .modifier(GoneWhen(gone: p * 1.5 >= 1, height: chrome.height))
             // Not there at all until it starts to show (it is clear below half way).
             if p > 0.5 {
                 ChatRegion(name: "ChromeCompact.body", content: compact)
@@ -7937,20 +8053,25 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     }
 }
 
-/// The open header once it has faded out: still laid out (its height is what folding measures) but hidden, so its
-/// buttons leave VoiceOver and XCUITest. `accessibilityHidden` alone was not enough (its back and ⋯ are glass, UIKit):
-/// slid up under the clip, its Back sat in the status bar's band, invisible, "hittable", and a tap there went nowhere.
+/// The open header once it has faded out: gone from the tree, so its buttons leave VoiceOver and XCUITest.
+/// `accessibilityHidden` alone was not enough (its back and ⋯ are glass, UIKit): slid up under the clip, its Back sat in
+/// the status bar's band, invisible, "hittable", and a tap there went nowhere.
+/// On iOS a clear placeholder of its last measured height takes its place (folding reads that height). It was a
+/// `.hidden()` copy of the header: another identity, so every fold built the whole header again, its glass and the
+/// agents' tabs, and every unfold once more (#9103). Now folding only drops it and unfolding builds it once. While
+/// folded its height is not measured; it is again as soon as it opens.
 /// On the Mac it only leaves VoiceOver: it is already clear and takes no clicks there (`allowsHitTesting`), and
-/// swapping it for a hidden copy built the whole header again, its glass and the agents' tabs, at every fold and
-/// unfold: 71–82 ms of hitches a second scrolling a chat up and down, 9–29 without (#1337).
+/// swapping it for a hidden copy cost 71–82 ms of hitches a second scrolling a chat up and down, 9–29 without (#1337).
 private struct GoneWhen: ViewModifier {
     var gone: Bool
+    /// The open header's measured height (`ChatChrome.height`).
+    var height: CGFloat
 
     func body(content: Content) -> some View {
         #if os(macOS)
         content.accessibilityHidden(gone)
         #else
-        if gone { content.hidden() } else { content }
+        if gone { Color.clear.frame(height: height) } else { content }
         #endif
     }
 }
@@ -8004,6 +8125,15 @@ final class ChatScratch {
     var drawnLines: [String] = []
     /// When a work line was last folded (the list may follow again if that leaves it at the newest end).
     var foldedAt = Date.distantPast
+    /// Where the lazy stack last placed its first row, the end sentinel, from the stack's top (0 when laid out right;
+    /// `ChatView.mendMisplacedStart`), and when the list was last built again for it.
+    var startY: CGFloat = 0
+    /// Where it placed the newest line, from the stack's top (`Theme.Space.l` past the sentinel, or more).
+    var newestLineY: (id: String, y: CGFloat)?
+    var startMendedAt = Date.distantPast
+    #if DEBUG
+    var startMends = 0 // lists built again for a misplaced newest end (#7382), for the scroll probe
+    #endif
     #if DEBUG
     /// Landings that left nothing drawn (`ChatView.mendBlankLanding`, `probe.chat-rows`).
     var blankLandings = 0
@@ -8165,6 +8295,11 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     /// SwiftUI's stored scroll position names a row: once a row was opened (`ChatPin.letGo`), the user's own scrolling
     /// stores the row it leaves on screen, and SwiftUI scrolls back to it when the content changes (#4788).
     var storedRow: Bool
+    /// Where the newest line starts in the list's content (16, the rows' spacing past the end sentinel, when the lazy stack
+    /// placed it from its start; #7382).
+    var newestY: Int?
+    /// Lists built again because the stack had placed its newest end elsewhere (`ChatView.mendMisplacedStart`).
+    var startMends: Int
 }
 #endif
 
@@ -8184,5 +8319,14 @@ struct DismissReader: View {
         Color.clear
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// The identifier of a chat's leading button while it opens the sidebar (#8603): not the symbol's, so a test tells it
+/// from a ‹.
+private struct SidebarButtonID: ViewModifier {
+    var active: Bool
+    func body(content: Content) -> some View {
+        if active { content.accessibilityIdentifier("chat-sidebar-button") } else { content }
     }
 }

@@ -177,6 +177,27 @@ class AssistantSettingsStateTest {
         assertTrue(state.state.value.notice?.error == true)
     }
 
+    @Test fun recentTaskChatsRestoresSnapshotWhenWriteIsCancelled() = runTest {
+        val seen = mutableListOf<Boolean?>()
+        val api = FakeApi().apply { config = config.copy(recentTaskChats = false) }
+        val state = AssistantSettingsState(api, Zone(), recentTaskChatsChanged = { seen += it })
+        state.load()
+        val updateStarted = CompletableDeferred<Unit>()
+        val never = CompletableDeferred<Unit>()
+        api.beforeUpdate = {
+            updateStarted.complete(Unit)
+            never.await()
+        }
+        val writing = async { state.setRecentTaskChats(true) }
+        updateStarted.await()
+        writing.cancel()
+        writing.join()
+
+        assertTrue("the write was cancelled", writing.isCancelled)
+        assertEquals("cancellation restores the previous setting", false, state.state.value.config?.recentTaskChats)
+        assertEquals("cancellation restores the shared Recent snapshot", false, seen.last())
+    }
+
     @Test fun recentTaskChatsSerializesConfigLoadStartedBeforeWrite() = runTest {
         val api = FakeApi().apply { config = config.copy(recentTaskChats = false) }
         val state = AssistantSettingsState(api, Zone())

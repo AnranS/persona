@@ -83,6 +83,9 @@ type Settings struct {
 	// MainBackgroundFolded: the apps fold the main conversation's background rounds (another conversation's message,
 	// a scheduled task or follow-up) into one line that opens on request (#4314). nil is on (the default).
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
+	// MainCompactWindow: the compaction window, in tokens, the main conversation is held to when its launcher declares a
+	// larger one (#7314, main_compact_window.go); nil is 400000, 0 follows the launcher.
+	MainCompactWindow *int `json:"main_compact_window,omitempty"`
 	// RecentTaskChats: the apps' sidebar Recent lists the chats a scheduled task or the background supervisor started
 	// too, by last activity with the others (#8324; since #6228 they are only in All chats). Display only, one value
 	// for every device. nil is off (the default).
@@ -133,6 +136,9 @@ type Settings struct {
 	// relay to the main or a leader conversation (dispatch_policy.go). nil or expired: every conversation behaves as
 	// without it.
 	DispatchPolicy *DispatchPolicy `json:"dispatch_policy,omitempty"`
+	// StartDefaults is the optional policy of what task Agents start with beyond what their caller named, by the kind
+	// of work (start_defaults.go). nil or expired: every task starts as without it.
+	StartDefaults *StartDefaultsPolicy `json:"start_defaults,omitempty"`
 	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
 	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
 	Leaders []string `json:"leaders,omitempty"`
@@ -584,7 +590,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			list, _ = s.sessions(ctx, d.ID)
 		}
 		for _, c := range list {
-			if c.Assistant && spaceOf(c) == sp && (withArchived || !c.Archived) {
+			if c.Assistant && !c.IsDeleted() && spaceOf(c) == sp && (withArchived || !c.Archived) {
 				out.Conversations = append(out.Conversations, c)
 			}
 		}
@@ -609,7 +615,11 @@ func (s *Service) profileRoutes() {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", space))
 			return
 		}
-		apierr.WriteJSON(w, s.view(r.Context(), archived == "1" || archived == "true", space))
+		out := s.view(r.Context(), archived == "1" || archived == "true", space)
+		if r.Header.Get(RoleHeader) == roleExtension {
+			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("PUT /api/v1/assistant", s.putSettings)
 	// warm: the app opened the chat tab; get a process ready so the first message skips claude's startup, and say what

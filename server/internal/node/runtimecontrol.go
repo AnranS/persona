@@ -306,8 +306,10 @@ func (n *Node) watchTakenOver(h *runtimeConn, id string) {
 	if w == nil || w.parent == nil || w.ctx.Err() != nil || n.runtimes.watchedOn(h, id) {
 		return
 	}
-	n.runtimes.watch(h, id, 0, w.parent)
-	n.runtimeWatch(h, id, 0)
+	attempt := n.runtimes.watch(h, id, 0, w.parent)
+	if err := n.runtimeWatch(h, id, attempt.since); err != nil {
+		n.runtimes.watchFailed(h, id, attempt.token)
+	}
 }
 
 // continueInRuntime is a message to a Claude session not running anywhere on a machine whose engine is a runtime: the
@@ -359,7 +361,7 @@ func (n *Node) liveRuntimeModels(ctx context.Context, h *runtimeConn, name strin
 // runtimeLauncherCheck opts into the authenticated availability probe of runtime h, the one offering launcher name to
 // the start in question (runtimeOfIn). A refused probe never falls back to the login shell, whose credentials may be
 // different. Older runtimes keep the existing shell check.
-func (n *Node) runtimeLauncherCheck(ctx context.Context, h *runtimeConn, name, cwd, prompt string) (proto.LauncherCheck, bool) {
+func (n *Node) runtimeLauncherCheck(ctx context.Context, h *runtimeConn, name, cwd, prompt, model string) (proto.LauncherCheck, bool) {
 	if h == nil {
 		return proto.LauncherCheck{}, false
 	}
@@ -373,7 +375,11 @@ func (n *Node) runtimeLauncherCheck(ctx context.Context, h *runtimeConn, name, c
 	defer cancel()
 	start := time.Now()
 	var result proto.LauncherCheck
-	if err := h.peer.Call(ctx, "launchers.check", map[string]any{"launcher": name, "cwd": cwd, "prompt": prompt}, &result); err != nil {
+	params := map[string]any{"launcher": name, "cwd": cwd, "prompt": prompt}
+	if model != "" {
+		params["model"] = model
+	}
+	if err := h.peer.Call(ctx, "launchers.check", params, &result); err != nil {
 		result = proto.LauncherCheck{Error: err.Error()}
 	}
 	launcher, _ := h.launcherNamed(name)

@@ -11,8 +11,10 @@ import persona.core.contracts.api.AssistantManagement
 import persona.core.contracts.api.AssistantRefused
 import persona.core.contracts.api.AssistantSkills
 import persona.core.contracts.api.MemoryFile
+import persona.core.contracts.api.SavedPlace
 import persona.core.contracts.parseTime
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -32,6 +35,9 @@ internal interface AssistantSettingsApi {
     suspend fun memory(): List<MemoryFile>
     suspend fun saveMemory(name: String, content: String)
     suspend fun deleteMemory(name: String)
+    suspend fun places(): List<SavedPlace> = emptyList()
+    suspend fun savePlace(place: SavedPlace): SavedPlace = throw UnsupportedOperationException("Saved places unavailable")
+    suspend fun deletePlace(id: String): Unit = throw UnsupportedOperationException("Saved places unavailable")
     suspend fun skills(): AssistantSkills = throw UnsupportedOperationException("Skills unavailable")
 }
 
@@ -43,6 +49,9 @@ internal fun AssistantManagement.settingsApi(): AssistantSettingsApi {
         override suspend fun memory() = management.memory()
         override suspend fun saveMemory(name: String, content: String) = management.saveMemory(name, content)
         override suspend fun deleteMemory(name: String) = management.deleteMemory(name)
+        override suspend fun places() = management.places()
+        override suspend fun savePlace(place: SavedPlace) = management.savePlace(place)
+        override suspend fun deletePlace(id: String) = management.deletePlace(id)
         override suspend fun skills() = management.skills()
     }
 }
@@ -122,6 +131,14 @@ internal data class MemoryState(
     val failed: Boolean = false,
 )
 
+/** Saved places list (#9293); [error] is kept when a reload fails so the page can still show what it had. */
+internal data class PlacesState(
+    val entries: List<SavedPlace>? = null,
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+    val error: String? = null,
+)
+
 /**
  * The skills on the assistant's machine (Skills, like iOS): null until read. [failed] when they could not be read,
  * with the hub's own reason when it gave one ([reason], shown as it is).
@@ -144,6 +161,7 @@ internal data class AssistantSettingsUiState(
     val notice: SettingsNotice? = null,
     val move: MachineMove? = null,
     val memory: MemoryState = MemoryState(),
+    val places: PlacesState = PlacesState(),
     val skills: SkillsState = SkillsState(),
     val followPhone: Boolean = true
 ) {
@@ -305,18 +323,24 @@ internal class AssistantSettingsState(
         if (!ok) set { copy(config = this.config?.copy(mainBackgroundFolded = !on)) }
     }
 
-    /** Show scheduled task chats in Recent: update the shared snapshot at once and restore it if the hub refuses. */
+    /** Show scheduled task chats in Recent: update the shared snapshot at once and restore it if the write fails or is cancelled. */
     suspend fun setRecentTaskChats(on: Boolean) = recentTaskChatsLock.withLock {
         val config = state.value.config ?: return@withLock
         val was = config.recentTaskChats ?: return@withLock
         if (state.value.busy || was == on) return@withLock
         set { copy(config = config.copy(recentTaskChats = on)) }
         var applied = on
-        val ok = perform(SettingsText(R.string.assistant_settings_save_failed)) {
-            recentTaskChatsChanged(on)
-            val updated = api.updateConfig(AssistantConfigUpdate(recentTaskChats = on))
-            applied = updated.recentTaskChats ?: on
-            set { copy(config = updated.copy(recentTaskChats = applied)) }
+        val ok = try {
+            perform(SettingsText(R.string.assistant_settings_save_failed)) {
+                recentTaskChatsChanged(on)
+                val updated = api.updateConfig(AssistantConfigUpdate(recentTaskChats = on))
+                applied = updated.recentTaskChats ?: on
+                set { copy(config = updated.copy(recentTaskChats = applied)) }
+            }
+        } catch (cancelled: CancellationException) {
+            set { copy(config = this.config?.copy(recentTaskChats = was)) }
+            withContext(NonCancellable) { quietly { recentTaskChatsChanged(was) } }
+            throw cancelled
         }
         if (!ok) {
             set { copy(config = this.config?.copy(recentTaskChats = was)) }
@@ -408,14 +432,79 @@ internal class AssistantSettingsState(
         return deleted
     }
 
+    /** A failed reload keeps the list it had; [PlacesState.error] is shown only while there is nothing to list. */
+    suspend fun loadPlaces() {
+        set { copy(places = places.copy(loading = true, failed = false)) }
+        try {
+            val entries = api.places()
+            set { copy(places = PlacesState(entries = entries)) }
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            val reason = error.message?.trim()?.ifEmpty { null }
+            set {
+                copy(places = places.copy(loading = false, failed = true, error = reason ?: places.error))
+            }
+        }
+    }
+
+    /** Adds or updates a place; null when the hub refused (busy, duplicate name, …). Trims name and address first. */
+    suspend fun savePlace(place: SavedPlace): SavedPlace? {
+        if (state.value.busy) return null
+        val draft = place.copy(
+            name = place.name.trim(),
+            address = place.address.trim(),
+        )
+        var saved: SavedPlace? = null
+        // Prefer the hub's reason (409 name taken, 400 too long / 50 places) over the generic save-failed text (#9293 R1).
+        val ok = perform(SettingsText(R.string.assistant_settings_save_failed), preferMessage = true) {
+            val result = api.savePlace(draft)
+            saved = result
+            set {
+                val list = places.entries.orEmpty()
+                val next = if (list.any { it.id == result.id }) list.map { if (it.id == result.id) result else it }
+                else list + result
+                copy(places = places.copy(entries = next, failed = false, error = null))
+            }
+            done(SettingsText(R.string.assistant_settings_places_saved, result.name))
+        }
+        return if (ok) saved else null
+    }
+
+    /** Optimistic: the row goes at once; a failure reports and reloads what the hub has. */
+    suspend fun deletePlace(place: SavedPlace): Boolean {
+        // Busy first: otherwise an optimistic remove rolls back with a reload and no message (#9293 R7).
+        if (place.id.isBlank() || state.value.busy) return false
+        val before = state.value.places.entries
+        set { copy(places = places.copy(entries = places.entries?.filterNot { it.id == place.id })) }
+        val deleted = perform(SettingsText(R.string.assistant_settings_delete_failed)) {
+            api.deletePlace(place.id)
+            done(SettingsText(R.string.assistant_settings_places_deleted, place.name))
+        }
+        if (!deleted) {
+            set { copy(places = places.copy(entries = before)) }
+            loadPlaces()
+        }
+        return deleted
+    }
+
     private fun done(text: SettingsText) = set { copy(notice = SettingsNotice(text, error = false)) }
 
-    private suspend fun perform(failure: SettingsText, block: suspend () -> Unit): Boolean {
+    private suspend fun perform(
+        failure: SettingsText,
+        preferMessage: Boolean = false,
+        block: suspend () -> Unit,
+    ): Boolean {
         if (state.value.busy) return false
         set { copy(busy = true, notice = null) }
         return try { block(); true }
         catch (error: CancellationException) { throw error }
-        catch (_: Exception) { set { copy(notice = SettingsNotice(failure, error = true)) }; false }
+        catch (error: Exception) {
+            val text = if (preferMessage) {
+                error.message?.trim()?.takeIf { it.isNotEmpty() }?.let(SettingsText::plain) ?: failure
+            } else failure
+            set { copy(notice = SettingsNotice(text, error = true)) }
+            false
+        }
         finally { set { copy(busy = false) } }
     }
 

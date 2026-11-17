@@ -26,6 +26,9 @@ type planInvalid struct{ error }
 
 // startPlan opens a todo for each task of the open plan id (edits, when given, replace the tasks' fields the user can
 // change) and starts their agents in the background; remember lets this kind start without asking next time.
+// On the owner's own Start (ownerStart) that also lets the scheduled task whose round planned it start these kinds by
+// itself from now on (scheduleGranting, #8045), each task's kind is added to that schedule's grant; never in the
+// health space.
 func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, remember bool) (*TaskPlan, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return nil, err
@@ -66,6 +69,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			return nil, planInvalid{err}
 		}
 		s.resolveTaskRepo(ctx, &p.Tasks[i]) // where it runs after the card's edits (its workspace, not the plan's cwd)
+		task := &p.Tasks[i]
+		if task.Continues != "" && task.Brief == nil {
+			// Cards saved before briefs must bind the current scope before they can start.
+			if err := s.planBriefs(ctx, "", p.Conversation, p.Tasks[i:i+1]); err != nil {
+				return nil, planInvalid{err}
+			}
+		}
+		if err := s.checkContinuationScope(task); err != nil {
+			return nil, planInvalid{err}
+		}
 	}
 	p.State = planStarted
 	for i := range p.Tasks {
@@ -73,6 +86,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		// Remembered by startTaskAgent once admission fixed the folder that runs: its repository is the kind, never
 		// the one the plan was made from when the workspace is in another (#8259).
 		p.Tasks[i].rememberKind = remember
+		if scheduleGrants(ctx) && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !p.Tasks[i].Readonly && !s.inHealth(ctx, p.Conversation) {
+			p.Tasks[i].grantSchedule = p.Tasks[i].Schedule // added once admission fixed the folder (startTaskAgent)
+		}
 	}
 	ok, err := s.movePlan(ctx, p, planOpen)
 	if err != nil {
@@ -122,17 +138,17 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 					s.taskCard(ctx, sup, todo.ID, "") // the leader sees its task's card too; the plan's stays where it was made
 				}
 			}
-			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+			s.supervisePlanTask(ctx, todo.ID, sup, t)
 		} else if sup, ok := s.defaultPlanSupervisor(ctx, p.Conversation, t.Parent); ok {
 			// Any other conversation's task is its own to supervise: its signals go to the conversation that planned it,
 			// which also sees its card and reviews it. No second card when that is the planning conversation itself.
 			if t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
 			}
-			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+			s.supervisePlanTask(ctx, todo.ID, sup, t)
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
-			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			s.supervisePlanTask(ctx, todo.ID, p.Conversation, t)
 			continue
 		}
 		if t.ReuseTodo != "" {
@@ -154,6 +170,26 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 	}
 	return p, nil
+}
+
+// supervisePlanTask keeps a continuation's ledger in step with its brief even
+// if the scope changed between accepting the card and preparing dispatch.
+func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) {
+	if t.Continues == "" {
+		s.superviseTodo(ctx, id, supervisor, t.DoneWhen, t.ExpectMinutes)
+		return
+	}
+	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		brief, ok := s.briefOfTodo(t.Continues)
+		if !ok {
+			return false
+		}
+		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectNow
+		return true
+	})
+	if err != nil {
+		s.logf("task %s: supervision: %v", id, err)
+	}
 }
 
 // notReusable is the refusal of a todo_id: it says why, so the assistant can plan again without it.
@@ -243,6 +279,9 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 	if task.Continues == id {
 		var todo Todo
 		todo, err = s.taskTodoForConversation(conversation, id)
+		if err == nil && task.Brief != nil {
+			err = s.checkContinuationScope(&task)
+		}
 		if err == nil {
 			stopped, err = s.stopContinuedTaskAgents(ctx, todo)
 		}
@@ -620,11 +659,35 @@ func (s *Service) planExecutionHistory(ctx context.Context) ([]*TaskPlan, error)
 	return plans, nil
 }
 
+// planHistoryOnce is planExecutionHistory read at most once, when first asked: one sweep over the open tasks
+// (remedyWatch) shares it, as it lists each machine once (machineSessions), instead of reading and decoding every plan
+// ever started for each to-do with no plan id of its own (#8770). Its plans are read only. A failed first read is
+// shared too, so that pass defers every remedy expiry to the next sweep, which builds a fresh closure and tries again.
+func (s *Service) planHistoryOnce() func(context.Context) ([]*TaskPlan, error) {
+	var (
+		read  bool
+		plans []*TaskPlan
+		err   error
+	)
+	return func(ctx context.Context) ([]*TaskPlan, error) {
+		if !read {
+			read = true
+			plans, err = s.planExecutionHistory(ctx)
+		}
+		return plans, err
+	}
+}
+
 // currentPlanAssignment resolves the execution binding, which is not the to-do's historical PlanID after a same-to-do
 // continuation. An exact binding in the same owning conversation keeps the ordinary direct lookup cheap. A handoff or
 // retired binding requires a global started-plan check: exactly one exact TodoID is current; guessing or merging
 // candidates could restore the wrong permission, so absence and ambiguity both fail closed with errTaskNotInPlan.
 func (s *Service) currentPlanAssignment(ctx context.Context, todo Todo) (*TaskPlan, int, error) {
+	return s.currentPlanAssignmentIn(ctx, todo, s.planExecutionHistory)
+}
+
+// currentPlanAssignmentIn is currentPlanAssignment with the global check reading the plans' history through history.
+func (s *Service) currentPlanAssignmentIn(ctx context.Context, todo Todo, history func(context.Context) ([]*TaskPlan, error)) (*TaskPlan, int, error) {
 	p, loadErr := s.loadPlan(ctx, todo.PlanID)
 	if loadErr != nil && !errors.Is(loadErr, errPlanNotFound) {
 		return nil, 0, loadErr
@@ -636,7 +699,7 @@ func (s *Service) currentPlanAssignment(ctx context.Context, todo Todo) (*TaskPl
 			return p, i, nil
 		}
 	}
-	plans, err := s.planExecutionHistory(ctx)
+	plans, err := history(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -680,7 +743,9 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok {
 		return nil, db.ErrTodoNotFound
 	}
-	if cur.PlanID == "" || cur.Origin == "" {
+	// A to-do no conversation opened is nobody's task to start again. One with no plan id of its own (a plan took it
+	// over through todo_id) is: the plan that binds it is found below (currentPlanAssignment, #8770).
+	if cur.Origin == "" {
 		return nil, errTaskNotRetryable
 	}
 	if cur.DoneAt == nil {

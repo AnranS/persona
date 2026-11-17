@@ -66,6 +66,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.StartDefaults != nil && len(in.StartDefaults.Rules) > 0 {
+		if err := in.StartDefaults.validate(true, time.Now().UTC()); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		in.StartDefaults.By = "owner" // this route is full credentials only
+	}
 	before := s.settings(ctx)
 	machine := before.MachineID
 	if in.MachineID != "" {
@@ -106,6 +113,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if p := in.ReviewSamplePercent; p != nil && (*p < 0 || *p > 100) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("review_sample_percent must be 0–100"))
+		return
+	}
+	if p := in.MainCompactWindow; p != nil && !validMainCompactWindow(*p) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("main_compact_window must be 0 or 100000–10000000"))
 		return
 	}
 	if d := in.IdleCloseHours; d != nil && (*d < 0 || *d > maxIdleCloseHours) {
@@ -206,6 +217,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
 		}
+		if in.MainCompactWindow != nil {
+			v.MainCompactWindow = in.MainCompactWindow
+		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
 		}
@@ -270,6 +284,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 				v.DispatchPolicy = nil
 			} else {
 				v.DispatchPolicy = in.DispatchPolicy
+			}
+		}
+		if in.StartDefaults != nil { // the same for the start defaults (start_defaults.go)
+			if len(in.StartDefaults.Rules) == 0 {
+				v.StartDefaults = nil
+			} else {
+				v.StartDefaults = in.StartDefaults
 			}
 		}
 		return nil

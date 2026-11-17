@@ -137,6 +137,9 @@ type Meta struct {
 	// CodexSandbox: Codex rollouts' sandbox of the latest turn (read-only, workspace-write…); PermissionMode is its approval policy.
 	CodexSandbox  string
 	ContextTokens int // input + cache read + cache creation of the latest reply: what the model last saw
+	// ContextCompacted: a compaction came after the latest reply, so the context is not known (ContextTokens 0) until
+	// the next one; the size before it no longer stands (#9207).
+	ContextCompacted bool
 	// ContextWindow is the model's context window when the transcript says it (a Codex rollout's token_count carries
 	// model_context_window); 0 for Claude Code, whose transcripts do not (node/contextwindow.go knows by model id).
 	ContextWindow    int
@@ -235,6 +238,11 @@ type Meta struct {
 	codexSeen   map[string]bool
 	codexTurnID string
 	codexUserID string
+	// codexPending: the ids of backgrounded commands whose terminal record has not been read. A command can finish in
+	// a later turn, so task_started does not clear it; the id leaves when its completed/failed record is read.
+	// codexPendingIDs keeps them oldest first and codexPendingKept (codex.go) bounds them.
+	codexPending    map[string]bool
+	codexPendingIDs []string
 	// codexTurnModel: the model the turn under way runs on (its turn_context), which the turn's agent items carry.
 	// task_started clears it, as a window starting there has none.
 	codexTurnModel string
@@ -277,18 +285,19 @@ type Meta struct {
 	Updated      time.Time
 }
 
-// ObserveNamingMetadata reads only title provenance and generated usage during an existing incremental scan.
+// ObserveNamingMetadata reads title provenance, generated usage and Codex turn settings during an existing incremental scan.
 // It never decodes message content (which can contain large screenshots or tool output).
 func (m *Meta) ObserveNamingMetadata(line []byte) {
 	if !bytes.Contains(line, []byte(`"custom-title"`)) && !bytes.Contains(line, []byte(`"ai-title"`)) &&
-		!bytes.Contains(line, []byte(`"output_tokens"`)) {
+		!bytes.Contains(line, []byte(`"output_tokens"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) {
 		return
 	}
 	var e struct {
-		Type        string `json:"type"`
-		CustomTitle string `json:"customTitle"`
-		AITitle     string `json:"aiTitle"`
-		IsSidechain bool   `json:"isSidechain"`
+		Type        string    `json:"type"`
+		Timestamp   time.Time `json:"timestamp"`
+		CustomTitle string    `json:"customTitle"`
+		AITitle     string    `json:"aiTitle"`
+		IsSidechain bool      `json:"isSidechain"`
 		Message     *struct {
 			ID    string `json:"id"`
 			Usage *struct {
@@ -296,8 +305,9 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 			} `json:"usage"`
 		} `json:"message"`
 		Payload struct {
-			Type string `json:"type"`
-			Info *struct {
+			Type   string `json:"type"`
+			Effort string `json:"effort"`
+			Info   *struct {
 				Total struct {
 					OutputTokens int `json:"output_tokens"`
 				} `json:"total_token_usage"`
@@ -308,6 +318,10 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 		return
 	}
 	switch e.Type {
+	case "turn_context":
+		if e.Payload.Effort != "" && !e.Timestamp.Before(m.EffortAt) {
+			m.Effort, m.EffortAt = e.Payload.Effort, e.Timestamp
+		}
 	case "custom-title":
 		if e.CustomTitle != "" {
 			m.Title, m.TitleManual, m.TitleSource = e.CustomTitle, true, "manual"
@@ -391,6 +405,10 @@ var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-co
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
+
+// OmpStoppedNotice is what a stopped omp session (listed from omp's own session files, node/ompdisk.go) shows in
+// place of its conversation. The hub puts it into the reader's language (hub/transcript_text.go noticeText).
+const OmpStoppedNotice = "这个 omp 会话已停止。现在只能在电脑上接着它（omp --resume），这里还不能给它发消息。"
 
 // InterruptedNotice is the notice a turn stopped by the user becomes (Claude Code and Codex); APIErrorPrefix starts
 // the notice of a turn the model service failed. The channels read them as why a turn ended without words
@@ -527,12 +545,17 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	switch {
 	case e.Type == "system" && e.Subtype == "compact_boundary":
 		meta.Compactions++
+		if !e.IsSidechain {
+			// What the latest reply saw was compacted away, and the boundary's postTokens leaves out the system prompt
+			// and tools (the next reply sees about four times as much, #9207): unknown until that reply.
+			meta.ContextTokens, meta.ContextCompacted = 0, true
+		}
 	case e.Type == "assistant" && e.Message != nil && e.Message.Usage != nil && !e.IsSidechain:
 		u := e.Message.Usage
 		// A gateway's sum of a whole turn is not a context, nor the zeros it reports on the turn's other replies
 		// (usage.go): the last real one stands.
 		if tokens := int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens); tokens > 0 && PlausibleContext(tokens, 0) {
-			meta.ContextTokens = tokens
+			meta.ContextTokens, meta.ContextCompacted = tokens, false
 		}
 		meta.observeOutput(e.Message.ID, int(u.OutputTokens))
 	}
