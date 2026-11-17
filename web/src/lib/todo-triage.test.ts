@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Session } from "./types";
-import { makeSessionLookup, shownStatus, todoStatus, todoStatusLabel, type Todo } from "./todos";
-import { checkCount, checklist, reviewBadge, type Supervision } from "./supervision";
+import { acceptedAtRest, makeSessionLookup, shownStatus, todoRank, todoStatus, todoStatusLabel, type Todo } from "./todos";
+import { checkCount, checklist, decisionDismissed, reviewBadge, type Supervision } from "./supervision";
 import { FOLDED_SECTIONS, lastActivity, relatedKeys, SHELVE_AFTER_MS, supersededFailedStarts, todoBucket, TRIAGE_SECTIONS, triage, triageTodos, waitingForMerge } from "./todo-triage";
 import { seenCanFile } from "./todo-seen";
 import { resetRestoredCache, restoreTodo } from "./todo-restore";
@@ -119,6 +119,32 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(reviewBadge(td)?.tone).toBe("green");
   });
 
+  it.each(["decide", "cannot"] as const)("an accepted task with a %s ask still waits for the owner", (outcome) => {
+    const td = todo("t", { agents: [agent("idle")], supervision: acceptedReopened(),
+      ask: { outcome, verdict: "Choose the rollout", asked_at: hoursAgo(1) } });
+    const status = todoStatus(td, lookup);
+    expect(at(td)).toMatchObject({ section: "waiting", rule: "owner_decides" });
+    expect(acceptedAtRest(td, status)).toBe(false);
+    expect(shownStatus(td, status)).toBe("needs_you");
+    expect(todoStatusLabel(td, status)).toBe("待处理");
+    expect(todoRank(td, status)).toBe(0);
+  });
+
+  it.each(["decide", "cannot"] as const)("an accepted task with a dismissed %s ask reads accepted again", (outcome) => {
+    const supervision = acceptedReopened();
+    const reviewAt = supervision.reviews?.at(-1)?.at;
+    expect(reviewAt).toBeDefined();
+    const td = todo("t", { agents: [agent("idle")], supervision,
+      ask: { outcome, verdict: "Choose the rollout", asked_at: hoursAgo(1) },
+      decision_review: { review_at: reviewAt!, dismissal_id: "dismiss-current-round" } });
+    const status = todoStatus(td, lookup);
+    expect(decisionDismissed(td)).toBe(true);
+    expect(at(td)).toMatchObject({ section: "done", rule: "accepted" });
+    expect(acceptedAtRest(td, status)).toBe(true);
+    expect(shownStatus(td, status)).toBe("done");
+    expect(todoStatusLabel(td, status)).toBe("已验收");
+    expect(todoRank(td, status)).toBe(8);
+  });
   it("an accepted concern stays open in its status words and tone too", () => {
     const td = todo("concern", { kind: "concern", supervision: acceptedReopened() });
     const status = todoStatus(td, lookup);

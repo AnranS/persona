@@ -83,7 +83,7 @@ nonisolated extension TodoItem {
     /// running or asking now: it reads Accepted, not Follow Up (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
     /// An open concern still waits for its report, so acceptance gives it neither that word nor Done styling (#3582).
     func acceptedAtRest(_ state: TaskState) -> Bool {
-        !isConcern && doneAt == nil && acceptanceStands && (state == .followup || state == .unread || state == .notStarted)
+        !isConcern && doneAt == nil && (!waitsForOwner || decisionReview?.dismissed == true) && acceptanceStands && (state == .followup || state == .unread || state == .notStarted)
     }
 
     /// The state a row draws its tone and mark from: accepted, owner wait and delivered work match their labels (#5732).

@@ -193,6 +193,29 @@ struct AssistantActionBarTests {
         #expect(AssistantEntries.rank(pending, limitedPending) == 1.5)
     }
 
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedOwnerDecisionKeepsNeedsYouRank(outcome: String) {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted",
+                            ask: ["verdict": "Choose the rollout", "asked_at": iso(2), "outcome": outcome])
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        #expect(accepted.waitsForOwner)
+        #expect(AssistantEntries.rank(accepted, .followUp) == 0)
+        let result = split([accepted], [session("a", "idle")])
+        #expect(ids(result.needsYou) == ["task:accepted"])
+        #expect(result.running.isEmpty)
+    }
+
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedDismissedOwnerDecisionRestoresAcceptedRank(outcome: String) {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted",
+                            ask: ["verdict": "Choose the rollout", "asked_at": iso(2), "outcome": outcome])
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        accepted.decisionReview = DecisionReview(reviewAt: iso(2), dismissalID: "dismiss-current-round")
+        #expect(accepted.decisionReview?.dismissed == true)
+        #expect(accepted.waitsForOwner)
+        #expect(AssistantEntries.rank(accepted, .followUp) == 8)
+    }
+
     private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: Double) -> TaskPlan {
         TaskPlan(id: id, conversation: "main", tasks: (0..<tasks).map { PlanTask(title: "task \($0)", prompt: "p", machine: "mac", cwd: "/demo") },
                  state: state, createdAt: now - at * 60)

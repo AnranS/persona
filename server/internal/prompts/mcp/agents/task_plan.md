@@ -128,6 +128,10 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "type": "string",
             "description": "with continues: one line on why the earlier task stopped or needs a replacement; kept on this continuation's plan"
           },
+          "scope_revision": {
+            "type": "string",
+            "description": "with continues after task_scope: the exact scope_revision returned by that change; a continuation planned against an older scope is refused so it can be planned again from the current brief"
+          },
           "started_why": {
             "type": "string",
             "description": "when the owner did not just ask for this (your own idea, something a 督办 message or a routine led to): one line on why you start it; kept on the brief"

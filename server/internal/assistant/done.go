@@ -674,7 +674,7 @@ func ownerChineseConditionalPrefix(prefix string) bool {
 				continue
 			}
 			lead := strings.TrimSpace(clause[:i])
-			if lead == "" || strings.HasSuffix(lead, "：") || strings.HasSuffix(lead, ":") ||
+			if lead == "" || strings.HasSuffix(lead, "：") || strings.HasSuffix(lead, ":") || // i18n-ignore: parser punctuation
 				strings.HasSuffix(lead, "，") || strings.HasSuffix(lead, ",") { // i18n-ignore: parser punctuation
 				return true
 			}

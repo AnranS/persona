@@ -714,9 +714,45 @@ extension TodoTriageTests {
         #expect(TodoTriageLogic.checksAsOpen(td, t))
     }
 
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedOwnerDecisionDoesNotReadAsAccepted(outcome: String) throws {
+        let json = """
+        {"id":"accepted-decision","title":"Choose the rollout","created_at":"2026-11-09T00:00:00.000Z",
+         "updated_at":"2026-11-10T10:00:00.000Z","done_at":null,"agents":[],"origin":"main",
+         "supervision":{"supervisor":"main","done_when":[],"state":"accepted",
+           "reviews":[{"at":"2026-11-10T09:00:00.000Z","verdict":"accepted","checks":[]}]},
+         "ask":{"outcome":"\(outcome)","verdict":"Choose the rollout","asked_at":"2026-11-10T10:00:00.000Z"}}
+        """
+        let td = try sharedTodo(json)
+        let status: TaskState = .followup
+        #expect(td.acceptanceStands)
+        #expect(td.waitsForOwner)
+        #expect(!td.acceptedAtRest(status))
+        #expect(td.shownState(status) == .needsYou)
+        #expect(td.statusLabel(status) == String(localized: "Waiting for You [To-do Sections]"))
+    }
+
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedDismissedOwnerDecisionReadsAccepted(outcome: String) throws {
+        let json = """
+        {"id":"accepted-dismissed-decision","title":"Choose the rollout","created_at":"2026-11-09T00:00:00.000Z",
+         "updated_at":"2026-11-10T10:00:00.000Z","done_at":null,"agents":[],"origin":"main",
+         "supervision":{"supervisor":"main","done_when":[],"state":"accepted",
+           "reviews":[{"at":"2026-11-10T09:00:00.000Z","verdict":"accepted","checks":[]}]},
+         "decision_review":{"review_at":"2026-11-10T09:00:00.000Z","dismissal_id":"dismiss-current-round"},
+         "ask":{"outcome":"\(outcome)","verdict":"Choose the rollout","asked_at":"2026-11-10T10:00:00.000Z"}}
+        """
+        let td = try sharedTodo(json)
+        let status: TaskState = .followup
+        #expect(td.decisionReview?.dismissed == true)
+        #expect(td.waitsForOwner)
+        #expect(td.acceptedAtRest(status))
+        #expect(td.shownState(status) == .done)
+        #expect(td.statusLabel(status) == String(localized: "Accepted"))
+    }
+
     /// Shared case `concern_deployed`: Other open / rest.
-    @Test func sharedConcernDeployed() throws {
-        let t = try sharedAt(#"{"id":"concern-deployed","title":"Answer the deployment question","kind":"concern","created_at":"2026-11-09T00:00:00.000Z","updated_at":"2026-11-10T10:00:00.000Z","done_at":null,"agents":[],"origin":"main","delivery":{"state":"live","at":"2026-11-10T09:00:00.000Z"}}"#)
+    @Test func sharedConcernDeployed() throws {        let t = try sharedAt(#"{"id":"concern-deployed","title":"Answer the deployment question","kind":"concern","created_at":"2026-11-09T00:00:00.000Z","updated_at":"2026-11-10T10:00:00.000Z","done_at":null,"agents":[],"origin":"main","delivery":{"state":"live","at":"2026-11-10T09:00:00.000Z"}}"#)
         #expect(t.section == .other && t.rule == .rest)
     }
 
