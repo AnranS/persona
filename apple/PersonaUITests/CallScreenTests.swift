@@ -76,7 +76,7 @@ final class CallScreenTests: XCTestCase {
                 XCTAssertTrue(app.buttons["call-speaker"].isSelected, "Speaker is not on")
             }),
             ("resume", "call-held-resume", { app in
-                XCTAssertTrue(app.staticTexts["已保持"].exists, "no 已保持\n\(app.debugDescription)")
+                XCTAssertTrue(app.staticTexts["通话保持中"].exists, "no 通话保持中\n\(app.debugDescription)")
                 XCTAssertTrue(app.buttons["call-resume"].exists, "no 恢复通话")
             }),
             ("reconnecting", "call-reconnecting", { app in
@@ -247,7 +247,7 @@ final class CallScreenTests: XCTestCase {
         let resume = app.buttons["urgentCall.resume"]
         XCTAssertTrue(resume.waitForExistence(timeout: 30), "no Resume on the held urgent call\n\(app.debugDescription)")
         let line = app.staticTexts.matching(identifier: "urgentCall.state").firstMatch // its text, not its icon
-        XCTAssertTrue(line.exists && line.label.contains("已保持"), "the line does not say 已保持: \(line.label)\n\(app.debugDescription)")
+        XCTAssertTrue(line.exists && line.label.contains("通话保持中"), "the line does not say 通话保持中: \(line.label)\n\(app.debugDescription)")
         assertOnScreen(app, ["urgentCall.mute", "urgentCall.speaker", "urgentCall.resume", "urgentCall.hangUp"], "urgent, held")
         Thread.sleep(forTimeInterval: 1)
         shot("urgent-call-held", app)

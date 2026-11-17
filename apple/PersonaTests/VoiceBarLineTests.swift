@@ -196,7 +196,7 @@ struct VoiceBarLineTests {
         #expect(status(.live(.listening), tool: "查日程").text == "正在查日程…")
         #expect(status(.ended(.lost)).orb == .ended)
         // A call to Persona on hold says so, as its call screen does, whatever the link or the mute.
-        let onHold = VoiceBarStatus(text: "已保持", orb: .paused)
+        let onHold = VoiceBarStatus(text: "通话保持中", orb: .paused)
         #expect(status(.live(.listening), link: .paused, held: true) == onHold)
         #expect(status(.live(.listening), muted: true, held: true) == onHold)
         #expect(status(.reconnecting(attempt: 1), held: true) == onHold)

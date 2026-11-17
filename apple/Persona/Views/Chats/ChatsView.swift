@@ -5700,7 +5700,7 @@ private struct TabBarRoomOnce: UIViewRepresentable {
             // window's own, and the call bar's room the root adds (`CallBarRoom`), which every page keeps.
             let given = tab.view.safeAreaInsets.top - tab.additionalSafeAreaInsets.top
             let rootTop = window.safeAreaInsets.top + (window.rootViewController?.additionalSafeAreaInsets.top ?? 0)
-            let extra = TabBarRoom.extra(given: given, rootTop: rootTop)
+            let extra = TabBarExtraRoom.extra(given: given, rootTop: rootTop)
             if abs(tab.additionalSafeAreaInsets.top + extra) > 0.5 { tab.additionalSafeAreaInsets.top = -extra }
         }
 
@@ -5712,7 +5712,7 @@ private struct TabBarRoomOnce: UIViewRepresentable {
 
 /// The tab bar's second room (`TabBarRoomOnce`): what a tab's controller is given at the top beyond the window root's
 /// top (the status bar, and the return-to-call bar's room the root adds: never taken back, #9290).
-nonisolated enum TabBarRoom {
+nonisolated enum TabBarExtraRoom {
     static func extra(given: CGFloat, rootTop: CGFloat) -> CGFloat { max(0, given - rootTop) }
 }
 #endif

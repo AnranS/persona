@@ -114,9 +114,9 @@ struct CallScreenTests {
     /// a tab is given above the root's top (the tab bar's second room) is taken back off it.
     @Test func theTabsKeepTheCallBarsRoom() {
         let status: CGFloat = 24, bar: CGFloat = 52, tabBar: CGFloat = 64
-        #expect(TabBarRoom.extra(given: status + bar + tabBar, rootTop: status + bar) == tabBar)
-        #expect(TabBarRoom.extra(given: status + bar, rootTop: status + bar) == 0, "the bar's room stays")
-        #expect(TabBarRoom.extra(given: status + tabBar, rootTop: status) == tabBar, "no bar: as before")
+        #expect(TabBarExtraRoom.extra(given: status + bar + tabBar, rootTop: status + bar) == tabBar)
+        #expect(TabBarExtraRoom.extra(given: status + bar, rootTop: status + bar) == 0, "the bar's room stays")
+        #expect(TabBarExtraRoom.extra(given: status + tabBar, rootTop: status) == tabBar, "no bar: as before")
     }
 
     /// The orb gives way on a short page or at a large text size: to its share of the page, then to the words around it

@@ -162007,7 +162007,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通话已保持，你说的话不会发出去"
+            "value" : "通话保持中，你说的话不会发出去"
           }
         }
       },
