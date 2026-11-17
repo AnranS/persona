@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { dirname, posix, relative, resolve, sep, win32 } from "node:path";
+import { dirname, posix, win32 } from "node:path";
 
 export const PAIR_INPUT = "persona://link?";
 export const SERVICE_SENTINEL = "real Link smoke: systemctl access is unavailable";
@@ -45,13 +45,13 @@ export function classifyOwnedPath(run, candidate) {
     if (descendant === ".." || descendant.startsWith(`..${win32.sep}`) || win32.isAbsolute(descendant)) return "outside";
     return "descendant";
   }
-  if (!run.startsWith(sep) || !candidate.startsWith(sep)) return "outside";
+  if (!run.startsWith(posix.sep) || !candidate.startsWith(posix.sep)) return "outside";
   if (candidate.includes(";") || candidate.split("/").includes("..")) return "outside";
-  const root = trimPosixTrailing(resolve(run));
-  const normalized = trimPosixTrailing(resolve(candidate));
+  const root = trimPosixTrailing(posix.resolve(run));
+  const normalized = trimPosixTrailing(posix.resolve(candidate));
   if (root === normalized) return "root";
-  const descendant = relative(root, normalized);
-  if (descendant === ".." || descendant.startsWith(`..${sep}`) || descendant.startsWith(sep)) return "outside";
+  const descendant = posix.relative(root, normalized);
+  if (descendant === ".." || descendant.startsWith(`..${posix.sep}`) || descendant.startsWith(posix.sep)) return "outside";
   return "descendant";
 }
 
@@ -87,7 +87,7 @@ function ownedReplacement(run, candidate) {
     const path = trimWindowsTrailing(win32.resolve(windowsComparable(candidate)));
     return `<run>/${windowsComparablePath(path).slice(rootPath.length).replace(/^\/+/, "")}`;
   }
-  return `<run>/${relative(trimPosixTrailing(resolve(run)), trimPosixTrailing(resolve(candidate)))}`;
+  return `<run>/${posix.relative(trimPosixTrailing(posix.resolve(run)), trimPosixTrailing(posix.resolve(candidate)))}`;
 }
 
 /**
@@ -140,7 +140,7 @@ function redactOnePath(text, run) {
       if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, candidate, replacement, consumed: candidate.length }));
       const trailing = candidate.slice(trimmed.length);
       const consumed = candidateEnd;
-      if (windowsToken === null && first[candidate.length] === ";" && !/^\s/.test(first[candidate.length + 1] ?? "")) return { replacement: "<path>", consumed: first.length };
+      if (first[candidate.length] === ";" && !/^\s/.test(first[candidate.length + 1] ?? "")) return { replacement: "<path>", consumed: first.length };
       return { replacement: replacement + trailing, consumed };
     }
   }

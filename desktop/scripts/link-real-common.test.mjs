@@ -226,6 +226,29 @@ test("namespace, spaced and punctuated private paths cannot leak or swallow evid
   ]);
 });
 
+test("Windows-owned paths fail closed on semicolon continuations", () => {
+  for (const root of [String.raw`C:\owned\root`, String.raw`\\server\share\owned`, String.raw`\\?\C:\owned\root`]) {
+    for (const suffix of [String.raw`;private-child\secret.txt`, String.raw`;private-child\..\..\outside\secret.txt`]) {
+      assert.equal(sanitize(`path=${root}${suffix}`, root), "path=<path>");
+    }
+  }
+});
+
+test("POSIX ownership uses POSIX semantics even on a Windows host", async () => {
+  const source = await readFile(new URL("./link-real-common.mjs", import.meta.url), "utf8");
+  const windowsSource = source.replace(
+    'import { dirname, posix, win32 } from "node:path";',
+    'import { dirname, posix, win32 } from "node:path"; const { relative, resolve, sep } = win32;',
+  );
+  assert.notEqual(windowsSource, source);
+  const windowsModule = await import(`data:text/javascript;base64,${Buffer.from(windowsSource).toString("base64")}`);
+  for (const candidate of [{ classifyOwnedPath, sanitize }, windowsModule]) {
+    assert.equal(candidate.classifyOwnedPath("/", "/tmp/run"), "descendant");
+    assert.equal(candidate.classifyOwnedPath("/tmp/run", "/tmp/run/child"), "descendant");
+    assert.equal(candidate.sanitize("/tmp/run/child /tmp/private/secret", "/tmp/run"), "<run>/child <path>");
+  }
+});
+
 test("independent review path counterexamples stay private without swallowing evidence", () => {
   assert.equal(sanitize("/tmp/run/child /tmp/private/secret", "/tmp/run"), "<run>/child <path>");
   assert.equal(sanitize("/tmp/private/secret),PRIVATE", "/tmp/run"), "<path>");
