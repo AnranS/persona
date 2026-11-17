@@ -388,8 +388,8 @@ the percentage and the color on the tile instead. Its examples are `examples/Vie
 UI version 10 (#9727) adds one component, `graph` (`GraphComponent`: `nodes`, `edges`, `layout`, `direction`, `selected`,
 `folded`): a canvas of nodes joined by edges, each node `GraphNode` with `id`, `title` and optional state, color, progress,
 group and action. The hub's `downgrade10` (`server/internal/extension/ui_v10.go`) draws an older app one indented row per
-visible node in reading order. A native stream never carries a graph, at 10 included: it gets those rows always, so
-`UIStreamItem`'s graph variant lists the fields a stream may draw. Its examples are `examples/View.v10-*.json`.
+visible node in reading order; a native stream's source may draw a graph too (`UIStreamItem` lists it), but its client
+never gets one, at 10 included: the hub draws it as those rows. Its examples are `examples/View.v10-*.json`.
 
 ## Adding a call
 

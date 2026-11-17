@@ -2786,7 +2786,7 @@ the same titles, states and actions are there, as a list:
 | a node's `subtitle`, `badge`, `icon`, `color`, `action` | the row's `subtitle`, `badge`, `icon`, `icon_color`, `action` |
 | a node's `progress` | the row's `value`, the percentage (`40%`) |
 | a folded node | its row's `value` gains `+12` (the nodes it hides), after the percentage with ` · ` when it has one; what it hides has no row |
-| `tone`, `group`, `selected`, `layout`, `direction`, `key` | left out (a row's key is `key/id` when the graph has a key and that is free on the page) |
+| `tone`, `group`, `selected`, `layout`, `direction`, `key` | left out (a row's key is `key/id` when the graph has a key and that is free on the page; a native stream's row always has a key, so a taken or overlong one becomes a free digest of the node id) |
 
 Below versions 6 and 3 the rows then lose what those versions did not have (`icon_color`, `icon`), as any row. A native stream's
 client (whose components never include `graph`) gets the same rows. Extensions may still draw an older app differently (`ui_version`).
