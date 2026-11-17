@@ -19,7 +19,8 @@ import { Badge, gaugePercent, glyphOf } from "./ViewBody6";
 import { ROW_ICON } from "./ViewBody";
 
 // The web's node pitch: a node is the graph node token's size (about 224 × 64 at the default text size,
-// docs/design/DESIGN_SYSTEM.md "An extension's graph"); a slot is a node and its gap on each axis.
+// docs/design/DESIGN_SYSTEM.md, the graph of "UI version 10" in docs/extensions/extensions.md); a slot is a node
+// and its gap on each axis.
 const NODE_W = 224;
 const NODE_H = 64;
 const PITCH_X = 272;
@@ -126,7 +127,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
   }, [laid, byId]);
 
   /** The node's place in the layer: slots × the web's pitch, plus the layer's margin. */
-  const at = (id: string): [number, number] => [laid.at[id][0] * PITCH_X + MARGIN, laid.at[id][1] * PITCH_Y + MARGIN];
+  const at = (id: string): [number, number] => (laid.at[id] ? [laid.at[id][0] * PITCH_X + MARGIN, laid.at[id][1] * PITCH_Y + MARGIN] : [0, 0]);
   const sel = item.selected && laid.at[item.selected] ? item.selected : undefined;
 
   useLayoutEffect(() => {
@@ -201,6 +202,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
       const r = area.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
+    const stop = (e: Event) => e.stopPropagation();
 
     const wheel = (e: WheelEvent) => {
       e.preventDefault(); // the canvas is a pan surface: the wheel never scrolls the page past it
@@ -213,7 +215,9 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
       }
     };
 
-    // Drag pans; two pointers pinch around their centre (the point between them stays put).
+    // Drag pans; two pointers pinch around their centre (the point between them stays put). A press that starts on a
+    // node (or any control) stays that control's press — the drag takes over only once the pointer moves 4 px, and
+    // dragging never presses the node under it.
     const points = new Map<number, { x: number; y: number }>();
     const gesture = (ps: Map<number, { x: number; y: number }>) => {
       const [a, b] = ps.values();
@@ -223,14 +227,22 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
     };
     const down = (e: PointerEvent) => {
       if (e.button !== 0 || points.size >= 2) return;
-      e.preventDefault();
-      area.setPointerCapture(e.pointerId);
       points.set(e.pointerId, local(e));
     };
     const move = (e: PointerEvent) => {
-      if (!points.has(e.pointerId)) return;
+      const p = points.get(e.pointerId);
+      if (!p) return;
+      const at = local(e);
+      const onControl = (e.target as Element | null)?.closest("button, a, input, select, textarea") ?? null;
+      const dragging = area.hasPointerCapture(e.pointerId);
+      // a control's own press stays its own until the pointer really moves (4 px) and the drag takes it over
+      if (!dragging && onControl && Math.hypot(at.x - p.x, at.y - p.y) < 4) return;
+      if (!dragging) {
+        area.setPointerCapture(e.pointerId);
+        if (onControl) onControl.addEventListener("click", stop, { capture: true, once: true }); // the drag begins on a control: swallow its click rather than press it as well
+      }
       const before = gesture(points)!;
-      points.set(e.pointerId, local(e));
+      points.set(e.pointerId, at);
       const after = gesture(points)!;
       if (before.d > 0 && after.d > 0) {
         // the point between the fingers stays put: zoom about it, then carry it with the fingers

@@ -617,7 +617,9 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // environment. The idle renderer (ViewBody.tsx) gains the graph's case with its Suspense fallback of the kept height
 // and the lazy registration of ViewBody10.tsx; the canvas itself (about 8 KB) loads on intent with the first view
 // that has a graph. Main had 0 B of room; the budget rises by exactly that delta.
-export const IDLE_TIER_BUDGET = 46_113;
+// 2 B more of the same change's drift (the canvas's chunk name the idle tier embeds, measured 46,115 B after the
+// gesture fix), so the budget covers what the branch sends.
+export const IDLE_TIER_BUDGET = 46_115;
 
 const gzip = promisify(gzipCompress);
 
