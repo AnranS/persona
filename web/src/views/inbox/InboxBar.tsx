@@ -111,7 +111,8 @@ export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGroup
     <div className="flex items-center gap-0.5" data-inbox-bar>
       <div role="radiogroup" aria-label={t("inbox-inboxlist.sections")} className="flex min-w-0 flex-1 items-center gap-0.5">
         {/* room around the pills for their touch targets (44 px around 24) and the keyboard's focus ring, which a sideways
-            scroller would clip, given back by the negative margin so the row sits where it would */}
+            scroller would clip, given back by the negative margin so the row sits where it would (12 px above and below:
+            classes the first screen's CSS already has) */}
         <div
           ref={strip}
           onScroll={beyond.measure}
@@ -121,7 +122,7 @@ export function InboxBar({ entries, chosen, onPick, grouping, groupable, onGroup
             if (box && box.scrollWidth > box.clientWidth && Math.abs(ev.deltaY) > Math.abs(ev.deltaX)) box.scrollLeft += ev.deltaY * (ev.deltaMode === 1 ? 16 : 1);
           }}
           style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
-          className="-mx-1 -my-2.5 flex min-w-0 items-center gap-0.5 overflow-x-auto px-1 py-2.5 scrollbar-none"
+          className="-mx-1 -mt-3 -mb-3 flex min-w-0 items-center gap-0.5 overflow-x-auto px-1 py-3 scrollbar-none"
           data-bar-strip
         >
           {entries.filter((e) => e.id !== "all").map(pill)}
