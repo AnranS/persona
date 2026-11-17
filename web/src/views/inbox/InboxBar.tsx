@@ -12,7 +12,10 @@ import type { Grouping } from "../../lib/inbox-groups";
 import { cx, IconButton, Menu, useMenu } from "../../ui/atoms";
 import { CountBadge } from "../../ui/CountBadge";
 import { nextTab } from "../../ui/roving";
-import { FADE } from "../chat/edge-fade";
+
+// How far the row fades at each edge, in px: edgeMask's widths (views/chat/edge-fade.ts), which InboxList.bar.test.tsx
+// keeps the same. A copy, not an import: edge-fade is in the first screen's chunk, which then changed with the bar.
+const FADE = { left: 28, right: 44 } as const;
 
 /** A choice's name: the section's title, Done, or All. */
 export function barChoiceName(id: BarChoice): string {

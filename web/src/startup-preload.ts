@@ -383,12 +383,14 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // layouts tried (mounting it under every exchange, or riding the reply bar's chunk, cost more). 85 B in ja, measured in
 // one environment against main 21cd52cc2 (ja 482,104 B to 482,189 B; en 478,990 B to 479,075 B, zh-Hans 479,859 B to
 // 479,944 B). Main had 422 B of room; the budget stays.
-// #9053: the Inbox section bar takes 69 B of that room in each language, measured in one environment against main
-// 309916f172 (ja 482,423 B to 482,492 B; en 479,319 B to 479,388 B, zh-Hans 480,124 B to 480,193 B): the grouping mark
-// in the icon set, IconButton saying it opens a menu, and --needs-ink with its class. CountBadge, which only the Inbox
-// page draws so far, is a module of its own (ui/CountBadge.tsx): in atoms it took another 131 B (against main
-// 094253763d). Of #4653's two Needs-you tokens only the text shade it draws comes along (the fill took 49 B more), and
-// the bar's strip uses spacing classes the CSS already has (its own took 44 B more). The budget stays.
+// #9053: the Inbox section bar takes 59 B of that room in each language, measured in one environment against main
+// ae3d20467b (ja 482,386 B to 482,445 B; en 479,282 B to 479,341 B, zh-Hans 480,087 B to 480,146 B): the grouping mark
+// in the icon set, IconButton saying it opens a menu, and --needs-ink with its class. The rest stays off the first
+// screen: CountBadge, which only the Inbox page draws so far, is a module of its own (ui/CountBadge.tsx; in atoms it
+// took another 131 B against main 094253763d); of #4653's two Needs-you tokens only the text shade it draws comes along
+// (the fill took 49 B more); the bar's strip uses spacing classes the CSS already has (its own took 44 B more); and the
+// App chunk is main's to the byte: the bar keeps its own copy of the edge fade's widths and of the arrow keys' step
+// rather than importing them from views/chat, which moved that chunk by up to 131 B. The budget stays.
 export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

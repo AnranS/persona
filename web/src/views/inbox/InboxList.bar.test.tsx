@@ -30,6 +30,7 @@ import { InboxList } from "./InboxList";
 import { barFade } from "./InboxBar";
 import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { resetMailForTests } from "../../lib/mail";
+import { edgeMask } from "../chat/edge-fade";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -269,6 +270,8 @@ describe("the Inbox's section bar (#9053)", () => {
     expect(barFade(0, 3)).toBe("linear-gradient(90deg,transparent,#000 0px,#000 calc(100% - 3px),transparent)");
     expect(barFade(0, 300)).toContain("calc(100% - 44px)");
     expect(barFade(120, 0)).toContain("#000 28px,");
+    // at full width, the fade every other sideways row draws (its own copy of the widths)
+    expect(barFade(300, 300)).toBe(edgeMask({ left: true, right: true }));
   });
 
   it("keeps All beside the grouping, out of the row of sections that scrolls sideways", async () => {
