@@ -38,6 +38,53 @@ export interface DesktopDeepLink {
   readonly route?: string;
 }
 
+function hasUnsafeRouteCharacters(value: string): boolean {
+  return value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value);
+}
+
+function validDeepLinkRoute(route: string): boolean {
+  if (!route.startsWith("/") || route.startsWith("//") || hasUnsafeRouteCharacters(route)) return false;
+  try { return new URL(route, "https://desktop.invalid/").origin === "https://desktop.invalid"; } catch { return false; }
+}
+
+/** The view-state keys that docs/protocol/deep-links.md allows for a canonical route. */
+function deepLinkQueryKeys(url: URL): ReadonlySet<string> {
+  const path = url.pathname;
+  if (/^\/persona\/[^/]+$/.test(path) && path !== "/persona/new") return new Set(["machine", "manager", "at"]);
+  if (/^\/s\/[^/]+\/[^/]+$/.test(path)) return new Set(["at", "view"]);
+  if (/^\/inbox\/[^/]+$/.test(path)) return new Set(["manager"]);
+  if (path === "/todos") return new Set(["view", "mode", "date", "id"]); // id is the older to-do form.
+  if (/^\/machines\/[^/]+$/.test(path)) return new Set(["range"]);
+  if (path === "/settings") {
+    let item: string | undefined;
+    switch (url.searchParams.get("tab")) {
+      case "models": item = "purpose"; break;
+      case "channels": item = "channel"; break;
+      case "extensions": item = "extension"; break;
+      case "connectors": item = "connector"; break;
+    }
+    return new Set(item ? ["tab", "manager", item] : ["tab", "manager"]);
+  }
+  if (/^\/(?:extension|plugin)\/[^/]+\/[^/]+$/.test(path)) return new Set(["state"]);
+  return new Set();
+}
+
+function canonicalDeepLinkRoute(url: URL): string | undefined {
+  let decodedPath: string;
+  try { decodedPath = decodeURIComponent(url.pathname); } catch { return undefined; }
+  if (!decodedPath.startsWith("/") || decodedPath.startsWith("//") || hasUnsafeRouteCharacters(decodedPath)) return undefined;
+  for (const [key, value] of url.searchParams) {
+    if (hasUnsafeRouteCharacters(key) || hasUnsafeRouteCharacters(value)) return undefined;
+  }
+  if (!validDeepLinkRoute(`${url.pathname}${url.search}`)) return undefined;
+  const allowed = deepLinkQueryKeys(url);
+  const query = new URLSearchParams();
+  for (const [key, value] of url.searchParams) {
+    if (key !== "hub" && allowed.has(key)) query.append(key, value);
+  }
+  return `${url.pathname}${query.size ? `?${query}` : ""}`;
+}
+
 /** Deep links are data, never automatic pairing or navigation to an arbitrary web origin. */
 export function parseDeepLink(raw: string): DesktopDeepLink | undefined {
   let url: URL;
@@ -46,14 +93,15 @@ export function parseDeepLink(raw: string): DesktopDeepLink | undefined {
   if (url.username || url.password || url.port) return undefined;
   if (url.host === "link") return { kind: "pair-link", url: raw };
   if (url.host === "pair") return { kind: "pair-app", url: raw };
-  if (url.host !== "open" || url.hash || url.searchParams.size !== 1) return undefined;
-  const route = url.searchParams.get("route");
-  if (!route || !route.startsWith("/") || route.startsWith("//") || route.includes("\\") || /[\u0000-\u001f\u007f]/.test(route)) return undefined;
-  try {
-    const target = new URL(route, "https://desktop.invalid/");
-    if (target.origin !== "https://desktop.invalid") return undefined;
-  } catch { return undefined; }
-  return { kind: "open", url: raw, route };
+  if (url.host !== "open" || url.hash) return undefined;
+  if (url.searchParams.size === 1 && url.searchParams.has("route")) {
+    const route = url.searchParams.get("route");
+    if (!route || !validDeepLinkRoute(route)) return undefined;
+    return { kind: "open", url: raw, route };
+  }
+  if (!url.pathname) return undefined;
+  const route = canonicalDeepLinkRoute(url);
+  return route ? { kind: "open", url: raw, route } : undefined;
 }
 
 export function hubRoute(hub: HubAddress, route: string): string {

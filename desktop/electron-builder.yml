@@ -1,5 +1,8 @@
 appId: ${env.PERSONA_DESKTOP_APP_ID}
 productName: Persona
+protocols:
+  - name: Persona
+    schemes: [persona]
 directories:
   output: release
   buildResources: build
