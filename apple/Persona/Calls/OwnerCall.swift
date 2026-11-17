@@ -164,7 +164,7 @@ extension PersonaCalls {
     /// From Siri, Shortcuts or Recents the app comes to the front on whatever page it was left on. The call's page and a
     /// refusal's alert go over the app's root (`personaCallCover`), which presents nothing while the shell's Settings
     /// sheet is up: that sheet closes, as it does for a notification's chat (#3818), and the page waits for it to have
-    /// gone (at most a second). Any other page stays under the call: Minimise goes back to it, with the bar to the call.
+    /// gone (at most a second). Any other page stays under the call: Minimize goes back to it, with the bar to the call.
     static func clearTheWay(_ model: AppModel) async {
         guard model.shellSettings else { return }
         model.shellSettings = false

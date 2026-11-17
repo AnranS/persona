@@ -92167,12 +92167,12 @@
       },
       "extractionState" : "manual"
     },
-    "Minimise [Call Screen]" : {
+    "Minimize [Call Screen]" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Minimise"
+            "value" : "Minimize"
           }
         },
         "ja" : {
@@ -109539,7 +109539,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已保持"
+            "value" : "通话保持中"
           }
         }
       },

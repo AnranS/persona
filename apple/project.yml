@@ -133,9 +133,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID)
         PRODUCT_MODULE_NAME: Persona
         PRODUCT_NAME: Persona
-        # The entitlements the app signs with: the CarPlay voice one is added only when config.json app.carplay_voice is
-        # on (scripts/persona_config.py xcconfig writes PERSONA_APP_ENTITLEMENTS; docs/apple/carplay.md). XcodeGen keeps a
-        # CODE_SIGN_ENTITLEMENTS the target sets itself; the default keeps an old Config.xcconfig working.
+        # Meant to sign with the opt-in entitlements scripts/persona_config.py xcconfig writes (PERSONA_APP_ENTITLEMENTS:
+        # CarPlay voice, HomeKit, HealthKit background delivery). XcodeGen 2.46 derives CODE_SIGN_ENTITLEMENTS from the
+        # entitlements path instead and ignores this, so those opt-ins don't reach the signature today (#9526). The SiriKit
+        # opt-in avoids it with apple/app-entitlements.yml + apple/siri-calls.yml.
         CODE_SIGN_ENTITLEMENTS: $(PERSONA_APP_ENTITLEMENTS:default=Persona/Resources/Persona.entitlements)
         # iPhone and iPad (2026-10-31: on iPad it ran as a phone-sized window). Wide layouts come from the size class
         # (SplitNavigation), as on an open iPhone Duo.

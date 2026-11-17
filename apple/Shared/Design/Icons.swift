@@ -625,7 +625,7 @@ extension Theme {
         /// The call screen's Audio: picks where the call's sound goes (the system's route picker) when Bluetooth, a car
         /// or headphones are there; the system's own glyph for it.
         static let callAudioRoute = "airplay.audio"
-        /// The call screen's Minimise: down to the bar that returns to the call (the call goes on).
+        /// The call screen's Minimize: down to the bar that returns to the call (the call goes on).
         static let callMinimise = expand
         /// The voice bar's way back to a system call's full screen (the call screen).
         static let callExpand = enlarge

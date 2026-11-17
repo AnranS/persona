@@ -2,7 +2,7 @@
 import SwiftUI
 
 // The call to Persona's own page (#9290, docs/design/DESIGN_SYSTEM.md "Call screen"): full screen over the app, as the
-// Phone app's in-call screen, because a call is one task going on with its controls always under the thumb; Minimise
+// Phone app's in-call screen, because a call is one task going on with its controls always under the thumb; Minimize
 // leaves it for a bar at the top that returns to it, and the call goes on (`PersonaCalls` runs it, not this page).
 
 /// What the call screen says and how its orb looks, from the call's state alone (pure, for the tests).
@@ -49,10 +49,10 @@ nonisolated struct CallScreenState: Equatable, Sendable {
     }
 }
 
-/// The call to Persona's page: Minimise at the top; Persona's orb (moving with the voice), its name, one line of where
+/// The call to Persona's page: Minimize at the top; Persona's orb (moving with the voice), its name, one line of where
 /// the call is and Persona's latest words in the middle; the round controls at the bottom. VoiceOver's escape
 /// minimises. When the call ends its line says why for a moment (the call stays `PersonaCalls.endedStays`), then the
-/// page goes. Minimise and the controls always keep their room: the middle takes what they leave (`CallScreenMiddle`).
+/// page goes. Minimize and the controls always keep their room: the middle takes what they leave (`CallScreenMiddle`).
 struct CallScreen: View {
     let call: PersonaCall
     @State private var calls = PersonaCalls.shared
@@ -117,13 +117,13 @@ struct CallScreen: View {
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Minimise [Call Screen]")
+        .accessibilityLabel("Minimize [Call Screen]")
         .accessibilityHint("The call goes on; the bar at the top returns to it")
         .accessibilityIdentifier("call-minimise")
     }
 }
 
-/// The middle of the call screen: Persona's orb, the name, the call's line and the latest caption, in the height Minimise
+/// The middle of the call screen: Persona's orb, the name, the call's line and the latest caption, in the height Minimize
 /// and the controls leave it, centred. The orb gives way to the words (`CallScreen.orbSize`), down to the voice bar's
 /// orb and then altogether (a short phone at the largest text size); where the words alone do not fit, they scroll, and
 /// the controls stay. The caption keeps its two lines' room, so nothing moves as Persona's words come.
@@ -354,7 +354,7 @@ struct PersonaCallCover: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .top) { CallReturnBar().modifier(AppTextSize(model: model)) }
-            // Nothing dismisses the cover but the call (Minimise, the call over, an urgent call's page): no swipe.
+            // Nothing dismisses the cover but the call (Minimize, the call over, an urgent call's page): no swipe.
             .fullScreenCover(item: Binding(get: { shown }, set: { _ in }), onDismiss: { coverUp = false; showRefusal() }) { call in
                 CallScreen(call: call)
                     .modifier(CoverLook(model: model))
