@@ -3,7 +3,6 @@ package wire
 import (
 	"errors"
 	"fmt"
-	"math"
 )
 
 // UI version 10's checks (docs/extensions/extensions.md "UI version 10"): a graph's nodes and edges. What the schema
@@ -105,12 +104,4 @@ func graphHasCycle(nodes []GraphNode, edges []GraphEdge) bool {
 		}
 	}
 	return seen != len(nodes)
-}
-
-// pct is a progress (0 to 1) as the whole percentage an older app reads ("40%"), held to that range.
-func pct(progress float64) string {
-	if math.IsNaN(progress) {
-		progress = 0
-	}
-	return fmt.Sprintf("%d%%", int(math.Round(min(1, max(0, progress))*100)))
 }

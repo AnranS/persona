@@ -17,27 +17,34 @@ func node(id string) GraphNode { return GraphNode{ID: id, Title: id} }
 
 func edge(from, to string) GraphEdge { return GraphEdge{From: from, To: to} }
 
-// Every refusable graph is refused, with the check's words.
+// Every refusable graph is refused, with its own check's words: several are also caught by a later check (a repeated
+// pair by the tree's parents, an unknown from or a self-join by the cycle), so the message is what pins each one.
 func TestCheckViewGraph(t *testing.T) {
-	for name, g := range map[string]Component{
-		"a repeated id":   {Nodes: []GraphNode{node("a"), node("a")}},
-		"an unknown from": {Nodes: []GraphNode{node("a")}, Edges: []GraphEdge{edge("x", "a")}},
-		"an unknown to":   {Nodes: []GraphNode{node("a")}, Edges: []GraphEdge{edge("a", "x")}},
-		"a node joined to itself": {Nodes: []GraphNode{node("a")},
-			Edges: []GraphEdge{edge("a", "a")}},
-		"the same pair twice": {Nodes: []GraphNode{node("a"), node("b")},
-			Edges: []GraphEdge{edge("a", "b"), edge("a", "b")}},
-		"a cycle": {Nodes: []GraphNode{node("a"), node("b"), node("c")},
-			Edges: []GraphEdge{edge("a", "b"), edge("b", "c"), edge("c", "a")}},
-		"two parents in a tree": {Nodes: []GraphNode{node("r"), node("a"), node("b"), node("c")},
-			Edges: []GraphEdge{edge("r", "a"), edge("r", "b"), edge("a", "c"), edge("b", "c")}},
-		"a tone and a color":           {Nodes: []GraphNode{{ID: "a", Title: "a", Tone: "positive", Color: "green"}}},
-		"a selected node that is none": {Nodes: []GraphNode{node("a")}, Selected: "b"},
-		"a folded node that is none":   {Nodes: []GraphNode{node("a")}, Folded: []string{"b"}},
-		"a progress above 1":           {Nodes: []GraphNode{{ID: "a", Title: "a", Progress: fptr(1.01)}}},
+	for name, c := range map[string]struct {
+		g    Component
+		want string
+	}{
+		"a repeated id":   {Component{Nodes: []GraphNode{node("a"), node("a")}}, "twice"},
+		"an unknown from": {Component{Nodes: []GraphNode{node("a")}, Edges: []GraphEdge{edge("x", "a")}}, "unknown node"},
+		"an unknown to":   {Component{Nodes: []GraphNode{node("a")}, Edges: []GraphEdge{edge("a", "x")}}, "unknown node"},
+		"a node joined to itself": {Component{Nodes: []GraphNode{node("a")},
+			Edges: []GraphEdge{edge("a", "a")}}, "joined to itself"},
+		"the same pair twice": {Component{Nodes: []GraphNode{node("a"), node("b")},
+			Edges: []GraphEdge{edge("a", "b"), edge("a", "b")}}, "twice"},
+		"the same pair twice, layered": {Component{Layout: GraphLayoutLayered, Nodes: []GraphNode{node("a"), node("b")},
+			Edges: []GraphEdge{edge("a", "b"), edge("a", "b")}}, "twice"},
+		"a cycle": {Component{Nodes: []GraphNode{node("a"), node("b"), node("c")},
+			Edges: []GraphEdge{edge("a", "b"), edge("b", "c"), edge("c", "a")}}, "a cycle"},
+		"two parents in a tree": {Component{Nodes: []GraphNode{node("r"), node("a"), node("b"), node("c")},
+			Edges: []GraphEdge{edge("r", "a"), edge("r", "b"), edge("a", "c"), edge("b", "c")}}, "parents in a tree"},
+		"a tone and a color":           {Component{Nodes: []GraphNode{{ID: "a", Title: "a", Tone: "positive", Color: "green"}}}, "a tone or a color, not both"},
+		"a selected node that is none": {Component{Nodes: []GraphNode{node("a")}, Selected: "b"}, "unknown node"},
+		"a folded node that is none":   {Component{Nodes: []GraphNode{node("a")}, Folded: []string{"b"}}, "unknown node"},
+		"a progress above 1":           {Component{Nodes: []GraphNode{{ID: "a", Title: "a", Progress: fptr(1.01)}}}, "progress"},
 	} {
-		if err := CheckView(graphView(g)); err == nil {
-			t.Errorf("%s: taken", name)
+		err := CheckView(graphView(c.g))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want %q, got %v", name, c.want, err)
 		}
 	}
 }
