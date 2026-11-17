@@ -138,9 +138,11 @@ nonisolated enum AssistantEntries {
 
     /// It waits for the user's review while nothing of it runs or asks (the web's `awaitsReview`): rank 2.
     static func rank(_ todo: TodoItem, _ status: Status) -> Double {
-        if todo.waitsForOwner { return 0 }
         let resting = status == .followUp || status == .unread || status == .notStarted
-        return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
+        if resting || status == .usageLimit, todo.acceptedAtRest(status.taskState) { return 8 }
+        if todo.waitsForOwner { return 0 }
+        if resting, todo.deliveredAwaitingReview(status.taskState) { return 2 }
+        return status.rank
     }
 
     /// Whether a task belongs in the recent-finished tray. Closed/accepted work is immediately Done on the to-do page
