@@ -1321,6 +1321,8 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 
 The daily grid is Monday-first, seven rows per week, with the current week last and a thin outline on today. A day with usage ranks among only the days with usage: `ceil(4 × rank / count)`, where rank includes every equal or smaller day, gives steps 1–4; no usage is step 0. The hourly grid uses the same quantile rule among its hours and retains repeated clock-change hours by timestamp. Small chart cells are not the sole controls: selected days have 48dp previous / next buttons and an exact spoken value, while the card's non-cell area opens the details page. Home reads while resumed and keeps the previous devices section until real data arrives; it never substitutes an all-zero calendar for a failed or unsupported read.
 
+Month labels have their own visible header above the scrolling weeks. The header follows the scroll position and keeps only the latest complete labels that fit the width and text scale; it never clips a month to a partial word. Weekday labels keep their full localized glyphs inside a dedicated column, while the day cells themselves stay the same size at every text size.
+
 ### 3.14 Tabletop hinge safety (Android)
 
 A horizontal separating hinge divides a page into safe regions; the window and hinge alone select this behavior, never a device model. All three Android styles use the same measured policy in `PageFrame`.

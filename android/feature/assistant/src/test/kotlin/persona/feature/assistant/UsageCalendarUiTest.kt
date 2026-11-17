@@ -3,11 +3,18 @@ package persona.feature.assistant
 import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -18,9 +25,13 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -33,8 +44,12 @@ import persona.core.contracts.api.UsageHistoryApi
 import persona.core.contracts.api.UsageHours
 import persona.core.contracts.api.UsageMachineShare
 import persona.core.contracts.api.UsageTokens
+import persona.core.designsystem.AppStyle
+import persona.core.designsystem.AppStyleStore
+import persona.core.designsystem.LayoutDensity
 import persona.core.designsystem.PersonaTheme
 import java.io.IOException
+import java.time.LocalDate
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
@@ -50,6 +65,14 @@ class UsageCalendarUiTest {
         machines = listOf(UsageMachineShare(id = "office", name = "Office", input = 6, cacheWrite = 8, cacheRead = 10, output = 12)),
         total = UsageTokens(input = 6, cacheWrite = 8, cacheRead = 10, output = 12),
     )
+    private val longDays = UsageDays(zone = "Asia/Shanghai", stored = true, days = (0 until 371).map { offset ->
+        val date = LocalDate.of(2026, 11, 17).minusDays((370 - offset).toLong())
+        UsageDay(date.toString(), input = (offset % 9 * 700).toLong(), cacheWrite = 2, cacheRead = 4, output = 8)
+    })
+
+    @After fun resetDensity() {
+        AppStyleStore(ApplicationProvider.getApplicationContext()).setDensity(LayoutDensity.Standard)
+    }
 
     private open class Hub(
         private val days: UsageDays,
@@ -186,6 +209,110 @@ class UsageCalendarUiTest {
         val rowHeight = dayTop - monthTop
 
         assertTrue("The month row grows to 40dp at 2.0 font scale: $rowHeight", rowHeight >= 40.dp)
+    }
+
+    @Test fun emptyAndInvalidDayZonesDoNotCrashTheCard() {
+        var zone by mutableStateOf("")
+        rule.setContent { PersonaTheme(reduceMotion = true) { UsageCalendarCard(days.copy(zone = zone), onOpen = null) } }
+
+        rule.onNodeWithTag("assistant-usage-calendar").assertExists()
+        rule.runOnIdle { zone = "invalid/zone" }
+        rule.waitForIdle()
+        rule.onNodeWithTag("assistant-usage-calendar").assertExists()
+    }
+
+    @Test fun emptyAndInvalidHourZonesDoNotCrashDetails() {
+        var zone by mutableStateOf("")
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) { UsageCalendarPage(Hub(days, hours.copy(zone = zone)), onBack = {}) }
+        }
+
+        rule.onNodeWithText("Last 7 days by hour", substring = true).assertExists()
+        rule.runOnIdle { zone = "invalid/zone" }
+        rule.waitForIdle()
+        rule.onNodeWithText("Last 7 days by hour", substring = true).assertExists()
+    }
+
+    @Test fun compactDeviceChipsUseTheSpaceTokenOnlyOnce() {
+        AppStyleStore(ApplicationProvider.getApplicationContext()).setDensity(LayoutDensity.Compact)
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                UsageHomeSection(null, listOf(
+                    Machine("a", name = "A", online = true), Machine("b", name = "B", online = true),
+                ), null, onOpen = {})
+            }
+        }
+
+        val first = rule.onNodeWithTag("usage-online-device-a").getBoundsInRoot()
+        val second = rule.onNodeWithTag("usage-online-device-b").getBoundsInRoot()
+        assertEquals("the fixture keeps both chips on one row", first.top, second.top)
+        assertEquals("Compact keeps the 4dp single-scaled gap", 4f, (second.left - first.right).value, 0.01f)
+    }
+
+    @Test fun theFirstMonthStaysWholeInsideTheScrolledViewport() {
+        rule.setContent { PersonaTheme(reduceMotion = true) { UsageCalendarCard(longDays, onOpen = null) } }
+        rule.waitForIdle()
+
+        val viewport = rule.onNodeWithTag("usage-calendar-months").getBoundsInRoot()
+        val month = rule.onNodeWithTag("usage-month-2026-07", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue("Jul must not start left of the visible month header: ${month.left} < ${viewport.left}", month.left >= viewport.left)
+        assertTrue("Jul must not end right of the visible month header", month.right <= viewport.right)
+    }
+
+    @Test fun largeMonthLabelsDoNotOverflowInAnyStyle() {
+        var style by mutableStateOf(AppStyle.Glass)
+        rule.setContent {
+            val base = LocalConfiguration.current
+            val configuration = Configuration(base).apply { fontScale = 2f }
+            PersonaTheme(reduceMotion = true, style = style) {
+                CompositionLocalProvider(
+                    LocalConfiguration provides configuration,
+                    LocalDensity provides Density(LocalDensity.current.density, 2f),
+                ) { UsageCalendarCard(longDays, onOpen = null) }
+            }
+        }
+
+        for (nextStyle in AppStyle.entries) {
+            rule.runOnIdle { style = nextStyle }
+            rule.waitForIdle()
+            val header = rule.onNodeWithTag("usage-calendar-months").getBoundsInRoot()
+            for (month in listOf("2026-09", "2026-10", "2026-11")) {
+                val tag = "usage-month-$month"
+                val bounds = rule.onNodeWithTag(tag, useUnmergedTree = true).getUnclippedBoundsInRoot()
+                assertTrue("$nextStyle keeps $month left of the header boundary", bounds.left >= header.left)
+                assertTrue("$nextStyle keeps $month inside the right boundary", bounds.right <= header.right)
+                val layout = textLayoutTag(tag)
+                assertEquals("$nextStyle keeps $month on one line", 1, layout.lineCount)
+                assertFalse("$nextStyle ellipsizes $month at 2.0 font scale", layout.isLineEllipsized(0))
+            }
+            rule.onNodeWithTag("usage-month-2026-08", useUnmergedTree = true).assertDoesNotExist()
+        }
+    }
+
+    @Test
+    @Config(sdk = [35], qualifiers = "ja-w400dp-h900dp-xhdpi")
+    fun japaneseWeekdaysStayWholeInsideTheirColumn() {
+        rule.setContent { PersonaTheme(reduceMotion = true) { UsageCalendarCard(longDays, onOpen = null) } }
+        rule.waitForIdle()
+        val column = rule.onNodeWithTag("usage-calendar-weekdays").getBoundsInRoot()
+
+        for (day in listOf("MONDAY", "WEDNESDAY", "FRIDAY")) {
+            val tag = "usage-weekday-$day"
+            val text = rule.onNodeWithTag(tag, useUnmergedTree = true)
+            val bounds = text.getUnclippedBoundsInRoot()
+            assertTrue("$day starts outside its weekday column", bounds.left >= column.left)
+            assertTrue("$day ends outside its weekday column", bounds.right <= column.right)
+            val layout = textLayoutTag(tag)
+            assertEquals("$day stays on one line", 1, layout.lineCount)
+            assertFalse("$day is ellipsized", layout.isLineEllipsized(0))
+        }
+    }
+
+    private fun textLayoutTag(tag: String): TextLayoutResult = textLayout(rule.onNodeWithTag(tag, useUnmergedTree = true))
+    private fun textLayout(node: SemanticsNodeInteraction): TextLayoutResult {
+        val layouts = mutableListOf<TextLayoutResult>()
+        node.fetchSemanticsNode().config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
+        return layouts.single()
     }
 
     private fun largeTextDetails() {
