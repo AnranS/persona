@@ -122,16 +122,8 @@ const minNodeMajor = 22
 // installers put it (a service's PATH is short); Paseo's desktop app last (paseoAppPaths): a Mac with only the app has
 // a Node.js there, also before Paseo runs. Each is asked its version; too old ones are skipped.
 func findPaseoJSRuntime(ctx context.Context, home string) (jsRuntime, error) {
-	cands, tried := jsCandidates(ctx, home)
-	for _, p := range paseoAppPaths(runtime.GOOS, userHome()) {
-		cands = append(cands, jsRuntime{Path: p, Electron: true, From: "Paseo's app"})
-	}
-	return pickJSRuntime(ctx, cands, tried)
-}
-
-// jsCandidates are findPaseoJSRuntime's candidates before Paseo's app, in order, and why the Paseo daemon's runtime was
-// passed over, if it was.
-func jsCandidates(ctx context.Context, home string) (cands []jsRuntime, tried []string) {
+	var cands []jsRuntime
+	var tried []string // why the Paseo daemon's runtime was passed over, if it was
 	if p := strings.TrimSpace(os.Getenv("PERSONA_NODEJS")); p != "" {
 		cands = append(cands, jsRuntime{Path: p, Electron: !isNodeBinary(p), From: "PERSONA_NODEJS"})
 	}
@@ -146,7 +138,10 @@ func jsCandidates(ctx context.Context, home string) (cands []jsRuntime, tried []
 	for _, p := range commonNodePaths() {
 		cands = append(cands, jsRuntime{Path: p, From: "installed"})
 	}
-	return cands, tried
+	for _, p := range paseoAppPaths(runtime.GOOS, userHome()) {
+		cands = append(cands, jsRuntime{Path: p, Electron: true, From: "Paseo's app"})
+	}
+	return pickJSRuntime(ctx, cands, tried)
 }
 
 // pickJSRuntime is the first of cands there that says it is Node.js minNodeMajor or newer, with that version; the

@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 // An older hub still names a runtime (assistant.warm, assistant.send, session.send, a guest's start and a meeting's
@@ -144,10 +143,7 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 			if got := envValue(p.cmd.Environ(), "CLAUDE_CONFIG_DIR"); !sameScopePath(got, profile) {
 				t.Fatalf("process profile %q, want %q", got, profile)
 			}
-			deadline := time.Now().Add(5 * time.Second)
-			for f.file("cli-profile") == "" && time.Now().Before(deadline) {
-				time.Sleep(20 * time.Millisecond)
-			}
+			cliWait(t, "claude's profile", func() bool { return f.file("cli-profile") != "" })
 			if got := strings.TrimSuffix(f.file("cli-profile"), "\n"); !sameScopePath(strings.TrimPrefix(got, "set:"), profile) {
 				t.Fatalf("claude ran in profile %q, want %q", got, profile)
 			}
@@ -162,8 +158,8 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 	}
 }
 
-// A CLI conversation's execution fingerprint is the one an older node computed for it (golden, from origin/main at
-// 5fe749b57b), so a node update does not restart the conversations it runs; a runtime of "cli" counted as none there.
+// A CLI conversation's execution fingerprint is the one a node before #9799 computed for it (golden), so a node update
+// does not restart the conversations it runs; a runtime of "cli" counted as none there.
 func TestCLIExecutionFingerprintIsUnchanged(t *testing.T) {
 	n, _ := testNode(t)
 	for _, c := range []struct {

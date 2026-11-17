@@ -1066,6 +1066,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if params == nil {
 		params = map[string]any{}
 	}
+	delete(params, "runtime") // every assistant conversation runs on Claude Code's CLI (finishModel)
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
@@ -1077,8 +1078,8 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
 		// A guest conversation keeps what it started on: no launcher, model or mode picked for a message (the node
-		// refuses a change too, node/assistant_guest.go), nor a runtime an older app names.
-		for _, k := range []string{"launcher", "model", "effort", "model_fingerprint", "runtime", "permission_mode"} {
+		// refuses a change too, node/assistant_guest.go).
+		for _, k := range []string{"launcher", "model", "effort", "model_fingerprint", "permission_mode"} {
 			delete(params, k)
 		}
 		return params, own, nil

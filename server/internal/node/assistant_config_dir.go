@@ -191,23 +191,24 @@ func (n *Node) assistantLauncherProfile(ctx context.Context, launcher string) st
 // Capture the pre-change rules, only for a pre-existing unrecorded session (or
 // an explicit new-session "legacy" request). Never guess the new private path.
 func (n *Node) legacyAssistantProfile(ctx context.Context, launcher string) string {
-	dir := os.Getenv("CLAUDE_CONFIG_DIR")
-	shellCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := loginShell(shellCtx, `printf '\n__PERSONA_LEGACY_PROFILE__%s\n' "$CLAUDE_CONFIG_DIR"`)
-	if out, err := cmd.Output(); err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			if value, ok := strings.CutPrefix(line, "__PERSONA_LEGACY_PROFILE__"); ok {
-				dir = value
-			}
-		}
-	}
 	if own := n.assistantLauncherProfile(ctx, launcher); own != "" {
 		return own
 	}
 	if launcher == "claude" {
 		if d := n.claudeStartDir.Load(); d != nil && *d != "" {
-			dir = *d
+			return proto.ExpandHome(*d, n.home)
+		}
+	}
+	// Neither names one: the service's CLAUDE_CONFIG_DIR, or the one a login shell sets.
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := loginShell(ctx, `printf '\n__PERSONA_LEGACY_PROFILE__%s\n' "$CLAUDE_CONFIG_DIR"`)
+	if out, err := cmd.Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if value, ok := strings.CutPrefix(line, "__PERSONA_LEGACY_PROFILE__"); ok {
+				dir = value
+			}
 		}
 	}
 	if dir == "" {

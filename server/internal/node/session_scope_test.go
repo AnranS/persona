@@ -246,7 +246,7 @@ func TestNodeSessionScopePinsMCPEnvironment(t *testing.T) {
 		if guest {
 			n.state.put(id, sessionState{Guest: []string{"ask_user"}})
 		}
-		raw, _ := n.claudeAssistantMCPAndTools(id, n.sessionScope.dir, true)
+		raw := mcpFlag(t, n.claudeAssistantMCPAndTools(id, n.sessionScope.dir, true), "--mcp-config")
 		var config map[string]any
 		if err := json.Unmarshal([]byte(raw), &config); err != nil {
 			t.Fatal(err)

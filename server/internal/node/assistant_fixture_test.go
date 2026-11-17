@@ -1,13 +1,11 @@
 package node
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -49,7 +47,6 @@ while IFS= read -r line; do
     *'"type":"user"'*)
       echo '{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
       echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hel"}},"parent_tool_use_id":null}'
-      sleep 0.1
       echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}},"parent_tool_use_id":null}'
       echo '{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}'
       if [ ! -e "$CLI_FAKE_DIR/hold" ]; then echo '{"type":"result","subtype":"success","result":"hello"}'; fi ;;
@@ -57,28 +54,11 @@ while IFS= read -r line; do
 done
 `
 
-type lockedBuf struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (l *lockedBuf) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.Write(p)
-}
-
-func (l *lockedBuf) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.String()
-}
-
 type cliFixture struct {
 	n   *Node
 	fh  *fakeHub
 	dir string // $CLI_FAKE_DIR
-	log *lockedBuf
+	log *syncBuffer
 }
 
 // cliTest is a node whose assistant conversations run fakeCLI as the machine's claude, with a fake hub.
@@ -89,7 +69,7 @@ func cliTest(t *testing.T) *cliFixture {
 	t.Setenv("CLI_FAKE_DIR", dir)
 	n := codexTestNode(t)
 	n.dir = t.TempDir()
-	buf := &lockedBuf{}
+	buf := &syncBuffer{}
 	n.logger = log.New(buf, "", 0)
 	fh := withFakeHub(t, n)
 	t.Cleanup(func() {
@@ -122,15 +102,10 @@ func cliExec() modelExecution {
 	return modelExecution{Fingerprint: "fp"}
 }
 
+// cliWait waits for what a conversation's process does, with room for a loaded machine.
 func cliWait(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !ok() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitWithin(t, 10*time.Second, what, ok)
 }
 
 func (f *cliFixture) file(name string) string {

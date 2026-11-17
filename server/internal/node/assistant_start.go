@@ -197,7 +197,8 @@ func (n *Node) spawnAssistant(id, cwd, launcher string, resume, spare bool, opti
 	return n.spawnClaude(id, cwd, launcher, resume, spare, options...)
 }
 
-func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJSON string, toolFlags []string) {
+// claudeAssistantMCPAndTools are a conversation's --mcp-config and tool permission flags.
+func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) []string {
 	if guest := n.guestOf(id); guest != nil { // assistant_guest.go: nothing else of the below
 		return n.guestMCPAndTools(id, guest, legacyMCP)
 	}
@@ -212,7 +213,7 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJS
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
-	toolFlags = []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", assistantBuiltinTools}
+	toolFlags := []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", assistantBuiltinTools}
 	// One --disallowedTools with a word per rule (it takes several, up to the next flag): a path may hold a comma.
 	if len(deny) > 0 {
 		deny = []string{strings.Join(deny, ",")}
@@ -221,7 +222,7 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string, legacyMCP bool) (mcpJS
 	if len(deny) > 0 {
 		toolFlags = append(toolFlags, append([]string{"--disallowedTools"}, deny...)...)
 	}
-	return string(mcp), toolFlags
+	return toolFlags
 }
 
 // assistantCLICommand is the command that runs the conversation's claude on the CLI: an interactive shell so ~/.zshrc
@@ -248,6 +249,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if err := os.MkdirAll(cwd, 0o700); err != nil {
 		return nil, err
 	}
+	guest := n.guestOf(id) != nil // a guest, a meeting's room too (assistant_guest.go)
 	var err error
 	execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), id, launcher, execution.ConfigDir, resume)
 	if err != nil {
@@ -260,7 +262,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	}
 	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--include-partial-messages"}
-	if execution.SupervisionInstructions != "" && n.guestOf(id) == nil {
+	if execution.SupervisionInstructions != "" && !guest {
 		args = append(args, "--append-system-prompt", execution.SupervisionInstructions)
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
@@ -274,10 +276,10 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	if settingsErr != nil {
 		return nil, settingsErr
 	}
-	if n.guestKindOf(id) == guestMeeting && n.guestOf(id) == nil {
+	if n.guestKindOf(id) == guestMeeting && !guest {
 		return nil, errRoomRecord // a meeting's room never runs with the assistant's tools
 	}
-	if n.guestOf(id) != nil { // a guest, a meeting's room too: none of the owner's Claude Code setup (assistant_guest.go)
+	if guest { // none of the owner's Claude Code setup (assistant_guest.go)
 		if settings, settingsErr = n.guestSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
 			return nil, settingsErr
 		}
@@ -293,10 +295,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	// blocks under the old namespace remain valid on a resume with only Persona offered (verified on Claude Code 2.1.322);
 	// an old hub that still addresses the legacy namespace keeps the alias.
 	legacyMCP := !n.hubSupportsPersonaContracts()
-	_, toolFlags := n.claudeAssistantMCPAndTools(id, cwd, legacyMCP)
-	args = append(args, toolFlags...)
+	args = append(args, n.claudeAssistantMCPAndTools(id, cwd, legacyMCP)...)
 	model := execution.Model
-	if model == "" && resume && execution.Fingerprint != "" && n.guestOf(id) == nil {
+	if model == "" && resume && execution.Fingerprint != "" && !guest {
 		// The model configuration names none: the launcher's default, not the model the session ran on last
 		// (assistant_resume_model.go). A guest keeps what it started on.
 		model = n.resumeModel(launcher, cwd, settings, configPath)
@@ -323,7 +324,6 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	// every tool until it is compacted. Never false: that turns deferral off for every server (#5838).
 	env := identity.Environment(os.Environ(), append([]string{"PERSONA_ASSISTANT=1", "ENABLE_TOOL_SEARCH=true"}, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
-	guest := n.guestOf(id) != nil
 	gateEnv, releaseGates := n.assistantLarkEnv(cwd, id) // its addresses at the gate proxy go with the process
 	if guest {
 		releaseGates()

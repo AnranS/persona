@@ -187,8 +187,9 @@ type modelProfileInput struct {
 	Capture     bool                           `json:"capture"`
 }
 
-// profilePurposeInput is a category's choice as PUT takes it. A "runtime" an older client still sends with it is
-// accepted and ignored, whatever its value: every assistant conversation runs on Claude Code's CLI.
+// profilePurposeInput is a category's choice as PUT takes it. The body is decoded strictly, so a "runtime" in it (the
+// shape of an older hub's binding) is accepted here and ignored, whatever its value: every assistant conversation runs
+// on Claude Code's CLI.
 type profilePurposeInput struct {
 	ModelBinding
 	Runtime json.RawMessage `json:"runtime"`

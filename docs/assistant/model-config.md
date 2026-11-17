@@ -61,7 +61,7 @@ It is returned by the model-configuration list and detail endpoints, never store
 Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
 `applyModel` overwrites any caller-supplied `launch` in node-call params. `startOn` requires `headless` before
 `assistant.send`; a new `AgentStartParams` requires `engine` before `session.start`. Existing launcher, model, effort,
-runtime, permission and resume choices are unchanged.
+permission and resume choices are unchanged.
 
 The web page groups purposes by `(kind, launch)`: **Persona chats · Background process**, **Agents · Interactive**,
 **Background processing · Direct API**, then **Extensions** (only when installed; extensions' own API purposes stay here).
@@ -352,9 +352,9 @@ Agent SDK; what older data, clients and nodes get:
 - **What clients read**: the `assistant` purpose has no `runtimes`, and no purpose lists `runtime` in `fields`. The
   clients show a runtime picker only when `runtimes` is present, so it is hidden here and kept for an older hub that still
   sends it (one device, several hubs).
-- **What the node gets**: `finishModel` never puts `runtime` in the params of `assistant.send` / `assistant.start` /
-  `assistant.warm` and deletes one a caller left there, so `model_fingerprint` does not depend on it and an older node
-  starts the CLI. A conversation an older node ran on the Agent SDK continues on the CLI with `--resume`, keeping its
+- **What the node gets**: the manager never puts `runtime` in the params of `assistant.send` / `assistant.warm` and
+  deletes one a caller left there (`finishModel`, `sendParamsOwn`), so `model_fingerprint` does not depend on it and an
+  older node starts the CLI. A conversation an older node ran on the Agent SDK continues on the CLI with `--resume`, keeping its
   id and history (`docs/protocol/rolling-upgrade-compatibility.md`, "Assistant conversations on the CLI only (#9799)").
 
 A binding without a model means the launcher's default, on a resume too (#2487). Claude Code resumes a session on the model it last ran on unless `--model` or a model variable (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`) names one; a `model` in its settings does not. So when node resumes a conversation the hub resolved with no model, it passes what a new session of that launcher would use: the `model` from Claude Code's settings, else `default`. It passes nothing when the launcher names a model itself or when its start cannot be seen (a managed launcher, a wrapper script); see `node/assistant_resume_model.go`.
@@ -368,9 +368,9 @@ A binding without a model means the launcher's default, on a resume too (#2487).
 
 It is the Settings side of #4633's decision: reusing an existing profile means choosing it, and nothing is copied between profiles. A machine whose only sign-in is a gateway and token in `~/.claude/settings.json`'s `env`, or an OAuth login in `~/.claude`, picks `legacy` here, and its new main chats start signed in.
 
-- **Where it applies**: only `assistant` offers it, as `config_dirs: ["private", "legacy"]` with `config_dir` in its `fields`. Agents, API purposes and a task's own purpose do not accept it, and PATCH returns 400 `err_config_dir_assistant_only`. A value other than `private` / `legacy` returns 400 `err_config_dir_invalid`. The main chat's other uses inherit it through the binding; a provider change keeps it, as it keeps the runtime.
+- **Where it applies**: only `assistant` offers it, as `config_dirs: ["private", "legacy"]` with `config_dir` in its `fields`. Agents, API purposes and a task's own purpose do not accept it, and PATCH returns 400 `err_config_dir_assistant_only`. A value other than `private` / `legacy` returns 400 `err_config_dir_invalid`. The main chat's other uses inherit it through the binding; a provider change keeps it.
 - **What reads it**: `startOn` (`withNewConversationProfile`) puts it in `assistant.send` when the start names no `config_dir`, is not a guest's, and runs on Claude Code. A launcher known to run another agent gets none, the same rule as #6467. The warm spare for the next new conversation (`assistant.warm`) gets it too, also when it is warmed on a pick carried over `/clear`, since a spare is adopted only in the same profile: node compares the profile each Claude start resolves to, Persona's own included, with the spare's, so a spare warmed before the choice changed, either way, or before a start that names `legacy` itself, is left and the conversation starts in its own (`node/assistant_spare.go`).
-- **What it leaves alone**: a start that names its own profile (the hub's own conversations' `legacy`, a meeting room's, an API caller's) and existing conversations, which keep the profile they were started in. Messages never carry it, and it is not in `model_fingerprint`, so choosing it restarts no running process. Model profiles leave it as they leave the runtime: a switch and its rollback keep the choice, and a model profile that sets it is refused (`err_config_dir`). One stored holding it anyway is read without it (`readModelProfiles`), so it shows no change it cannot make, can still be switched to and edited, and the next write stores it clean.
+- **What it leaves alone**: a start that names its own profile (the hub's own conversations' `legacy`, a meeting room's, an API caller's) and existing conversations, which keep the profile they were started in. Messages never carry it, and it is not in `model_fingerprint`, so choosing it restarts no running process. Model profiles leave it alone: a switch and its rollback keep the choice, and a model profile that sets it is refused (`err_config_dir`). One stored holding it anyway is read without it (`readModelProfiles`), so it shows no change it cannot make, can still be switched to and edited, and the next write stores it clean.
 - **Older nodes, unknown agents**: one too old to be told a profile (`node_outdated`) gets the start, or the warm-up, again without it, and the conversation starts where it always has. So does a launcher whose agent the hub cannot tell (the machine's launcher list did not come): it is asked for in the profile, and the node, which alone has profiles for Claude Code, refuses it for another agent before starting anything (`profileRefused`, #6884).
 - **Clients**: the web edits it in the Main chat editor, for a Claude Code provider only, and shows it under what runs now (`web/e2e/main-chat-profile.mjs`). The Apple and Android editors do not show it yet. They send sparse PATCHes, so they leave a saved choice as it is. Without an editor it is set through `PATCH /api/v1/model-config/purposes/assistant` (`{"revision": <n>, "config_dir": "legacy"}`).
 

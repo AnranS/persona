@@ -783,6 +783,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ConfiguredAgent string `json:"configured_agent"` // strict work-session options: hub.json specifies the harness
 
 	}
+	// The "runtime" an older hub sends with assistant.send, assistant.warm and session.send is not read: every assistant
+	// conversation runs on Claude Code's CLI.
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
