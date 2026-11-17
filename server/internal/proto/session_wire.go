@@ -252,8 +252,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"attention_reason":`, s.AttentionReason, true)
 	w.str(`"failure_reason":`, s.FailureReason, true)
 	w.str(`"external_url":`, s.ExternalURL, true)
-	w.str(`"runtime":`, s.Runtime, true)
-	w.str(`"runtime_fallback":`, s.RuntimeFallback, true)
 	w.str(`"chat":`, s.Chat, true)
 	w.str(`"topic":`, s.Topic, true)
 	w.strs(`"dispatched":`, s.Dispatched)
