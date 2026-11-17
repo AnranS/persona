@@ -477,7 +477,9 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	delivered := func(ctx context.Context) { s.leaderRetryDelivered(ctx, lead, entries, list, kept, holds) }
-	async, err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), list, kept, holds, delivered)
+	// Sort a copy for rendering so the retry still pairs each fingerprint with its original signal.
+	text := prompts.RenderWorkerSupervise(sortEntries(slices.Clone(entries)))
+	async, err := s.sendToLeader(ctx, lead, text, list, kept, holds, delivered)
 	if err != nil {
 		var escalated leaderEscalated
 		if errors.As(err, &escalated) {
