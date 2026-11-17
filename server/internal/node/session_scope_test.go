@@ -258,14 +258,6 @@ func TestNodeSessionScopePinsMCPEnvironment(t *testing.T) {
 				t.Fatalf("guest=%v %s env=%v", guest, name, env)
 			}
 		}
-		// Agent SDK consumes this same map, rather than inheriting an MCP process's environment.
-		options, err := (sdkStart{id: id, cwd: n.sessionScope.dir, mcp: config}).options("claude")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(options["mcpServers"], servers) {
-			t.Fatal("SDK dropped pinned MCP environment")
-		}
 	}
 	quotedHome, err := json.Marshal(n.dir)
 	if err != nil {

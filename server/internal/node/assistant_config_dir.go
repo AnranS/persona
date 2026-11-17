@@ -15,10 +15,10 @@ import (
 // "default" records Claude's unset-directory behavior (~/.claude/projects but
 // ~/.claude.json). An absolute ~/.claude is not equivalent: its global config
 // is ~/.claude/.claude.json. "legacy" is an input only, resolved once and saved.
-func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runtime, asked string, resume bool) (string, error) {
+func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, asked string, resume bool) (string, error) {
 	normalize := func(dir string) (string, error) {
 		if dir == "legacy" {
-			dir = n.legacyAssistantProfile(ctx, launcher, runtime)
+			dir = n.legacyAssistantProfile(ctx, launcher)
 		}
 		if dir == "default" {
 			return dir, nil
@@ -31,7 +31,7 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 	}
 	if n.sessionScope != nil {
 		if asked == "legacy" {
-			asked = n.legacyAssistantProfile(ctx, launcher, runtime) // the dedicated node's own existing profile
+			asked = n.legacyAssistantProfile(ctx, launcher) // the dedicated node's own existing profile
 		}
 		if asked != "" && asked != n.sessionScope.claude {
 			return "", errors.New("config_dir must stay in the node's session scope")
@@ -43,7 +43,7 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 		if _, managed := n.managedLauncher(launcher); managed {
 			return "", nil
 		}
-		if own := n.assistantLauncherProfile(ctx, launcher, runtime); own != "" {
+		if own := n.assistantLauncherProfile(ctx, launcher); own != "" {
 			return normalize(own)
 		}
 		return "", nil
@@ -89,7 +89,7 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 				// projects/ holds the transcript by real path. The path found
 				// need not name it: ~/.claude/projects (or ~/.claude) may be
 				// a symlink to a wrapper's profile, which is the one in use.
-				legacy := n.legacyAssistantProfile(ctx, launcher, runtime)
+				legacy := n.legacyAssistantProfile(ctx, launcher)
 				if sameScopePath(projects, filepath.Join(n.assistantConfigPath(legacy), "projects")) {
 					newest = legacy
 				} else if sameScopePath(newest, filepath.Join(n.home, ".claude")) {
@@ -110,12 +110,12 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 			}
 		}
 		if selected == "" {
-			selected = n.legacyAssistantProfile(ctx, launcher, runtime)
+			selected = n.legacyAssistantProfile(ctx, launcher)
 		}
 	} else if asked != "" {
 		selected = asked
 	} else {
-		selected = n.assistantLauncherProfile(ctx, launcher, runtime)
+		selected = n.assistantLauncherProfile(ctx, launcher)
 		if selected == "" {
 			root := n.dir
 			if root == "" {
@@ -167,12 +167,10 @@ func sameAssistantProfile(a, b string) bool {
 	return sameScopePath(a, b)
 }
 
-func (n *Node) assistantLauncherProfile(ctx context.Context, launcher, runtime string) string {
+func (n *Node) assistantLauncherProfile(ctx context.Context, launcher string) string {
 	var env map[string]string
 	if l, managed := n.managedLauncher(launcher); managed {
 		env = providerEnv(l, "", "", true)
-	} else if runtime == proto.AssistantRuntimeAgentSDK && launcher == "claude" {
-		return "" // the SDK runs the executable, not a shell function or alias
 	} else if e, ok := n.launcherProfileEnv(ctx, launcher); ok { // not a login shell per message (#8947)
 		env = e
 	}
@@ -192,22 +190,19 @@ func (n *Node) assistantLauncherProfile(ctx context.Context, launcher, runtime s
 
 // Capture the pre-change rules, only for a pre-existing unrecorded session (or
 // an explicit new-session "legacy" request). Never guess the new private path.
-func (n *Node) legacyAssistantProfile(ctx context.Context, launcher, runtime string) string {
+func (n *Node) legacyAssistantProfile(ctx context.Context, launcher string) string {
 	dir := os.Getenv("CLAUDE_CONFIG_DIR")
-	_, managed := n.managedLauncher(launcher)
-	if runtime != proto.AssistantRuntimeAgentSDK || launcher != "claude" && !managed {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		cmd := loginShell(ctx, `printf '\n__PERSONA_LEGACY_PROFILE__%s\n' "$CLAUDE_CONFIG_DIR"`)
-		if out, err := cmd.Output(); err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				if value, ok := strings.CutPrefix(line, "__PERSONA_LEGACY_PROFILE__"); ok {
-					dir = value
-				}
+	shellCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := loginShell(shellCtx, `printf '\n__PERSONA_LEGACY_PROFILE__%s\n' "$CLAUDE_CONFIG_DIR"`)
+	if out, err := cmd.Output(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if value, ok := strings.CutPrefix(line, "__PERSONA_LEGACY_PROFILE__"); ok {
+				dir = value
 			}
 		}
 	}
-	if own := n.assistantLauncherProfile(ctx, launcher, runtime); own != "" {
+	if own := n.assistantLauncherProfile(ctx, launcher); own != "" {
 		return own
 	}
 	if launcher == "claude" {
