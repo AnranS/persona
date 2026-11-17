@@ -106,6 +106,13 @@ final class ComposerExpandTests: XCTestCase {
 
         // Delete back to a single line and dismiss the keyboard: the expand icon goes away when unfocused and single-line.
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: scrollingDraft.count + 1 - "Draft line 1".count))
+        // The delete batch and the composer's short shrink animation can still be settling when typeText returns.
+        let oneLine = NSPredicate { _, _ in
+            (self.field.value as? String) == "Draft line 1" && abs(self.field.frame.height - oneLineHeight) <= 2
+        }
+        let settled = XCTNSPredicateExpectation(predicate: oneLine, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed,
+                       "the composer did not settle to one line: \(String(describing: field.value)), height \(field.frame.height)")
         XCTAssertEqual(field.value as? String, "Draft line 1")
         XCTAssertEqual(field.frame.height, oneLineHeight, accuracy: 2)
         element("shell-composer-dismiss-keyboard").tap()
