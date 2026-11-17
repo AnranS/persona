@@ -242,8 +242,20 @@ test("Windows semicolon redaction retains closing wrappers and later diagnostics
       assert.equal(sanitize(`path=${open}${secret}${close} detail=keep`, root), `path=${open}<path>${close} detail=keep`);
     }
     assert.equal(sanitize(`[${secret}], next=keep`, root), "[<path>], next=keep");
+    assert.equal(sanitize(`[${secret}],next=keep`, root), "[<path>],next=keep");
     assert.equal(sanitize(`[${secret}] detail=keep D:\\outside\\private`, root), "[<path>] detail=keep <path>");
     assert.equal(sanitize(`[${secret}] PERSONA_TOKEN=example-secret`, root), "[<path>] PERSONA_TOKEN=<redacted>");
+  }
+});
+
+test("Windows semicolon ambiguity cannot expose later fields or embedded paths", () => {
+  for (const root of [String.raw`C:\owned\root`, String.raw`\\server\share\owned`, String.raw`\\?\C:\owned\root`, String.raw`\\?\UNC\server\share\owned`]) {
+    assert.equal(sanitize(`path=${root};diagnostic=keep;secret=private-value`, root), "path=<path>");
+    assert.equal(sanitize(`path=${root};first=one;second=two;third=three`, root), "path=<path>");
+    for (const embedded of ["//?/D:/private/secret", "//./D:/private/secret", "//private/share/path"]) {
+      assert.equal(sanitize(`${root};secret${embedded} detail=keep`, root), "<path><path> detail=keep");
+      assert.equal(sanitize(`${root};secret${embedded},next=keep`, root), "<path><path>,next=keep");
+    }
   }
 });
 

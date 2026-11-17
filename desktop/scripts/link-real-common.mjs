@@ -105,8 +105,8 @@ function redactOnePath(text, run) {
   const token = windowsToken ?? posixToken;
   if (!token) return undefined;
   const windows = windowsToken !== null;
-  const embedded = windows ? token[0].slice(1).search(/\/\/[?.]\/|\/\/[^/]+\/[^/]+\//) : -1;
-  const first = embedded >= 1 ? token[0].slice(0, embedded) : token[0];
+  const embedded = windows ? token[0].search(/\/\/[?.]\/|\/\/[^/]+\/[^/]+\//) : -1;
+  const first = embedded > 0 ? token[0].slice(0, embedded) : token[0];
   const structural = first.search(/[\r\n"'`\[\](){}<>]/);
   const pathText = structural >= 0 ? first.slice(0, structural) : first;
   const trailing = trimTrailing(pathText).replace(/[,:]+$/, "");
@@ -144,17 +144,18 @@ function redactOnePath(text, run) {
         // The ambiguous continuation is private, but its closing wrapper and later diagnostic fields are not path text.
         let end = structural >= 0 ? structural : first.length;
         for (const boundary of first.matchAll(/[\s,;][A-Za-z][\w.-]*=/g)) {
-          if (boundary.index > candidateEnd) { end = Math.min(end, boundary.index); break; }
+          // A no-space semicolon suffix is still ambiguous path content, including its later `;field=value` fields.
+          if (boundary.index > candidateEnd && first[boundary.index] !== ";") { end = Math.min(end, boundary.index); break; }
         }
         for (const boundary of first.matchAll(/[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/g)) {
-          if (boundary.index > candidateEnd) { end = Math.min(end, boundary.index); break; }
+          if (boundary.index > candidateEnd && first[boundary.index] !== ";") { end = Math.min(end, boundary.index); break; }
         }
         return { replacement: "<path>", consumed: end };
       }
       return { replacement: replacement + trailing, consumed };
     }
   }
-  const field = /(?:^|\s)[A-Za-z][\w.-]*=/.exec(first);
+  const field = /(?:^|[\s,;])[A-Za-z][\w.-]*=/.exec(first);
   const phrase = /\s+(?:failed|error|cannot|denied|unexpected|fatal|exception)\b/i.exec(first);
   const boundary = Math.min(field?.index ?? first.length, phrase?.index ?? first.length);
   const nextPath = /\s+(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
