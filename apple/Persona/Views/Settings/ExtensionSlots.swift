@@ -273,6 +273,14 @@ struct ExtensionCard: View {
     var open: () -> Void
 
     private var opens: Bool { card.opens?.isEmpty == false }
+    /// A graph preview owns its tap (full screen). The card's title keeps the card's ordinary page-opening path.
+    private var graphPreview: Bool {
+        model.view?.sections.contains { section in
+            section.items.contains { item in
+                if case .graph = item { true } else { false }
+            }
+        } == true
+    }
 
     var body: some View {
         if !model.unsupported {
@@ -289,6 +297,8 @@ struct ExtensionCard: View {
                         ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                     }
                 }
+                .contentShape(.rect)
+                .onTapGesture { if opens && graphPreview { open() } }
                 if let v = model.view {
                     ExtensionViewStack(view: v, model: model, cards: false, link: $link)
                         .environment(\.pluginUICompact, true)
@@ -309,7 +319,7 @@ struct ExtensionCard: View {
             }
             .padding(.vertical, Theme.Space.xs)
             .contentShape(.rect)
-            .onTapGesture { if opens { open() } }
+            .onTapGesture { if opens && !graphPreview { open() } }
             .accessibilityElement(children: .contain)
             .accessibilityAddTraits(opens ? .isButton : [])
             .task { if model.view == nil { await model.load() } }

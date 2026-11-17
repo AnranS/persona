@@ -15,7 +15,7 @@ nonisolated enum ExtensionGraphLayouter {
         var height: Double
     }
 
-    struct Frame: Equatable, Sendable {
+    struct Frame: Equatable, Hashable, Sendable {
         var group: String
         var members: [String]
     }

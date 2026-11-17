@@ -94,6 +94,8 @@ private actor ExtensionGraphDiskStore {
 /// restoration happen on reload; a redraw with the same key retains explicit fold choices and a touched transform.
 @MainActor @Observable final class ExtensionGraphModel {
     @ObservationIgnored private(set) var graph: ExtensionGraphComponent
+    @ObservationIgnored private(set) var nodesByID: [String: ExtensionGraphNode]
+    @ObservationIgnored private(set) var parentTitles: [String: String]
     private(set) var layout: ExtensionGraphLayouter.Result?
     private(set) var folded: Set<String>
     private(set) var transform = ExtensionGraphTransform()
@@ -112,6 +114,8 @@ private actor ExtensionGraphDiskStore {
     init(graph: ExtensionGraphComponent, restored: ExtensionGraphSavedState? = nil, keeps: Bool = true,
          onSave: ((ExtensionGraphSavedState) -> Void)? = nil) {
         self.graph = graph
+        nodesByID = Dictionary(uniqueKeysWithValues: graph.nodes.map { ($0.id, $0) })
+        parentTitles = Self.parentTitles(graph)
         persistenceKey = graph.key ?? ""
         self.keeps = keeps
         self.onSave = onSave
@@ -143,9 +147,20 @@ private actor ExtensionGraphDiskStore {
         let arranged = await Self.arrange(next, folded: folded)
         guard revision == self.revision else { return }
         graph = next
+        nodesByID = Dictionary(uniqueKeysWithValues: next.nodes.map { ($0.id, $0) })
+        parentTitles = Self.parentTitles(next)
         layout = arranged
         layoutVersion += 1
         if !touched { needsFit = true }
+    }
+
+    private static func parentTitles(_ graph: ExtensionGraphComponent) -> [String: String] {
+        let nodes = Dictionary(uniqueKeysWithValues: graph.nodes.map { ($0.id, $0.title) })
+        var parents: [String: String] = [:]
+        for edge in graph.edges ?? [] where parents[edge.to] == nil {
+            if let title = nodes[edge.from] { parents[edge.to] = title }
+        }
+        return parents
     }
 
     @concurrent nonisolated private static func arrange(_ graph: ExtensionGraphComponent,
