@@ -1,7 +1,7 @@
 import XCTest
 
 /// Only the app's composer controls are inspected, not the system keyboard's buttons. Synthetic chats on a private
-/// mock hub (`scripts/mock/composer_hub.py`) cover the shared assistant/Agents composer, multiline drafts
+/// mock hub (`scripts/mock/mock_hub.py`) cover the shared assistant/Agents composer, multiline drafts
 /// and drag dismissal (#2200).
 final class ComposerKeyboardTests: XCTestCase {
     private var app: XCUIApplication!
@@ -121,8 +121,7 @@ final class ComposerKeyboardTests: XCTestCase {
                 XCTAssertLessThanOrEqual(control.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
                 frames[id] = control.frame
             }
-            let expected = name.hasPrefix("assistant") ? "6.1 Sol" : "6.1 Sol Codex Mini Preview 2026 11 05"
-            XCTAssertTrue((app.buttons["shell-composer-modes"].value as? String ?? "").hasPrefix(expected),
+            XCTAssertTrue((app.buttons["shell-composer-modes"].value as? String ?? "").hasPrefix("Opus 5.5"),
                           "the model label lost the version or variant")
             let mic = frames["shell-composer-mic"]!, send = frames["shell-composer-send"]!
             XCTAssertEqual(mic.height, send.height, accuracy: 1)
@@ -194,9 +193,9 @@ final class ComposerKeyboardTests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let button = app.buttons["shell-composer-modes"]
-        XCTAssertTrue((button.value as? String ?? "").hasPrefix("6.1 Sol"))
+        XCTAssertTrue((button.value as? String ?? "").hasPrefix("Opus 5.5"))
         button.tapCenter()
-        XCTAssertTrue(app.staticTexts["6.1 Sol"].waitForExistence(timeout: 5), "menu and current label disagree")
+        XCTAssertTrue(app.staticTexts["Opus 5.5"].waitForExistence(timeout: 5), "menu and current label disagree")
         shot("assistant-model-menu")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
     }
