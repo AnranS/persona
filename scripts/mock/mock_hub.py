@@ -9217,11 +9217,11 @@ if MOCK_TASKS and os.environ.get("MOCK_REQUEST_GRAPH") == "1":
         _g_todo("todo_graph_backend", "后端：实现 /search 接口和分页", "todo_graph_search", after=("todo_graph_fields",), minutes=60,
                 agents=[_g_agent(2, "后端：实现 /search 接口", "working", "在写分页游标。", kind="codex", state_since=ago(minutes=23), effort="high"),
                         _g_agent(3, "查现有的索引", "working", "在看 orders 表上的索引。", state_since=ago(minutes=6), subagents=[
-                            {"id": "ga1", "session_id": _g_sid(3), "type": "Explore", "description": "列出 orders 表现有的索引", "running": False,
+                            {"id": "ga1", "session_id": _g_sid(3) + "@ga1", "type": "Explore", "description": "列出 orders 表现有的索引", "running": False,
                              "started_at": ago(minutes=6), "last_text": "共 4 个索引，没有覆盖 name 字段。"},
-                            {"id": "ga2", "session_id": _g_sid(3), "type": "Explore", "description": "找搜索会用到的慢查询", "running": True,
+                            {"id": "ga2", "session_id": _g_sid(3) + "@ga2", "type": "Explore", "description": "找搜索会用到的慢查询", "running": True,
                              "started_at": ago(minutes=4), "last_tool": {"name": "Grep", "summary": "grep -rn \"LIKE '%\" server/"}},
-                            {"id": "ga3", "session_id": _g_sid(3), "type": "general-purpose", "description": "对比两种分页方案", "running": True,
+                            {"id": "ga3", "session_id": _g_sid(3) + "@ga3", "type": "general-purpose", "description": "对比两种分页方案", "running": True,
                              "started_at": ago(minutes=2), "parent_id": "ga2", "last_tool": {"name": "Read", "summary": "docs/pagination.md"}}])]),
         # the back end's workers: its Codex leader handed them out (origin), one still going, one done
         _g_todo("todo_graph_backend_test", "后端：游标分页的单元测试", "", minutes=20, origin="macbook/" + _g_sid(2),

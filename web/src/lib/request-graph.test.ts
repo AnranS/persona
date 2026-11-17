@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentTree, buildGraph, CARD_H, CARD_W, ENDED_KEPT, layoutRequest, lineage, mergesWithRoot, notesWords, ownerWords, pieceStep, queuedRows, requestHeading, rootHeight,
-  roundedPath, TREE_HEAD_H, TREE_ROW_H, treeHeight, type GraphData, type GraphNode, type GraphRequest,
+  roundedPath, subagentLink, TREE_HEAD_H, TREE_ROW_H, treeHeight, type GraphData, type GraphNode, type GraphRequest,
 } from "./request-graph";
 import { caseKey, caseName, caseTodos, MERGE_CASES, PIECES, ROOTS, type PieceKind, type RootKind } from "./request-graph-merge-cases";
 import type { PlanTask, TaskPlan } from "./feed";
@@ -353,7 +353,7 @@ describe("where a to-do stands", () => {
 describe("a piece's Agent tree", () => {
   const dir = (todoId: string, agents: DirectionAgent[]): DirectionTree =>
     ({ directions: [{ id: "main", name: "", tasks: [{ id: todoId, title: todoId, state: "working", agents }] }] }) as unknown as DirectionTree;
-  const sub = (id: string, patch: Partial<Subagent> = {}): Subagent => ({ id, session_id: "L", description: `sub ${id}`, ...patch });
+  const sub = (id: string, patch: Partial<Subagent> = {}): Subagent => ({ id, session_id: `L@${id}`, description: `sub ${id}`, ...patch });
 
   it("reads the leader, then its workers (open and closed), what it spawned and its subagents, each under what it hangs from", () => {
     const todos = [
@@ -388,9 +388,21 @@ describe("a piece's Agent tree", () => {
     ]);
     const by = (k: string) => agents.find((a) => a.key === k)!;
     expect([by("mac/W1").doing, by("mac/W2").doing, by("sub:mac/L/e1").doing, by("sub:mac/L/r1").doing]).toEqual(["Reading the index", "Done: wrote the API", "Found 3 call sites", "grep foo"]);
-    // a subagent opens the session that launched it
-    expect([by("sub:mac/L/n1").open, by("mac/W2").open]).toEqual([{ mid: "mac", sid: "L" }, { mid: "mac", sid: "W2" }]);
+    // a subagent opens its own link (the launching chat at its card), never the Agent that launched it; one only the
+    // direction tree knows too
+    expect([by("sub:mac/L/n1").open, by("sub:mac/L/fresh").open, by("mac/W2").open]).toEqual([
+      { mid: "mac", sid: "L@n1" }, { mid: "mac", sid: "L@fresh" }, { mid: "mac", sid: "W2" },
+    ]);
+    expect(agents.filter((a) => a.role === "subagent").every((a) => a.open.sid !== "L")).toBe(true);
     expect([by("sub:mac/L/e1").state, by("sub:mac/L/r1").state]).toEqual(["", "working"]);
+  });
+
+  it("opens a subagent at its own link: the hub's, else <launching session>@<id>, never the launching session", () => {
+    expect(subagentLink({ session_id: "L@a1" }, "L", "a1")).toBe("L@a1");
+    // a subagent with a session of its own
+    expect(subagentLink({ session_id: "child-9" }, "L", "a1")).toBe("child-9");
+    // a row that names the launching session (or nothing) as the subagent's: its link is made, not the parent opened
+    expect([subagentLink({ session_id: "L" }, "L", "a1"), subagentLink({ session_id: "" }, "L", "a1"), subagentLink(undefined, "L", "a1")]).toEqual(["L@a1", "L@a1", "L@a1"]);
   });
 
   it("keeps a summary row's running subagents from the direction tree when no complete row is there", () => {

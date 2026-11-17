@@ -60,7 +60,8 @@ export interface NodeAgent {
   ended: boolean;
   /** What it does now, or the last it said (one line, "" when nothing is known). */
   doing: string;
-  /** The session that opens for it: its own, a subagent's launching session. */
+  /** The session that opens for it: its own; for an in-session subagent, its link "<launching session>@<id>", which opens
+   *  the launching chat at the subagent's card (lib/subagent-link.ts). */
   open: { mid: string; sid: string };
 }
 
@@ -195,6 +196,13 @@ const firstLine = (s: string | undefined | null) => (s ?? "").trim().split(/\r?\
  *  one of session `sid`'s in-session subagents. */
 const subagentId = (childSid: string, sid: string) => (childSid.startsWith(`${sid}@`) ? childSid.slice(sid.length + 1) : undefined);
 
+/** The session a subagent of session `sid` opens: its own link as the hub sends it ("<sid>@<id>", or a session of its
+ *  own), else "<sid>@<id>"; never the launching session itself, which would open the Agent that launched it. */
+export function subagentLink(sub: Pick<Subagent, "session_id"> | undefined, sid: string, id: string): string {
+  const own = sub?.session_id?.trim();
+  return own && own !== sid ? own : `${sid}@${id}`;
+}
+
 /** Which to-do had each Agent (refs "machine/session"), per to-do list: a direction tree child that is another to-do's
  *  Agent is a worker. */
 const ownersCache = new WeakMap<readonly Todo[], Map<string, Todo>>();
@@ -244,7 +252,7 @@ export function nodeAgents(todo: Todo, data: GraphData): NodeAgent[] {
       const key = `sub:${mid}/${sid}/${x.id}`;
       out.push({
         key, mid, agent: s?.agent || a.agent, subagent: x.sub, title: x.title, state: x.running ? "working" : "", role: "subagent",
-        depth: d, parent: under, ended: !x.running, doing: x.doing, open: { mid, sid },
+        depth: d, parent: under, ended: !x.running, doing: x.doing, open: { mid, sid: subagentLink(x.sub, sid, x.id) },
       });
       for (const y of subs.filter((y) => y.parent === x.id && y.id !== x.id && !placed.has(y.id)).sort(order)) emit(y, d + 1, key);
     };

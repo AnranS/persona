@@ -299,10 +299,10 @@ describe("a piece's Agent tree", () => {
     expect(parseFloat(box.style.height)).toBeGreaterThan(CARD_H + 5 * 30);
   });
 
-  it("opens a line's Agent (a subagent's launching session) and the head still opens the to-do", () => {
+  it("opens a line's Agent (a subagent: its own link, never the Agent that launched it) and the head still opens the to-do", () => {
     act(() => line("mac/W1").click());
     act(() => line("sub:mac/L/r1").click());
-    expect(agentsOpened).toEqual(["mac/W1", "mac/L"]);
+    expect(agentsOpened).toEqual(["mac/W1", "mac/L@r1"]);
     act(() => host.querySelector<HTMLButtonElement>('[data-node="todo:lead"]')!.click());
     expect(opened).toEqual(["lead"]);
   });
