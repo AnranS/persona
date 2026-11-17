@@ -129,8 +129,11 @@ class DiagnosticsShareViewModel @Inject constructor(
                 bindings.drafts, bindings.composer, destination,
                 bindings.mainUploadTarget ?: { null }, archive, note,
             )
-            targets.remember(destination, System.currentTimeMillis())
             openChat = DiagnosticsOpenChat(destination)
+            try {
+                targets.remember(destination, System.currentTimeMillis())
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { }
         } catch (_: TimeoutCancellationException) {
             error = application.getString(R.string.app_diagnostics_prepare_failed)
         } catch (cancelled: CancellationException) { throw cancelled }

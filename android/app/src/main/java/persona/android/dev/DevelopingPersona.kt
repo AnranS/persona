@@ -21,6 +21,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -334,19 +335,29 @@ internal fun thermalName(status: Int): String = when (status) {
 }
 
 /** Only this process's log, dumped at export; no log permission and no background logcat process. */
-private fun readOwnLogcat(): List<String> {
-    var process: Process? = null
+private fun readOwnLogcat(): List<String> = try {
+    readOwnLogcat(ProcessBuilder("logcat", "-d", "-v", "threadtime", "--pid=${android.os.Process.myPid()}",
+        "-t", DevPackage.maxLogLines.toString()).redirectErrorStream(true).start())
+} catch (_: Exception) {
+    emptyList()
+}
+
+internal fun readOwnLogcat(process: Process, timeoutMillis: Long = 5_000): List<String> {
+    val reading = FutureTask<List<String>> { process.inputStream.bufferedReader().use { it.readLines() } }
+    val reader = Thread(reading, "dev-logcat-reader").apply { isDaemon = true }
     return try {
-        process = ProcessBuilder("logcat", "-d", "-v", "threadtime", "--pid=${android.os.Process.myPid()}",
-            "-t", DevPackage.maxLogLines.toString()).redirectErrorStream(true).start()
-        val lines = process.inputStream.bufferedReader().use { it.readLines() }
-        if (!process.waitFor(5, TimeUnit.SECONDS)) {
-            process.destroy()
-            emptyList()
-        } else lines
+        reader.start()
+        reading.get(timeoutMillis, TimeUnit.MILLISECONDS)
     } catch (_: Exception) {
         emptyList()
     } finally {
-        process?.destroy()
+        reading.cancel(true)
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
+        runCatching { process.outputStream.close() }
+        if (process.isAlive) {
+            process.destroy()
+            process.destroyForcibly()
+        }
     }
 }

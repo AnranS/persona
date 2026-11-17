@@ -1,7 +1,10 @@
 package persona.android.dev
 
 import android.app.Application
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.SavedStateHandle
 import java.io.File
 import java.io.IOException
@@ -15,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -80,6 +84,20 @@ class DiagnosticsShareViewModelTest {
         } finally { fixture.close() }
     }
 
+    @Test fun recentTargetFailureStillOpensTheSavedDraftWithoutAnotherUpload() = runTest {
+        val fixture = Fixture(recentTargetFailure = true)
+        try {
+            fixture.model.prepare(fixture.target)
+            assertEquals(DiagnosticsOpenChat(fixture.target), fixture.model.openChat)
+            assertNull(fixture.model.error)
+            assertEquals(1, fixture.composer.uploads.size)
+
+            fixture.model.prepare(fixture.target)
+            assertEquals(1, fixture.composer.uploads.size)
+            assertEquals(1, fixture.drafts.stored.version)
+        } finally { fixture.close() }
+    }
+
     @Test fun missingBindingsTimeOutWithAnErrorInsteadOfOpeningOrCancelling() = runTest {
         val fixture = Fixture(agentAvailable = false)
         try {
@@ -116,7 +134,12 @@ class DiagnosticsShareViewModelTest {
         } finally { fixture.close() }
     }
 
-    private class Fixture(main: Boolean = false, agentAvailable: Boolean = true, readArchive: Boolean = true) {
+    private class Fixture(
+        main: Boolean = false,
+        agentAvailable: Boolean = true,
+        readArchive: Boolean = true,
+        recentTargetFailure: Boolean = false,
+    ) {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<Application>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val target = SessionKey("machine", "session")
@@ -131,7 +154,11 @@ class DiagnosticsShareViewModelTest {
         val current = MutableStateFlow<ChatAppBindings?>(bindings)
         val agent = MutableStateFlow<ChatAppBindings?>(if (agentAvailable) bindings else null)
         private val temp = Files.createTempDirectory("diagnostics-view-model").toFile()
-        private val store = PreferenceDataStoreFactory.create(scope = scope) { File(temp, "targets.preferences_pb") }
+        private val store = if (recentTargetFailure) object : DataStore<Preferences> {
+            override val data = flowOf(emptyPreferences())
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
+                throw IOException("recent targets unavailable")
+        } else PreferenceDataStoreFactory.create(scope = scope) { File(temp, "targets.preferences_pb") }
         private val archive = File(File(context.cacheDir, "dev-exports").apply { mkdirs() }, "view-model-test.zip").apply { writeBytes(byteArrayOf(1)) }
         private val wiring = object : ChatWiringSource {
             override val current = this@Fixture.current
