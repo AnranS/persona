@@ -38,7 +38,7 @@ interface MenuDump {
   submenu?: MenuDump[];
 }
 
-/** Electron 40.4.1's default macOS menu, dumped as label/role/type. */
+/** Electron 45.3.2's default macOS menu, dumped as label/role/type. */
 const BASELINE: MenuDump[] = [
   {
     label: "persona-desktop", role: "appmenu", type: "submenu", submenu: [

@@ -1,7 +1,7 @@
 import type { MenuItemConstructorOptions } from "electron";
 import type { DesktopStrings } from "./strings.js";
 
-/** Electron 40.4.1's default macOS menu; unchanged role labels stay with Electron, and only the three app-named labels are localized. */
+/** Electron 45.3.2's default macOS menu; unchanged role labels stay with Electron, and only the three app-named labels are localized. */
 export function appMenuTemplate(platform: NodeJS.Platform, appName: string, strings: DesktopStrings): MenuItemConstructorOptions[] | null {
   if (platform !== "darwin") return null;
   return [
