@@ -171,6 +171,7 @@ private struct ExtensionStateDot: View {
 /// looked at here.
 struct ExtensionDetailView: View {
     @State private var page: ExtensionModel
+    @FocusState private var focusedNumber: String?
     @State private var editingSecret: ExtensionSecret?
     /// An Always rule the user asked to remove: confirmed first.
     @State private var declarations = ExtensionTextContributions()
@@ -246,6 +247,13 @@ struct ExtensionDetailView: View {
         .themedPage()
         .detailTitle(page.detail?.plugin.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
+        #if os(iOS)
+        .toolbar {
+            NumberKeyboardActions(focused: focusedNumber != nil, canSave: page.canSave, saving: page.saving,
+                                  configurationBusy: lifecycle.busy,
+                                  save: { Task { await page.save() } }, done: { focusedNumber = nil })
+        }
+        #endif
         .confirmationDialog(disableDialogTitle, isPresented: disableDialogPresented, titleVisibility: .visible) {
             switch page.disableDialog {
             case .some(.dependents):
@@ -473,7 +481,9 @@ struct ExtensionDetailView: View {
     private func form(_ d: HubExtensionDetail) -> some View {
         Group {
             Section {
-                ForEach(d.form.filter { $0.type != "object" }) { f in ExtensionFieldRow(field: f, path: [f.name], page: page, templates: declarations.templates) }
+                ForEach(d.form.filter { $0.type != "object" }) { f in
+                    ExtensionFieldRow(field: f, path: [f.name], page: page, templates: declarations.templates, numberFocus: $focusedNumber)
+                }
             } header: {
                 SettingsHeading(String(localized: "Settings"))
             } footer: {
@@ -489,7 +499,9 @@ struct ExtensionDetailView: View {
             }
             ForEach(d.form.filter { $0.type == "object" }) { group in
                 Section {
-                    ForEach(group.fields ?? []) { f in ExtensionFieldRow(field: f, path: [group.name, f.name], page: page, templates: declarations.templates) }
+                    ForEach(group.fields ?? []) { f in
+                        ExtensionFieldRow(field: f, path: [group.name, f.name], page: page, templates: declarations.templates, numberFocus: $focusedNumber)
+                    }
                 } header: {
                     SettingsHeading(group.label)
                 } footer: {
@@ -617,6 +629,7 @@ private struct ExtensionFieldRow: View {
     var path: [String]
     @Bindable var page: ExtensionModel
     var templates: [ExtensionTextTemplate]
+    var numberFocus: FocusState<String?>.Binding
     /// A switch with x-confirm waiting on its alert before it is turned on.
     @State private var asking = false
 
@@ -688,6 +701,9 @@ private struct ExtensionFieldRow: View {
                     HStack(spacing: Theme.Space.s) {
                         TextField(placeholder, text: numberBinding)
                             .keyboardType(field.type == "integer" ? .numberPad : .decimalPad)
+                            #if os(iOS)
+                            .focused(numberFocus, equals: path.joined(separator: "."))
+                            #endif
                         if field.type == "integer" {
                             // A step at a time within its bounds (#2385); typing still works for a far value.
                             Stepper(value: stepperBinding, in: stepperRange) { Text(title) }
