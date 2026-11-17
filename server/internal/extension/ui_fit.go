@@ -69,7 +69,7 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 	}
 	// a native stream's components never include a graph, even at 10: it gets the rows always
 	if native || uiVersion < 10 {
-		downgrade10(v)
+		downgrade10(v, native)
 	}
 	if uiVersion < 9 {
 		downgrade9(v)

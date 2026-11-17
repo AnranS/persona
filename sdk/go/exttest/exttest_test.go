@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,10 @@ func TestCheck(t *testing.T) {
 }
 
 func TestCheckView(t *testing.T) {
+	nodes := make([]string, 300)
+	for k := range nodes {
+		nodes[k] = fmt.Sprintf(`{"id":"n%d","title":"n%d"}`, k, k)
+	}
 	for _, c := range []struct {
 		view    string
 		compact bool
@@ -106,6 +111,7 @@ func TestCheckView(t *testing.T) {
 		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a"}, {"id": "b", "title": "b"}], "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}]}]}]}`, false, "cycle"},
 		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a"}, {"id": "a", "title": "b"}]}]}]}`, false, "twice"},
 		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a", "tone": "positive", "color": "green"}]}]}]}`, false, "a tone or a color"},
+		{`{"sections": [{"items": [{"type": "graph", "nodes": [` + strings.Join(nodes, ",") + `]}, {"type": "text", "text": "one more"}]}]}`, false, "300"},
 	} {
 		err := exttest.CheckView(json.RawMessage(c.view), c.compact)
 		if c.bad == "" && err != nil || c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)) {

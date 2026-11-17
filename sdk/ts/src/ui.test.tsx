@@ -134,8 +134,8 @@ describe("server JSX reconciler", () => {
 
   test("graph nodes lower with their node fields and their own callbacks", async () => {
     let calls = 0;
-    const session = mount(<View key="root"><Section key="main"><Graph key="graph" nodes={[{ id: "a", title: "fixture", progress: 0.5, action: callback(() => { calls++; }) }]} edges={[{ from: "a", to: "a" }]} folded={["a"]} /></Section></View>, allow);
-    const graph = session.current().view.sections[0].items[0] as { type: string; nodes: { id: string; progress?: number; action: { id: string } }[]; edges: { from: string }[]; folded: string[] };
+    const session = mount(<View key="root"><Section key="main"><Graph key="graph" nodes={[{ id: "a", title: "fixture", progress: 0.5, action: callback(() => { calls++; }) }, { id: "b", title: "other" }]} edges={[{ from: "a", to: "b" }]} folded={["a"]} /></Section></View>, allow);
+    const graph = session.current().view.sections[0].items[0] as { type: string; nodes: { id: string; progress?: number; action: { id: string } }[]; edges: { from: string; to: string }[]; folded: string[] };
     expect(graph.type).toBe("graph");
     expect(graph.nodes[0].progress).toBe(0.5);
     expect(graph.folded).toEqual(["a"]);

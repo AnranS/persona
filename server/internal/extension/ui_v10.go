@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -16,17 +18,31 @@ import (
 // left out rather than cut past it.
 const graphRowKeyMost = 128
 
+// graphRowKeyHashMost is how much of a node id's digest a native stream's fallback row key carries.
+const graphRowKeyHashMost = 16
+
 // downgrade10 draws every graph with rows, in place: its visible nodes (the view's folded applied) in reading order,
 // each indented by its depth, with the node's subtitle, badge, icon, color and action as the row's, and its progress
 // as the row's percentage. A folded node's row value gains "+N" for the nodes it hides; they have no row. The graph's
 // key, group, tone, selected, layout and direction are left out; a row's key is the graph's key and the node's id
-// when that is free on the page.
-func downgrade10(v *View) {
+// when that is free on the page. A native stream needs a key on every row, so its taken or overlong `key/id` becomes a
+// free digest of the id instead.
+func downgrade10(v *View, native bool) {
+	// every key on the page: a section's and an item's, and every item's tile keys share the page's one key space
 	used := make(map[string]bool)
 	for i := range v.Sections {
+		if k := v.Sections[i].Key; k != "" {
+			used[k] = true
+		}
 		for j := range v.Sections[i].Items {
-			if k := v.Sections[i].Items[j].Key; k != "" {
+			e := &v.Sections[i].Items[j]
+			if k := e.Key; k != "" {
 				used[k] = true
+			}
+			for k := range e.Tiles {
+				if t := e.Tiles[k].Key; t != "" {
+					used[t] = true
+				}
 			}
 		}
 	}
@@ -66,12 +82,39 @@ func downgrade10(v *View) {
 					if k := e.Key + "/" + id; !used[k] && utf8.RuneCountInString(k) <= graphRowKeyMost {
 						row.Key = k
 						used[k] = true
+					} else if native {
+						row.Key = freeGraphRowKey(e.Key, id, used)
 					}
+				} else if native {
+					row.Key = freeGraphRowKey("", id, used)
 				}
 				items = append(items, row)
 			}
 		}
 		s.Items = items
+	}
+}
+
+// freeGraphRowKey is a key for a native stream's row whose `key/id` is taken or too long: the graph's key cut so the
+// whole stays under graphRowKeyMost, a slash and the first graphRowKeyHashMost hex characters of the id's digest, with
+// "~2", "~3", … until that is free. The digest keeps it stable across redraws and the suffix separates ids that only
+// agree in their digest's start.
+func freeGraphRowKey(graphKey, id string, used map[string]bool) string {
+	sum := sha256.Sum256([]byte(id))
+	base := []rune(graphKey)
+	if most := graphRowKeyMost - graphRowKeyHashMost - 9; len(base) > most {
+		base = base[:most]
+	}
+	head := string(base) + "/" + hex.EncodeToString(sum[:])[:graphRowKeyHashMost]
+	for n := 1; ; n++ {
+		k := head
+		if n > 1 {
+			k += "~" + strconv.Itoa(n)
+		}
+		if !used[k] {
+			used[k] = true
+			return k
+		}
 	}
 }
 

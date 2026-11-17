@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/extension/uistream"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -112,6 +115,39 @@ func TestFitV10WorkTreeRows(t *testing.T) {
 	}
 }
 
+// A layered graph below 10: several parents, each node once at its first visit.
+func TestFitV10PlanLayeredRows(t *testing.T) {
+	page, _ := Slot("nav_page")
+	v := v10Example(t, "plan-layered")
+	drawn := graphOf(t, v)
+	order, depth := newGraphWalk(drawn).readingOrder()
+	if _, err := Fit(v, page, 9); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(items(v), func(e UIElem) bool { return e.Type == wire.ComponentGraph }) {
+		t.Fatal("a graph is left")
+	}
+	rows := items(v)
+	if len(rows) != len(order) {
+		t.Fatalf("%d rows for %d visible nodes", len(rows), len(order))
+	}
+	seen := map[string]bool{}
+	for k, row := range rows {
+		id := order[k]
+		if seen[id] {
+			t.Errorf("%s twice", id)
+		}
+		seen[id] = true
+		indent := strings.Repeat("│ ", max(depth[id]-1, 0))
+		if depth[id] > 0 {
+			indent += "└ "
+		}
+		if row.Title != indent+nodeOf(t, drawn, id).Title {
+			t.Errorf("row %d: %q, want %q", k, row.Title, indent+id)
+		}
+	}
+}
+
 // A folded node keeps its percentage and gains the count after it; every node has its percentage rounded, and a
 // graph without a key gives no row keys.
 func TestGraphRowValue(t *testing.T) {
@@ -180,6 +216,94 @@ func TestFitNativeV10(t *testing.T) {
 	rows := got.Sections[0].Items
 	if len(rows) != 2 || rows[0].Type != wire.ComponentRow || rows[1].Title != "└ two" || rows[1].Key != "g/a.b" {
 		t.Fatalf("native 10: %s", fitted)
+	}
+}
+
+// A row key is the graph's and the node's only when nothing else on the page has it: an item's key and a tile's
+// key share the page's one key space, and two nodes that would take one give no key instead of clashing.
+func TestFitV10RowKeysOnlyWhenFree(t *testing.T) {
+	page, _ := Slot("nav_page")
+	v := v10Example(t, "work-tree")
+	drawn := graphOf(t, v)
+	order, _ := newGraphWalk(drawn).readingOrder()
+	v.Sections[0].Items = append(v.Sections[0].Items,
+		UIElem{Type: "text", Text: "an item holds build", Key: "work/build"},
+		UIElem{Type: "grid", Key: "grid", Tiles: []wire.Tile{{Title: "a tile holds tests", Key: "work/tests"}}})
+	if _, err := Fit(v, page, 9); err != nil {
+		t.Fatal(err)
+	}
+	rows := items(v)[1 : 1+len(order)]
+	for k, id := range order {
+		want := "work/" + id
+		if id == "build" || id == "tests" {
+			want = ""
+		}
+		if rows[k].Key != want {
+			t.Errorf("row %d (%s): key %q, want %q", k, id, rows[k].Key, want)
+		}
+	}
+}
+
+// A graph's nodes count toward a card's 12 components as tiles do: 13 nodes are one too many.
+func TestFitV10CardCountsNodes(t *testing.T) {
+	card, _ := Slot("overview_card")
+	nodes := make([]wire.GraphNode, 13)
+	for k := range nodes {
+		nodes[k] = wire.GraphNode{ID: strconv.Itoa(k), Title: "n"}
+	}
+	v := &View{Sections: []Section{{Items: []UIElem{{Type: wire.ComponentGraph, Nodes: nodes}}}}}
+	if _, err := Fit(v, card, 10); err == nil || !strings.Contains(err.Error(), "12 items") {
+		t.Fatalf("13 nodes in a card: %v", err)
+	}
+	nodes = nodes[:12]
+	if _, err := Fit(&View{Sections: []Section{{Items: []UIElem{{Type: wire.ComponentGraph, Nodes: nodes}}}}}, card, 10); err != nil {
+		t.Fatalf("12 nodes in a card: %v", err)
+	}
+}
+
+// A native stream's row always has a key, also when `key/id` is taken (a section's key does too) or over 128
+// characters: a free digest stands in, and the snapshot decodes.
+func TestFitNativeV10RowKeys(t *testing.T) {
+	page, _ := Slot("nav_page")
+	long := strings.Repeat("k", 100)
+	section := &View{Sections: []Section{
+		{Key: "g/a", Items: []UIElem{{Type: "text", Text: "x", Key: "t"}}},
+		{Key: "s", Items: []UIElem{{Type: wire.ComponentGraph, Key: "g",
+			Nodes: []wire.GraphNode{{ID: "a", Title: "a"}, {ID: "b", Title: "b"}},
+			Edges: []wire.GraphEdge{{From: "a", To: "b"}}}}},
+	}}
+	tooLong := &View{Sections: []Section{{Key: "s", Items: []UIElem{{Type: wire.ComponentGraph, Key: long,
+		Nodes: []wire.GraphNode{{ID: strings.Repeat("n", 40), Title: "a"}}}}}}}
+	for name, v := range map[string]*View{"a section takes the row key": section, "the row key is too long": tooLong} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fitted, err := FitNative(raw, page, 10, i18n.En)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var got wire.View
+		if err := json.Unmarshal(fitted, &got); err != nil {
+			t.Fatalf("%s: %s", name, fitted)
+		}
+		for _, s := range got.Sections {
+			for _, e := range s.Items {
+				if e.Type != wire.ComponentRow {
+					continue
+				}
+				if e.Key == "" || utf8.RuneCountInString(e.Key) > graphRowKeyMost {
+					t.Fatalf("%s: a row key of %d runes: %q", name, utf8.RuneCountInString(e.Key), e.Key)
+				}
+			}
+		}
+		snapshot, err := json.Marshal(wire.UIStreamSnapshot{Protocol: 1, Session: "s", Epoch: "e", RootKey: "root", Version: 1, View: got})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := uistream.DecodeSnapshot(snapshot); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }
 
