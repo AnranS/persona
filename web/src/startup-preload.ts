@@ -383,11 +383,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // layouts tried (mounting it under every exchange, or riding the reply bar's chunk, cost more). 85 B in ja, measured in
 // one environment against main 21cd52cc2 (ja 482,104 B to 482,189 B; en 478,990 B to 479,075 B, zh-Hans 479,859 B to
 // 479,944 B). Main had 422 B of room; the budget stays.
-// #9053: the Inbox section bar takes 121 B of that room in each language, measured in one environment against main
-// 094253763d (ja 481,844 B to 481,965 B; en 478,710 B to 478,831 B, zh-Hans 479,540 B to 479,661 B): the grouping mark
-// in the icon set, IconButton saying it opens a menu, --needs and --needs-ink in the token table, and the edge fade's
-// widths shared with the bar. CountBadge, which only the Inbox page draws so far, is a module of its own (ui/CountBadge.tsx):
-// in atoms it took another 131 B (252 B in all, 6 B of room left). The budget stays.
+// #9053: the Inbox section bar takes 91 B of that room in each language, measured in one environment against main
+// 9c1cfa4242 (ja 482,391 B to 482,482 B; en 479,277 B to 479,368 B, zh-Hans 480,146 B to 480,237 B): the grouping mark
+// in the icon set, IconButton saying it opens a menu, --needs-ink with its class, and the bar's spacing classes.
+// CountBadge, which only the Inbox page draws so far, is a module of its own (ui/CountBadge.tsx): in atoms it took
+// another 131 B (against main 094253763d). Of #4653's two Needs-you tokens only the text shade it draws comes along;
+// the fill took another 49 B. The budget stays.
 export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

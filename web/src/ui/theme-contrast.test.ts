@@ -132,8 +132,8 @@ describe("default palette contrast", () => {
       // Unadjusted, the built-in theme colors fall short on the dark AI tint: the rule above is what keeps them.
       if (scheme === "dark") expect(contrast(accentTokens(PRESET_COLORS.blue.accent).dark["--accent-ink"], ai)).toBeLessThan(4.5);
     });
-    it(`${scheme}: Needs you is the blue every client uses (spec/tokens/color.status.json)`, () => {
-      expect([t.needs, t["needs-ink"]]).toEqual(scheme === "light" ? ["#007aff", "#0064c8"] : ["#0a84ff", "#409cff"]);
+    it(`${scheme}: Needs you's text is the shade every client uses (spec/tokens/color.status.json)`, () => {
+      expect(t["needs-ink"]).toBe(scheme === "light" ? "#0064c8" : "#409cff");
     });
     it(`${scheme}: inline code's ink (--ink and --ink-2 mixed, #9477) reads on every background, between the two`, () => {
       expect(css).toContain("color: color-mix(in srgb, var(--ink) 55%, var(--ink-2))");
