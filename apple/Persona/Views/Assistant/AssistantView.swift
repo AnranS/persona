@@ -2131,7 +2131,7 @@ private struct ClassicDestinations: ViewModifier {
     func body(content: Content) -> some View {
         if enabled {
             content
-                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id, openDetail: { path.append($0) }) }
+                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id, openDetail: { (route: TodoDetailRoute) in path.append(route) }) }
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
         } else {
             content

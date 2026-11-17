@@ -5129,7 +5129,7 @@ private struct AgentsDestinations: ViewModifier {
             .navigationDestination(for: PersonalAgentsRoute.self) { _ in PersonalAgentListView().splitDetailPage() }
             .navigationDestination(for: PersonalAgentSession.self) { s in PersonalAgentSessionView(session: s).id(s.id).splitDetailPage() }
             .navigationDestination(for: TodoDetailRoute.self) { r in
-                TodoDetailView(todoID: r.id, openDetail: { path.append($0) }).splitDetailPage()
+                TodoDetailView(todoID: r.id, openDetail: { (route: TodoDetailRoute) in path.append(route) }).splitDetailPage()
             }
     }
 }

@@ -484,7 +484,7 @@ struct ShellDestinations: ViewModifier {
             if on {
                 content
                     .navigationDestination(for: TodoDetailRoute.self) { r in
-                        TodoDetailView(todoID: r.id, openDetail: { path.append($0) })
+                        TodoDetailView(todoID: r.id, openDetail: { (route: TodoDetailRoute) in path.append(route) })
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: MachineDetailRoute.self) { r in
@@ -519,7 +519,7 @@ struct ShellDestinations: ViewModifier {
     @ViewBuilder static func place(_ route: ShellRoute, path: Binding<NavigationPath>, accounts: InboxAccountState) -> some View {
         switch route {
         case .inbox: InboxPage(path: path, accountState: accounts, embedded: true)
-        case .todos: TodosView(openDetail: { path.append($0) })
+        case .todos: TodosView(openDetail: { (route: TodoDetailRoute) in path.wrappedValue.append(route) })
         case .machines: MachinesView()
         case .extensionPage(let r): ExtensionNavPage(route: r)
         case .profile: AssistantProfileView()
