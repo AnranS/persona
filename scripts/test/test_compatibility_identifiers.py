@@ -139,6 +139,28 @@ class CompatibilityIdentifierTests(unittest.TestCase):
             self.assertEqual(guard.repository_findings(root, registry, [name]),
                              [name + ': compatibility entrypoint is no longer a symlink'])
 
+    def test_powershell_golden_registers_exact_legacy_contract(self):
+        path = "server/internal/node/powershell_start_test.go"
+        mcp = "mcp__" + FORMER + "__"
+        environment = FORMER.upper() + "_"
+        required = {
+            mcp + "report_to_supervisor",
+            mcp + "task_plan",
+            mcp + "task_review",
+            mcp + "todo_bind_thread",
+            mcp + "todo_decision_add",
+            mcp + "todo_decisions",
+            environment + "ASSISTANT",
+            environment + "ASSISTANT_BIN",
+            environment + "GUEST",
+            environment + "SESSION_ID",
+            environment + "SPACE",
+        }
+        registry = guard.load_registry(ROOT / guard.REGISTRY)
+        unexpected = mcp + "not_registered"
+        self.assertEqual(guard.findings(path, unexpected, registry), [(1, unexpected)])
+        self.assertEqual(registry.get(path, {}).get("tokens"), sorted(required))
+
     def test_repository_uses_only_exact_registered_compatibility_identifiers(self):
         registry = guard.load_registry(ROOT / guard.REGISTRY)
         found = guard.repository_findings(ROOT, registry)
