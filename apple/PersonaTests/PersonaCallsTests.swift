@@ -720,6 +720,20 @@ struct PersonaCallsTests {
         #expect(rig.calls.ownerCall?.connectedSince == rig.voice.clock.now.addingTimeInterval(-42))
         #expect(!rig.calls.systemMade && rig.system.reports.isEmpty)
     }
+
+    /// `-showUrgentCallSample held`: the urgent call behind the page on hold with Resume, no page of a call to Persona, and
+    /// nothing to the system, Hang Up included.
+    @Test func theHeldUrgentSampleOffersResumeWithoutTheSystem() throws {
+        let rig = CallRig()
+        let id = UUID()
+        rig.calls.showUrgentSample(id, callID: "call_mock")
+        let call = try #require(rig.calls.call(id))
+        #expect(call.kind == .urgent(callID: "call_mock") && call.held && call.resumeOffered)
+        #expect(rig.calls.ownerCall == nil && !rig.calls.presented)
+        rig.calls.hangUp(id)
+        #expect(rig.calls.call(id) == nil)
+        #expect(!rig.calls.systemMade && rig.system.reports.isEmpty && rig.system.requests.isEmpty && rig.system.activations == 0)
+    }
     #endif
 }
 

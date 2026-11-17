@@ -190,6 +190,18 @@ final class CallScreenTests: XCTestCase {
         XCTAssertTrue(call.exists, "no Call Persona\n\(app.debugDescription)")
         XCTAssertGreaterThan(call.frame.minY, app.buttons["composer-menu-voice"].frame.minY, "Call Persona before Voice Chat")
         shot("main-plus-call-row", app)
+        // At the sheet's half height the list goes on under the floating tabs (Mention, partly under them): a drag up opens
+        // the sheet to full, where the list's end is clear of them.
+        let mention = app.buttons["composer-menu-mention"]
+        XCTAssertTrue(mention.exists, "no Mention\n\(app.debugDescription)")
+        let camera = app.buttons["composer-menu-camera"]
+        camera.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.2, thenDragTo: camera.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -4)), withVelocity: .slow,
+                   thenHoldForDuration: 0.3)
+        sleep(1)
+        XCTAssertLessThanOrEqual(mention.frame.maxY, app.buttons["attach-tab-more"].frame.minY + 0.5,
+                                 "Mention stays under the tabs\n\(app.debugDescription)")
+        shot("main-plus-call-row-end", app)
         app.terminate()
 
         let agent = try launch(Self.agent)
@@ -228,6 +240,20 @@ final class CallScreenTests: XCTestCase {
         app.terminate()
     }
 
+    /// On hold after an interruption its audio did not come back from: the urgent call's page says On Hold and offers
+    /// Resume beside Mute, Speaker and Hang Up, all four inside the screen.
+    @MainActor func testTheUrgentCallOnHold() throws {
+        let app = try launch(Self.main + ["-showUrgentCallSample", "held"])
+        let resume = app.buttons["urgentCall.resume"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 30), "no Resume on the held urgent call\n\(app.debugDescription)")
+        let line = app.staticTexts.matching(identifier: "urgentCall.state").firstMatch // its text, not its icon
+        XCTAssertTrue(line.exists && line.label.contains("已保持"), "the line does not say 已保持: \(line.label)\n\(app.debugDescription)")
+        assertOnScreen(app, ["urgentCall.mute", "urgentCall.speaker", "urgentCall.resume", "urgentCall.hangUp"], "urgent, held")
+        Thread.sleep(forTimeInterval: 1)
+        shot("urgent-call-held", app)
+        app.terminate()
+    }
+
     // MARK: The real path
 
     private func log(_ hub: String) throws -> [String: Any] {
@@ -237,12 +263,23 @@ final class CallScreenTests: XCTestCase {
 
     private func audio(_ hub: String) throws -> Int { try XCTUnwrap(log(hub)["audio"] as? Int) }
 
-    /// + › Call Persona; the call connects (its time runs); minimised, Home and another app for 15 s: the audio keeps
-    /// going up to the mock; the Home Screen and the Lock Screen photographed (the Simulator has no call service, so
-    /// neither shows the call); back in the app the call screen is up and still connected, and the mock's start was a
-    /// system call's (`surface: call`); End ends it.
+    /// + › Call Persona; the call connects (its time runs); minimised (the bar back to it at the top), the Agents page and an
+    /// Agent's conversation, the Home Screen, another app for 15 s, locked for 15 s: the audio keeps going up to the mock at
+    /// every step; the Home Screen and the Lock Screen photographed (the Simulator has no call service, so neither shows the
+    /// call); back in the app the call screen is up and still connected, the voice's socket never closed, and the mock's
+    /// start was a system call's (`surface: call`); End ends it. The mock's audio count at each step goes to
+    /// `real-flow.json` beside the screenshots (and the log: `real-flow:`), for the PR.
     @MainActor func testACallGoesOnAwayFromTheApp() throws {
         let hub = try hub
+        var steps: [[String: Any]] = []
+        func step(_ name: String) throws -> Int {
+            let count = try audio(hub)
+            steps.append(["step": name, "audio": count, "at": Date.now.timeIntervalSince1970])
+            print("real-flow: \(name) audio=\(count)")
+            return count
+        }
+        // The mock counts every socket closed in its run: this call's are those after now.
+        let closedBefore = try XCTUnwrap(log(hub)["closes"] as? Int)
         let app = try launch(Self.main)
         try openMore(app)
         app.buttons["composer-menu-call"].tap()
@@ -256,52 +293,89 @@ final class CallScreenTests: XCTestCase {
         shot("real-call-connected", app)
         let starts = try XCTUnwrap(log(hub)["starts"] as? [[String: Any]])
         XCTAssertEqual(starts.last?["surface"] as? String, "call", "the start was not a system call's: \(starts)")
+        let connected = try step("connected")
 
         app.buttons["call-minimise"].tap()
-        XCTAssertTrue(app.buttons["call-return-bar"].waitForExistence(timeout: 10), "no bar back to the call")
+        let bar = app.buttons["call-return-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "no bar back to the call")
         // The main conversation under it: the voice bar in the composer's place, with Show Call beside Stop.
         XCTAssertTrue(app.buttons["voice-expand"].waitForExistence(timeout: 10), "no Show Call on the voice bar\n\(app.debugDescription)")
         Thread.sleep(forTimeInterval: 1)
         shot("real-call-minimised", app)
-        let before = try audio(hub)
+        let minimised = try step("minimised")
+        XCTAssertGreaterThan(minimised, connected, "no audio after minimising (\(connected) → \(minimised))")
+
+        // Elsewhere in the app: the Agents page, then an Agent's conversation, the bar over both.
+        let agents = app.buttons["shell-agents"].firstMatch
+        XCTAssertTrue(agents.waitForExistence(timeout: 10), "no Agents switch\n\(app.debugDescription)")
+        agents.tap()
+        let row = app.buttons.matching(identifier: "agents.row").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "no Agents page\n\(app.debugDescription)")
+        XCTAssertTrue(bar.exists, "no bar back to the call over the Agents page")
+        Thread.sleep(forTimeInterval: 2)
+        shot("real-call-agents", app)
+        let onAgents = try step("agents page")
+        XCTAssertGreaterThan(onAgents, minimised, "the audio stopped on the Agents page (\(minimised) → \(onAgents))")
+        row.tap()
+        let back = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 15) || row.waitForNonExistence(timeout: 1), "no Agent's conversation\n\(app.debugDescription)")
+        XCTAssertTrue(bar.exists, "no bar back to the call over an Agent's conversation")
+        Thread.sleep(forTimeInterval: 3)
+        shot("real-call-agent-conversation", app)
+        let inAgent = try step("agent conversation")
+        XCTAssertGreaterThan(inAgent, onAgents, "the audio stopped in an Agent's conversation (\(onAgents) → \(inAgent))")
+
         XCUIDevice.shared.press(.home)
         sleep(2)
-        shot("lock-or-island-home")
+        shot("home-screen")
+        let home = try step("home screen")
         let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         settings.launch()
         sleep(15)
-        shot("lock-or-island-other-app")
-        let away = try audio(hub)
-        XCTAssertGreaterThan(away, before + 20, "the audio stopped while away (\(before) → \(away))")
+        shot("settings-app")
+        let away = try step("settings app 15 s")
+        XCTAssertGreaterThan(away, home + 20, "the audio stopped while away (\(home) → \(away))")
 
-        // Lock and wake to the Lock Screen, then unlock (a locked simulator hangs the next run).
+        // Locked for 15 s, woken to the Lock Screen, then unlocked (a locked simulator hangs the next run).
         XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
-        sleep(2)
+        sleep(15)
+        let locked = try step("locked 15 s")
+        XCTAssertGreaterThan(locked, away + 20, "the audio stopped while locked (\(away) → \(locked))")
         XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
         sleep(3)
-        shot("lock-or-island-lock")
+        shot("lock-screen")
         let bottom = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
         bottom.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
         sleep(2)
-        let locked = try audio(hub)
-        XCTAssertGreaterThan(locked, away, "the audio stopped while locked (\(away) → \(locked))")
+        let unlocked = try step("unlocked")
+        XCTAssertGreaterThan(unlocked, locked, "the audio stopped after unlocking (\(locked) → \(unlocked))")
 
         // Back in the app (as from the Dynamic Island or the status bar's call): the call screen, still connected.
         app.activate()
         XCTAssertTrue(element(app, "call-screen").waitForExistence(timeout: 10), "the call screen did not come back\n\(app.debugDescription)")
         XCTAssertTrue(element(app, "call-duration").exists, "the call is not connected after coming back")
-        let closes = try XCTUnwrap(log(hub)["closes"] as? Int)
+        let closes = try XCTUnwrap(log(hub)["closes"] as? Int) - closedBefore
         XCTAssertEqual(closes, 0, "the voice's socket closed while away")
         shot("real-call-back", app)
+        let returned = try step("back in Persona")
+        XCTAssertGreaterThan(returned, unlocked, "no audio back in the app (\(unlocked) → \(returned))")
 
         app.buttons["call-end"].tap()
         XCTAssertTrue(app.staticTexts["通话已结束"].waitForExistence(timeout: 5), "no 通话已结束\n\(app.debugDescription)")
         shot("real-call-ended", app)
         XCTAssertTrue(element(app, "call-screen").waitForNonExistence(timeout: 10), "the ended call stayed")
         XCTAssertFalse(app.buttons["call-return-bar"].exists, "a bar for an ended call")
-        let after = try audio(hub)
+        let after = try step("ended")
         sleep(3)
-        XCTAssertLessThanOrEqual(try audio(hub) - after, 5, "the audio went on after End")
+        let later = try step("3 s after the end")
+        XCTAssertLessThanOrEqual(later - after, 5, "the audio went on after End")
+        let surface = (try log(hub)["starts"] as? [[String: Any]])?.last?["surface"] as? String
+        print("real-flow: starts[-1].surface=\(surface ?? "nil") closes=\(closes)")
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            let record: [String: Any] = ["steps": steps, "surface": surface ?? NSNull(), "closes": closes]
+            let data = try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: dir + "/real-flow.json"))
+        }
         app.terminate()
     }
 }

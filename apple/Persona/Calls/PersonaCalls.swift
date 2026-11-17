@@ -177,7 +177,10 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// Hang Up: the call to Persona unless another is named. Through the system, so its call UI ends too.
     func hangUp(_ id: UUID? = nil) {
         guard let call = id.flatMap(call) ?? ownerCall else { return }
-        if call.sample { return remove(call) }
+        if call.sample {
+            call.urgentSession?.hangUp() // an urgent call page's sample goes with its call
+            return remove(call)
+        }
         dispatch(call, .hangUpTapped)
     }
 
@@ -595,6 +598,18 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         }
         call.sync()
         presented = true
+    }
+
+    /// The urgent call page's sample on hold (`-showUrgentCallSample held`, `UrgentCallCenter.showSample`): the system call
+    /// `id` behind it answered, then interrupted with no audio back, so its page offers Resume. No system, no audio.
+    func showUrgentSample(_ id: UUID, callID: String) {
+        let call = add(id, kind: .urgent(callID: callID), direction: .incoming)
+        call.sample = true
+        let events: [CallEvent] = [.known, .joinAction, .audioActivated, .engineRunning, .interruptionBegan, .audioDeactivated,
+                                   .interruptionEnded, .timer(.recoveryUnpause), .timer(.recoveryActivate), .timer(.recoveryGiveUp)]
+        for event in events { _ = call.machine.handle(event, at: clock.now) }
+        call.sync()
+        route.show(.receiver)
     }
     #endif
 }

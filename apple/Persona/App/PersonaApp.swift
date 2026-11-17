@@ -177,10 +177,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         let d = UserDefaults.standard
         #if os(iOS)
-        if d.bool(forKey: "showUrgentCallSample") { // the urgent call page, from the mock hub (UrgentCallCenter.showSample)
+        // `-showUrgentCallSample YES|held`: the urgent call page, from the mock hub (UrgentCallCenter.showSample); `held`
+        // on hold with Resume.
+        let urgentSampleHeld = d.string(forKey: "showUrgentCallSample") == "held"
+        if d.bool(forKey: "showUrgentCallSample") || urgentSampleHeld {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                UrgentCallCenter.shared.showSample()
+                UrgentCallCenter.shared.showSample(held: urgentSampleHeld)
             }
         }
         // `-openOwnerCall YES`: calls Persona (#9290) once the hub is there, as the main conversation's Call does (on the

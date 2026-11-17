@@ -198,7 +198,8 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
 - `-openOwnerCall YES`: calls Persona once the hub is there, as a redial would (in the Simulator through
   `SimulatedCallSystem`); `-openOwnerCallSeconds <n>` hangs up n seconds after it connected.
 - `-showSystemCallService YES`: the Simulator on the real LiveCommunicationKit (it ends every call, see above).
-- `-showUrgentCallSample YES`: the answered urgent call's page (Mute, Speaker, Hang Up).
+- `-showUrgentCallSample YES`: the answered urgent call's page (Mute, Speaker, Hang Up); `held`: on hold after an
+  interruption its audio did not come back from (On Hold, with Resume beside them).
 
 ## Tests
 
@@ -209,8 +210,10 @@ All are listed in `scripts/release/release.sh`, which fails a Release binary tha
   the `UrgentCall*Tests` suites, `VoiceCallsTests`, `VoiceConversationTests` (`.call`, hold frames, `surface`),
   `LocalProxyRouteTests` and the CarPlay suites.
 - UI (`apple/PersonaUITests/`, against `MOCK_VOICE=1` `scripts/mock/mock_hub.py`, `docs/operations/testing.md`):
-  `CallScreenTests` (each sample, largest text, the app's text size, the bar, + › Call Persona, the urgent call's Mute,
-  and the real path: a call that keeps sending audio with another app in front and the phone locked) and
+  `CallScreenTests` (each sample, largest text, the app's text size, the bar, + › Call Persona, the urgent call's Mute
+  and its page on hold with Resume, and the real path: a call that keeps sending audio on the Agents page, in an Agent's
+  conversation, on the Home Screen, with another app in front and with the phone locked, the mock's audio count at each
+  step written to `real-flow.json` beside the screenshots) and
   `CallPersonaShortcutTests` (Call Persona and Talk to Persona from Spotlight, over Settings and an Agent's
   conversation, the microphone refused).
 - The mock's `GET /mock/voice2` keeps each start's `surface` (`"call"` for a system call) and the app's `hold` frames
