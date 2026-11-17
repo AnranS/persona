@@ -99,6 +99,26 @@ struct CallScreenTests {
         #expect(agent.flatMap(\.rows).allSatisfy { $0.id != "composer-menu-call" })
     }
 
+    /// Call Persona is one glyph wherever it is offered (#9290): the + panel's (above), the App Shortcut's (a literal
+    /// there) and the Continue of a call that ended (a new system call), apart from Voice Chat's handset.
+    @Test func callPersonaHasOneGlyphEverywhere() throws {
+        let shortcuts = try Self.code("Persona/Intents/PersonaShortcuts.swift")
+        let call = try #require(shortcuts.range(of: "intent: CallPersonaIntent()"))
+        let entry = String(shortcuts[call.upperBound...].prefix(600))
+        #expect(entry.contains("systemImageName: \"\(Theme.Icon.callPersona)\""))
+        let strip = try Self.code("Persona/Views/Voice/VoiceEntry.swift")
+        #expect(strip.contains("systemImage: call.surface == .call ? Theme.Icon.callPersona : Theme.Icon.voiceChannel"))
+    }
+
+    /// The return-to-call bar's room at the window root is every page's, the Separate layout's iPad tabs too: only what
+    /// a tab is given above the root's top (the tab bar's second room) is taken back off it.
+    @Test func theTabsKeepTheCallBarsRoom() {
+        let status: CGFloat = 24, bar: CGFloat = 52, tabBar: CGFloat = 64
+        #expect(TabBarRoom.extra(given: status + bar + tabBar, rootTop: status + bar) == tabBar)
+        #expect(TabBarRoom.extra(given: status + bar, rootTop: status + bar) == 0, "the bar's room stays")
+        #expect(TabBarRoom.extra(given: status + tabBar, rootTop: status) == tabBar, "no bar: as before")
+    }
+
     /// The orb gives way on a short page or at a large text size: to its share of the page, then to the words around it
     /// (the room the middle has less theirs); where not even the voice bar's orb fits, it goes and the words stay.
     @Test func theOrbGivesWayToTheControlsAndTheWords() throws {
@@ -245,14 +265,16 @@ struct CallScreenTests {
         #expect(strip.contains("PersonaCalls.shared.callPersona(group: group, origin: .app)"))
     }
 
-    /// Urgent calls start on the earpiece as calls to Persona do (owner decision 2026-11-17): the call's category, with
-    /// no loudspeaker by default; the urgent page has the Speaker control that moves it.
+    /// Urgent calls start on the earpiece as calls to Persona do (owner decision 2026-11-17): one call category for both
+    /// kinds, with no loudspeaker by default; the urgent page has the Speaker control that moves it.
     @Test func anUrgentCallStartsOnTheEarpiece() throws {
         let calls = try Self.code("Persona/Calls/PersonaCalls.swift")
-        let prepare = try #require(calls.range(of: "func prepareUrgentAudio()"))
+        let prepare = try #require(calls.range(of: "static func setCallCategory()"))
         let body = String(calls[prepare.upperBound...].prefix(400))
         #expect(body.contains("PhoneVoiceAudio.callSessionOptions") && !body.contains("PhoneVoiceAudio.sessionOptions"))
         #expect(!PhoneVoiceAudio.callSessionOptions.contains(.defaultToSpeaker))
+        let owner = try Self.code("Persona/Calls/OwnerCall.swift")
+        #expect(owner.contains("await prepareAudio(call)"), "a call to Persona's is the same")
         let page = try Self.code("Persona/Calls/UrgentCallView.swift")
         #expect(page.contains("calls.setSpeaker(") && page.contains("CallAudioRouteControl("))
     }

@@ -67,14 +67,7 @@ extension PersonaCalls {
         // An in-app voice chat ends first: its audio would end the call's.
         endVoiceChat(for: .replaced)
         // The call's category before Start (the system activates the session; the app never does).
-        let options = PhoneVoiceAudio.callSessionOptions
-        await Task.detached {
-            do {
-                try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: options)
-            } catch {
-                PersonaCalls.log.notice("call: the audio category: \(error.localizedDescription, privacy: .public)")
-            }
-        }.value
+        await prepareAudio(call)
         let recent = VoiceLine.recent(model.chat(key).items)
         let ownerDeps = ownerDeps
         let engine = OwnerCallEngine(key: key, extensionID: extensionID, recent: recent, audio: ownerAudio(), calls: voiceCalls,
@@ -136,7 +129,7 @@ extension PersonaCalls {
 
     nonisolated static func insteadLine(_ why: CallSystemError) -> String {
         why.isAtCapacity ? String(localized: "Another call is on, so this is a voice chat in the app instead")
-            : String(localized: "The phone didn't place the call, so this is a voice chat in the app instead")
+            : String(localized: "This device didn't place the call, so this is a voice chat in the app instead")
     }
 
     // MARK: Recents
@@ -214,7 +207,7 @@ extension PersonaCalls {
 
     static var noHubNote: VoiceUnavailableNote {
         VoiceUnavailableNote(title: String(localized: "Not paired with a hub yet"),
-                             message: String(localized: "Pair this iPhone with a hub to call Persona."), settings: nil)
+                             message: String(localized: "Pair this device with a hub to call Persona."), settings: nil)
     }
 
     static var noMainNote: VoiceUnavailableNote {

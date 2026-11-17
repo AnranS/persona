@@ -116481,24 +116481,24 @@
         }
       }
     },
-    "Pair this iPhone with a hub to call Persona." : {
+    "Pair this device with a hub to call Persona." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pair this iPhone with a hub to call Persona."
+            "value" : "Pair this device with a hub to call Persona."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Persona に電話するには、この iPhone をハブとペアリングしてください。"
+            "value" : "Persona に電話するには、このデバイスをハブとペアリングしてください。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这台 iPhone 配对 hub 后才能打给 Persona。"
+            "value" : "这台设备配对 hub 后才能打给 Persona。"
           }
         }
       },
@@ -150219,6 +150219,29 @@
         }
       }
     },
+    "Start a continuous, hands-free voice chat with Persona on CarPlay: you talk, it answers, and you can cut in anytime." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start a continuous, hands-free voice chat with Persona on CarPlay: you talk, it answers, and you can cut in anytime."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CarPlayでPersonaとハンズフリーで続けて音声チャットを始めます。話すと答え、いつでも割り込めます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 CarPlay 上开始和 Persona 连续、免提的语音对话：你说，它答，你随时可以插话。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Start a meeting recording with one tap. [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -160858,6 +160881,29 @@
       },
       "extractionState" : "manual"
     },
+    "The call is on hold; nothing you say is sent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The call is on hold; nothing you say is sent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話は保留中です。話しても送信されません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话已保持，你说的话不会发出去"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "The card changed. Confirm again." : {
       "localizations" : {
         "en" : {
@@ -165759,29 +165805,6 @@
           }
         }
       }
-    },
-    "The phone didn't place the call, so this is a voice chat in the app instead" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The phone didn't place the call, so this is a voice chat in the app instead"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "電話が発信されなかったため、アプリ内の音声チャットに切り替えました"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "手机没有拨出这通电话，改为 App 内语音对话"
-          }
-        }
-      },
-      "extractionState" : "manual"
     },
     "The photo couldn't be read. Try another one." : {
       "extractionState" : "manual",
@@ -171266,6 +171289,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这台设备不能在这个对话里用语音"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "This device didn't place the call, so this is a voice chat in the app instead" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device didn't place the call, so this is a voice chat in the app instead"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスから発信できなかったため、アプリ内の音声チャットに切り替えました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备没有拨出这通电话，改为 App 内语音对话"
           }
         }
       },

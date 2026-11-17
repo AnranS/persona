@@ -141,9 +141,10 @@ def provisioning_profiles(cfg: dict) -> dict[str, str]:
         bid + ".notify": "Persona Notify App Store",
         bid + ".share": "Persona Share App Store",
     }
-    # Only in a build with the extension: without it the export options stay as they were.
+    # Only in a build with the extension: without it the export options stay as they were. A dict literal assigned to
+    # `profiles`, as above: the privacy check reads the published default names from such literals only.
     if opted_in(cfg, "app.siri_calls"):
-        profiles[call_intents_bundle_id(cfg)] = "Persona Call Intents App Store"
+        profiles = {**profiles, call_intents_bundle_id(cfg): "Persona Call Intents App Store"}
     overrides = get(cfg, "app_store.provisioning_profiles", {})
     if not isinstance(overrides, dict):
         sys.exit("app_store.provisioning_profiles must be a Bundle ID to profile name object")

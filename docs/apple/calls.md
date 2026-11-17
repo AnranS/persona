@@ -59,31 +59,40 @@ LiveCommunicationKit reports errors in CallKit's domains (`com.apple.CallKit.err
 
 A call has an id (the conversation UUID), a kind (`.owner(group:)` or `.urgent(callID:)`), a direction, a phase
 (`dialing`, `ringing`, `connecting`, `connected(since:)`, `ended(reason)`), `muted`, a set of hold reasons (`.system`:
-the system paused it; `.interruption`: the audio session was interrupted outside a pause) and whether the system's
-audio is the call's (`audioActive`). `held` is "any hold reason".
+the system paused it; `.interruption`: the audio session is not the call's outside a pause, whether interrupted,
+deactivated with no word of why, or not given back after the system resumed the call) and whether the system's audio is
+the call's (`audioActive`). `held` is "any hold reason".
 
 - **Start (outgoing).** `StartConversationAction` → fulfil, phase `connecting`, report `startedConnecting` and
   `pausable`, begin the engine (the voice starts), start the activation watchdog. Reports wait until the system knows
   the conversation (it is in `conversations`: checked right after the fulfil, else on the next `conversationChanged`):
   the system drops reports made before. The system giving up on the Start ends the call as failed.
 - **Connected.** A call to Persona connects on the voice's first `ready` (report `connected`); an urgent call on Join.
-- **Audio.** The engine's audio starts only on `didActivate`. `didDeactivate` stops it and never ends the call. No
-  `didActivate` 5 s after the Start or Join: logged, `setActive(true)` tried once; if that fails too, the call ends as
-  failed (both are device-checklist lines). An activation that comes before the Start is handled is kept.
+- **Audio.** The engine's audio starts only on `didActivate`. `didDeactivate` stops it and never ends the call; outside
+  a pause, with no interruption to say why, it holds the call (`.interruption`, either kind's engine holds) and the
+  recovery below runs at once, so the call is never left connected and silent. No `didActivate` 5 s after the Start or
+  Join: logged, `setActive(true)` tried once; if that fails too, the call ends as failed (both are device-checklist
+  lines). The watchdog waits while the call is held (the system's pause or an interruption has the audio) and runs again
+  from the system's resume; the result of an activation asked before a hold or an interruption counts for nothing. An
+  activation that comes before the Start is handled is kept.
 - **Mute.** `MuteConversationAction` is fulfilled and applied, idempotent by value: the system echoes the app's own mute
   8–17 ms later and sends an unmute after a muted call ends. The page's Mute asks the system (so its call UI and AirPods
   agree) and applies here if the system refuses (it does while dialling: the mute then reaches the system once it knows
   the call). From `didActivate` until 0.5 s after the engine runs, a system mute is the engine's own (turning voice
-  processing on surfaces as one on iOS 17+): ignored, and the owner's mute asserted again once.
+  processing on surfaces as one on iOS 17+): ignored, and the owner's mute asserted again once per engine (the first, one
+  after a hold or an interruption, and one a route change rebuilt, which the audio says before it starts it).
 - **Hold.** `PauseConversationAction` is fulfilled at once (a failed pause, or one left about 5 s, makes the system end
   the call). While held the microphone sends silence, what the voice says is dropped and nothing plays, the idle clock
-  stops, and an extension that lists `hold` gets `{"type":"hold","on":true}` (again after a reconnect's `ready`). The
-  call goes on only once every hold reason is gone and the audio is the call's again.
+  stops, and an extension that lists `hold` gets `{"type":"hold","on":true}` (again after a reconnect's `ready`, before
+  any audio; what the microphone caught while waiting for `ready` is dropped, never sent). The call goes on only once
+  every hold reason is gone and the audio is the call's again. The system's resume with no `didActivate` after it (the
+  session was active already, our other call had it) keeps the call On Hold and runs the recovery below.
 - **Interruption.** LiveCommunicationKit has no call observer, so a cellular call or another app's call may reach the
   app only as an audio-session interruption. Its `began` once the call started or was answered holds the call
-  (`.interruption`), never ends it, and stops the engine. Its `ended`: nothing while the system still pauses the call (its resume brings the audio
-  back); otherwise after 1 s without `didActivate` the app asks the system to unpause, 0.5 s later activates the session
-  once itself, and at 5 s the call stays On Hold with a **Resume** button (never silently ended). Resume asks again.
+  (`.interruption`), never ends it, and stops the engine. Its `ended`: nothing while the system still pauses the call (its
+  resume starts the recovery); otherwise the recovery: after 1 s without `didActivate` the app asks the system to
+  unpause, 0.5 s later activates the session once itself (not while the system pauses the call), and at 5 s the call
+  stays On Hold with a **Resume** button (never silently ended). Resume asks again.
 - **Our own second call.** When any of our calls ends, every other call the system held is unpaused by the app (the
   system does not resume a held call of the same app): an urgent call answered with Hold & Accept, then over, gives the
   call to Persona back.
@@ -113,9 +122,14 @@ audio is the call's (`audioActive`). `held` is "any hold reason".
 7. On the system's Start: the voice, `VoiceCalls.begin` of a `VoiceConversation(surface: .call)` with the chat's recent
    lines; its `start` frame carries `"surface":"call"`.
 
-The urgent call sets the same category (`prepareUrgentAudio`, unless a call to Persona has set it already), so both kinds
-start on the earpiece; the pages' **Speaker** (or **Audio**, the system's route picker, while Bluetooth, a car or
-headphones can take the call) and the system's call UI move it.
+The urgent call sets the same category as it rings (`PersonaCalls.prepareAudio`), unless a call to Persona has set it
+already (one still being placed has not), or an in-app voice chat is on: its loudspeaker stays while the call rings, and
+answering ends the chat and sets the category before Join is fulfilled. So both kinds start on the earpiece; the pages'
+**Speaker** (or **Audio**, the system's route picker, while Bluetooth, a car or headphones can take the call) and the
+system's call UI move it.
+
+A refusal that comes after its attempt was hung up (the main conversation or the microphone prompt answered late) is
+dropped: a newer call's page and alert stay.
 
 ## Background and the Lock Screen
 
@@ -131,15 +145,22 @@ headphones can take the call) and the system's call UI move it.
 
 ## With voice chat, urgent calls and recording
 
-- One call at a time. Another chat's voice button ends the call to Persona and waits (at most 1 s) for the system to
-  let its audio go before the voice chat opens its own (`endForVoiceChat`). CarPlay's start ends it without waiting.
+- One call at a time. Any voice chat (another chat's voice button, CarPlay's, a Continue) ends the call to Persona and
+  waits (at most 1 s) for the system to let its audio go before it opens its own (`VoiceCalls.endSystemCall`, which
+  `PersonaCalls.endForVoiceChat` answers), and is refused if an urgent call rang meanwhile.
 - An urgent call rings during a call to Persona: it is reported as always (iOS ends an app that does not report a VoIP
   push's call), and the system offers Hold & Accept, End & Accept or Decline. Pause and End reach the call to Persona
   through its machine; after the urgent call, the app unpauses it.
 - An urgent call answered during an in-app voice chat ends the voice chat first (`VoiceEnd.urgentCall`, "Ended for
   Persona's urgent call", Continue offered), so its audio cannot deactivate the session under the urgent call.
 - While an urgent call rings or is on, a voice chat (any page, CarPlay, Continue) and a call to Persona are refused with
-  "Finish the urgent call first" (`VoiceUnavailableNote.urgentCall`; `VoiceCalls.urgentCallOn`).
+  "Finish the urgent call first" (`VoiceUnavailableNote.urgentCall`; `VoiceCalls.urgentCallOn`). One the system would
+  not show (Focus or Do Not Disturb refused its ring, only its companion notification says so) refuses nothing until it
+  is answered from that notification.
+- Answered from its notification without the system (it refused the ring or Join): a call to Persona that is on goes on
+  hold through the system first, as Hold & Accept does, and the urgent call talks once the system let that call's audio
+  go; after it, the call to Persona is resumed. If the system will not hold the call to Persona, the urgent call is not
+  answered here and its conversation opens instead.
 - A recording or dictation in progress refuses a call to Persona; one that starts during the call takes the microphone
   and ends it (`microphoneTaken`), and the system hears the end.
 
@@ -158,7 +179,7 @@ Spotlight and the opt-in SiriKit extension: `docs/apple/siri.md`, "Calling Perso
 - Talk to Persona with no car places a call to Persona on the phone; with CarPlay connected it is the car's voice chat,
   or asks to open Persona on the car's screen (`docs/apple/carplay.md`).
 - The car's voice chat is refused while an urgent call rings or is on, and starting it ends a call to Persona (one call
-  at a time).
+  at a time) and waits for the system to let its audio go, as every voice chat does.
 
 ## No CallKit
 

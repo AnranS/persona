@@ -43,6 +43,22 @@ struct CallPersonaIntentTests {
         #expect(!model.shellSettings && shell.page == 1)
     }
 
+    /// Talk to Persona promises a call only where it places one: the phone's description and keywords; elsewhere
+    /// (Apple Vision Pro, where `PersonaCalls` does not exist and it only says to connect CarPlay) CarPlay's alone.
+    @Test func talkToPersonaPromisesACallOnlyWhereItPlacesOne() throws {
+        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Persona/Intents/TalkToPersonaIntent.swift")
+        // The code alone: a comment may say what it does not promise.
+        let source = try String(contentsOf: path, encoding: .utf8).components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+        let phone = try #require(source.range(of: "#if os(iOS)"))
+        let other = try #require(source.range(of: "#else", range: phone.upperBound..<source.endIndex))
+        let end = try #require(source.range(of: "#endif", range: other.upperBound..<source.endIndex))
+        let elsewhere = String(source[other.upperBound..<end.lowerBound])
+        #expect(String(source[phone.upperBound..<other.lowerBound]).contains("a call to Persona on this device"))
+        #expect(elsewhere.contains("IntentDescription(") && !elsewhere.contains("call to Persona") && !elsewhere.contains(#""call""#))
+    }
+
     @Test func siriSaysItIsCalling() {
         #expect(CallPersonaIntent.calling == String(localized: "Calling Persona"))
         #expect(CallPersonaIntent.calling != CarPlayTalk.notConnected.sentence)

@@ -491,6 +491,9 @@ struct VoiceDeps {
         held = on
         uplink.isMuted = muted || held
         if on {
+            // What the microphone caught while the connection waited for `ready` stays here: the extension never hears
+            // speech from a held call, and one without `hold` gets its silence.
+            uplink.discardHeld()
             dropSpeech()
         } else {
             lastActivity = deps.clock.now
@@ -748,11 +751,11 @@ struct VoiceDeps {
         attempt = 0
         features = r.features
         if let t = r.target { target = t }
+        // Still on hold after a reconnect: the new connection's extension hears it again, before any audio goes up.
+        if held { sendHold() }
         uplink.open(rate: r.inputRate) { @Sendable pcm in socket.send(data: pcm) }
         lastActivity = deps.clock.now
         refreshPhase()
-        // Still on hold after a reconnect: the new connection's extension hears it again.
-        if held { sendHold() }
         if connectedAt == nil {
             connectedAt = deps.clock.now
             deps.callEvents?(.ready)

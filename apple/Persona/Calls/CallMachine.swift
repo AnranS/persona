@@ -23,8 +23,9 @@ nonisolated enum CallDirection: Equatable, Sendable {
 nonisolated enum CallHoldReason: Hashable, Sendable {
     /// The system paused it (Hold & Accept, a long press on Mute): `PauseConversationAction`.
     case system
-    /// The audio session was interrupted outside a pause (a phone call or another app's call reaches the app only so:
-    /// LiveCommunicationKit has no call observer).
+    /// The audio session is not the call's outside a pause: interrupted (a phone call or another app's call reaches the
+    /// app only so: LiveCommunicationKit has no call observer), taken away with no word of why (`didDeactivate` alone), or
+    /// not given back after the system resumed the call. The recovery asks for it back, then offers Resume.
     case interruption
 }
 
@@ -135,9 +136,9 @@ nonisolated enum CallEvent: Equatable, Sendable {
     /// The system refused the hang-up: it ends here and the system hears it.
     case hangUpRefused
     case resumeTapped
-    /// The audio session activated by the app itself (`CallEffect.activateSession`), or that failed.
-    case sessionActivated
-    case sessionActivationFailed
+    /// The audio session activated by the app itself (`CallEffect.activateSession`, by its attempt), or that failed.
+    case sessionActivated(Int)
+    case sessionActivationFailed(Int)
     /// An urgent call answered without the system (its notification tapped and the system refused Join).
     case answeredHere
     /// The urgent call stopped ringing for good (missed, settled elsewhere): the system hears why.
@@ -147,6 +148,9 @@ nonisolated enum CallEvent: Equatable, Sendable {
     case voiceReady
     /// The engine's audio runs (voice processing on, the microphone open).
     case engineRunning
+    /// A new engine is about to start on the call's audio (a route change rebuilt it): voice processing turning on
+    /// again can surface as a system mute again.
+    case engineStarting
     /// The voice or the urgent conversation ended by itself.
     case engineEnded(failed: Bool)
     case interruptionBegan
@@ -171,8 +175,9 @@ nonisolated enum CallEffect: Equatable, Sendable {
     /// Through the system: `PauseConversationAction(isPaused: false)`.
     case performUnpause
     case performEnd
-    /// `AVAudioSession.setActive(true)`, once: the system did not activate it.
-    case activateSession
+    /// `AVAudioSession.setActive(true)`, once: the system did not activate it. Its result comes back as
+    /// `sessionActivated` / `sessionActivationFailed` with the same attempt; one the call no longer waits for is ignored.
+    case activateSession(Int)
     case endEngine
     case schedule(CallTimer)
     case log(String)
@@ -198,7 +203,8 @@ nonisolated struct CallMachine: Equatable, Sendable {
     /// The page's mute on its way through the system: when it comes back as an action it is the owner's.
     private(set) var requestedMute: Bool?
     /// Until then a system mute is the engine's own (enabling voice processing surfaces as one on iOS 17+), not the
-    /// owner's: ignored and the owner's mute asserted again, once.
+    /// owner's: ignored and the owner's mute asserted again, once per engine (the first, one after an interruption or a
+    /// hold, one a route change rebuilt).
     private(set) var startingUntil: Date?
     private(set) var reasserted = false
     /// The app activated the session itself once (the activation watchdog, or the recovery after an interruption).
@@ -207,6 +213,16 @@ nonisolated struct CallMachine: Equatable, Sendable {
     private(set) var recovering = false
     /// The audio did not come back after an interruption: the page offers Resume.
     private(set) var resumeOffered = false
+    /// The app's own activation of the session on its way, and whether it is the watchdog's (a refusal ends a call that
+    /// never had audio). A hold or an interruption since makes its result count for nothing.
+    private(set) var awaited: Activation?
+    /// The app's activations so far: each attempt's number.
+    private(set) var attempts = 0
+
+    nonisolated struct Activation: Equatable, Sendable {
+        var attempt: Int
+        var watchdog: Bool
+    }
 
     /// How long after the engine runs a system mute is still the engine's.
     static let engineSettle: TimeInterval = 0.5
@@ -293,9 +309,16 @@ nonisolated struct CallMachine: Equatable, Sendable {
             guard phase.isLive else { return out }
             if paused {
                 holds.insert(.system)
-            } else {
-                holds.remove(.system)
+                // The system's resume brings the audio back: until then nothing of the app's asks for it (the watchdog and
+                // the recovery wait), and an activation already on its way counts for nothing.
+                recovering = false
                 resumeOffered = false
+                awaited = nil
+            } else {
+                // A resume of a call the system did not hold changes nothing (the recovery's own unpause, echoed).
+                guard holds.remove(.system) != nil else { return out }
+                resumeOffered = false
+                out += resumed()
             }
             out += followHold()
 
@@ -319,34 +342,53 @@ nonisolated struct CallMachine: Equatable, Sendable {
                 out.append(.performMute(true))
             }
 
-        case .audioActivated, .sessionActivated:
+        case .audioActivated:
             guard phase.isLive else { return [] }
-            if event == .sessionActivated { out.append(.log("the call's audio session activated by the app")) }
-            let on = !audioActive
-            out += activated()
-            // A system mute is the engine's own from now until half a second after it runs (`engineRunning`). Only when
-            // the audio comes on: a second word of the same activation (the watchdog's own and the system's late one)
-            // starts no engine, so nothing would close the window again.
-            if on { startingUntil = .distantFuture }
+            out += audioCameOn()
 
-        case .sessionActivationFailed:
-            guard phase.isLive, !audioActive else { return [] }
-            guard everActive else {
+        case .sessionActivated(let attempt):
+            guard phase.isLive else { return [] }
+            // Asked before a hold or an interruption, or the system's own activation came first: not this call's audio now.
+            guard awaited?.attempt == attempt else { return [.log("an activation the call no longer waits for, ignored")] }
+            awaited = nil
+            out.append(.log("the call's audio session activated by the app"))
+            out += audioCameOn()
+
+        case .sessionActivationFailed(let attempt):
+            guard phase.isLive, let asked = awaited, asked.attempt == attempt else { return [] }
+            awaited = nil
+            guard !audioActive else { return [] }
+            if asked.watchdog, !everActive {
                 // The watchdog: the system never activated the call's audio and it would not activate either.
                 out.append(.log("no audio: the system did not activate the call's audio session and it would not activate"))
                 return out + end(.failed, report: true)
             }
-            out.append(.log("the call's audio session would not activate after the interruption"))
+            out.append(.log("the call's audio session would not activate"))
 
         case .audioDeactivated:
             guard audioActive else { return [] }
             audioActive = false
             startingUntil = nil
-            if phase.isLive { out.append(.audioOff) }
+            guard phase.isLive else { return [] }
+            out.append(.audioOff)
+            // Taken away outside a pause, with no interruption to say so: held as for an interruption whose end nobody
+            // will say, and the recovery asks for the audio back (Resume at last). Never connected and silent.
+            if !holds.contains(.system), phase == .connecting || phase.connectedSince != nil {
+                holds.insert(.interruption)
+                awaited = nil
+                out += followHold()
+                out += recover()
+            }
 
         case .engineRunning:
             guard phase.isLive else { return [] }
             startingUntil = now.addingTimeInterval(Self.engineSettle)
+
+        case .engineStarting:
+            // A system mute is the new engine's own until half a second after it runs, and corrected once again.
+            guard phase.isLive, audioActive else { return [] }
+            startingUntil = .distantFuture
+            reasserted = false
 
         case .voiceReady:
             guard phase == .connecting else { return [] }
@@ -403,16 +445,14 @@ nonisolated struct CallMachine: Equatable, Sendable {
             holds.insert(.interruption)
             recovering = false
             resumeOffered = false
+            awaited = nil
             out += followHold()
 
         case .interruptionEnded:
             guard phase.isLive, holds.contains(.interruption) else { return [] }
-            // Still paused by the system: its resume brings the audio back.
+            // Still paused by the system: its resume brings the audio back (or the recovery, `resumed`).
             guard !holds.contains(.system) else { return [] }
-            recovering = true
-            activationTried = false
-            out.append(.schedule(.recoveryUnpause))
-            out.append(.schedule(.recoveryGiveUp))
+            out += recover()
 
         case .timer(let timer):
             out += fire(timer)
@@ -426,17 +466,19 @@ nonisolated struct CallMachine: Equatable, Sendable {
         guard phase.isLive else { return [] }
         switch timer {
         case .activation:
-            guard !everActive, !activationTried else { return [] }
+            // Not while held: the system's pause or an interruption has the audio, and its resume (`resumed`) or the
+            // recovery asks for it then. Activating it now would take the other call's, or fail a call nothing is wrong with.
+            guard !everActive, !activationTried, !audioActive, !held else { return [] }
             activationTried = true
-            return [.log("no didActivate 5 s after the call started: activating the audio session once"), .activateSession]
+            return [.log("no didActivate 5 s after the call started: activating the audio session once"), activate(watchdog: true)]
         case .recoveryUnpause:
             guard recovering, !audioActive, !holds.contains(.system) else { return [] }
             return [.log("no didActivate 1 s after the interruption ended: asking the system to resume"), .performUnpause,
                     .schedule(.recoveryActivate)]
         case .recoveryActivate:
-            guard recovering, !audioActive, !activationTried else { return [] }
+            guard recovering, !audioActive, !activationTried, !holds.contains(.system) else { return [] }
             activationTried = true
-            return [.activateSession]
+            return [activate(watchdog: false)]
         case .recoveryGiveUp:
             guard recovering, !audioActive, holds.contains(.interruption) else { return [] }
             recovering = false
@@ -451,13 +493,57 @@ nonisolated struct CallMachine: Equatable, Sendable {
         let first = !audioActive
         audioActive = true
         everActive = true
-        // The system gave the session back: whatever interrupted it is over.
+        // The system gave the session back: whatever interrupted it is over, and an activation still on its way is moot.
         holds.remove(.interruption)
         recovering = false
         resumeOffered = false
+        awaited = nil
         if first { out.append(.audioOn) }
         out += followHold()
         return out
+    }
+
+    /// The system's activation or the app's own: the engine starts. A system mute is the engine's own from now until half
+    /// a second after it runs (`engineRunning`), and is corrected once for this engine. Only when the audio comes on: a
+    /// second word of the same activation (the watchdog's own and the system's late one) starts no engine, so nothing
+    /// would close the window again.
+    private mutating func audioCameOn() -> [CallEffect] {
+        let on = !audioActive
+        let out = activated()
+        if on {
+            startingUntil = .distantFuture
+            reasserted = false
+        }
+        return out
+    }
+
+    /// Activates the session once, as attempt `attempts`: its result counts only while the call still waits for it.
+    private mutating func activate(watchdog: Bool) -> CallEffect {
+        attempts += 1
+        awaited = Activation(attempt: attempts, watchdog: watchdog)
+        return .activateSession(attempts)
+    }
+
+    /// The audio should be the call's and is not: wait a moment for the system's activation, ask the system to resume
+    /// the call, activate the session once, and at last offer Resume (`fire`).
+    private mutating func recover() -> [CallEffect] {
+        recovering = true
+        activationTried = false
+        return [.schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)]
+    }
+
+    /// The system resumed the call (its Resume, or the resume asked for once our other call ended). Its activation
+    /// normally follows; when the session is active already (the other call had it) the system may never say so again,
+    /// so a call that had its audio stays on hold until it is back and the recovery asks for it; one that never had
+    /// audio waits for it as it did when it started (the watchdog, which waited meanwhile).
+    private mutating func resumed() -> [CallEffect] {
+        guard !audioActive, phase == .connecting || phase.connectedSince != nil else { return [] }
+        guard everActive else {
+            activationTried = false
+            return [.schedule(.activation)]
+        }
+        holds.insert(.interruption)
+        return recover()
     }
 
     /// Tells the engine whether it is on hold: held as soon as anything holds it; going on only once nothing does and the

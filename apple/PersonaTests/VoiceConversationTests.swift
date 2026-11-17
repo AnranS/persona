@@ -598,6 +598,37 @@ struct VoiceConversationTests {
         #expect(rig.audio.played.count == 1)
     }
 
+    /// Speech the microphone caught while the connection waited for `ready` (the first one, or a reconnect's), then the
+    /// call went on hold: none of it goes up when `ready` comes while it is held, with the hold feature or without.
+    @Test func onHoldWhatWasCaughtBeforeReadyNeverGoesUp() async {
+        for hold in [false, true] {
+            let rig = VoiceRig()
+            let (call, socket) = await started(rig, surface: .call)
+            rig.audio.capture(.pcm(1600, 5000))
+            call.setHeld(true)
+            rig.audio.capture(.pcm(1600, 5000))
+            socket.ready(rig.key, hold: hold)
+            #expect(!socket.audio.isEmpty)
+            #expect(socket.audio.allSatisfy { VoicePCM.samples($0).allSatisfy { $0 == 0 } }, "hold feature \(hold): silence only")
+            if hold { #expect(socket.frames.last?["type"] as? String == "hold" && socket.frames.last?["on"] as? Bool == true) }
+
+            // A reconnect: what was caught while the socket was away, then the hold, then the new `ready`.
+            call.setHeld(false)
+            socket.drop()
+            rig.audio.capture(.pcm(1600, 5000))
+            call.setHeld(true)
+            rig.audio.capture(.pcm(1600, 5000))
+            await rig.advance(1)
+            let again = rig.socket!
+            again.ready(rig.key, hold: hold)
+            #expect(again !== socket && !again.audio.isEmpty)
+            #expect(again.audio.allSatisfy { VoicePCM.samples($0).allSatisfy { $0 == 0 } }, "hold feature \(hold): after a reconnect")
+            call.setHeld(false)
+            rig.audio.capture(.pcm(1600, 5000))
+            #expect(again.audio.last.map { VoicePCM.samples($0).contains { $0 != 0 } } == true, "off hold it is heard again")
+        }
+    }
+
     @Test func holdFramesGoOnlyToAnExtensionThatTakesThemAndAgainAfterAReconnect() async {
         let rig = VoiceRig()
         let (call, socket) = await started(rig, surface: .call)

@@ -13,6 +13,16 @@ struct CallMachineTests {
 
     private func urgent() -> CallMachine { CallMachine(id: UUID(), kind: .urgent(callID: "call_1"), direction: .incoming) }
 
+    /// An urgent call answered, with its audio on.
+    private func answered() -> CallMachine {
+        var m = urgent()
+        _ = m.handle(.known, at: at(0))
+        _ = m.handle(.joinAction, at: at(0))
+        _ = m.handle(.audioActivated, at: at(0.2))
+        _ = m.handle(.engineRunning, at: at(0.3))
+        return m
+    }
+
     /// A call to Persona the system started and knows, with its audio on and the voice ready.
     private func connected() -> CallMachine {
         var m = owner()
@@ -75,10 +85,38 @@ struct CallMachineTests {
     @Test func theEngineStartsOnlyOnActivationAndDeactivationNeverEndsTheCall() {
         var m = connected()
         #expect(m.audioActive)
-        #expect(m.handle(.audioDeactivated, at: at(5)) == [.audioOff])
+        #expect(m.handle(.audioDeactivated, at: at(5)).first == .audioOff)
         #expect(m.phase.isLive)
-        #expect(m.handle(.audioActivated, at: at(6)) == [.audioOn])
+        #expect(m.handle(.audioActivated, at: at(6)) == [.audioOn, .hold(false)])
         #expect(m.handle(.audioActivated, at: at(6.1)).isEmpty, "once per activation")
+    }
+
+    /// `didDeactivate` alone, outside a pause and with no interruption to say why: held as for an interruption (the
+    /// engine of either kind holds), the recovery asks for the audio back, and Resume is offered at last; the call is
+    /// never left connected and silent.
+    @Test func aDeactivationAloneHoldsTheCallAndRecovers() {
+        for start in [connected(), answered()] {
+            var m = start
+            #expect(m.handle(.audioDeactivated, at: at(10)) == [.audioOff, .hold(true), .schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)])
+            #expect(m.held && m.holdReason == .interruption && m.phase.isLive)
+            let unpause = m.handle(.timer(.recoveryUnpause), at: at(11))
+            #expect(unpause.contains(.performUnpause) && unpause.contains(.schedule(.recoveryActivate)))
+            #expect(m.handle(.timer(.recoveryActivate), at: at(11.5)) == [.activateSession(1)])
+            _ = m.handle(.sessionActivationFailed(1), at: at(11.6))
+            #expect(m.phase.isLive, "a refused activation is no reason to end a call that had its audio")
+            _ = m.handle(.timer(.recoveryGiveUp), at: at(15))
+            #expect(m.resumeOffered && m.held)
+            #expect(m.handle(.audioActivated, at: at(20)) == [.audioOn, .hold(false)])
+            #expect(!m.held && !m.resumeOffered)
+        }
+        // A deactivation the system's pause explains holds nothing more.
+        var paused = connected()
+        _ = paused.handle(.pauseAction(true), at: at(10))
+        #expect(paused.handle(.audioDeactivated, at: at(10.1)) == [.audioOff] && paused.holds == [.system])
+        // Nor one of a call still dialling.
+        var dialling = owner()
+        _ = dialling.handle(.audioActivated, at: at(0.1))
+        #expect(dialling.handle(.audioDeactivated, at: at(0.2)) == [.audioOff] && !dialling.held)
     }
 
     @Test func noActivationActivatesOnceAndThenFails() {
@@ -86,10 +124,10 @@ struct CallMachineTests {
         _ = m.handle(.known, at: at(0))
         _ = m.handle(.startAction, at: at(0))
         let first = m.handle(.timer(.activation), at: at(5))
-        #expect(first.contains(.activateSession))
+        #expect(first.contains(.activateSession(1)))
         #expect(first.contains { if case .log = $0 { true } else { false } }, "a device-checklist line")
-        #expect(!m.handle(.timer(.activation), at: at(6)).contains(.activateSession), "once")
-        let failed = m.handle(.sessionActivationFailed, at: at(6))
+        #expect(!m.handle(.timer(.activation), at: at(6)).contains(.activateSession(2)), "once")
+        let failed = m.handle(.sessionActivationFailed(1), at: at(6))
         #expect(m.phase == .ended(.failed))
         #expect(reports(failed) == [.ended(at(6), .failed)])
         #expect(failed.contains(.endEngine))
@@ -99,14 +137,67 @@ struct CallMachineTests {
         var m = owner()
         _ = m.handle(.startAction, at: at(0))
         _ = m.handle(.timer(.activation), at: at(5))
-        #expect(m.handle(.sessionActivated, at: at(5.1)).contains(.audioOn))
+        #expect(m.handle(.sessionActivated(1), at: at(5.1)).contains(.audioOn))
         #expect(m.handle(.timer(.activation), at: at(9)).isEmpty)
+    }
+
+    /// The system holds the call before its audio ever came (another call took it right after the Start): the watchdog
+    /// waits, so it neither takes the other call's session nor fails a call nothing is wrong with, and runs again from
+    /// the resume.
+    @Test func theWatchdogWaitsWhileTheSystemHoldsTheCall() {
+        var m = owner()
+        _ = m.handle(.known, at: at(0))
+        _ = m.handle(.startAction, at: at(0))
+        #expect(m.handle(.pauseAction(true), at: at(1)) == [.fulfil, .hold(true)])
+        #expect(m.handle(.timer(.activation), at: at(5)).isEmpty, "held: no activation of its own")
+        #expect(m.handle(.pauseAction(false), at: at(20)) == [.fulfil, .schedule(.activation)], "the watchdog again")
+        #expect(m.phase.isLive && !m.held)
+        #expect(m.handle(.timer(.activation), at: at(25)).contains(.activateSession(1)))
+        #expect(m.handle(.audioActivated, at: at(25.1)) == [.audioOn, .hold(false)])
+        // An interruption before the audio came holds the watchdog too.
+        var interrupted = owner()
+        _ = interrupted.handle(.startAction, at: at(0))
+        _ = interrupted.handle(.interruptionBegan, at: at(1))
+        #expect(interrupted.handle(.timer(.activation), at: at(5)).isEmpty)
+    }
+
+    /// The app's own activation asked before a hold or an interruption came: its result is not the call's any more. A
+    /// refusal does not end the held call; a success does not start its engine.
+    @Test func anActivationAskedBeforeAHoldCountsForNothing() {
+        for success in [false, true] {
+            var m = owner()
+            _ = m.handle(.startAction, at: at(0))
+            #expect(m.handle(.timer(.activation), at: at(5)).contains(.activateSession(1)))
+            _ = m.handle(.pauseAction(true), at: at(5.05))
+            let result = m.handle(success ? .sessionActivated(1) : .sessionActivationFailed(1), at: at(5.1))
+            #expect(!result.contains(.audioOn) && !result.contains(.endEngine), "success \(success)")
+            #expect(m.phase.isLive && m.held && !m.audioActive, "success \(success)")
+        }
+        var interrupted = connected()
+        _ = interrupted.handle(.audioDeactivated, at: at(10))
+        _ = interrupted.handle(.timer(.recoveryUnpause), at: at(11))
+        #expect(interrupted.handle(.timer(.recoveryActivate), at: at(11.5)) == [.activateSession(1)])
+        _ = interrupted.handle(.interruptionBegan, at: at(11.55))
+        #expect(!interrupted.handle(.sessionActivated(1), at: at(11.6)).contains(.audioOn), "the interruption came since")
+    }
+
+    /// The recovery asked the system to resume, and the system paused the call meanwhile (another call): it does not
+    /// activate the session the other call has, nor offer Resume; the system's resume starts it again.
+    @Test func theRecoveryWaitsWhileTheSystemHoldsTheCall() {
+        var m = connected()
+        _ = m.handle(.interruptionBegan, at: at(10))
+        _ = m.handle(.interruptionEnded, at: at(20))
+        #expect(m.handle(.timer(.recoveryUnpause), at: at(21)).contains(.schedule(.recoveryActivate)))
+        _ = m.handle(.pauseAction(true), at: at(21.2))
+        #expect(m.handle(.timer(.recoveryActivate), at: at(21.5)).isEmpty)
+        #expect(m.handle(.timer(.recoveryGiveUp), at: at(25)).isEmpty && !m.resumeOffered)
+        #expect(m.handle(.pauseAction(false), at: at(30)) == [.fulfil, .schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)])
     }
 
     /// The watchdog's own activation and the system's late `didActivate` for the same session, in either order: the
     /// engine starts once, and half a second after it runs a system mute (its call UI, AirPods) is the owner's again.
     @Test func aSecondWordOfTheSameActivationKeepsTheMuteWindowItHad() {
-        for words in [[CallEvent.sessionActivated, .audioActivated], [.audioActivated, .sessionActivated]] {
+        for words in [[CallEvent.sessionActivated(1), .audioActivated], [.audioActivated, .sessionActivated(1)]] {
             var m = owner()
             _ = m.handle(.known, at: at(0))
             _ = m.handle(.startAction, at: at(0))
@@ -181,6 +272,33 @@ struct CallMachineTests {
         #expect(m.handle(.muteAction(true), at: at(1.0)) == [.fulfil, .mute(true)], "half a second after the engine runs it is the owner's")
     }
 
+    /// Every new engine's startup mute is corrected, not only the first's: after an interruption or a hold brought the
+    /// audio back, and after a route change rebuilt the engine. A second word of the same activation corrects nothing more.
+    @Test func theStartupMuteIsCorrectedForEveryNewEngine() {
+        var m = connected()
+        #expect(m.handle(.muteAction(true), at: at(0.5)).contains(.performMute(false)), "the first engine's")
+        _ = m.handle(.interruptionBegan, at: at(10))
+        _ = m.handle(.interruptionEnded, at: at(20))
+        _ = m.handle(.audioActivated, at: at(20.1))
+        #expect(m.handle(.muteAction(true), at: at(20.2)).contains(.performMute(false)), "the engine after the interruption")
+        _ = m.handle(.engineRunning, at: at(20.3))
+        _ = m.handle(.pauseAction(true), at: at(30))
+        _ = m.handle(.audioDeactivated, at: at(30.1))
+        _ = m.handle(.pauseAction(false), at: at(40))
+        _ = m.handle(.audioActivated, at: at(40.1))
+        #expect(m.handle(.muteAction(true), at: at(40.2)).contains(.performMute(false)), "the engine after the hold")
+        #expect(m.handle(.audioActivated, at: at(40.25)).isEmpty)
+        #expect(m.handle(.muteAction(true), at: at(40.3)) == [.fulfil, .log("a system mute while the engine started, ignored")],
+                "once per engine")
+        _ = m.handle(.engineRunning, at: at(40.4))
+        // A route change rebuilt the engine: voice processing on again.
+        #expect(m.handle(.engineStarting, at: at(50)).isEmpty)
+        #expect(m.handle(.muteAction(true), at: at(50.1)).contains(.performMute(false)), "the rebuilt engine's")
+        _ = m.handle(.engineRunning, at: at(50.2))
+        #expect(m.handle(.muteAction(true), at: at(51)) == [.fulfil, .mute(true)], "the owner's once it runs")
+        #expect(m.muted)
+    }
+
     // MARK: Hold
 
     @Test func aPauseIsFulfilledAtOnceAndHoldsTheCall() {
@@ -189,10 +307,55 @@ struct CallMachineTests {
         #expect(paused == [.fulfil, .hold(true)])
         #expect(m.held && m.holdReason == .system)
         #expect(m.handle(.audioDeactivated, at: at(10.2)) == [.audioOff])
-        // Resumed: off hold only once the audio is the call's again.
-        #expect(m.handle(.pauseAction(false), at: at(20)) == [.fulfil])
-        #expect(!m.held)
+        // Resumed: on hold until the audio is the call's again, which the recovery asks for if the system does not say so.
+        #expect(m.handle(.pauseAction(false), at: at(20)) == [.fulfil, .schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)])
+        #expect(m.held && m.holdReason == .interruption)
         #expect(m.handle(.audioActivated, at: at(20.2)) == [.audioOn, .hold(false)])
+        #expect(!m.held)
+        #expect(m.handle(.timer(.recoveryUnpause), at: at(21)).isEmpty, "nothing left to recover")
+        #expect(m.handle(.pauseAction(false), at: at(22)) == [.fulfil], "a resume of a call not held changes nothing")
+    }
+
+    /// The system resumed the call (our other call ended: Hold & Accept's urgent call) but never activated the session
+    /// for it again (the other call had it active): the call stays on hold, the recovery asks the system and then
+    /// activates the session itself, and Resume is offered if even that does not bring the audio back.
+    @Test func aResumeWithoutTheSystemsActivationRecoversTheAudio() {
+        for activates in [true, false] {
+            var m = connected()
+            _ = m.handle(.pauseAction(true), at: at(10))
+            _ = m.handle(.audioDeactivated, at: at(10.2))
+            _ = m.handle(.pauseAction(false), at: at(20))
+            let unpause = m.handle(.timer(.recoveryUnpause), at: at(21))
+            #expect(unpause.contains(.performUnpause) && unpause.contains(.schedule(.recoveryActivate)))
+            #expect(m.handle(.timer(.recoveryActivate), at: at(21.5)) == [.activateSession(1)])
+            if activates {
+                #expect(m.handle(.sessionActivated(1), at: at(21.6)) == [.log("the call's audio session activated by the app"), .audioOn, .hold(false)])
+                #expect(!m.held && m.audioActive)
+            } else {
+                _ = m.handle(.sessionActivationFailed(1), at: at(21.6))
+                _ = m.handle(.timer(.recoveryGiveUp), at: at(25))
+                #expect(m.resumeOffered && m.held && m.phase.isLive)
+                let resume = m.handle(.resumeTapped, at: at(30))
+                #expect(resume.first == .performUnpause && resume.contains(.schedule(.recoveryActivate)))
+                #expect(m.handle(.timer(.recoveryActivate), at: at(30.5)) == [.activateSession(2)])
+                #expect(m.handle(.sessionActivated(2), at: at(30.6)).contains(.audioOn) && !m.held)
+            }
+        }
+    }
+
+    /// An interruption that ended while the system held the call: the system's resume starts the recovery, so the
+    /// audio comes back or Resume is offered.
+    @Test func anInterruptionThatEndedWhileHeldRecoversOnTheResume() {
+        var m = connected()
+        _ = m.handle(.pauseAction(true), at: at(10))
+        _ = m.handle(.interruptionBegan, at: at(10.1))
+        #expect(m.handle(.interruptionEnded, at: at(15)).isEmpty)
+        #expect(m.handle(.pauseAction(false), at: at(20)) == [.fulfil, .schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)])
+        _ = m.handle(.timer(.recoveryUnpause), at: at(21))
+        _ = m.handle(.timer(.recoveryActivate), at: at(21.5))
+        _ = m.handle(.sessionActivationFailed(1), at: at(21.6))
+        _ = m.handle(.timer(.recoveryGiveUp), at: at(25))
+        #expect(m.resumeOffered && m.held)
     }
 
     @Test func leavingHoldWaitsForEveryReason() {
@@ -202,7 +365,7 @@ struct CallMachineTests {
         #expect(m.holds == [.system, .interruption])
         _ = m.handle(.audioDeactivated, at: at(10.2))
         #expect(m.handle(.interruptionEnded, at: at(11)).isEmpty, "still paused by the system: its resume brings the audio")
-        #expect(m.handle(.pauseAction(false), at: at(12)) == [.fulfil])
+        #expect(m.handle(.pauseAction(false), at: at(12)) == [.fulfil, .schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)])
         #expect(m.held, "the interruption still holds it")
         #expect(m.handle(.audioActivated, at: at(12.2)) == [.audioOn, .hold(false)])
         #expect(!m.held)
@@ -218,8 +381,8 @@ struct CallMachineTests {
         #expect(m.handle(.interruptionEnded, at: at(40)) == [.schedule(.recoveryUnpause), .schedule(.recoveryGiveUp)])
         let unpause = m.handle(.timer(.recoveryUnpause), at: at(41))
         #expect(unpause.contains(.performUnpause) && unpause.contains(.schedule(.recoveryActivate)))
-        #expect(m.handle(.timer(.recoveryActivate), at: at(41.5)) == [.activateSession])
-        _ = m.handle(.sessionActivationFailed, at: at(41.6))
+        #expect(m.handle(.timer(.recoveryActivate), at: at(41.5)) == [.activateSession(1)])
+        _ = m.handle(.sessionActivationFailed(1), at: at(41.6))
         #expect(m.phase.isLive, "a failed activation after an interruption is no reason to end")
         _ = m.handle(.timer(.recoveryGiveUp), at: at(45))
         #expect(m.resumeOffered && m.held && m.phase.isLive)
@@ -256,11 +419,13 @@ struct CallMachineTests {
         _ = gone.handle(.interruptionEnded, at: at(20))
         let unpause = gone.handle(.timer(.recoveryUnpause), at: at(21))
         #expect(unpause.contains(.performUnpause) && unpause.contains(.schedule(.recoveryActivate)), "the recovery runs")
-        #expect(gone.handle(.timer(.recoveryActivate), at: at(21.5)) == [.activateSession])
-        _ = gone.handle(.sessionActivationFailed, at: at(21.6))
+        #expect(gone.handle(.timer(.recoveryActivate), at: at(21.5)) == [.activateSession(1)])
+        _ = gone.handle(.sessionActivationFailed(1), at: at(21.6))
         _ = gone.handle(.timer(.recoveryGiveUp), at: at(25))
         #expect(gone.resumeOffered && gone.held && gone.phase.isLive)
-        #expect(gone.handle(.sessionActivated, at: at(30)) == [.log("the call's audio session activated by the app"), .audioOn, .hold(false)])
+        _ = gone.handle(.resumeTapped, at: at(30))
+        #expect(gone.handle(.timer(.recoveryActivate), at: at(30.5)) == [.activateSession(2)])
+        #expect(gone.handle(.sessionActivated(2), at: at(30.6)) == [.log("the call's audio session activated by the app"), .audioOn, .hold(false)])
     }
 
     /// Half a second after the engine starts again after an interruption, a system mute is the owner's.

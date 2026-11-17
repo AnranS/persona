@@ -107,7 +107,6 @@ struct CallSourceTests {
         let entry = try Self.lines("Persona/Views/Voice/VoiceEntry.swift")
         let start = try #require(Self.body(entry, "static func start("))
         #expect(start.contains("PersonaCalls.shared.urgentInProgress"))
-        #expect(start.contains("PersonaCalls.shared.endForVoiceChat()"))
         let strip = try #require(Self.body(entry, "struct VoiceEndedStrip"))
         #expect(strip.contains("refusal = await VoiceCalls.shared.resume(") && strip.contains(".voiceUnavailableAlert($refusal"))
         let car = try Self.lines("Persona/CarPlay/CarPlayVoiceSession.swift").joined(separator: "\n")
@@ -115,5 +114,12 @@ struct CallSourceTests {
         #expect(car.contains("if let refused = await VoiceCalls.shared.resume("))
         let calls = try Self.lines("Persona/Calls/PersonaCalls.swift").joined(separator: "\n")
         #expect(calls.contains("voiceCalls.urgentCallOn = { [weak self] in self?.urgentInProgress ?? false }"))
+        // Every way in waits for a call to Persona to let its audio go, in `VoiceCalls` itself (CarPlay too).
+        #expect(calls.contains("voiceCalls.endSystemCall = { [weak self] in await self?.endForVoiceChat() }"))
+        let voiceCalls = try Self.lines("Persona/Voice/VoiceCalls.swift")
+        for name in ["func start(", "func resume("] {
+            let body = try #require(Self.body(voiceCalls, name), "\(name)")
+            #expect(body.contains("await handOff("), "\(name)")
+        }
     }
 }

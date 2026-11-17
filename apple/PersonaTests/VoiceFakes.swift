@@ -136,6 +136,7 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     private(set) var deactivations = 0
     private(set) var heldNow = false
     var onRunning: (@MainActor () -> Void)?
+    var onStarting: (@MainActor () -> Void)?
 
     var running: Bool { uplink != nil }
 
@@ -186,6 +187,13 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     func interruptSystemSession() {
         active = false
         events?(.interrupted)
+    }
+
+    /// A route change the engine could not be wired again for: a new engine, voice processing turned on again, as
+    /// `PhoneVoiceAudio.rebuild` tells a system call.
+    func rebuildEngine() {
+        onStarting?()
+        onRunning?()
     }
 }
 

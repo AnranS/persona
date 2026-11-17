@@ -154,6 +154,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     /// The system's session only, on the simulator: its input is tried once the session is the call's.
     private var probeLater = false
     var onRunning: (@MainActor () -> Void)?
+    var onStarting: (@MainActor () -> Void)?
 
     init(session owner: SessionOwner = .app) {
         self.owner = owner
@@ -291,9 +292,10 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         if engine == nil { bringUp() } else { routeChanged() }
     }
 
-    /// The system's session: the engine, once `start` came and the system activated the session.
+    /// The system's session: the engine, once `start` came and the system activated the session, and not while the call
+    /// is on hold (taking it off hold brings it up).
     private func bringUp() {
-        guard owner == .system, systemActive, events != nil, engine == nil else { return }
+        guard owner == .system, systemActive, !held, events != nil, engine == nil else { return }
         let session = AVAudioSession.sharedInstance()
         if probeLater {
             probeLater = false
@@ -489,8 +491,12 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         pump = nil
         dropQueued()
         guard AVAudioSession.sharedInstance().isInputAvailable else { throw VoiceAudioError.noInput }
+        // A system call's manager hears of the new engine both ways: voice processing turning on again can surface as a
+        // system mute, which is the engine's and not the owner's until a moment after it runs.
+        if owner == .system { onStarting?() }
         try build(voiceProcessing: capture == .voiceProcessing)
         watchEngine()
+        if owner == .system { onRunning?() }
     }
 
     /// What was queued to play is gone with the old player.

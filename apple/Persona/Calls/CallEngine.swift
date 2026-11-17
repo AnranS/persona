@@ -23,6 +23,8 @@ nonisolated enum CallEngineEvent: Equatable, Sendable {
     case ready
     /// The audio runs.
     case running
+    /// A new engine is about to start on the call's audio (a route change rebuilt it).
+    case starting
     /// It ended by itself. `note`: why, in a line for the page (nil: nothing to say).
     case ended(failed: Bool, note: String?)
     case interrupted
@@ -80,6 +82,7 @@ extension VoiceEnd {
         voice.setHeld(held)
         audio.setHeld(held)
         audio.onRunning = { [weak self] in self?.events?(.running) }
+        audio.onStarting = { [weak self] in self?.events?(.starting) }
         self.voice = voice
         let calls = calls
         starting = Task { [weak self] in

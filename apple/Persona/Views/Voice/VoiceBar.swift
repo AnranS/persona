@@ -34,11 +34,11 @@ struct VoiceBar: View {
         let session = model.session(key)
         let cards = pendingCards
         let line = VoiceBarLine.make(phase: call.phase, link: call.link, runs: call.runs, session: session, cards: cards,
-                                     muted: call.muted, asking: call.askingID, notice: call.notice, label: label,
+                                     muted: call.muted, held: call.held, asking: call.askingID, notice: call.notice, label: label,
                                      dismissed: call.dismissed, resendable: Set(call.runs.map(\.id).filter { call.canResend($0) }))
         let working = [.working, .paused, .waiting].contains(line.kind)
         let status = VoiceBarStatus.make(phase: call.phase, link: call.link, muted: call.muted, working: working,
-                                         tool: call.tools.last?.label)
+                                         tool: call.tools.last?.label, held: call.held)
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             controls(status)
             second(line, cards: cards)
@@ -286,6 +286,7 @@ struct VoiceBar: View {
         case .notSent: (Theme.Icon.errorFilled, Theme.caution)
         case .offline: (Theme.Icon.offline, Theme.caution)
         case .muted: (Theme.Icon.voiceMute, Color.secondary)
+        case .held: (Theme.Icon.pause, Theme.caution)
         case .ready, .handing, .working, .waiting, .paused: nil
         }
     }

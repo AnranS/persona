@@ -29,7 +29,7 @@ struct PersonaShortcuts: AppShortcutsProvider {
                 "\(.applicationName) call",
             ],
             shortTitle: "Call Persona",
-            systemImageName: "phone.fill" // icon: App Shortcuts take only a literal (Theme.Icon.voiceChannel)
+            systemImageName: "phone.arrow.up.right" // icon: App Shortcuts take only a literal (Theme.Icon.callPersona)
         )
         #endif
         AppShortcut(

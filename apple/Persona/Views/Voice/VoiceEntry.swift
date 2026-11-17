@@ -39,13 +39,9 @@ extension VoiceSupport {
         #if DEBUG
         if VoiceSample.silentAudio { deps.audio = { VoiceSample.SilentAudio() } }
         #endif
-        Task {
-            #if os(iOS)
-            // A call to Persona is on: it ends first, and the voice chat starts once the system let its audio go.
-            await PersonaCalls.shared.endForVoiceChat()
-            #endif
-            await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps)
-        }
+        // A call to Persona that is on ends first, and the voice chat starts once the system let its audio go
+        // (`VoiceCalls.endSystemCall`).
+        Task { await VoiceCalls.shared.start(key, extensionID: id, surface: .phone, recent: recent, deps: deps) }
         return nil
     }
 
@@ -121,7 +117,9 @@ struct VoiceEndedStrip: View {
                         #endif
                         Task { refusal = await VoiceCalls.shared.resume(call.key) }
                     } label: {
-                        Label(again == .resume ? String(localized: "Continue") : String(localized: "Retry [Components b8784c]"), systemImage: Theme.Icon.voiceChannel)
+                        // Calling Persona again is Call Persona's glyph, not the in-app voice chat's.
+                        Label(again == .resume ? String(localized: "Continue") : String(localized: "Retry [Components b8784c]"),
+                              systemImage: call.surface == .call ? Theme.Icon.callPersona : Theme.Icon.voiceChannel)
                             .lineLimit(1)
                     }
                     .accessibilityIdentifier("voice-continue")

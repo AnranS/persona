@@ -20,6 +20,9 @@ import os
     var note: String?
     /// A call to Persona's voice, once it began (its captions, what it is doing).
     fileprivate(set) var voice: VoiceConversation?
+    /// An urgent call the system would not show (Focus, Do Not Disturb refused its ring): only its companion notification
+    /// says it rings, so while it rings it refuses nothing (`PersonaCalls.urgentInProgress`).
+    fileprivate(set) var unshown = false
 
     var held: Bool { holdReason != nil }
     var connectedSince: Date? { phase.connectedSince }
@@ -30,6 +33,9 @@ import os
     @ObservationIgnored fileprivate var machine: CallMachine
     @ObservationIgnored fileprivate var engine: (any CallEngine)?
     @ObservationIgnored fileprivate var timers: [CallTimer: Task<Void, Never>] = [:]
+    /// The call's audio category is set (`PersonaCalls.prepareAudio`): a call to Persona's before its Start, an urgent
+    /// call's as it rang or as it was answered.
+    @ObservationIgnored fileprivate(set) var audioPrepared = false
     /// Over: the call is ended and what follows its end has run.
     @ObservationIgnored fileprivate var finished = false
     /// A DEBUG sample: nothing reaches the system or an engine.
@@ -96,6 +102,8 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     /// A call to Persona's audio and voice: the system's session, and `VoiceDeps.systemCall` (the tests' fakes).
     @ObservationIgnored let ownerAudio: @MainActor () -> any SystemCallAudio
     @ObservationIgnored let ownerDeps: @MainActor (String, any SystemCallAudio, @escaping @MainActor (VoiceCallEvent) -> Void) -> VoiceDeps
+    /// Sets a call's audio category (`setCallCategory`; the tests count it).
+    @ObservationIgnored let callCategory: @MainActor () async -> Void
     /// The interruption observer for urgent calls (a call to Persona hears its own through its audio).
     @ObservationIgnored private var interruptions: NSObjectProtocol?
     /// When the last redial came (`continueActivity`): the same tap can come twice.
@@ -107,14 +115,18 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
          voiceCalls: VoiceCalls = .shared,
          ownerAudio: @escaping @MainActor () -> any SystemCallAudio = { PhoneVoiceAudio(session: .system) },
          ownerDeps: @escaping @MainActor (String, any SystemCallAudio, @escaping @MainActor (VoiceCallEvent) -> Void) -> VoiceDeps
-             = { VoiceDeps.systemCall(group: $0, audio: $1, events: $2) }) {
+             = { VoiceDeps.systemCall(group: $0, audio: $1, events: $2) },
+         callCategory: @escaping @MainActor () async -> Void = { await PersonaCalls.setCallCategory() }) {
         makeSystem = system
         self.clock = clock
         self.voiceCalls = voiceCalls
         self.ownerAudio = ownerAudio
         self.ownerDeps = ownerDeps
-        // Every voice chat starts or goes on through `VoiceCalls` (a page, CarPlay, Continue): none under an urgent call.
+        self.callCategory = callCategory
+        // Every voice chat starts or goes on through `VoiceCalls` (a page, CarPlay, Continue): none under an urgent call,
+        // and none before a call to Persona that is on let its audio go (`endForVoiceChat`).
         voiceCalls.urgentCallOn = { [weak self] in self?.urgentInProgress ?? false }
+        voiceCalls.endSystemCall = { [weak self] in await self?.endForVoiceChat() }
     }
 
     /// The system's side, made the first time a call needs it. On the Simulator a stand-in (it has no call service);
@@ -150,8 +162,11 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     var ownerCall: PersonaCall? { calls.last { !$0.kind.isUrgent } }
     /// The newest live call, else the one that just ended.
     var current: PersonaCall? { calls.last { $0.phase.isLive } ?? calls.last }
-    /// An urgent call rings or is on: nothing else may start (voice chat, a call to Persona).
-    var urgentInProgress: Bool { calls.contains { $0.kind.isUrgent && $0.phase.isLive } }
+    /// An urgent call rings or is on: nothing else may start (voice chat, a call to Persona). One the system would not
+    /// show counts only once it is answered (its notification tapped): until then nothing rings.
+    var urgentInProgress: Bool {
+        calls.contains { $0.kind.isUrgent && $0.phase.isLive && !($0.unshown && $0.phase == .ringing) }
+    }
     /// A call to Persona is on.
     var ownerInProgress: Bool { calls.contains { !$0.kind.isUrgent && $0.phase.isLive } }
 
@@ -217,8 +232,13 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
     }
 
     /// A call that never reached the system (refused before Start): it ends with `note`, the page goes, and the note
-    /// is what the app shows (`refusal`).
+    /// is what the app shows (`refusal`). Not for an attempt that is over already (hung up while it waited for the hub or
+    /// the microphone prompt): a newer call's page and alert stay as they are.
     func refuse(_ call: PersonaCall, note: VoiceUnavailableNote?) {
+        guard call.phase.isLive else {
+            Self.log.notice("call \(call.id.uuidString, privacy: .public): a refusal after it ended, not shown")
+            return
+        }
         _ = call.machine.handle(.settled(.failed), at: clock.now)
         call.note = note?.title
         call.sync()
@@ -319,12 +339,12 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
                     self.dispatch(call, .hangUpRefused)
                 }
             }
-        case .activateSession:
+        case .activateSession(let attempt):
             let system = system
             Task { [weak self, weak call] in
                 let ok = await system.activateAudio()
                 guard let self, let call else { return }
-                self.dispatch(call, ok ? .sessionActivated : .sessionActivationFailed)
+                self.dispatch(call, ok ? .sessionActivated(attempt) : .sessionActivationFailed(attempt))
             }
         case .endEngine:
             call.engine?.hangUp()
@@ -358,6 +378,7 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         switch event {
         case .ready: dispatch(call, .voiceReady)
         case .running: dispatch(call, .engineRunning)
+        case .starting: dispatch(call, .engineStarting)
         case .ended(let failed, let note):
             if call.phase.isLive, let note { call.note = note }
             dispatch(call, .engineEnded(failed: failed))
@@ -367,8 +388,9 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         }
     }
 
-    /// Another chat's voice: the call to Persona ends (one call at a time) and its audio goes before the voice chat
-    /// opens its own (at most a second): the system's deactivation would otherwise interrupt the new session.
+    /// Another chat's voice (a page's Voice Chat, CarPlay's Talk to Persona, Continue: `VoiceCalls.endSystemCall`): the
+    /// call to Persona ends (one call at a time) and its audio goes before the voice chat opens its own (at most a
+    /// second): the system's deactivation would otherwise interrupt the new session.
     func endForVoiceChat() async {
         guard let call = ownerCall, call.phase.isLive else { return }
         let wasActive = call.machine.audioActive
@@ -395,8 +417,17 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         let call = add(id, kind: .urgent(callID: callID), direction: .incoming)
         attach(UrgentCallEngine(id: id), to: call)
         watchInterruptions()
+        // Its category before the system can activate the session for it. Not while a call to Persona set it already (the
+        // same), nor under an in-app voice chat, whose loudspeaker stays while it rings: answering ends the chat, and
+        // sets the category then (`readyToAnswer`).
+        if !audioReady(call), !voiceChatOn { await prepareAudio(call) }
         let system = system
-        try await system.reportIncoming(id, name: name)
+        do {
+            try await system.reportIncoming(id, name: name)
+        } catch {
+            call.unshown = true
+            throw error
+        }
         if system.knows(id) { dispatch(call, .known) }
     }
 
@@ -413,10 +444,35 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         }
     }
 
-    /// Answered without the system: the page and the turns start at once.
-    func answeredHere(_ id: UUID) {
-        guard let call = call(id) else { return }
+    /// Answered without the system (its notification tapped, and the system refused the ring or Join): the page and the
+    /// turns start here. A call to Persona that is on goes on hold through the system first, as Hold & Accept does, and
+    /// the urgent call talks once the system let that call's audio go (at most a second); the call to Persona resumes
+    /// when the urgent call ends (`finish`). False when the call to Persona could not be held: the urgent call is not
+    /// answered here then (the call's voice would hear the owner's answers too).
+    func answeredHere(_ id: UUID) async -> Bool {
+        guard let call = call(id), call.phase == .ringing else { return false }
+        if let owner = ownerCall, owner.phase.isLive, !owner.machine.holds.contains(.system) {
+            do {
+                try await system.perform(.pause(true), for: owner.id)
+            } catch {
+                Self.log.notice("call \(id.uuidString, privacy: .public): not answered here, the call to Persona could not be held: \(CallSystemError(error).description, privacy: .public)")
+                return false
+            }
+            for _ in 0..<20 where owner.phase.isLive && (!owner.machine.holds.contains(.system) || owner.machine.audioActive) {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            if owner.phase.isLive, !owner.machine.holds.contains(.system) {
+                Self.log.notice("call \(id.uuidString, privacy: .public): not answered here, the system did not hold the call to Persona")
+                // Its pause may still come: the call to Persona goes on all the same.
+                perform(.pause(false), owner)
+                return false
+            }
+        }
+        guard call.phase == .ringing else { return false }
+        await readyToAnswer(call)
+        guard call.phase == .ringing else { return false }
         dispatch(call, .answeredHere)
+        return true
     }
 
     /// The urgent call stopped ringing for good (missed, answered or declined elsewhere).
@@ -431,15 +487,46 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         dispatch(call, .engineEnded(failed: false))
     }
 
-    /// The urgent call's audio category, before the system activates the session for it: a call's, as a call to
-    /// Persona's (the earpiece when nothing is connected; the page's Speaker and the system's call UI move it, owner
-    /// decision 2026-11-17). Not while a call to Persona is on: its session is set already.
-    func prepareUrgentAudio() async {
-        guard !ownerInProgress else { return }
+    // MARK: The call's audio category
+
+    /// A call's audio category, for both kinds, before the system activates the session for it (the app never activates
+    /// it): the earpiece when nothing is connected, as a phone call; the page's Speaker and the system's call UI move it
+    /// (owner decision 2026-11-17).
+    func prepareAudio(_ call: PersonaCall) async {
+        await callCategory()
+        call.audioPrepared = true
+    }
+
+    /// Off the main actor: setting the category blocks for a moment.
+    static func setCallCategory() async {
         let options = PhoneVoiceAudio.callSessionOptions
         await Task.detached {
-            try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            } catch {
+                PersonaCalls.log.notice("call: the audio category: \(error.localizedDescription, privacy: .public)")
+            }
         }.value
+    }
+
+    /// `call`'s category is set: its own, or that of a call to Persona that is on and set it (the same). A call to Persona
+    /// still being placed (waiting for the hub or the microphone prompt) has set nothing yet.
+    private func audioReady(_ call: PersonaCall) -> Bool {
+        call.audioPrepared || calls.contains { !$0.kind.isUrgent && $0.phase.isLive && $0.audioPrepared }
+    }
+
+    /// An in-app voice chat (the phone's, the car's) is on: its own session and loudspeaker.
+    private var voiceChatOn: Bool {
+        guard let chat = voiceCalls.current else { return false }
+        return chat.surface != .call && !chat.phase.isEnded
+    }
+
+    /// Answering an urgent call whose category is not set yet (it rang under an in-app voice chat): the chat ends first
+    /// (its `stop` deactivates the session), then the category, before the system activates the session. One the system
+    /// did not show refused nothing while it rang: a voice chat may have set its own category since, so it is set again.
+    private func readyToAnswer(_ call: PersonaCall) async {
+        endVoiceChat(for: .urgentCall)
+        if call.unshown || !audioReady(call) { await prepareAudio(call) }
     }
 
     /// An urgent call's audio has no observer of its own: the interruption reaches its machine from here (a call to
@@ -489,7 +576,7 @@ nonisolated enum CallOrigin: String, Equatable, Sendable {
         case .held: events += [.voiceReady, .pauseAction(true)]
         case .interrupted: events += [.voiceReady, .interruptionBegan]
         case .resume: events += [.voiceReady, .interruptionBegan, .audioDeactivated, .interruptionEnded, .timer(.recoveryUnpause),
-                                 .timer(.recoveryActivate), .sessionActivationFailed, .timer(.recoveryGiveUp)]
+                                 .timer(.recoveryActivate), .timer(.recoveryGiveUp)]
         case .ended: events += [.voiceReady, .engineEnded(failed: true)]
         }
         for event in events {
@@ -533,6 +620,16 @@ extension PersonaCalls: CallSystemHandler {
         case .mute(let on): .muteAction(on)
         case .pause(let on): .pauseAction(on)
         case .other: .otherAction
+        }
+        // An urgent call answered whose category is not set yet (it rang under an in-app voice chat): the chat ends and the
+        // category is set before Join is fulfilled, after which the system activates the session.
+        if action == .join, call.kind.isUrgent, call.phase == .ringing, !audioReady(call) {
+            Task { [weak self, weak call] in
+                guard let self, let call else { return fail() }
+                await self.readyToAnswer(call)
+                self.dispatch(call, .joinAction, fulfil: fulfil, fail: fail)
+            }
+            return
         }
         dispatch(call, event, fulfil: fulfil, fail: fail)
         // The conversation can be in the system's list only once Start is fulfilled: what waited for it goes now.

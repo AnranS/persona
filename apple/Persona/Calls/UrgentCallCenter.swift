@@ -66,11 +66,12 @@ import UserNotifications
         }
         let calls = PersonaCalls.shared
         Task {
-            await calls.prepareUrgentAudio()
             do {
+                // Its audio category first, where nothing else set it (`PersonaCalls.ring`).
                 try await calls.ring(uuid, callID: ring?.id ?? "", name: name)
             } catch {
-                // Focus or Do Not Disturb can refuse the call: the companion notification is what the owner sees then.
+                // Focus or Do Not Disturb can refuse the call: the companion notification is what the owner sees then, and
+                // the call refuses nothing else until it is answered from there.
                 Self.log.notice("urgent call: the call was not shown: \(error.localizedDescription, privacy: .public)")
             }
             done()
@@ -128,11 +129,20 @@ import UserNotifications
     func opened(callID: String, group: String) {
         if let (uuid, r) = ringing.first(where: { $0.value.ring.id == callID }), !r.answered {
             Task {
-                // No call to join (the system refused it): the page opens and the call talks all the same.
-                if await !PersonaCalls.shared.answer(uuid) { PersonaCalls.shared.answeredHere(uuid) }
+                let calls = PersonaCalls.shared
+                if await calls.answer(uuid) { return }
+                // No call to join (the system refused it): the page opens and the call talks all the same, a call to
+                // Persona on hold meanwhile. One the system would not hold stays on, and the conversation opens instead.
+                if await calls.answeredHere(uuid) { return }
+                self.openConversation(callID, group: group)
             }
             return
         }
+        openConversation(callID, group: group)
+    }
+
+    /// The urgent call's conversation, its matter in writing.
+    private func openConversation(_ callID: String, group: String) {
         removeCompanion(callID)
         guard let api = AppModel.shared.api(group) else { return }
         Task {

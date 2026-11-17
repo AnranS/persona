@@ -120,10 +120,13 @@ nonisolated enum VoiceCapture: Equatable, Sendable {
     func activate()
     /// The system took the session away: the engine stops, the call goes on.
     func deactivate()
-    /// On hold: a route change does not start the engine again.
+    /// On hold: nothing starts the engine (an activation, a route change) until it is off hold again.
     func setHeld(_ held: Bool)
     /// Each time the engine runs (voice processing on, the microphone open).
     var onRunning: (@MainActor () -> Void)? { get set }
+    /// Just before a new engine starts on the session the call has (a route change rebuilt it): turning voice processing
+    /// on can surface as a system mute again. `onRunning` follows once it runs.
+    var onStarting: (@MainActor () -> Void)? { get set }
 }
 
 /// The microphone and the voice's loudness, about 20 times a second: an object of its own, so only the orb redraws.
