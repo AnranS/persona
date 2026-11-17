@@ -12,8 +12,8 @@ struct NumberKeyboardActions: ToolbarContent {
     var done: () -> Void
 
     var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .keyboard) {
-            if focused {
+        if focused {
+            ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button(action: save) {
                     Group {
