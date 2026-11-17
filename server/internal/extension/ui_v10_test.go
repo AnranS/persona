@@ -203,10 +203,10 @@ func TestGraphReadingOrderFollowsTheSharedCases(t *testing.T) {
 	}
 	var doc struct {
 		Cases []struct {
-			Name   string
-			Graph  struct {
-				Nodes []struct{ ID, Group string }
-				Edges []struct{ From, To string }
+			Name  string
+			Graph struct {
+				Nodes  []struct{ ID, Group string }
+				Edges  []struct{ From, To string }
 				Layout string
 				Folded []string
 			}

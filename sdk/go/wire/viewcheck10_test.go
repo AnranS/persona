@@ -20,7 +20,7 @@ func edge(from, to string) GraphEdge { return GraphEdge{From: from, To: to} }
 // Every refusable graph is refused, with the check's words.
 func TestCheckViewGraph(t *testing.T) {
 	for name, g := range map[string]Component{
-		"a repeated id": {Nodes: []GraphNode{node("a"), node("a")}},
+		"a repeated id":   {Nodes: []GraphNode{node("a"), node("a")}},
 		"an unknown from": {Nodes: []GraphNode{node("a")}, Edges: []GraphEdge{edge("x", "a")}},
 		"an unknown to":   {Nodes: []GraphNode{node("a")}, Edges: []GraphEdge{edge("a", "x")}},
 		"a node joined to itself": {Nodes: []GraphNode{node("a")},
@@ -31,7 +31,7 @@ func TestCheckViewGraph(t *testing.T) {
 			Edges: []GraphEdge{edge("a", "b"), edge("b", "c"), edge("c", "a")}},
 		"two parents in a tree": {Nodes: []GraphNode{node("r"), node("a"), node("b"), node("c")},
 			Edges: []GraphEdge{edge("r", "a"), edge("r", "b"), edge("a", "c"), edge("b", "c")}},
-		"a tone and a color": {Nodes: []GraphNode{{ID: "a", Title: "a", Tone: "positive", Color: "green"}}},
+		"a tone and a color":           {Nodes: []GraphNode{{ID: "a", Title: "a", Tone: "positive", Color: "green"}}},
 		"a selected node that is none": {Nodes: []GraphNode{node("a")}, Selected: "b"},
 		"a folded node that is none":   {Nodes: []GraphNode{node("a")}, Folded: []string{"b"}},
 		"a progress above 1":           {Nodes: []GraphNode{{ID: "a", Title: "a", Progress: fptr(1.01)}}},
