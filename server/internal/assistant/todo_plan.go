@@ -236,6 +236,9 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if f := s.pieceWriteHook; links && f != nil {
 		f(id)
 	}
+	if f := s.editWriteHook; f != nil {
+		f(id)
+	}
 	s.todos.writing.Lock()
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
@@ -256,9 +259,12 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 			return Todo{}, err
 		}
 	} else {
-		base := cur
-		if fresh, ok := s.todoNow(id); ok {
-			base = fresh // as the writes before this one left it, not as it was before the lock
+		// as the writes before this one left it, not as it was before the lock; deleted since: not there (never made
+		// again from the copy read before the lock)
+		base, ok := s.todoNow(id)
+		if !ok {
+			s.todos.writing.Unlock()
+			return Todo{}, db.ErrTodoNotFound
 		}
 		r := todoRowOf(base)
 		e.Apply(&r, now)

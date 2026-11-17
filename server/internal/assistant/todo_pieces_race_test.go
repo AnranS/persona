@@ -181,3 +181,76 @@ func TestTodoPiecesConcurrentWrites(t *testing.T) {
 		})
 	})
 }
+
+// A to-do deleted while an edit of it is on its way (after the caller read and checked it, before the write) stays
+// deleted: the edit answers "not found" instead of writing the to-do again from the copy it read, in memory and in
+// the store, whether the edit names part_of/after (checked again at the write) or not.
+func TestTodoEditOfADeletedTodo(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		s := e.s
+		send := func(method, path, body string) Todo {
+			var res struct{ Todo Todo }
+			_ = json.Unmarshal(e.must(method, path, body).Body.Bytes(), &res)
+			return res.Todo
+		}
+		root := send("POST", "/api/v1/todos", `{"title":"Move house"}`)
+		piece := func(title string) Todo {
+			td := send("POST", "/api/v1/todos", `{"title":"`+title+`"}`)
+			return send("PATCH", "/api/v1/todos/"+td.ID, `{"part_of":"`+root.ID+`"}`)
+		}
+		// deleteOnTheWay deletes id as the next edit of it is about to write
+		deleteOnTheWay := func(t *testing.T, id string) {
+			t.Helper()
+			var once sync.Once
+			s.editWriteHook = func(at string) {
+				if at == id {
+					once.Do(func() {
+						if err := s.deleteTodo(context.Background(), id); err != nil {
+							t.Errorf("delete %s: %v", id, err)
+						}
+					})
+				}
+			}
+			t.Cleanup(func() { s.editWriteHook = nil })
+		}
+		gone := func(t *testing.T, id string) {
+			t.Helper()
+			if td, ok := s.todoNow(id); ok {
+				t.Fatalf("memory: %s is back (title %q, part_of %q, after %v)", id, td.Title, td.PartOf, td.After)
+			}
+			reloadTodos(t, s)
+			if td, ok := s.todoNow(id); ok {
+				t.Fatalf("after a reload: %s is back (title %q)", id, td.Title)
+			}
+		}
+
+		t.Run("a PATCH of after", func(t *testing.T) {
+			a, b, c := piece("Book the van"), piece("Pack the kitchen"), piece("Measure the sofa")
+			send("PATCH", "/api/v1/todos/"+a.ID, `{"after":["`+b.ID+`"]}`)
+			deleteOnTheWay(t, a.ID)
+			if code := e.do("PATCH", "/api/v1/todos/"+a.ID, `{"after":["`+c.ID+`"]}`).Code; code != http.StatusNotFound {
+				t.Fatalf("PATCH of a deleted to-do: %d, want 404", code)
+			}
+			gone(t, a.ID)
+		})
+
+		t.Run("todo_update of part_of and after", func(t *testing.T) {
+			a, b := piece("Change the address"), piece("Cancel the gym")
+			deleteOnTheWay(t, a.ID)
+			_, err := runJSON(t, s, "conv1", "todo_update", map[string]any{"id": a.ID, "part_of": root.ID, "after": []string{b.ID}})
+			if err == nil {
+				t.Fatal("todo_update of a deleted to-do succeeded")
+			}
+			gone(t, a.ID)
+		})
+
+		t.Run("a PATCH of the title only", func(t *testing.T) {
+			x := send("POST", "/api/v1/todos", `{"title":"Hire movers"}`)
+			deleteOnTheWay(t, x.ID)
+			if code := e.do("PATCH", "/api/v1/todos/"+x.ID, `{"title":"Hire movers on Friday"}`).Code; code != http.StatusNotFound {
+				t.Fatalf("PATCH of a deleted to-do: %d, want 404", code)
+			}
+			gone(t, x.ID)
+		})
+	})
+}

@@ -57,6 +57,9 @@ func (s *Service) checkPieces(id string, p pieceEdit) (db.TodoEdit, error) {
 		return db.TodoEdit{}, nil
 	}
 	out, err := s.checkPiecesNow(id, p)
+	if errors.Is(err, db.ErrTodoNotFound) {
+		return out, err // deleted since the caller read it: not a refusal of the links
+	}
 	if err != nil {
 		return out, &pieceError{err}
 	}
@@ -69,7 +72,11 @@ func (s *Service) checkPiecesNow(id string, p pieceEdit) (db.TodoEdit, error) {
 	defer s.todos.mu.RUnlock()
 	book := s.todos.todos
 	var cur Todo // its links now, as the book has them (a write may have changed them since the caller read it)
-	if t, ok := book[id]; ok && id != "" {
+	if id != "" {
+		t, ok := book[id]
+		if !ok {
+			return out, db.ErrTodoNotFound // deleted since the caller read it: nothing to check, nothing to write
+		}
 		cur = *t
 	}
 	partOf := cur.PartOf
