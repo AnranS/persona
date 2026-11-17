@@ -102,6 +102,7 @@ nonisolated extension ExtensionComponent {
         case .image(let c): c.key
         case .grid(let c): c.key
         case .carousel(let c): c.key
+        case .graph(let c): c.key
         case .unknown: nil
         }
     }
