@@ -403,7 +403,7 @@ done
 // The model switch registers its replacement before it marks it busy and sends it the retry. The fixture's wait for
 // the end of a turn must not take that gap for it, as the node does not (#3815): waiting on busy alone counted the
 // requests while the fallback model had not been asked yet.
-func TestSDKFixtureIdleWaitsOutTheModelSwitch(t *testing.T) {
+func TestCLIFixtureIdleWaitsOutTheModelSwitch(t *testing.T) {
 	n := assistantNode(t)
 	f := &cliFixture{n: n}
 	const id = "11111111-2222-3333-4444-555555555555"
