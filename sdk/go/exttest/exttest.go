@@ -269,9 +269,10 @@ var uiVersion = func() int {
 }()
 
 // CheckView checks a View the way the apps will read it: against the schema (wire.ValidateJSON: only known fields
-// and components, the tones, the limits of each), https links, at most 300 components and 16 KB of state, and for
-// a card (compact: an overview card, a widget, a shortcut's result) at most 2 sections and 12 components and no
-// fields. The hub holds a widget to less still (FitWidget): `personad extension test` checks that.
+// and components, the tones, the limits of each), https links, a graph's structure (wire.CheckGraph), at most 300
+// components (a tile or a graph node one each) and 16 KB of state, and for a card (compact: an overview card, a
+// widget, a shortcut's result) at most 2 sections and 12 components and no fields. The hub holds a widget to less
+// still (FitWidget): `personad extension test` checks that.
 func CheckView(raw json.RawMessage, compact bool) error {
 	if err := wire.ValidateJSON("View", raw); err != nil {
 		return err
@@ -286,10 +287,16 @@ func CheckView(raw json.RawMessage, compact bool) error {
 	n := 0
 	for si, s := range v.Sections {
 		for ii, c := range s.Items {
-			n++
+			// a grid's or a carousel's tiles, and a graph's nodes, are components of the page each
+			n += max(1, len(c.Tiles)+len(c.Nodes))
 			at := fmt.Sprintf("sections[%d].items[%d] (%s)", si, ii, c.Type)
 			if c.Type == wire.ComponentLink && !strings.HasPrefix(c.URL, "https://") {
 				return fmt.Errorf("%s: links are https", at)
+			}
+			if c.Type == wire.ComponentGraph {
+				if err := wire.CheckGraph(&c); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
 			}
 			if compact && c.Type == wire.ComponentField {
 				return fmt.Errorf("%s: a card has no fields (open a page for them)", at)

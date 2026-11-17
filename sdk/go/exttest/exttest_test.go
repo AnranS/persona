@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -100,10 +102,27 @@ func TestCheckView(t *testing.T) {
 		{`{"sections": [{"items": [{"type": "link", "title": "a", "url": "http://example.com"}]}]}`, false, "https"},
 		{`{"sections": [{"items": [{"type": "field", "name": "a", "label": "a", "kind": "text"}]}]}`, true, "no fields"},
 		{`{"sections": [{"items": [{"type": "text", "text": "` + strings.Repeat("长", 2001) + `"}]}]}`, false, "2000"},
+		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a"}]}]}]}`, false, ""},
+		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a"}, {"id": "b", "title": "b"}], "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}]}]}]}`, false, "cycle"},
+		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a"}, {"id": "a", "title": "b"}]}]}]}`, false, "twice"},
+		{`{"sections": [{"items": [{"type": "graph", "nodes": [{"id": "a", "title": "a", "tone": "positive", "color": "green"}]}]}]}`, false, "a tone or a color"},
 	} {
 		err := exttest.CheckView(json.RawMessage(c.view), c.compact)
 		if c.bad == "" && err != nil || c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad)) {
 			t.Errorf("%.60s: want %q, got %v", c.view, c.bad, err)
+		}
+	}
+}
+
+// The view examples of the graph pass the kit.
+func TestCheckViewGraphExamples(t *testing.T) {
+	for _, name := range []string{"View.v10-work-tree.json", "View.v10-plan-layered.json"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "schema", "extension", "examples", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := exttest.CheckView(raw, false); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }
