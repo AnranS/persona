@@ -171,6 +171,72 @@ export const isDoneTodo = (t: Pick<Todo, "done_at" | "start_error">) => Boolean(
 /** How deep workers of workers go at most (a leader's workers are plain workers: one level is what the hub allows). */
 const MAX_DEPTH = 4;
 
+/**
+ * Where each to-do of a list is drawn, one rule for the graph's cards and the pieces' Agent trees, so every to-do is drawn
+ * exactly once:
+ * - `pieceOf`: the request it is a piece of (a listed to-do other than itself that is no piece itself; the hub keeps one
+ *   level). A piece has its own card, never a line in another piece's tree.
+ * - `roots`: the to-dos some piece names: each is a request's root card.
+ * - `workerOf`: the to-do whose Agent handed it out (its ledger's supervisor, else its origin), when that to-do is drawn
+ *   with an Agent tree: the worker is a line in that tree. A piece, a root, and a to-do whose chain of dispatchers loops
+ *   are never workers.
+ * - `rootWorkerOf`: the root whose own Agent handed it out. A root's card has no Agent tree, so such a to-do is drawn
+ *   as a piece of that request instead of being hidden.
+ */
+export interface Placement {
+  pieceOf: (t: Todo) => string | undefined;
+  roots: ReadonlySet<string>;
+  workerOf: (t: Todo) => string | undefined;
+  rootWorkerOf: (t: Todo) => string | undefined;
+}
+
+const placementCache = new WeakMap<readonly Todo[], Placement>();
+
+export function placement(todos: readonly Todo[]): Placement {
+  const cached = placementCache.get(todos);
+  if (cached) return cached;
+  const byId = new Map(todos.map((t) => [t.id, t]));
+  const pieceOf = (t: Todo) => {
+    const p = t.part_of;
+    return p && p !== t.id && byId.has(p) && !byId.get(p)!.part_of ? p : undefined;
+  };
+  const roots = new Set<string>();
+  for (const t of todos) {
+    const p = pieceOf(t);
+    if (p) roots.add(p);
+  }
+  const owners = agentRefs(todos);
+  // the to-do whose Agent handed `t` out, none for a piece or a root (each has a card of its own)
+  const dispatcher = (t: Todo) => {
+    if (pieceOf(t) || roots.has(t.id)) return undefined;
+    const owner = owners.get(t.supervision?.supervisor || t.origin || "");
+    return owner && owner !== t.id ? owner : undefined;
+  };
+  // a chain of dispatchers that comes back to `t`: none of them is a worker, so each keeps a card
+  const loops = (t: Todo) => {
+    const seen = new Set([t.id]);
+    for (let d = dispatcher(t); d; d = byId.get(d) && dispatcher(byId.get(d)!)) {
+      if (seen.has(d)) return true;
+      seen.add(d);
+    }
+    return false;
+  };
+  const p: Placement = {
+    pieceOf,
+    roots,
+    workerOf: (t) => {
+      const d = dispatcher(t);
+      return d && !roots.has(d) && !loops(t) ? d : undefined;
+    },
+    rootWorkerOf: (t) => {
+      const d = dispatcher(t);
+      return d && roots.has(d) ? d : undefined;
+    },
+  };
+  placementCache.set(todos, p);
+  return p;
+}
+
 /** The direction tree's task for a to-do, wherever it is filed. */
 function directionTask(tree: DirectionTree | null | undefined, todoId: string): DirectionTask | undefined {
   for (const d of tree?.directions ?? []) {
@@ -226,6 +292,14 @@ function ownerOfAgent(todos: readonly Todo[], key: string): Todo | undefined {
 export function nodeAgents(todo: Todo, data: GraphData): NodeAgent[] {
   const out: NodeAgent[] = [];
   const seen = new Set<string>();
+  // the to-dos drawn in this tree: this one, then each worker as it is reached; a to-do is a worker line here only when
+  // its dispatcher is one of them (placement.workerOf), so a piece, or a worker drawn in another tree, is never repeated
+  const place = placement(data.todos);
+  const inTree = new Set([todo.id]);
+  const ours = (w: Todo) => {
+    const d = place.workerOf(w);
+    return d !== undefined && inTree.has(d);
+  };
   const subagents = (a: AgentLink, s: Session | undefined, depth: number, parent: string) => {
     const mid = a.machine_id, sid = a.session_id;
     const list = data.complete?.(mid, sid)?.subagents ?? s?.subagents ?? [];
@@ -276,12 +350,21 @@ export function nodeAgents(todo: Todo, data: GraphData): NodeAgent[] {
       const workers: Todo[] = [];
       for (const c of kids) {
         const owner = ownerOfAgent(data.todos, ref(c.machine_id, c.session_id));
-        if (owner && owner.id !== todo.id && !workers.includes(owner)) workers.push(owner);
+        if (owner && owner.id !== todo.id && ours(owner) && !workers.includes(owner)) workers.push(owner);
       }
-      for (const w of workersOf(data.todos, a.machine_id, a.session_id)) if (w.id !== todo.id && !workers.includes(w)) workers.push(w);
-      for (const w of workers) on(w, "worker", depth + 1, key, Boolean(w.done_at));
+      for (const w of workersOf(data.todos, a.machine_id, a.session_id)) if (w.id !== todo.id && ours(w) && !workers.includes(w)) workers.push(w);
+      for (const w of workers) {
+        inTree.add(w.id);
+        on(w, "worker", depth + 1, key, Boolean(w.done_at));
+      }
     }
-    for (const c of kids) if (!seen.has(ref(c.machine_id, c.session_id))) visit(c, "spawned", depth + 1, key, false);
+    // what it spawned; an Agent of another to-do drawn elsewhere (a piece, another tree's worker) is not repeated here
+    for (const c of kids) {
+      if (seen.has(ref(c.machine_id, c.session_id))) continue;
+      const owner = ownerOfAgent(data.todos, ref(c.machine_id, c.session_id));
+      if (owner && !inTree.has(owner.id)) continue;
+      visit(c, "spawned", depth + 1, key, false);
+    }
     subagents(a, s, depth + 1, key);
   };
   const on = (td: Todo, role: AgentRole, depth: number, parent: string | undefined, ended: boolean) => {
@@ -562,20 +645,10 @@ const rank = (r: GraphRequest) => Math.min(STATE_RANK.done + 1, ...r.nodes.map((
 export function buildGraph({ todos: all, plans, data }: GraphInput): Graph {
   const todos = all;
   const byId = new Map(todos.map((t) => [t.id, t]));
-  // the request a to-do is a piece of: a listed to-do other than itself that is no piece itself (the hub keeps one level)
-  const parentOf = (t: Todo) => {
-    const p = t.part_of;
-    return p && p !== t.id && byId.has(p) && !byId.get(p)!.part_of ? p : undefined;
-  };
-  const rootOf = (t: Todo) => parentOf(t) ?? t.id;
-  const owners = agentRefs(todos);
-  // a worker a leader's Agent handed out: drawn on the leader's piece (unless it is a piece of a request)
-  const isWorker = (t: Todo) => {
-    if (parentOf(t)) return false;
-    const by = t.supervision?.supervisor || t.origin || "";
-    const owner = owners.get(by);
-    return Boolean(owner && owner !== t.id);
-  };
+  // a piece's request, or the root whose own Agent handed it out; a worker is drawn in its dispatcher's Agent tree
+  const place = placement(todos);
+  const rootOf = (t: Todo) => place.pieceOf(t) ?? place.rootWorkerOf(t) ?? t.id;
+  const isWorker = (t: Todo) => place.workerOf(t) !== undefined;
 
   const groups = new Map<string, { kind: RequestKind; root?: Todo; plan?: TaskPlan; members: Todo[] }>();
   const group = (key: string, make: () => { kind: RequestKind; root?: Todo; plan?: TaskPlan }) => {
@@ -583,14 +656,9 @@ export function buildGraph({ todos: all, plans, data }: GraphInput): Graph {
     if (!g) groups.set(key, (g = { ...make(), members: [] }));
     return g;
   };
-  const roots = new Set<string>();
+  const roots = place.roots;
   for (const t of todos) {
     if (isWorker(t)) continue;
-    const r = rootOf(t);
-    if (r !== t.id) roots.add(r);
-  }
-  for (const t of todos) {
-    if (isWorker(t) && !roots.has(t.id)) continue;
     if (roots.has(t.id)) {
       group(`todo:${t.id}`, () => ({ kind: "parent", root: t }));
       continue;

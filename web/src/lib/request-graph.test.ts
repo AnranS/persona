@@ -134,6 +134,69 @@ describe("requests", () => {
     ]);
   });
 
+  describe("where a worker is drawn: once, as a card or as a line of exactly one Agent tree", () => {
+    // each to-do's Agent is its id in capitals; `from` names the Agent that handed it out (its origin)
+    const t = (id: string, patch: Partial<Todo> & { from?: string } = {}) => {
+      const { from, ...rest } = patch;
+      return todo(id, { agents: [link(id.toUpperCase())], ...(from ? { origin: `mac/${from}` as Todo["origin"] } : {}), ...rest });
+    };
+    const dir = (todoId: string, agents: DirectionAgent[]): DirectionTree =>
+      ({ directions: [{ id: "main", name: "", tasks: [{ id: todoId, title: todoId, state: "working", agents }] }] }) as unknown as DirectionTree;
+    const cases: { name: string; todos: Todo[]; tree?: DirectionTree; want: Record<string, string> }[] = [
+      { name: "a leader's worker, on a request of its own", todos: [t("lead"), t("w", { from: "LEAD" })],
+        want: { lead: "card todo:lead", w: "tree lead" } },
+      { name: "a worker of a piece's leader", todos: [todo("r"), t("p", { part_of: "r" }), t("w", { from: "P" })],
+        want: { r: "root todo:r", p: "card todo:r", w: "tree p" } },
+      { name: "a worker that is itself a piece of the same request", todos: [todo("r"), t("p", { part_of: "r" }), t("w", { part_of: "r", from: "P" })],
+        want: { r: "root todo:r", p: "card todo:r", w: "card todo:r" } },
+      { name: "a worker that is a piece of another request", todos: [todo("r"), t("p", { part_of: "r" }), todo("r2"), t("w", { part_of: "r2", from: "P" })],
+        want: { r: "root todo:r", p: "card todo:r", r2: "root todo:r2", w: "card todo:r2" } },
+      { name: "a worker the request root's own Agent handed out, and that worker's own worker",
+        todos: [t("r"), t("p", { part_of: "r" }), t("w", { from: "R" }), t("w2", { from: "W" })],
+        want: { r: "root todo:r", p: "card todo:r", w: "card todo:r", w2: "tree w" } },
+      { name: "a worker whose ledger names another supervisor than its origin", todos: [t("a"), t("b"), t("w", { from: "A", supervision: { supervisor: "mac/B" } as Todo["supervision"] })],
+        want: { a: "card todo:a", b: "card todo:b", w: "tree b" } },
+      { name: "a worker of a worker", todos: [t("lead"), t("w1", { from: "LEAD" }), t("w2", { from: "W1" })],
+        want: { lead: "card todo:lead", w1: "tree lead", w2: "tree lead" } },
+      { name: "another piece's Agent the direction tree hangs under a leader", todos: [todo("r"), t("p", { part_of: "r" }), t("q", { part_of: "r" })],
+        tree: dir("p", [{ machine_id: "mac", session_id: "P", title: "p", state: "working", children: [{ machine_id: "mac", session_id: "Q", title: "q", state: "working" }] }]),
+        want: { r: "root todo:r", p: "card todo:r", q: "card todo:r" } },
+      { name: "two to-dos naming each other's Agents", todos: [t("a", { from: "B" }), t("b", { from: "A" })],
+        want: { a: "card todo:a", b: "card todo:b" } },
+      { name: "a worker whose dispatcher is not listed", todos: [t("w", { from: "NOBODY" })],
+        want: { w: "card todo:w" } },
+    ];
+    it.each(cases)("$name", ({ todos, tree, want }) => {
+      const g = buildGraph({ todos, plans: {}, data: { todos, tree: tree ?? null, lookup: makeSessionLookup([]) } });
+      const byAgent = new Map<string, string>(todos.flatMap((td) => (td.agents ?? []).map((a) => [`${a.machine_id}/${a.session_id}`, td.id] as [string, string])));
+      const places = new Map<string, string[]>();
+      const put = (id: string, where: string) => places.set(id, [...(places.get(id) ?? []), where]);
+      for (const r of [...g.active, ...g.done]) {
+        if (r.root && !r.merged) put(r.root.id, `root ${r.key}`);
+        for (const n of r.nodes) {
+          if (!n.todo) continue;
+          put(n.todo.id, `card ${r.key}`);
+          for (const a of n.agents) {
+            const owner = byAgent.get(a.key);
+            if (owner && owner !== n.todo.id && a.role !== "subagent") put(owner, `tree ${n.todo.id}`);
+          }
+        }
+      }
+      // every to-do once, where it belongs
+      expect(Object.fromEntries([...places].map(([id, w]) => [id, w.join(" + ")]))).toEqual(want);
+    });
+
+    it("draws a root's worker as a piece hanging from the root, and nests a worker's worker under it", () => {
+      const todos = [t("r"), t("p", { part_of: "r" }), t("w", { from: "R" })];
+      const r = graph(todos).active[0];
+      expect(r.edges.map((e) => `${e.from}>${e.to}`)).toEqual(["root>todo:p", "root>todo:w"]);
+      const nested = graph([t("lead"), t("w1", { from: "LEAD" }), t("w2", { from: "W1" })]).active[0].nodes[0].agents;
+      expect(nested.map((a) => [a.key, a.role, a.depth, a.parent ?? ""])).toEqual([
+        ["mac/LEAD", "lead", 0, ""], ["mac/W1", "worker", 1, "mac/LEAD"], ["mac/W2", "worker", 2, "mac/W1"],
+      ]);
+    });
+  });
+
   it("puts the most active request first: what needs the owner, then work going on, then what waits", () => {
     const todos = [
       todo("idle", { updated_at: at(50) }),
