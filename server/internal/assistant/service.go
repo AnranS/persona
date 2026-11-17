@@ -255,6 +255,12 @@ type Service struct {
 	trust      trustBook     // machine_trust.go: the computers waiting to be confirmed
 	ready      readinessBook // readiness.go: the main conversation's readiness
 
+	// pieceWriteHook, when set, runs as a write of part_of/after (editTodo, insertTodo) has passed its caller's check
+	// and is about to take todoBook.writing (tests: two writes held there both passed against the same graph).
+	pieceWriteHook func(id string)
+	// editWriteHook, when set, runs as any edit (editTodo) is about to take todos.writing, after pieceWriteHook: tests
+	// use it to change the to-do in between (a DELETE racing the edit).
+	editWriteHook func(id string)
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
@@ -761,8 +767,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
+	s.userSpokeText(ctx, r, "")
+}
+
+func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
-	s.agentDecisionSpoke(ctx, r, time.Now())
+	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
