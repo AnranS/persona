@@ -298,8 +298,8 @@ func TestOfflineTaskLeaderAcknowledgesOnlyAfterSend(t *testing.T) {
 		return map[string]any{"ok": true}, nil
 	})
 	lead := TodoAgent{MachineID: "box", SessionID: "s1"}
-	if !s.deliverToLeaderAgent(context.Background(), lead, []superviseSignal{g}, testWeb, time.Now(), time.Time{}) {
-		t.Fatal("the offline leader's resume was not started")
+	if s.deliverToLeaderAgent(context.Background(), lead, []superviseSignal{g}, testWeb, time.Now(), time.Time{}) {
+		t.Fatal("an offline resume is not synchronous delivery")
 	}
 	<-started
 	if got := storedSupervisePending(t, s)[g.id()]; got.Key != g.Key {
@@ -308,6 +308,70 @@ func TestOfflineTaskLeaderAcknowledgesOnlyAfterSend(t *testing.T) {
 	close(release)
 	waitFor(t, "the offline leader's real-send acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
 	requireLeaderTurnToldAfterRestart(t, s, g)
+}
+
+// A second digest may deliver new work while an older offline resume is still blocked. It must not acknowledge the
+// older batch's pending signal or turn receipt before that older real send completes.
+func TestOfflineLeaderSecondBatchDoesNotAcknowledgeInflightSignal(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	second := todo
+	second.ID = "todo_second_worker"
+	second.Title = "Second worker"
+	putTodo(s, second)
+	for _, id := range []string{todo.ID, second.ID} {
+		if _, _, err := s.updateSupervision(context.Background(), id, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	first := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "first-offline-send", At: time.Now()}
+	newer := superviseSignal{Todo: second.ID, Kind: sigReview, Key: "second-offline-send", At: time.Now()}
+	s.signal(first)
+	s.signal(newer)
+	markLeaderTurnSignalled(t, s, first)
+	markLeaderTurnSignalled(t, s, newer)
+	firstEntry, ok := s.digestEntry(ctx, first, testWeb)
+	if !ok {
+		t.Fatal("the first signal is not renderable")
+	}
+	_, _, rollback, err := s.reserveSupervisionDelivery(ctx, []prompts.SuperviseEntry{firstEntry}, []superviseSignal{first}, time.Now(), leaderResumeDelivery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first offline send is still in flight. A second online digest carries only the new signal; its synchronous
+	// success must leave the first signal's pending entry and receipt for the first delivery callback.
+	lead := TodoAgent{MachineID: "box", SessionID: "s1"}
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking})
+	if !s.deliverToLeaderAgent(ctx, lead, []superviseSignal{first, newer}, testWeb, time.Now(), time.Time{}) {
+		t.Fatal("the second online batch did not deliver")
+	}
+	text := strings.Join(deliveredTo(f, "s1"), "\n")
+	if strings.Contains(text, first.Todo) || !strings.Contains(text, newer.Todo) {
+		t.Fatalf("the second batch did not filter exactly the in-flight entry:\n%s", text)
+	}
+	if got := storedSupervisePending(t, s)[first.id()]; got.Key != first.Key {
+		t.Fatal("the second batch acknowledged the first in-flight signal")
+	}
+	if got := storedSupervisePending(t, s)[newer.id()]; got.Key != "" {
+		t.Fatalf("the second batch's own signal stayed pending: %+v", got)
+	}
+	if s.turnSignalled(first) {
+		t.Fatal("the second batch closed the first in-flight signal's turn receipt")
+	}
+	if !s.turnSignalled(newer) {
+		t.Fatal("the second batch's own turn receipt was not closed")
+	}
+	s.supervise.dedupMu.Lock()
+	rollback()
+	s.leaderDelivered(ctx, lead, []prompts.SuperviseEntry{firstEntry}, []superviseSignal{first}, []superviseSignal{first}, []superviseSignal{first})
+	s.supervise.dedupMu.Unlock()
+	if got := storedSupervisePending(t, s); len(got) != 0 {
+		t.Fatalf("the first real delivery left its signal pending: %+v", got)
+	}
+	requireLeaderTurnToldAfterRestart(t, s, first)
+	requireLeaderTurnToldAfterRestart(t, s, newer)
 }
 
 // A mixed batch can contain a signal whose task closed before delivery. Once another member's real send succeeds, the
@@ -346,8 +410,8 @@ func TestOfflineLeaderSuccessAcknowledgesFilteredBatch(t *testing.T) {
 			}
 			lead := TodoAgent{MachineID: "box", SessionID: "s1"}
 			list := []superviseSignal{stale, live}
-			if !s.deliverToLeaderAgent(context.Background(), lead, list, testWeb, time.Now(), time.Time{}) {
-				t.Fatal("the offline leader delivery was not started")
+			if s.deliverToLeaderAgent(context.Background(), lead, list, testWeb, time.Now(), time.Time{}) {
+				t.Fatal("an offline resume is not synchronous delivery")
 			}
 			waitFor(t, "the live member's real-send acknowledgment", func() bool {
 				return storedSupervisePending(t, s)[live.id()].Key == ""
@@ -520,8 +584,8 @@ func TestOfflineLeaderDedupHitRetriesPending(t *testing.T) {
 	s.supervise.mu.Lock()
 	s.supervise.pending = map[string]superviseSignal{} // sendDigest took the stretch out for this delivery attempt
 	s.supervise.mu.Unlock()
-	if !s.deliverToLeaderAgent(context.Background(), lead, []superviseSignal{g}, testWeb, time.Now(), time.Time{}) {
-		t.Fatal("the deduplicated offline signal did not enter its real-send retry")
+	if s.deliverToLeaderAgent(context.Background(), lead, []superviseSignal{g}, testWeb, time.Now(), time.Time{}) {
+		t.Fatal("the deduplicated offline retry is not synchronous delivery")
 	}
 	waitFor(t, "the offline dedup retry's real-send acknowledgment", func() bool { return len(storedSupervisePending(t, s)) == 0 })
 }

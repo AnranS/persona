@@ -79,9 +79,23 @@ func keyIsNews(kind string) bool {
 	return false
 }
 
+type supervisionDelivery int
+
+const (
+	digestDelivery supervisionDelivery = iota
+	leaderDelivery
+	leaderResumeDelivery
+)
+
 // reserveSupervision checkpoints deduplication before dispatch. A failed dispatch
 // and queue admission releases the reservation. dedupMu is held by sendDigest.
 func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.SuperviseEntry, signals []superviseSignal, now time.Time) ([]prompts.SuperviseEntry, []superviseSignal, func(), error) {
+	return s.reserveSupervisionDelivery(ctx, entries, signals, now, digestDelivery)
+}
+
+// Offline resumes take minutes. Keep their reservations in memory until the send
+// is confirmed so recovery never mistakes an in-flight resume for delivery.
+func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prompts.SuperviseEntry, signals []superviseSignal, now time.Time, delivery supervisionDelivery) ([]prompts.SuperviseEntry, []superviseSignal, func(), error) {
 	b := &s.supervise
 	history := b.dedup
 	if st := s.store(); st != nil {
@@ -112,6 +126,8 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 	}
 	pending := maps.Clone(r.st.SupervisePending)
 	r.mu.Unlock()
+	var resumingIDs [][2]string
+	resuming := delivery == leaderResumeDelivery
 	for i, entry := range entries {
 		key, hash := digestFingerprint(entry, signals[i])
 		current, undelivered := pending[signals[i].id()]
@@ -125,12 +141,30 @@ func (s *Service) reserveSupervision(ctx context.Context, entries []prompts.Supe
 				continue
 			}
 		}
+		id := [2]string{key, hash}
+		if _, ok := b.resuming[id]; ok && delivery != digestDelivery {
+			continue
+		}
+		if resuming {
+			if b.resuming == nil {
+				b.resuming = make(map[[2]string]struct{})
+			}
+			b.resuming[id] = struct{}{}
+			resumingIDs = append(resumingIDs, id)
+		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Key: signals[i].Key, Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
 		if signals[i].Kind == sigAllStopped {
 			fingerprint.Todo = signals[i].Todo
 		}
 		next[key] = fingerprint
 		out, kept = append(out, entry), append(kept, signals[i])
+	}
+	if resuming {
+		return out, kept, func() {
+			for _, id := range resumingIDs {
+				delete(b.resuming, id)
+			}
+		}, nil
 	}
 	if len(out) == 0 {
 		return nil, nil, func() {}, nil

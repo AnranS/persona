@@ -448,39 +448,74 @@ func (s *Service) leaderRoute(g superviseSignal) (lead TodoAgent, handled, reach
 // deliverToLeaderAgent puts the signals list of its workers into leader agent lead's session as one supervision message
 // (agents/worker_supervise), deduplicated as a conversation's are; now is when sendDigest marked it as the last message
 // and prev the last before. True when it went in. session.send queues behind a running turn and resumes a closed agent,
-// so nothing is queued here.
+// so nothing is queued here. An offline resume completes in the background.
 func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list []superviseSignal, web string, now, prev time.Time) bool {
 	var entries []prompts.SuperviseEntry
 	var kept, moot []superviseSignal
+	// An earlier offline resume owns its in-flight signals until its real delivery callback. Keep them out of this
+	// batch's acknowledgements as well as its text: a second digest may carry new signals, but must not ack the first
+	// batch before that first batch reaches the leader (#5732, #9701). dedupMu is held throughout this selection.
+	batch := make([]superviseSignal, 0, len(list))
 	for _, g := range list {
-		if e, ok := s.digestEntry(ctx, g, web); ok {
-			entries, kept = append(entries, e), append(kept, g)
-		} else {
+		e, ok := s.digestEntry(ctx, g, web)
+		if !ok {
 			moot = append(moot, g)
+			batch = append(batch, g)
+			continue
 		}
+		key, hash := digestFingerprint(e, g)
+		if _, resuming := s.supervise.resuming[[2]string{key, hash}]; resuming {
+			continue
+		}
+		entries, kept = append(entries, e), append(kept, g)
+		batch = append(batch, g)
 	}
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either
 	if len(entries) == 0 {
-		s.ackSupervisePending(list)
+		s.ackSupervisePending(batch)
 		return false
 	}
 	holds := kept
-	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
+	session, listed := s.session(ctx, lead.MachineID, lead.SessionID)
+	if !listed {
+		s.logf("supervise: task leader %s is not listed; trying again", short(lead.SessionID))
+		s.restoreDigest(kept, now, prev)
+		return false
+	}
+	delivery := leaderDelivery
+	if session.Status == proto.StatusOffline {
+		delivery = leaderResumeDelivery
+	}
+	entries, kept, rollback, err := s.reserveSupervisionDelivery(ctx, entries, kept, now, delivery)
 	if err != nil {
 		s.logf("supervise: deduplication unavailable; retrying: %v", err)
 		s.restoreDigest(kept, now, prev)
 		return false
 	}
 	if len(entries) == 0 {
-		s.ackSupervisePending(list)
+		s.ackSupervisePending(batch)
 		s.turnsTold(ctx, holds) // already covered by the deduplication history
 		return false
 	}
-	delivered := func(ctx context.Context) { s.leaderRetryDelivered(ctx, lead, entries, list, kept, holds) }
+	delivered := func(ctx context.Context) {
+		s.supervise.dedupMu.Lock()
+		defer s.supervise.dedupMu.Unlock()
+		s.leaderDelivered(ctx, lead, entries, batch, kept, holds)
+	}
 	// Sort a copy for rendering so the retry still pairs each fingerprint with its original signal.
 	text := prompts.RenderWorkerSupervise(sortEntries(slices.Clone(entries)))
-	async, err := s.sendToLeader(ctx, lead, text, list, kept, holds, delivered)
-	if err != nil {
+	if delivery == leaderResumeDelivery {
+		s.resumeLeaderForSupervision(lead, text, batch, kept, holds, func(ctx context.Context, err error) {
+			s.supervise.dedupMu.Lock()
+			defer s.supervise.dedupMu.Unlock()
+			rollback()
+			if err == nil {
+				s.leaderDelivered(ctx, lead, entries, batch, kept, holds)
+			}
+		}, delivered)
+		return false
+	}
+	if err := s.sendToLeader(ctx, lead, text, batch, kept, holds, delivered); err != nil {
 		var escalated leaderEscalated
 		if errors.As(err, &escalated) {
 			// The current process's escalation/retry owns this message. Do not restore its pending entry and escalate it
@@ -494,15 +529,8 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		s.restoreDigest(kept, now, prev)
 		return false
 	}
-	if async {
-		// Starting a resume is not delivery. Its goroutine acknowledges only after the real session.send succeeds;
-		// releasing dedup now also makes a restart before that callback safe to retry.
-		rollback()
-		s.logf("supervise: %d signal(s) for task leader %s: resume started", len(entries), short(lead.SessionID))
-		return true
-	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
-	s.ackSupervisePending(list)
+	s.ackSupervisePending(batch)
 	s.parkedDueTold(ctx, kept)
 	s.turnsTold(ctx, holds) // kept went, the rest was said the same within the deduplication window
 	return true
@@ -522,70 +550,54 @@ type leaderEscalated struct{ err error }
 func (e leaderEscalated) Error() string { return e.err.Error() }
 func (e leaderEscalated) Unwrap() error { return e.err }
 
-// sendToLeader sends text, the supervision message for signals sent, into the leader agent's session. Its bool is true
-// when delivery or its retry continues in the background: a closed agent's resume, or a stopped/unconfirmed agent's
-// escalation. Neither is delivery yet. A failed resume and a node refusal with agent_stopped escalate and retry
-// (escalateLeaderMessage); nodeMayHaveTaken marks the escalation unconfirmed rather than unreachable (#9607). A session
-// its computer does not list, or a failed online send for any other reason, is a leaderUnreachable for the caller, which
-// puts the signals back for the next digest. After real delivery, delivered re-records dedup and acknowledges the
-// original batch, including members suppressed by dedup (#5732). sent determines the text actually carried; receipts
-// includes the filtered members whose turn receipts must be closed only after delivery.
-func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, sent, receipts []superviseSignal, delivered func(context.Context)) (bool, error) {
-	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
-	if !ok {
-		return false, leaderUnreachable{errors.New("the leader's session is not listed")}
-	}
-	if c.Status == proto.StatusOffline {
-		go func() {
-			if err := s.sendToLeaderNow(context.Background(), lead, text); err != nil {
-				s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
-				s.escalateLeaderMessage(lead, all, sent, receipts, text, nodeMayHaveTaken(err), delivered)
-				return
-			}
-			// A resumed leader is acknowledged only after the real send, never when the goroutine was merely started.
-			if delivered != nil {
-				delivered(context.Background())
-			} else {
-				s.ackSupervisePending(all)
-				s.parkedDueTold(context.Background(), sent)
-				s.turnsTold(context.Background(), receipts)
-			}
-		}()
-		return true, nil
-	}
+// sendToLeader sends text, the supervision message for signals sent, into the leader agent's session. A stopped or
+// unconfirmed send escalates and retries (escalateLeaderMessage); nodeMayHaveTaken marks that escalation unconfirmed
+// rather than unreachable (#9607). Other failures are retried by the next digest. After real delivery, delivered
+// re-records dedup and acknowledges this batch, including members suppressed by delivered dedup history (#5732). sent
+// determines the text actually carried; receipts includes the filtered members whose turn receipts close on delivery.
+func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, sent, receipts []superviseSignal, delivered func(context.Context)) error {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer cancel()
 	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
 		if refusedWith(err, proto.CodeAgentStopped) {
 			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
 			s.escalateLeaderMessage(lead, all, sent, receipts, text, false, delivered)
-			return true, leaderEscalated{err}
+			return leaderEscalated{err}
 		}
 		if nodeMayHaveTaken(err) {
 			s.logf("task leader %s: the message may have reached it, not confirmed: %v", short(lead.SessionID), err)
 			s.escalateLeaderMessage(lead, all, sent, receipts, text, true, delivered)
-			return true, leaderEscalated{err}
+			return leaderEscalated{err}
 		}
-		return false, leaderUnreachable{err}
+		return leaderUnreachable{err}
 	}
-	return false, nil
+	return nil
 }
 
-// leaderRetryDelivered records what a digest records for a supervision message the leader took, once a retry got it
-// there (escalateLeaderMessage): the deduplication of its entries, its parked tasks' and turns' Told. Until then they
-// stay untold with their deduplication released, so a manager restarted meanwhile delivers them again from its ledger;
-// after it, a restarted manager finds them told and does not (#9607).
-func (s *Service) leaderRetryDelivered(ctx context.Context, lead TodoAgent, entries []prompts.SuperviseEntry, all, sent, receipts []superviseSignal) {
-	b := &s.supervise
-	b.dedupMu.Lock()
-	defer b.dedupMu.Unlock()
+// resumeLeaderForSupervision lets the digest continue while the offline session resumes. Complete the first attempt
+// before handing a failure to the retry loop. Only confirmed delivery acknowledges the batch and its filtered receipts.
+func (s *Service) resumeLeaderForSupervision(lead TodoAgent, text string, all, sent, receipts []superviseSignal, completed func(context.Context, error), delivered func(context.Context)) {
+	go func() {
+		ctx := context.Background()
+		err := s.sendToLeaderNow(ctx, lead, text)
+		completed(ctx, err)
+		if err != nil {
+			s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
+			s.escalateLeaderMessage(lead, all, sent, receipts, text, nodeMayHaveTaken(err), delivered)
+		}
+	}()
+}
+
+// leaderDelivered records a confirmed background send or retry under dedupMu. It re-records the actual entries/signals
+// pairing, then acknowledges only this batch; an older in-flight resume still owns its own excluded signals.
+func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries []prompts.SuperviseEntry, all, sent, receipts []superviseSignal) {
 	if _, _, _, err := s.reserveSupervision(ctx, entries, sent, time.Now()); err != nil {
-		s.logf("supervise: task leader %s took the retried message; deduplication not recorded: %v", short(lead.SessionID), err)
+		s.logf("supervise: task leader %s took the message; deduplication not recorded: %v", short(lead.SessionID), err)
 	}
 	s.ackSupervisePending(all)
 	s.parkedDueTold(ctx, sent)
 	s.turnsTold(ctx, receipts)
-	s.logf("supervise: %d signal(s) to task leader %s on a retry", len(sent), short(lead.SessionID))
+	s.logf("supervise: %d signal(s) to task leader %s after confirmation", len(sent), short(lead.SessionID))
 }
 
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
