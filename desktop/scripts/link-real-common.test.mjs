@@ -255,6 +255,14 @@ test("Windows semicolon ambiguity cannot expose later fields or embedded paths",
     for (const embedded of ["//?/D:/private/secret", "//./D:/private/secret", "//private/share/path"]) {
       assert.equal(sanitize(`${root};secret${embedded} detail=keep`, root), "<path><path> detail=keep");
       assert.equal(sanitize(`${root};secret${embedded},next=keep`, root), "<path><path>,next=keep");
+      for (const delimiter of [",", ";"]) {
+        for (const outside of [String.raw`D:\outside\private`, "/outside/private"]) {
+          assert.equal(sanitize(`${root};secret${embedded}${delimiter}${outside}`, root), `<path><path>${delimiter}<path>`);
+        }
+        for (const phrase of ["failed private-value", "cannot read"]) {
+          assert.equal(sanitize(`${root};secret${embedded}${delimiter}${phrase}`, root), `<path><path>${delimiter}${phrase}`);
+        }
+      }
     }
   }
 });

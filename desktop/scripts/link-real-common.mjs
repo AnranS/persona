@@ -156,9 +156,9 @@ function redactOnePath(text, run) {
     }
   }
   const field = /(?:^|[\s,;])[A-Za-z][\w.-]*=/.exec(first);
-  const phrase = /\s+(?:failed|error|cannot|denied|unexpected|fatal|exception)\b/i.exec(first);
+  const phrase = /[\s,;](?:failed|error|cannot|denied|unexpected|fatal|exception)\b/i.exec(first);
   const boundary = Math.min(field?.index ?? first.length, phrase?.index ?? first.length);
-  const nextPath = /\s+(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
+  const nextPath = /[\s,;](?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
   const consumed = Math.min(boundary, nextPath?.index ?? first.length);
   const bracket = [")", "]", "}", ">"].includes(first[consumed - 1]);
   if (process.env.PERSONA_REDACT_DEBUG === "1") console.error(JSON.stringify({ input: text, token: token[0], first, boundary, nextPath: nextPath?.index, consumed }));
