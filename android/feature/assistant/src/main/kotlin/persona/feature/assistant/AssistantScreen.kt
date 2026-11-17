@@ -438,8 +438,7 @@ fun AssistantScreen(
                 target.archiveConversation(session.key)
                 if (feedback?.notice(archivedWords, persona.core.designsystem.FeedbackStyle.Success) != true)
                     toast.show(persona.core.designsystem.FeedbackNotice(archivedWords, style = persona.core.designsystem.FeedbackStyle.Success))
-                // The main conversation in place of the archived one; keep the list open for the next archive.
-                if (activeMachine == session.machineId && activeSession == session.sessionId) openMain()
+                // Archiving only hides the row; the open conversation stays open and the list stays ready for the next archive.
                 assistantAttempt { repository.refresh() }.onSuccess { archived = archived - session.key }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
