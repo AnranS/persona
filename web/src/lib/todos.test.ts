@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { hasRequestPieces } from "./request-pieces";
 import type { Machine, Session } from "./types";
 import {
-  hasRequestPieces,
   DECISIONS_FIRST,
   shownDecisions,
   heldDelivery,
