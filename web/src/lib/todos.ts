@@ -992,4 +992,3 @@ export function taskNow(lead: Session | undefined, working: boolean): TaskNow | 
 export function runningSubagents(s: Session | undefined): string[] {
   return (s?.subagents ?? []).filter((a) => a.running).map((a) => a.description?.trim() || a.type || t("lib-todos.subtask"));
 }
-
