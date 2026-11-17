@@ -48,6 +48,18 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     return url.startsWith(`${prefix}/`) ? url.slice(prefix.length) : undefined;
   };
 
+  /** A recoverable API response is evidence only with its exact path and parsed public error category. */
+  const upstreamCategory = (path, body) => {
+    const endpoint = path.split("?")[0];
+    const apiPath = prefix && endpoint.startsWith(`${prefix}/`) ? endpoint.slice(prefix.length) : endpoint;
+    if (apiPath !== "/api/v1/inbox/done/days") return undefined;
+    try {
+      const value = JSON.parse(body);
+      if (value && Object.keys(value).length === 1 && value.error === "tz must be a time zone name") return "unsupported-time-zone";
+    } catch {}
+    return undefined;
+  };
+
   const server = createServer(async (req, res) => {
     const path = inner(req.url ?? "/");
     const entry = { method: req.method, path: (req.url ?? "/").split("?")[0] };
@@ -80,6 +92,13 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
       const upstream = httpRequest({ host: "127.0.0.1", port: mockPort, path, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${mockPort}` } }, answer => {
         answer.on("aborted", () => { entry.upstreamError = true; res.destroy(); });
         answer.on("error", () => { entry.upstreamError = true; res.destroy(); });
+        const chunks = [];
+        answer.on("data", chunk => { chunks.push(chunk); });
+        answer.on("end", () => {
+          if (answer.statusCode === 400 && answer.headers["content-type"]?.startsWith("application/json")) {
+            entry.responseCategory = upstreamCategory(path, Buffer.concat(chunks).toString("utf8")) ?? "unclassified";
+          }
+        });
         res.writeHead(answer.statusCode ?? 502, answer.headers);
         answer.pipe(res);
       });

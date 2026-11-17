@@ -34,6 +34,24 @@ test("ordinary prefix escapes require a complete refusal, never an accepted page
   assert.match(gatewayEvidenceFailure({ outsidePrefix, gatewayRequests: [{ method: "GET", path: "/outside", status: 404, complete: false }] }), /not completely refused/);
 });
 
+test("only the documented inbox time-zone fallback tolerates an upstream 400", () => {
+  const base = { method: "GET", path: "/api/v1/inbox/done/days", status: 400, complete: true, responseCategory: "unsupported-time-zone" };
+  assert.equal(gatewayEvidenceFailure({ gatewayRequests: [base] }), undefined);
+  assert.equal(gatewayEvidenceFailure({ gatewayRequests: [{ ...base, path: "/persona/api/v1/inbox/done/days" }] }), undefined);
+  assert.equal(gatewayEvidenceFailure({ otherGatewayEvidence: { requests: [{ ...base, path: "/persona/api/v1/inbox/done/days" }] } }), undefined);
+  for (const request of [
+    { ...base, responseCategory: "unclassified" },
+    { ...base, responseCategory: undefined },
+    { ...base, status: 200 },
+    { ...base, complete: false },
+    { ...base, upstreamError: "read failed" },
+    { ...base, clientAborted: true },
+    { ...base, path: "/api/v1/inbox/done/days/extra" },
+    { ...base, path: "/api/v1/other" },
+    { ...base, method: "POST" },
+  ]) assert.match(gatewayEvidenceFailure({ gatewayRequests: [request] }), /gateway request failed/, JSON.stringify(request));
+});
+
 test("client cancellation is distinct from upstream failure", () => {
   const cancelled = { method: "GET", path: "/api/v1/models", status: "client-aborted", clientAborted: true, complete: false };
   assert.equal(gatewayEvidenceFailure({ gatewayRequests: [cancelled] }), undefined);

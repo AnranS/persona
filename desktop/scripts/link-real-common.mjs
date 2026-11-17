@@ -33,9 +33,9 @@ export function classifyOwnedPath(run, candidate) {
   if (typeof run !== "string" || typeof candidate !== "string") return "outside";
   const embedded = candidate.slice(1).includes("//?/") || candidate.slice(1).includes("//./");
   if (embedded) return "outside";
-  const windows = value => /^(?:[A-Za-z]:[\\/]|\\\\|\/\/[?.]\/)/.test(value) && !/^\/\/[?.]\/UNC\//i.test(value);
-  const unc = value => /^\/\/[^/]+[\\/][^/]+[\\/]/.test(value) && !/^\/\/[?.]\//.test(value);
+  const unc = value => /^\/\/[^/?]+[\\/][^/]+[\\/]/.test(value) && !/^\/\/[?.]\//.test(value);
   const uncNamespace = value => /^\/\/[?.]\/UNC\//i.test(value);
+  const windows = value => /^(?:[A-Za-z]:[\\/]|\\\\|\/\/[?.]\/)/.test(value) && !unc(value) && !uncNamespace(value);
   if (windows(run) !== windows(candidate) || (unc(run) !== unc(candidate) && !(uncNamespace(run) && unc(candidate)) && !(unc(run) && uncNamespace(candidate)))) return "outside";
   if (windows(run) || windows(candidate) || unc(run) || unc(candidate) || uncNamespace(run) || uncNamespace(candidate)) {
     const rootPath = trimWindowsTrailing(windowsComparable(run)).toLowerCase();
@@ -77,7 +77,7 @@ export function redactPaths(run, paths = []) {
 }
 
 function ownedReplacement(run, candidate) {
-  if (typeof candidate !== "string" || candidate.includes(";") || /(^|[\\/])\.\.([\\/]|$)/.test(candidate)) return undefined;
+  if (typeof candidate !== "string" || /(^|[\\/])\.\.([\\/]|$)/.test(candidate)) return undefined;
   if (/[A-Za-z]:(?![\\/])/.test(candidate)) return undefined;
   const kind = classifyOwnedPath(run, candidate);
   if (kind === "root") return "<run>";
@@ -125,7 +125,9 @@ function redactOnePath(text, run) {
     }
     token[0] = token[0].slice(0, separator);
   }
-  const nextAbsolute = /[\s,;][\w.-]*=[\[(]?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))|[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))/.exec(first);
+  // `path=/owned/root; child=/owned/root/child` preserves the first delimiter. A semicolon in the path itself fails closed.
+  // A space before another absolute POSIX path starts a new token, while spaces inside the current path remain owned.
+  const nextAbsolute = /[\s,;][A-Za-z][\w.-]*=[\[(]?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/))|[\s,;]\[?(?=(?:[A-Za-z]:[\\/]|\\\\|\/\/))| (?=\/)/.exec(first);
   const candidates = [first, ...Array.from(first.matchAll(/[\s,;:<>{}\[\]()]/g), match => first.slice(0, match.index)).reverse()];
   for (const candidate of candidates) {
     if (nextAbsolute && candidate.length > nextAbsolute.index) continue;

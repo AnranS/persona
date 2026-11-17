@@ -14,9 +14,10 @@ async function fixture(t) {
   await mkdir(dist);
   await writeFile(join(dist, "index.html"), '<base href="/" />');
   let forwarded = "";
+  let upstreamResponse = { status: 200, contentType: "application/json", body: '{"ok":true}' };
   const upstream = createServer((req, res) => {
     forwarded = req.url;
-    res.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
+    res.writeHead(upstreamResponse.status, { "Content-Type": upstreamResponse.contentType }).end(upstreamResponse.body);
   });
   await new Promise(done => upstream.listen(0, "127.0.0.1", done));
   const gateway = await startGateway({ dist, mockPort: upstream.address().port, prefix: "/persona" });
@@ -33,7 +34,7 @@ async function fixture(t) {
     await upstreamClosed;
     await rm(directory, { recursive: true, force: true });
   });
-  return { gateway, forwarded: () => forwarded };
+  return { gateway, forwarded: () => forwarded, respond: response => { upstreamResponse = response; } };
 }
 
 function upgrade(port, path, headers = {}) {
@@ -59,6 +60,24 @@ test("an in-prefix request passes, with redacted reporting but an intact forward
   assert.equal(gateway.outside().length, 0);
   assert.deepEqual(gateway.requests(), [{ method: "GET", path: "/persona/api/v1/test", status: 200, closed: true, complete: true }]);
   assert.ok(!JSON.stringify(gateway.requests()).includes("synthetic-secret"));
+});
+
+test("a real upstream unsupported-time-zone response is categorized without recording the time zone", async t => {
+  const { gateway, respond } = await fixture(t);
+  respond({ status: 400, contentType: "application/json", body: '{"error":"tz must be a time zone name"}' });
+  const response = await fetch(`${gateway.url}api/v1/inbox/done/days?tz=Synthetic%2FPrivateZone`);
+  assert.equal(response.status, 400);
+  assert.equal(await response.text(), '{"error":"tz must be a time zone name"}');
+  const requests = gateway.requests();
+  assert.equal(requests[0].responseCategory, "unsupported-time-zone");
+  assert.ok(!JSON.stringify(requests).includes("Synthetic/PrivateZone"));
+  assert.ok(!JSON.stringify(requests).includes("Synthetic%2FPrivateZone"));
+  respond({ status: 400, contentType: "application/json", body: '{"error":"a different API failure"}' });
+  assert.equal((await fetch(`${gateway.url}api/v1/inbox/done/days?tz=Synthetic%2FPrivateZone`)).status, 400);
+  assert.equal(gateway.requests()[1].responseCategory, "unclassified");
+  respond({ status: 400, contentType: "application/json", body: '{"error":"tz must be a time zone name","diagnostic":"not part of the public category"}' });
+  assert.equal((await fetch(`${gateway.url}api/v1/inbox/done/days?tz=Synthetic%2FPrivateZone`)).status, 400);
+  assert.equal(gateway.requests()[2].responseCategory, "unclassified");
 });
 
 test("outside HTTP and UPGRADE fail closed even without browser metadata, with no query in evidence", async t => {

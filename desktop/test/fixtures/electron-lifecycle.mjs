@@ -1,5 +1,10 @@
 import { EventEmitter } from "node:events";
 
+// The child opts into this only for the macOS updater scenario; production code still reads process.platform.
+if (process.env.PERSONA_DESKTOP_TEST_PLATFORM) {
+  Object.defineProperty(process, "platform", { value: process.env.PERSONA_DESKTOP_TEST_PLATFORM });
+}
+
 export const events = [];
 export const windows = [];
 export const controls = new Map();
@@ -65,7 +70,8 @@ export const Tray = class extends EventEmitter {
     if (name === "click") events.push("tray-click-registered");
   }
 };
-export const autoUpdater = { on() {}, checkForUpdates: async () => undefined, quitAndInstall() {}, autoDownload: false, autoInstallOnAppQuit: false };
+// Match Electron's native autoUpdater EventEmitter, including the macOS one-shot update-downloaded listener.
+export const autoUpdater = Object.assign(new EventEmitter(), { checkForUpdates: async () => undefined, quitAndInstall() {}, autoDownload: false, autoInstallOnAppQuit: false });
 export const nativeTheme = {};
 
 class Contents extends EventEmitter {

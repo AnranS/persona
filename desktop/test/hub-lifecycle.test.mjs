@@ -112,10 +112,16 @@ async function run(name) {
       setup.close();
       const recovered = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the setup after an ordinary close");
       if ((await electron.hubGet({sender: recovered.webContents, senderFrame: recovered.webContents})).address !== "https://old.example/old/") throw new Error("ordinary setup close erased the saved hub");
-    ` : name === "quit-no-hub" ? `
+    ` : name === "quit-no-hub" || name === "updater-darwin" ? `
       const setup = await electron.waitFor(() => electron.windows.find(window => window.options.title === "Persona setup" && !window.destroyed), "the initial setup window without a hub");
-      await electron.app.quit();
-      if (electron.windows.some(window => !window.destroyed)) throw new Error("Quit left a live window behind");
+      if (${name === "updater-darwin"}) {
+        if (electron.events.some(event => event.title === "Persona could not start")) throw new Error("the macOS updater listener could not be installed: " + JSON.stringify(electron.events));
+        electron.autoUpdater.emit("update-downloaded");
+        electron.autoUpdater.emit("update-downloaded");
+      } else {
+        await electron.app.quit();
+        if (electron.windows.some(window => !window.destroyed)) throw new Error("Quit left a live window behind");
+      }
     ` : name === "quit-pending-success" || name === "quit-pending-failure" ? `
       electron.scenario.holdNew = true;
       electron.scenario.failNew = ${name === "quit-pending-failure" ? "true" : "false"};
@@ -157,7 +163,7 @@ async function run(name) {
     process.stdout.write(JSON.stringify({events: electron.events, unhandled: electron.scenario.unhandled, updates: (await import("./fixtures/lifecycle-store.mjs")).updates, windows: electron.windows.map(window => ({title: window.options.title, url: window.url, destroyed: window.destroyed, partition: window.options.webPreferences.partition}))}));
     process.exit(0);
   `;
-  const child = spawn(process.execPath, ["--import", pathToFileURL(loader).href, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), env: { ...process.env, PERSONA_TEST_MAIN: pathToFileURL(main).href, PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1", ...(name === "quit-no-hub" ? { PERSONA_HUB_URL: "not a hub" } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", pathToFileURL(loader).href, "--input-type=module", "--eval", script], { cwd: join(root, "desktop", "test"), env: { ...process.env, PERSONA_TEST_MAIN: pathToFileURL(main).href, PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION: "1", ...(name === "quit-no-hub" || name === "updater-darwin" ? { PERSONA_HUB_URL: "not a hub" } : {}), ...(name === "updater-darwin" ? { PERSONA_DESKTOP_TEST_PLATFORM: "darwin" } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });
@@ -221,6 +227,12 @@ test("a closed pending successful connection cannot persist or install its hub",
   assert.deepEqual(unhandled, []);
   assert.equal(updates.some(update => update.hub === "https://new.example/"), false);
   assert.equal(windows.some(window => !window.destroyed && window.url === "https://new.example/"), false);
+});
+
+test("the macOS native updater exposes the one-shot listener used by production", async () => {
+  const { events, unhandled } = await run("updater-darwin");
+  assert.deepEqual(unhandled, []);
+  assert.equal(events.some(event => event.title === "Persona could not start"), false, JSON.stringify(events));
 });
 
 test("quitting with no hub does not reopen setup", async () => {
