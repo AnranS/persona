@@ -5368,6 +5368,28 @@
       },
       "extractionState" : "manual"
     },
+    "%@: [Copied Messages]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@:"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@："
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@："
+          }
+        }
+      }
+    },
     "%@: open %@, high %@, low %@, close %@" : {
       "localizations" : {
         "en" : {
@@ -45906,6 +45928,28 @@
       },
       "extractionState" : "manual"
     },
+    "Copied [Selected Messages]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コピーしました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拷贝"
+          }
+        }
+      }
+    },
     "Copied [V N C Pi P Diagnostics 8f6f8d]" : {
       "localizations" : {
         "en" : {
@@ -49627,6 +49671,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Couldn't make the image" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't make the image"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像を作成できませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能生成图片"
+          }
+        }
+      }
     },
     "Couldn't mark it as handled: %@" : {
       "extractionState" : "manual",
@@ -61632,6 +61698,28 @@
         }
       }
     },
+    "Each answer brings the question before it" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each answer brings the question before it"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "各回答の前の質問も一緒に含めます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把每条回答前面的提问一起带上"
+          }
+        }
+      }
+    },
     "Each assistant is complete on its own, with its own chats, inbox and computers, running wherever you choose." : {
       "localizations" : {
         "en" : {
@@ -65848,6 +65936,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "先导出…"
+          }
+        }
+      }
+    },
+    "Export Image" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export Image"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像を書き出す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出图片"
           }
         }
       }
@@ -71677,6 +71787,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "次へ移動します"
+          }
+        }
+      }
+    },
+    "Goes with its answer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Goes with its answer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回答と一緒に含めます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随回答一起"
           }
         }
       }
@@ -77647,6 +77779,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Include Questions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Include Questions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問を含める"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含提问"
+          }
+        }
+      }
     },
     "Include adding %@" : {
       "comment" : "BeautifulUI looks this up in the app's catalog (#5574)",
@@ -117088,6 +117242,28 @@
       },
       "extractionState" : "manual"
     },
+    "Page %lld of %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Page %1$lld of %2$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld枚中%1$lld枚目"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$lld 张，共 %2$lld 张"
+          }
+        }
+      }
+    },
     "Page drawn by the assistant · Sandboxed" : {
       "localizations" : {
         "en" : {
@@ -141098,6 +141274,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Select Messages [Message Menu]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Messages"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複数選択"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多选"
+          }
+        }
+      }
     },
     "Select Messages…" : {
       "localizations" : {
@@ -176926,6 +177124,28 @@
         }
       }
     },
+    "Title and Date" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title and Date"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトルと日付"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题和日期"
+          }
+        }
+      }
+    },
     "Title, e.g. “Morning briefing”" : {
       "localizations" : {
         "en" : {
@@ -178729,6 +178949,28 @@
       },
       "extractionState" : "manual"
     },
+    "Topic %lld / %lld: %@ [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topic %lld / %lld: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "議題 %lld/%lld：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "议题 %lld/%lld：%@"
+          }
+        }
+      }
+    },
     "Topic Details" : {
       "localizations" : {
         "en" : {
@@ -178771,6 +179013,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "トピック"
+          }
+        }
+      }
+    },
+    "Topic: %@ [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topic: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "議題：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "议题：%@"
           }
         }
       }
@@ -180486,29 +180750,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Turn Off Persona" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn Off Persona"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona をオフ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭 Persona"
-          }
-        }
-      }
     },
     "Turn Off Persona in the Meeting" : {
       "extractionState" : "manual",
@@ -204744,6 +204985,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "“%@” [Recording Line]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”"
+          }
+        }
+      }
     },
     "“%@” already exists" : {
       "localizations" : {
