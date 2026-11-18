@@ -87,6 +87,17 @@ final class ShellPagerTests: XCTestCase {
         attachScreen("composer-held-strip-keyboard")
     }
 
+    @MainActor func testRecoveryExposesOnlyTheDragStartingPage() {
+        launch(["-showShellPagerAt", "0.7"])
+        sleep(1)
+        let destination = app.buttons["agents-new"].firstMatch
+        XCTAssertFalse(destination.exists, "the destination page is exposed while recovery returns to Assistant")
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the starting page's composer is not exposed")
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the starting page's composer did not focus")
+    }
+
     /// #9961 AC2: a full-screen interruption cancels a real drag; Hang Up must restore first-tap composer focus.
     @MainActor func testComposerFirstTapAfterUrgentCallInterruptsDrag() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs mock Hub") }

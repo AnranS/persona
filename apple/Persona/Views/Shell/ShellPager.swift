@@ -23,6 +23,9 @@ import SwiftUI
     /// release does not redraw the pages before `letGo` has chosen where it settles.
     private(set) var restoringInput = false
     var restoresPageInput: Bool { restoringInput || (moving && goal == nil && !touching) }
+    /// The only page an interrupted drag may expose before it settles: where that drag started, not the page nearest
+    /// the abandoned position. A drag past halfway must not expose its destination while cancelling back.
+    var recoveryPage: Int { Int(dragStart.rounded()) }
     /// The strip came to rest under a finger already down: the moving bar stays in its place until the finger lets go,
     /// so a tap that began on its switch still lands (`ShellMovingBar`). Taken away, the switch under the finger took
     /// nothing: a tap on Agents as the strip came back to Assistant was lost (`ShellRaceTests`).
@@ -249,7 +252,7 @@ struct ShellPageSlide: ViewModifier {
         let distance: CGFloat = abs(delta)
         let shown = pager.moving ? distance < 1 : index == pager.page
         let inReach = (!pager.moving && index == pager.page && index == shell.page)
-            || (pager.restoresPageInput && index == pager.page)
+            || (pager.restoresPageInput && index == pager.recoveryPage)
         let offset: CGFloat = pager.moving && railEdge == nil ? delta * pager.width : 0
         let opacity: CGFloat = railEdge != nil && pager.moving
             ? max(CGFloat(0), CGFloat(1) - distance)
