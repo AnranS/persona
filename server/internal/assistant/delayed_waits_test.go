@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -347,6 +348,199 @@ func TestReceiptRecheckNewGenerationReplacesLocalTimer(t *testing.T) {
 	})
 }
 
+type failOnePutStore struct {
+	Store
+	key    string
+	failed bool
+}
+
+func (st *failOnePutStore) PutSetting(ctx context.Context, key string, value any) error {
+	if key == st.key && !st.failed {
+		st.failed = true
+		return errors.New("run history write failed")
+	}
+	return st.Store.PutSetting(ctx, key, value)
+}
+
+func TestUnknownRetryOutcomeRetriesFailedRunSave(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	first, n, w := newDelayedRetryFixture(t, st)
+	if _, ok, err := first.claimDelayedWait(context.Background(), w.ID, "interrupted", time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	failedWrite := &failOnePutStore{Store: st, key: runsKey}
+	second := newServiceOn(t, n, failedWrite)
+	second.restoreDelayedWaits(context.Background())
+	doc, err := second.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 || !doc.Waits[0].Unknown {
+		t.Fatalf("unknown wait was dropped after its history write failed: %+v, %v", doc.Waits, err)
+	}
+	before := len(n.pushed())
+	third := newServiceOn(t, n, st)
+	third.restoreDelayedWaits(context.Background())
+	waitFor(t, "the unknown outcome to be recorded and cleared", func() bool {
+		doc, err := third.readDelayedWaits(context.Background())
+		return err == nil && len(doc.Waits) == 0
+	})
+	if n.sent() != 0 || len(n.pushed()) != before+1 {
+		t.Fatalf("recovery resent or failed to report the unknown outcome: sends=%d pushes=%d", n.sent(), len(n.pushed()))
+	}
+}
+
+func TestUnknownRetryOutcomeSurvivesHistoryTruncation(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	first, n, w := newDelayedRetryFixture(t, st)
+	if _, ok, err := first.claimDelayedWait(context.Background(), w.ID, "interrupted", time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	sc := first.loadSchedule(context.Background())
+	sc.mu.Lock()
+	sc.runs = nil
+	err := st.PutSetting(context.Background(), runsKey, sc.runs)
+	sc.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := newServiceOn(t, n, st)
+	second.restoreDelayedWaits(context.Background())
+	doc, err := second.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 0 {
+		t.Fatalf("unknown outcome was not recovered after history truncation: %+v, %v", doc.Waits, err)
+	}
+	sc = second.loadSchedule(context.Background())
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if len(sc.runs) != 1 || sc.runs[0].ID != w.Retry.Run.ID || n.sent() != 0 {
+		t.Fatalf("unknown history = %+v, sends=%d", sc.runs, n.sent())
+	}
+}
+
+type releaseSessionsHub struct {
+	*fakeHub
+	once    sync.Once
+	read    chan struct{}
+	release chan struct{}
+	limited proto.Session
+}
+
+func (h *releaseSessionsHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionsList {
+		h.once.Do(func() {
+			close(h.read)
+			<-h.release
+		})
+		return json.Marshal(map[string]any{"sessions": []proto.Session{h.limited}})
+	}
+	return h.fakeHub.DeviceCall(ctx, p)
+}
+
+func TestPartialRestoreDoesNotRequeueLiveReceiptClaim(t *testing.T) {
+	st := withDelayedWaitCAS(planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}})
+	firstReceipt, f, st, receiptWait := newReceiptWaitFixtureOn(t, st, time.Now().Add(-time.Second))
+	scheduled, _, retryWait := newDelayedRetryFixture(t, st)
+	if _, ok, err := scheduled.claimDelayedWait(context.Background(), retryWait.ID, "scheduled-crash", time.Now()); err != nil || !ok {
+		t.Fatalf("scheduled claim = %v, %v", ok, err)
+	}
+	firstClaim := make(chan string, 1)
+	unknownFailed := false
+	receiptClaims := 0
+	valueGate := &compareValueGate{Store: st}
+	valueGate.before = func(doc delayedWaitDoc) error {
+		for _, w := range doc.Waits {
+			if w.Kind == delayedScheduledRetry && w.Unknown && !unknownFailed {
+				unknownFailed = true
+				return errors.New("scheduled recovery CAS failed")
+			}
+			if w.Kind == delayedReceiptRecheck && w.Claim != "" {
+				receiptClaims++
+				if receiptClaims == 1 {
+					firstClaim <- w.Claim
+				}
+			}
+		}
+		return nil
+	}
+	second := newServiceOn(t, f, valueGate)
+	copyReceiptFixtureTasks(firstReceipt, second)
+	limited := limitTurn("s1", time.Now().Add(time.Hour), true)
+	limited.MachineID, limited.Agent, limited.UpdatedAt = "box", "claude", time.Now()
+	hub := &releaseSessionsHub{fakeHub: f, read: make(chan struct{}), release: make(chan struct{}), limited: limited}
+	second.hub = hub
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	second.running.Store(&ctx)
+	var resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(hub.release) }) }
+	t.Cleanup(resume)
+	if second.restoreDelayedWaits(ctx) {
+		t.Fatal("the injected scheduled recovery failure unexpectedly succeeded")
+	}
+	liveToken := <-firstClaim
+	select {
+	case <-hub.read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the live receipt handler did not reach settlement")
+	}
+	second.restoreDelayedWaits(ctx)
+	doc, err := second.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) == 0 {
+		t.Fatalf("live receipt wait disappeared: %+v, %v", doc.Waits, err)
+	}
+	var current delayedWait
+	for _, w := range doc.Waits {
+		if w.ID == receiptWait.ID {
+			current = w
+		}
+	}
+	if current.Claim != liveToken {
+		t.Fatalf("partial restore replaced the live receipt claim %q with %q", liveToken, current.Claim)
+	}
+	resume()
+	waitFor(t, "the settled receipt's successor", func() bool {
+		doc, err := second.readDelayedWaits(context.Background())
+		if err != nil {
+			return false
+		}
+		for _, w := range doc.Waits {
+			if w.ID == receiptWait.ID {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func newReceiptWaitFixtureOn(t *testing.T, st Store, at time.Time) (*Service, *fakeHub, Store, delayedWait) {
+	t.Helper()
+	first, f := newTaskServiceOn(t, st)
+	startedTask(t, first, f)
+	first.taskWorking(context.Background(), "box", "s1")
+	f.judge = `{"verdict":"done","reason":"Delivery verified"}`
+	f.setItems(proto.Item{ID: "answer-1", Kind: proto.KindText, Role: "assistant", Text: "Delivery verified", TS: time.Now()})
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "codex", Status: proto.StatusDone,
+		State: proto.StateIdle, LastText: "Delivery verified", UpdatedAt: time.Now(), Rev: 1})
+	w := first.newReceiptRecheck(context.Background(), "box", "s1", at)
+	selected, arm, err := first.persistReceiptRecheck(context.Background(), w)
+	if err != nil || !arm {
+		t.Fatalf("persist receipt recheck = %v, %v", arm, err)
+	}
+	return first, f, st, selected
+}
+
+type compareValueGate struct {
+	Store
+	before func(delayedWaitDoc) error
+}
+
+func (st *compareValueGate) CompareSetting(ctx context.Context, key string, revision int64, value any) (bool, error) {
+	if st.before != nil {
+		if err := st.before(value.(delayedWaitDoc)); err != nil {
+			return false, err
+		}
+	}
+	return st.Store.(delayedWaitCAS).CompareSetting(ctx, key, revision, value)
+}
+
 type failFirstSettingStore struct {
 	Store
 	failed chan struct{}
@@ -406,19 +600,7 @@ func TestReceiptRecheckRetriesReleaseFailure(t *testing.T) {
 func newReceiptWaitFixture(t *testing.T, at time.Time) (*Service, *fakeHub, Store, delayedWait) {
 	t.Helper()
 	st := withDelayedWaitCAS(planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}})
-	first, f := newTaskServiceOn(t, st)
-	startedTask(t, first, f)
-	first.taskWorking(context.Background(), "box", "s1")
-	f.judge = `{"verdict":"done","reason":"Delivery verified"}`
-	f.setItems(proto.Item{ID: "answer-1", Kind: proto.KindText, Role: "assistant", Text: "Delivery verified", TS: time.Now()})
-	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "codex", Status: proto.StatusDone,
-		State: proto.StateIdle, LastText: "Delivery verified", UpdatedAt: time.Now(), Rev: 1})
-	w := first.newReceiptRecheck(context.Background(), "box", "s1", at)
-	selected, arm, err := first.persistReceiptRecheck(context.Background(), w)
-	if err != nil || !arm {
-		t.Fatalf("persist receipt recheck = %v, %v", arm, err)
-	}
-	return first, f, st, selected
+	return newReceiptWaitFixtureOn(t, st, at)
 }
 
 func TestRestoredReceiptRecheckRejectsStaleBinding(t *testing.T) {

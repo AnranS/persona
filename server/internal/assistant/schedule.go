@@ -1690,14 +1690,35 @@ func (s *Service) recordRun(r ScheduleRun) string {
 // updateRun returns whether it pushed the streak notice (#4658), which then stands for the run's own failure push;
 // false when the notice was left out (a muted conversation, #4785), so that push still goes.
 func (s *Service) updateRun(r ScheduleRun, status, errText string) bool {
+	streak, _ := s.updateRunResult(r, status, errText)
+	return streak
+}
+
+// updateRunResult preserves updateRun's in-memory and notification behavior, while recovery can require proof that
+// both schedule documents were persisted before it clears a durable unknown outcome.
+func (s *Service) updateRunResult(r ScheduleRun, status, errText string) (bool, error) {
+	return s.updateRunResultMissing(r, status, errText, false)
+}
+
+// updateRunResultMissing can append an unknown outcome when bounded history no longer holds the original run.
+// Ordinary updateRun callers retain the old missing-run behavior.
+func (s *Service) updateRunResultMissing(r ScheduleRun, status, errText string, allowMissing bool) (bool, error) {
 	sc, err := s.lockedSchedule(context.Background())
 	if err != nil {
-		return false
+		return false, err
 	}
 	i := slices.IndexFunc(sc.runs, func(x ScheduleRun) bool { return x.ID == r.ID })
 	if i < 0 {
-		sc.mu.Unlock()
-		return false
+		if !allowMissing {
+			sc.mu.Unlock()
+			return false, errors.New("schedule run not found")
+		}
+		r.Status, r.Error = status, errText
+		sc.runs = append(sc.runs, r)
+		if len(sc.runs) > maxRuns {
+			sc.runs = append([]ScheduleRun(nil), sc.runs[len(sc.runs)-maxRuns:]...)
+		}
+		i = len(sc.runs) - 1
 	}
 	wasOK := sc.runs[i].Status == runOK
 	sc.runs[i].Status, sc.runs[i].Error = status, errText
@@ -1706,17 +1727,20 @@ func (s *Service) updateRun(r ScheduleRun, status, errText string) bool {
 	}
 	streakTask, streakN, streak := streakToldLocked(sc, i, wasOK) // a turn that ends in an error is a failed run too (schedule_streak.go)
 	streakRun := sc.runs[i]
-	_ = s.saveLocked(sc, sc.tasks)
+	saveErr := s.saveLocked(sc, sc.tasks)
 	if st := s.store(); st != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := st.PutSetting(ctx, runsKey, sc.runs); err != nil {
 			s.logf("save schedule runs: %v", err)
+			if saveErr == nil {
+				saveErr = err
+			}
 		}
 		cancel()
 	}
 	sc.mu.Unlock()
 	s.broadcastSchedule()
-	return streak && s.pushStreak(streakTask, streakN, streakRun)
+	return streak && s.pushStreak(streakTask, streakN, streakRun), saveErr
 }
 
 // errTaskBusy: the task's last run is still going; this one is skipped (and recorded) rather than queued behind it.

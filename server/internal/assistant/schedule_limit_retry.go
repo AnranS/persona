@@ -138,15 +138,19 @@ func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, p
 
 // recoverScheduledLimitRetry records the conservative outcome before using the ordinary failure-notification path.
 // The original failed run may have been retried or not; without a receiver idempotency contract, sending again is not safe.
-func (s *Service) recoverScheduledLimitRetry(ctx context.Context, w delayedWait) {
+func (s *Service) recoverScheduledLimitRetry(ctx context.Context, w delayedWait) bool {
 	retry := w.Retry
 	if retry == nil {
-		return
+		return true
 	}
 	run := retry.Run
 	run.of = retry.RunOf
 	body := i18n.T(s.lang(ctx), "assistant-schedule.retry_unknown")
-	streak := s.updateRun(run, runFailed, body)
+	streak, err := s.updateRunResultMissing(run, runFailed, body, true)
+	if err != nil {
+		s.logf("record recovered scheduled retry %s: %v", w.ID, err)
+		return false
+	}
 	name := run.RefID
 	space := ""
 	if sc, err := s.lockedSchedule(ctx); err == nil {
@@ -166,5 +170,7 @@ func (s *Service) recoverScheduledLimitRetry(ctx context.Context, w delayedWait)
 	}
 	if err := s.finishUnknownScheduledRetry(context.Background(), w.ID, w.Claim); err != nil {
 		s.logf("finish recovered scheduled retry %s: %v", w.ID, err)
+		return false
 	}
+	return true
 }

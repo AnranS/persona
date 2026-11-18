@@ -295,24 +295,35 @@ func (s *Service) releaseReceiptRecheck(ctx context.Context, w delayedWait, toke
 // restoreDelayedWaits re-arms exact deadlines. Receipt claims are replayable through the durable turn ledger;
 // scheduled claims are not, so their recovery reports an unknown outcome instead of sending again.
 func (s *Service) restoreDelayedWaits(ctx context.Context) bool {
+	s.delayedRecoveryMu.Lock()
+	defer s.delayedRecoveryMu.Unlock()
 	if s.store == nil {
 		return true
 	}
 	if s.store() == nil {
 		return false
 	}
-	if err := s.requeueClaimedReceiptRechecks(ctx); err != nil {
-		s.logf("restore receipt rechecks: %v", err)
-		return false
+	if !s.delayedReceiptsRecovered {
+		if err := s.requeueClaimedReceiptRechecks(ctx); err != nil {
+			s.logf("restore receipt rechecks: %v", err)
+			return false
+		}
+		s.delayedReceiptsRecovered = true
 	}
 	doc, err := s.readDelayedWaits(ctx)
 	if err != nil {
 		s.logf("restore delayed waits: %v", err)
 		return false
 	}
+	if s.delayedRestored == nil {
+		s.delayedRestored = map[string]bool{}
+	}
 	restored := true
 	for _, w := range doc.Waits {
 		w := w
+		if s.delayedRestored[w.ID] {
+			continue
+		}
 		switch w.Kind {
 		case delayedScheduledRetry:
 			if w.Retry == nil {
@@ -323,17 +334,26 @@ func (s *Service) restoreDelayedWaits(ctx context.Context) bool {
 				if err != nil {
 					s.logf("recover scheduled retry %s: %v", w.ID, err)
 					restored = false
-				} else if found {
-					s.recoverScheduledLimitRetry(ctx, w)
+					continue
 				}
+				if found && !s.recoverScheduledLimitRetry(ctx, w) {
+					restored = false
+					continue
+				}
+				s.delayedRestored[w.ID] = true
 				continue
 			}
+			s.delayedRestored[w.ID] = true
 			go s.runScheduledLimitRetry(ctx, w, true)
 		case delayedReceiptRecheck:
 			if w.Receipt != nil && w.Claim == "" {
+				s.delayedRestored[w.ID] = true
 				s.armReceiptRecheck(w, true)
 			}
 		}
+	}
+	if restored {
+		s.delayedRestored = nil
 	}
 	return restored
 }
