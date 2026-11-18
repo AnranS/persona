@@ -77,7 +77,11 @@ import UIKit
             case .image:
                 guard let bytes = content.image?.bytes else { return finish(.remoteEmpty) }
                 deps.pasteboard.write(content)
-                let picture = await Self.previewPicture(bytes, height: Theme.Size.box200 * scale)
+                guard let picture = await Self.previewPicture(bytes, height: Theme.Size.box200 * scale) else {
+                    fetched = nil
+                    fetchedPicture = nil
+                    return finish(.failed(.badImage))
+                }
                 fetched = content
                 fetchedPicture = picture
                 return finish(.fetched(.image))
@@ -158,7 +162,7 @@ import UIKit
                   let p = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                   let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int, w > 0, h > 0
             else { return nil }
-            // EXIF orientations 5–8 draw the picture turned a quarter.
+            // EXIF orientations 5–8 turn the picture a quarter and swap its dimensions; 2–4 do not.
             let size = (p[kCGImagePropertyOrientation] as? Int ?? 1) >= 5 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
             let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                                          kCGImageSourceThumbnailMaxPixelSize: previewPixels(size, height: height),
@@ -169,10 +173,23 @@ import UIKit
 
     #if DEBUG
     /// Screenshots: a state without a hub (`-showClipboardFetched text|image`, `-showClipboardHint YES`).
-    func preview(fetched: ClipboardContent?, hint: Bool) {
-        self.fetched = fetched
+    func preview(fetched: ClipboardContent?, hint: Bool, scale: CGFloat = 3) async {
+        self.fetched = nil
         fetchedPicture = nil
-        if let fetched { outcome = .fetched(fetched.kind) }
+        outcome = nil
+        if let fetched {
+            if case .image = fetched.kind {
+                guard let bytes = fetched.image?.bytes,
+                      let picture = await Self.previewPicture(bytes, height: Theme.Size.box200 * scale) else {
+                    outcome = .failed(.badImage)
+                    showsPasteHint = hint
+                    return
+                }
+                fetchedPicture = picture
+            }
+            self.fetched = fetched
+            outcome = .fetched(fetched.kind)
+        }
         showsPasteHint = hint
     }
     #endif

@@ -17,7 +17,15 @@ import PersonaWire
             PhonePasteboard(read: { [self] in
                 reads += 1
                 return refuses ? nil : content
-            }, write: { [self] in content = $0 }, hasContent: { [self] in content != nil })
+            }, write: { [self] in
+                // Match the live pasteboard: unknown, undecodable bytes do not replace what the phone already holds.
+                if case .image = $0.kind, let bytes = $0.image?.bytes {
+                    let png = bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+                    let jpeg = bytes.starts(with: [0xff, 0xd8, 0xff])
+                    if !png && !jpeg && UIImage(data: bytes) == nil { return }
+                }
+                content = $0
+            }, hasContent: { [self] in content != nil })
         }
     }
 
@@ -171,15 +179,29 @@ import PersonaWire
         #expect(m.fetched == nil && m.fetchedPicture == nil, "switched off: no preview, and its picture let go")
     }
 
-    @Test func bytesThatAreNoPictureShowNone() async {
+    @Test func bytesThatAreNoPictureAreAVisibleFailure() async throws {
         let hub = FakeHub()
         let board = Board()
         let m = model(hub, board)
         let broken = ClipboardContent.image(ClipboardImage(mime: "image/png", bytes: Data("not a picture".utf8)))
         hub.on("GET", "/api/v1/machines/mac/clipboard") { _ in try JSON.encoder.encode(broken) }
-        #expect(await m.fetch(machineID: "mac", scale: 3) == .fetched(.image), "said as before: the phone has what the computer had")
-        #expect(board.content == broken && m.fetched == broken && m.fetchedPicture == nil)
+        let result = await m.fetch(machineID: "mac", scale: 3)
+        #expect(result == .failed(.badImage) && m.outcome == result)
+        #expect(m.outcome?.message(machine: "MacBook").isEmpty == false, "the failure says what went wrong")
+        #expect(board.content == nil, "the live pasteboard cannot store unreadable image bytes")
+        #expect(m.fetched == nil && m.fetchedPicture == nil, "no successful but empty image preview")
     }
+
+    #if DEBUG
+    @Test func debugImagePreviewDecodesItsPicture() async throws {
+        let m = model(FakeHub(), Board())
+        let content = try picture(40, 20)
+        await m.preview(fetched: content, hint: false)
+        #expect(m.fetched == content && m.outcome == .fetched(.image))
+        let kept = try #require(m.fetchedPicture?.cgImage, "the screenshot's image preview is not blank")
+        #expect(kept.width == 40 && kept.height == 20)
+    }
+    #endif
 
     @Test func hubRefusalsInWords() async {
         let hub = FakeHub()

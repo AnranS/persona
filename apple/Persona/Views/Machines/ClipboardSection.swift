@@ -44,7 +44,11 @@ struct ClipboardSection: View {
             await model?.refresh(machineID: ref.id)
             #if DEBUG
             let d = UserDefaults.standard
-            if d.bool(forKey: "showClipboardHint") { model?.preview(fetched: nil, hint: true) }
+            if let kind = d.string(forKey: "showClipboardFetched") {
+                await model?.preview(fetched: Self.screenshotContent(kind), hint: d.bool(forKey: "showClipboardHint"), scale: displayScale)
+            } else if d.bool(forKey: "showClipboardHint") {
+                await model?.preview(fetched: nil, hint: true)
+            }
             // `-showClipboardFetch YES`: runs Get Clipboard against the (mock) hub on opening (screenshots).
             if d.bool(forKey: "showClipboardFetch"), state.usable, online { await fetch() }
             #endif
@@ -59,6 +63,27 @@ struct ClipboardSection: View {
             app.applyMachine(m)
         }, hints: .live())
     }
+
+    #if DEBUG
+    /// A self-contained picture or text preview for screenshot launches, without a hub or an asset in the app bundle.
+    private static func screenshotContent(_ kind: String) -> ClipboardContent? {
+        switch kind {
+        case "text":
+            return .text("Clipboard preview")
+        case "image":
+            let size = CGSize(width: 480, height: 300)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let data = UIGraphicsImageRenderer(size: size, format: format).pngData { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
+            return .image(ClipboardImage(mime: "image/png", bytes: data))
+        default:
+            return nil
+        }
+    }
+    #endif
 
     // MARK: Actions
 
