@@ -19,6 +19,9 @@ from check_no_callkit import CheckError, dependencies
 
 TIMEOUT = 120
 HEX = re.compile(r"0x[0-9A-Fa-f]+$")
+MAC_TARGET = "arm64e-macos"
+IOS_SUPPORT_TARGET = "arm64e-maccatalyst"
+TARGET_BLOCK = re.compile(r"^[ \t]*-[ \t]+(targets|archs):[ \t]*\[(.*?)\]", re.MULTILINE | re.DOTALL)
 
 
 def parse_imports(text):
@@ -60,42 +63,83 @@ def library_aliases(install_name):
 
 
 def system_library(install_name):
-    return install_name.startswith(("/System/Library/", "/usr/lib/"))
+    return install_name.startswith((
+        "/System/Library/",
+        "/usr/lib/",
+        "/System/iOSSupport/System/Library/",
+        "/System/iOSSupport/usr/lib/",
+    ))
 
 
 def tbd_relative(install_name, ios_support=False):
+    already_support = install_name.startswith("/System/iOSSupport/")
     relative = install_name.lstrip("/")
     if relative.endswith(".dylib"):
         relative = relative[:-len(".dylib")] + ".tbd"
     else:
         relative += ".tbd"
-    if ios_support and install_name.startswith("/System/Library/"):
+    if ios_support and not already_support and install_name.startswith(("/System/Library/", "/usr/lib/")):
         relative = "System/iOSSupport/" + relative
     return relative
 
 
+def tbd_target(relative):
+    if relative.startswith("System/iOSSupport/") or relative.startswith("System/Library/"):
+        return (IOS_SUPPORT_TARGET,)
+    # System dylibs also supply the compiler runtime from their macOS target document.
+    return (MAC_TARGET, IOS_SUPPORT_TARGET)
+
+
+def flow_values(text):
+    for token in re.finditer(r"'([^']+)'|\"([^\"]+)\"|([^\s,\[\]]+)", text):
+        yield next(value for value in token.groups() if value is not None)
+
+
 def array_values(text, key):
-    """Values of TBD flow arrays named key, across documents and architecture export blocks."""
+    """Values of TBD flow arrays named key."""
     pattern = re.compile(r"^[ \t]*" + re.escape(key) + r":[ \t]*\[(.*?)\]", re.MULTILINE | re.DOTALL)
     for match in pattern.finditer(text):
-        for token in re.finditer(r"'([^']+)'|\"([^\"]+)\"|([^\s,\[\]]+)", match.group(1)):
-            yield next(value for value in token.groups() if value is not None)
+        yield from flow_values(match.group(1))
 
 
-def parse_tbd(text):
-    """Return (exported symbols, reexported install names) from TBD v3/v4 text, without PyYAML."""
+def target_blocks(text, targets):
+    """TBD export/reexport blocks for the runtime targets, never another CPU's exports."""
+    if isinstance(targets, str):
+        targets = (targets,)
+    matches = list(TARGET_BLOCK.finditer(text))
+    if not matches:
+        return [text]
+    architectures = {target.split("-", 1)[0] for target in targets}
+    blocks = []
+    for index, match in enumerate(matches):
+        values = set(flow_values(match.group(2)))
+        if match.group(1) == "targets":
+            selected = any(target in values for target in targets)
+        else:
+            # TBD v3 has architecture-only blocks; the document supplies its platform.
+            selected = bool(architectures & values) or ("arm64e" in architectures and "arm64" in values)
+        if selected:
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            blocks.append(text[match.start():end])
+    return blocks
+
+
+def parse_tbd(text, target=IOS_SUPPORT_TARGET):
+    """Return (exported symbols, reexported install names) for the selected runtime targets."""
     symbols = set()
-    for key in ("symbols", "weak-symbols", "reexports"):
-        for value in array_values(text, key):
-            if not value.startswith("/"):
-                symbols.add(value)
-    for key, prefixes in (("objc-classes", ("_OBJC_CLASS_$_", "_OBJC_METACLASS_$_")),
-                          ("objc-eh-types", ("_OBJC_EHTYPE_$_",)),
-                          ("objc-ivars", ("_OBJC_IVAR_$_",))):
-        for value in array_values(text, key):
-            for prefix in prefixes:
-                symbols.add(prefix + value)
-    reexports = {value for value in array_values(text, "libraries") if system_library(value)}
+    reexports = set()
+    for block in target_blocks(text, target):
+        for key in ("symbols", "weak-symbols", "reexports"):
+            for value in array_values(block, key):
+                if not value.startswith("/"):
+                    symbols.add(value)
+        for key, prefixes in (("objc-classes", ("_OBJC_CLASS_$_", "_OBJC_METACLASS_$_")),
+                              ("objc-eh-types", ("_OBJC_EHTYPE_$_",)),
+                              ("objc-ivars", ("_OBJC_IVAR_$_",))):
+            for value in array_values(block, key):
+                for prefix in prefixes:
+                    symbols.add(prefix + value)
+        reexports.update(value for value in array_values(block, "libraries") if system_library(value))
     return symbols, reexports
 
 
@@ -120,7 +164,7 @@ def find_missing_imports(imports_text, linked_dylibs, tbd_texts):
         if path in cache:
             return cache[path]
         cache[path] = set()  # A reexport cycle contributes no symbols until its own exports are added.
-        symbols, reexports = parse_tbd(tbd_texts[path])
+        symbols, reexports = parse_tbd(tbd_texts[path], target=tbd_target(path))
         for reexport in sorted(reexports):
             inherited = exports(reexport)
             if inherited:
@@ -183,7 +227,7 @@ def load_tbd_texts(mac_sdk, install_names):
             except OSError as error:
                 raise CheckError("reading %s: %s" % (path, error))
             texts[relative] = text
-            _symbols, reexports = parse_tbd(text)
+            _symbols, reexports = parse_tbd(text, target=tbd_target(relative))
             queue.extend(sorted(reexports - set(install_names)))
             install_names.update(reexports)
     return texts

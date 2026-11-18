@@ -37,22 +37,27 @@ def imports_text(*entries):
     return "\n".join(lines) + "\n"
 
 
-def tbd_text(install_name, symbols=(), reexports=()):
+def tbd_text(install_name, symbols=(), reexports=(), target="arm64e-maccatalyst", additional_exports=()):
     """A TBD v4 fixture with direct symbols and, optionally, reexported install names."""
     lines = [
         "--- !tapi-tbd",
         "tbd-version: 4",
-        "targets: [ arm64-macos ]",
+        f"targets: [ {target} ]",
         f"install-name: '{install_name}'",
         "exports:",
-        "  - targets: [ arm64-macos ]",
+        f"  - targets: [ {target} ]",
         f"    symbols: [ {', '.join(symbols)} ]",
     ]
+    for export_target, export_symbols in additional_exports:
+        lines += [
+            f"  - targets: [ {export_target} ]",
+            f"    symbols: [ {', '.join(export_symbols)} ]",
+        ]
     if reexports:
         libraries = ", ".join(f"'{name}'" for name in reexports)
         lines += [
             "reexported-libraries:",
-            "  - targets: [ arm64-macos ]",
+            f"  - targets: [ {target} ]",
             f"    libraries: [ {libraries} ]",
         ]
     lines.append("...")
@@ -105,7 +110,7 @@ class MacImportTests(unittest.TestCase):
             (STRONG, present, "libExamplePhone.dylib"),
             (STRONG, absent, "libExamplePhone.dylib"),
         ], {"libExamplePhone.dylib": PHONE_DYLIB}, {
-            tbd_path(PHONE_DYLIB): tbd_text(PHONE_DYLIB, symbols=[present]),
+            tbd_path(PHONE_DYLIB): tbd_text(PHONE_DYLIB, symbols=[present], target="arm64e-macos"),
         })
         self.assertEqual(found, [(PHONE_DYLIB, absent)])
 
@@ -167,9 +172,54 @@ class MacImportTests(unittest.TestCase):
             (STRONG, mac_only, "ExampleConversationKit"),
         ], {"ExampleConversationKit": KIT}, {
             tbd_path(KIT): tbd_text(KIT, symbols=[mac_only]),
-            tbd_path(KIT, ios_support=True): tbd_text(KIT, symbols=[ios_only]),
+            tbd_path(KIT, ios_support=True): tbd_text(KIT, symbols=[ios_only], target="arm64e-maccatalyst"),
         })
         self.assertEqual(found, [(KIT, mac_only)])
+
+    def test_exports_from_another_cpu_target_do_not_satisfy_apple_silicon(self):
+        apple_silicon = "_ExampleAppleSiliconEntry"
+        intel_only = "_ExampleIntelOnlyEntry"
+        macos_only = "_ExampleMacOSOnlyFrameworkEntry"
+        found = findings([
+            (STRONG, apple_silicon, "ExampleConversationKit"),
+            (STRONG, intel_only, "ExampleConversationKit"),
+            (STRONG, macos_only, "ExampleConversationKit"),
+        ], {"ExampleConversationKit": KIT}, {
+            tbd_path(KIT): tbd_text(
+                KIT,
+                symbols=[apple_silicon],
+                target="arm64e-maccatalyst",
+                additional_exports=[
+                    ("x86_64-macos", [intel_only]),
+                    ("arm64e-macos", [macos_only]),
+                ],
+            ),
+        })
+        self.assertEqual(found, [(KIT, intel_only), (KIT, macos_only)])
+
+    def test_ios_support_swift_overlay_follows_its_ios_support_reexports(self):
+        overlay = "/usr/lib/swift/libswiftExampleOverlay.dylib"
+        overlay_source = "libswiftExampleOverlay.dylib"
+        support_framework = "/System/iOSSupport/System/Library/Frameworks/ExampleUIKit.framework/ExampleUIKit"
+        support_framework_tbd = "System/iOSSupport/System/Library/Frameworks/ExampleUIKit.framework/ExampleUIKit.tbd"
+        exported = "_ExampleAvailableThroughUIKit"
+        missing = "_ExampleMissingFromUIKit"
+        found = findings([
+            (STRONG, exported, overlay_source),
+            (STRONG, missing, overlay_source),
+        ], {overlay_source: overlay}, {
+            tbd_path(overlay, ios_support=True): tbd_text(
+                "/System/iOSSupport" + overlay,
+                reexports=[support_framework],
+                target="arm64e-maccatalyst",
+            ),
+            support_framework_tbd: tbd_text(
+                support_framework,
+                symbols=[exported],
+                target="arm64e-maccatalyst",
+            ),
+        })
+        self.assertEqual(found, [(overlay, missing)])
 
 
 if __name__ == "__main__":
