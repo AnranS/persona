@@ -14,6 +14,7 @@ import { panelSections } from "../../lib/model-panel";
 import { getSession, getState, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import type { ModelPanelProps } from "../../ui/model-panel/ModelPanel";
+import launcherFixture from "../../../../spec/fixtures/assistant-launchers/cases.json";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -45,6 +46,7 @@ const codexList = { agent: "codex", models: [
   { id: "gpt-fast", name: "GPT Fast", efforts: ["low", "high"], service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }] },
   { id: "gpt-standard", name: "GPT Standard", efforts: ["low", "high"] },
 ] };
+const sharedLaunchers = launcherFixture.cases[0];
 let machine = 0;
 let host: HTMLDivElement;
 let root: Root;
@@ -52,6 +54,7 @@ let calls: { method: string; url: string; body?: unknown }[];
 let pickAnswer: () => Response;
 let defaultSetup: { provider: string; model: string; effort: string };
 let superviseSetup: { provider: string; model: string; effort: string };
+let sharedPicker = false;
 
 const mid = () => `persona-${machine}`;
 const chat = (x: Partial<Session> = {}): Session =>
@@ -65,15 +68,21 @@ beforeEach(() => {
   pickAnswer = () => json({ ok: true, model_pick: {} });
   defaultSetup = { provider: "claude", model: "opus", effort: "high" };
   superviseSetup = defaultSetup; // the supervisor's own purpose follows Main chat until it is set apart
+  sharedPicker = false;
   Object.assign(getState(), { features: ["assistant_model_pick", "assistant_start_service_tier", "typed_models"], sessions: {}, assistant: { machine_id: mid(), launcher: "claude", main: "c1", conversations: [] } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ method: init?.method ?? "GET", url, body });
     if (url.includes("/codex/models")) return json(codexList);
+    if (sharedPicker && url.includes("/runtime/models")) return json({ agent: "claude", models: [] });
     if (url.includes("/models")) return json(claudeList);
     if (url.includes("/launchers?purpose=assistant.supervise")) return json({ launchers: [{ name: "claude", source: "builtin" }], default: superviseSetup, unavailable: [] });
-    if (url.includes("/launchers?purpose=assistant")) return json({
+    if (url.includes("/launchers?purpose=assistant")) return json(sharedPicker ? {
+      launchers: sharedLaunchers.candidates,
+      default: defaultSetup,
+      unavailable: [],
+    } : {
       launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
       default: defaultSetup,
       unavailable: [{ name: "gpt-direct", kind: "api", code: "api_protocol", reason: "Responses API" }],
@@ -404,5 +413,33 @@ describe("an older hub and the new-conversation page", () => {
     expect(await act(() => panel.props!.onPick({ provider: "relay", model: "haiku", effort: "low" }))).toBe(true);
     expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual(["relay", "haiku", "low"]);
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
+  });
+
+  it("replays the shared eligible choices in both pickers without a legacy concrete default model", async () => {
+    sharedPicker = true;
+    defaultSetup = { provider: "runtime", model: "", effort: "high" };
+    expect(launcherFixture.version).toBe(1);
+    expect(sharedLaunchers.candidates.map((l) => l.name)).toEqual(["runtime", "codex-gw", "team-api"]);
+
+    await show(undefined);
+    await open();
+    const newProviders = panel.props!.providers;
+    const newNames = newProviders.filter((p) => !p.unavailable).map((p) => p.id);
+    const newModels = newProviders.flatMap((p) => p.models ?? []).map((m) => [m.id, m.name]);
+    act(() => root.render(<></>));
+    await flush();
+
+    await show(chat({ launcher: "runtime", agent: "claude", model: undefined, effort: "high" }));
+    await open();
+    const mainProviders = panel.props!.providers;
+    expect(mainProviders.filter((p) => !p.unavailable).map((p) => p.id)).toEqual(sharedLaunchers.assistant);
+    expect(newNames).toEqual(sharedLaunchers.assistant);
+    expect(mainProviders.map((p) => p.id)).not.toContain("codex-gw");
+
+    // An older node's display placeholder means the launcher's default, never a model ID or English row label.
+    expect(newModels.some(([id, name]) => id === "默认" || name === "默认")).toBe(false);
+    expect(mainProviders.flatMap((p) => p.models ?? []).some((m) => m.id === "默认" || m.name === "默认")).toBe(false);
+    expect(panel.props!.state.current).toBeNull();
+    expect(calls.every((c) => !c.url.includes("/launchers?") || c.url.includes("purpose=assistant"))).toBe(true);
   });
 });

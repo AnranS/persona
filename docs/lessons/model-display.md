@@ -10,3 +10,8 @@
 - After changing a shared helper, also run the new-session tests that depend on it (#2302). Changes to `AgentModel.label` affect the fallback in `defaultModelDetail`, even if the new-session page itself is unchanged. When updating display expectations, retain request assertions for the raw model ID and effort.
 
 If Android's existing input bar has no model list / current-model data, do not add a new query and selection flow just for a display change. Reuse the session model already passed in, and preserve the existing fallback when it is missing.
+
+## Display text is not a wire model (#4663)
+
+- A launcher that names no model sends an empty `model`, not a localized placeholder. Normalize the legacy placeholder at the pure display/fallback boundary too: older nodes still send it, and an empty-catalog fallback must not turn it into a concrete row or a model pick.
+- Removing the placeholder must not change launcher inference. An absent model is unknown, never evidence for choosing between several launchers on one endpoint; keep the no-guess test beside the wire tests.
