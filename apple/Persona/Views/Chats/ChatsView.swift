@@ -334,6 +334,7 @@ struct ChatsView: View {
                 searching = false
                 header.floating = false
                 header.up = false
+                header.motion = 0
                 header.setCompact(false)
                 return path = new
             }
@@ -757,6 +758,8 @@ struct ChatsView: View {
         #if DEBUG
         SearchTrace.shared.note("begin listTop=\(header.listTop) scrolled=\(header.scrolled)")
         #endif
+        header.motion = 0
+        header.rising = true
         header.floating = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if header.floating { riseSearch() } } // no keyboard came
         #endif
@@ -1965,6 +1968,7 @@ private struct AgentsList: View {
             searching = false
             header.floating = false
             header.up = false
+            header.motion = 0
             header.setCompact(false)
             path.append(key)
             return

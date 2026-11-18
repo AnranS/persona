@@ -36,11 +36,16 @@ import UIKit
     /// when it changes, so what reads it is not drawn again on every frame of a scroll.
     var rowsUnder = false
     /// The field floats in the bar's row: searching, and until it has come back down after.
-    var floating = false
-    /// Where the field is on its way, animated: up in the bar's row (searching) or down in the list's row. What moves
-    /// follows it (`AgentsSearchOverlay`, `ListShift`, `AgentsTopBarFade`); the page's `searching` changes without an
-    /// animation, so the list's rows (links at rest, buttons while searching) are not cross-faded.
+    var floating = false {
+        didSet { if !floating, refoldAfterClose { refold() } }
+    }
+    /// Where the field is on its way, animated: up in the bar's row (searching) or down in the list's row. The field,
+    /// list and bar use the same target, with `Rise` publishing its actual progress through `motion` for the bar;
+    /// the page's `searching` changes without an animation, so the list's rows are not cross-faded.
     var up = false
+    /// The floating field's actual animated progress. The shell's bar follows it instead of starting an independent
+    /// fade that could run while the field is still in the bar's row on a busy main thread.
+    var motion = 0.0
     /// On the way up and not laid out for searching yet: what `ListShift.arrived` does it for. `setCompact` clears it
     /// either way, so a slide still at the top as a search closes is not taken for an arrival.
     @ObservationIgnored var rising = false
@@ -71,6 +76,7 @@ import UIKit
     @ObservationIgnored fileprivate weak var probe: UIView?
     @ObservationIgnored private weak var foundList: UIScrollView?
     @ObservationIgnored private var folded = false
+    @ObservationIgnored private var refoldAfterClose = false
 
     /// Starts the page with the field folded away (2026-11-01 user request: it shows on a pull, like Mail): the list
     /// scrolled by the field's band, once it is laid out, if it still sits at its top. A list too short to scroll gets
@@ -100,7 +106,13 @@ import UIKit
     }
 
     /// The page came back to the front: folded again if the list sits at its top with the field out (#740).
+    /// If a search is still closing, wait for its field to leave instead of consuming the one-shot fold (#10166).
     func refold() {
+        if floating, !up {
+            refoldAfterClose = true
+            return
+        }
+        refoldAfterClose = false
         folded = false
         foldOnce()
     }
@@ -147,6 +159,11 @@ import UIKit
     func showField() {
         guard let list = listScrollView else { return }
         list.setContentOffset(CGPoint(x: list.contentOffset.x, y: -list.adjustedContentInset.top), animated: false)
+    }
+
+    /// Publish only new frame values: a list redraw at rest must not redraw the field or bar too.
+    func updateMotion(_ progress: Double) {
+        if motion != progress { motion = progress }
     }
 
     /// The list's scroll view: the largest collection view in the page the probe is in (List is one). Kept once found
@@ -292,19 +309,24 @@ struct AgentsSearchOverlay: View {
                 .padding(.leading, Theme.Space.page)
                 .frame(height: AgentsHeader.band, alignment: .top)
                 .searchTraceMark("float")
-                .modifier(Rise(progress: header.up ? 1 : 0, from: from, to: 0))
+                .modifier(Rise(progress: header.up ? 1 : 0, from: from, to: 0, onProgress: header.updateMotion))
             }
         }
     }
 
-    /// The field between the row (0) and the bar's row (1).
+    /// The field between the row (0) and the bar's row (1). Its actual progress also drives the shell bar's fade.
     private struct Rise: ViewModifier, Animatable {
         var progress: Double
         var from: CGFloat
         var to: CGFloat
+        var onProgress: (Double) -> Void
         var animatableData: Double {
             get { progress }
-            set { progress = newValue }
+            set {
+                progress = newValue
+                let report = onProgress, value = newValue
+                DispatchQueue.main.async { report(value) }
+            }
         }
 
         func body(content: Content) -> some View {
@@ -573,7 +595,7 @@ struct AgentsTopBarPlace: ViewModifier {
                 if header.bar != y { header.bar = y }
             }
             // The field on its way up into the bar's row, animated (`AgentsHeader.up`).
-            .modifier(AgentsTopBarFade(progress: header.up ? 1 : 0,
+            .modifier(AgentsTopBarFade(progress: header.motion, resting: !header.floating,
                                        gone: AgentsTopBarFade.gone(bar: header.bar, field: header.listTop + AgentsHeader.room(shell: true))))
     }
 }
@@ -581,14 +603,12 @@ struct AgentsTopBarPlace: ViewModifier {
 
 /// The shell's top bar while the field comes up into its row: gone before the field gets to it, back only once the
 /// field has gone below it. `progress` is the same animated value as the field's (`AgentsSearchOverlay`).
-struct AgentsTopBarFade: ViewModifier, Animatable {
+struct AgentsTopBarFade: ViewModifier {
     var progress: Double
+    /// At rest the bar is fully visible, even if the field's last published animation value never arrived.
+    var resting = false
     /// The share of the field's way up by which the bar has gone (`gone(bar:field:)`).
     var gone = Self.standard
-    var animatableData: Double {
-        get { progress }
-        set { progress = newValue }
-    }
 
     /// At the standard text size the field reaches the bar's bottom at about 0.4 of its way (150 → 62 pt, the bar
     /// 62–112): the bar is gone by 0.35.
@@ -605,6 +625,6 @@ struct AgentsTopBarFade: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        content.opacity(max(0, 1 - progress / gone))
+        content.opacity(resting ? 1 : max(0, 1 - progress / gone))
     }
 }
