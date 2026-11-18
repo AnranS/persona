@@ -12,9 +12,8 @@ type SparkSeries = { color: string; read: (point: MetricPoint) => number | undef
 const CPU: SparkSeries[] = [{ color: "var(--accent)", read: (p) => p.cpu }];
 const NETWORK: SparkSeries[] = [{ color: "var(--orange)", read: (p) => p.rx }, { color: "var(--ai)", read: (p) => p.tx }];
 
-/** The same current-value summaries as the Machines page. No extra requests: all history comes from /metrics.
- *  Compact cards use current CPU, memory, disk and network values without the hour plots or token cell. */
-export function MachineMetricsSummary({ machine, metrics, compact = false }: { machine: Machine; metrics?: MachineMetrics; compact?: boolean }) {
+/** The same three summaries as the phone. No extra requests: all history comes from /metrics. */
+export function MachineMetricsSummary({ machine, metrics }: { machine: Machine; metrics?: MachineMetrics }) {
   // Either source can already know about a disconnect while the other still has its previous sample.
   if (!machine.online || metrics?.online === false) return null;
   const latest = metrics?.latest;
@@ -22,9 +21,8 @@ export function MachineMetricsSummary({ machine, metrics, compact = false }: { m
   const total = positive(latest?.mem_total) ?? positive(metrics?.system?.memory) ?? positive(machine.system?.memory);
   const cpu = known(latest?.cpu);
   const memory = memPercent(known(latest?.mem_used), total);
-  const disk = memPercent(known(latest?.disk_used), known(latest?.disk_total));
   const now = Date.now() / 1000;
-  const usage = compact ? undefined : metrics?.usage;
+  const usage = metrics?.usage;
   const minute = Math.floor(now / 60) * 60;
   const tokenPoints = usage?.recent.map((cpu, i) => ({ t: minute - (usage.recent.length - 1 - i) * 60, cpu })) ?? [];
   // The metrics are one row when each column holds the widest value it can show ("↓ 1023 MB/s", 97.7 px at the standard
@@ -33,21 +31,18 @@ export function MachineMetricsSummary({ machine, metrics, compact = false }: { m
   // ("↓ 2.58 M…") and read as another number. Below that two columns, never three with one left alone on a second row
   // (a card at 1280 px, 428 px inside, keeps its four in a row).
   return (
-    <div className={cx("@container", compact ? "px-3 pt-1 pb-3" : "px-4 py-3")}>
-      <div className={cx("grid grid-cols-2 gap-3", compact ? "@min-[26.75rem]:grid-cols-4" : usage ? "@min-[26.75rem]:grid-cols-4" : "@min-[19.875rem]:grid-cols-3")} data-testid="machine-metrics-summary" data-compact={compact || undefined}>
+    <div className="@container px-4 py-3">
+      <div className={cx("grid grid-cols-2 gap-3", usage ? "@min-[26.75rem]:grid-cols-4" : "@min-[19.875rem]:grid-cols-3")} data-testid="machine-metrics-summary">
         <MetricCell label="CPU" value={percent(cpu)} detail={t("machines.load_value", { value: load(known(latest?.load)) })} severity={level(cpu, 75, 90)}>
-          {!compact && <Spark points={points} end={now} />}
+          <Spark points={points} end={now} />
         </MetricCell>
         <MetricCell label={t("machines.memory")} value={percent(memory)} detail={usedOfTotal(known(latest?.mem_used), total)} severity={level(memory, 80, 90)}>
-          {!compact && <Spark points={points} end={now} series={[{ color: "var(--green)", read: (p) => memPercent(known(p.mem), total) }]} label={t("machines.memory_last_hour")} />}
+          <Spark points={points} end={now} series={[{ color: "var(--green)", read: (p) => memPercent(known(p.mem), total) }]} label={t("machines.memory_last_hour")} />
         </MetricCell>
-        {compact && (
-          <MetricCell label={t("machines-machinedetail.disk")} value={percent(disk)} detail={usedOfTotal(known(latest?.disk_used), known(latest?.disk_total))} severity={level(disk, 80, 90)} />
-        )}
         <MetricCell label={t("machines.network")} value={`↓ ${rate(known(latest?.net_rx))}`} detail={`↑ ${rate(known(latest?.net_tx))}`} valueColor="var(--orange)" detailColor="var(--ai)">
-          {!compact && <Spark points={points} end={now} series={NETWORK} minimumMax={1} label={t("machines.network_last_hour")} />}
+          <Spark points={points} end={now} series={NETWORK} minimumMax={1} label={t("machines.network_last_hour")} />
         </MetricCell>
-        {!compact && usage && (
+        {usage && (
           <MetricCell label={t("machines-usage.tokens")} value={t("machines-usage.per_minute_value", { n: formatTokens(usage.per_minute) })} detail={t("machines-usage.today_value", { n: formatTokens(totalTokens(usage.today)) })}>
             <Spark points={tokenPoints} end={now} minimumMax={1} label={t("machines-usage.tokens_last_hour")} />
           </MetricCell>
@@ -58,7 +53,7 @@ export function MachineMetricsSummary({ machine, metrics, compact = false }: { m
 }
 
 function MetricCell({ label, value, detail, severity = "normal", valueColor, detailColor, children }: {
-  label: string; value: string; detail: string; severity?: Level; valueColor?: string; detailColor?: string; children?: ReactNode;
+  label: string; value: string; detail: string; severity?: Level; valueColor?: string; detailColor?: string; children: ReactNode;
 }) {
   return (
     <div className="min-w-0">
@@ -70,7 +65,7 @@ function MetricCell({ label, value, detail, severity = "normal", valueColor, det
       <div className="min-h-4 truncate text-xs text-ink-3 tabular-nums" title={detail}>
         {detailColor ? <><span style={{ color: detailColor }}>{detail.slice(0, 1)}</span>{detail.slice(1)}</> : detail}
       </div>
-      {children && <div className="mt-2">{children}</div>}
+      <div className="mt-2">{children}</div>
     </div>
   );
 }

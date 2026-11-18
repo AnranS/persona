@@ -39,7 +39,7 @@ import { MarkSeenDialog } from "./AgentMenus";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
 import { OverviewCards } from "./extensions/ExtensionSlots";
-import { OverviewMachineCards } from "./OverviewMachineCards";
+import { OverviewMachineCards, OverviewMachineRows, OverviewMachineViewSwitch, useOverviewMachineView } from "./OverviewMachineCards";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
@@ -54,6 +54,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   useTapGuardView(overviewTapSurface, currentViewId());
   // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
   const machines = useScopedMachines();
+  const [machineView, chooseMachineView] = useOverviewMachineView();
   const interactions = useScopedInteractions();
   const answered = useStore((s) => s.answered);
   // a card answered here moves its agent out of "Stuck" at once, not at the hub's next push (#4286)
@@ -251,8 +252,19 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
           )}
 
           {loaded && machines.length > 0 && (
-            <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
-              <OverviewMachineCards machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
+            <Group
+              title={t("home.computers")}
+              count={machines.length}
+              right={
+                <div className="flex items-center gap-2 self-center">
+                  <a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="whitespace-nowrap text-[12px] text-ink-3 hover:text-ink-2 @max-[21.75rem]:hidden">{t("home.monitor")}</a>
+                  <OverviewMachineViewSwitch value={machineView} onChange={chooseMachineView} />
+                </div>
+              }
+            >
+              {machineView === "cards"
+                ? <OverviewMachineCards machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
+                : <OverviewMachineRows machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />}
             </Group>
           )}
         </div>
