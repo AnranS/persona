@@ -101,6 +101,10 @@ final class ComposerExpandTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         assertCorner()
         shot("04-collapsed")
+        // The keyboard can be visible before the sheet has returned focus to the box; do not lose the first keystroke.
+        let focused = NSPredicate { _, _ in self.field.value(forKey: "hasKeyboardFocus") as? Bool == true }
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: focused, evaluatedWith: nil)], timeout: 5), .completed,
+                       "collapse did not return keyboard focus to the composer")
         field.typeText("!")
         XCTAssertEqual(field.value as? String, scrollingDraft + "!", "the cursor did not return to the end")
 
