@@ -70,11 +70,7 @@ func (s *Service) runReceiptRecheck(ctx context.Context, w delayedWait, persiste
 	token := randomHex(16)
 	claimed, ok, err := s.claimDelayedWait(ctx, w.ID, token, time.Now())
 	if err != nil {
-		if ctx.Err() == nil {
-			s.logf("claim receipt recheck %s: %v", w.ID, err)
-			w.At = delayedWaitRetryAt()
-			s.armReceiptRecheck(w, true)
-		}
+		s.rearmReceiptRecheckAfterClaimError(ctx, w, err)
 		return
 	}
 	if !ok {
@@ -121,6 +117,26 @@ func sameOptionalTime(a, b *time.Time) bool {
 		return a == nil && b == nil
 	}
 	return a.Equal(*b)
+}
+
+func (s *Service) rearmReceiptRecheckAfterClaimError(ctx context.Context, w delayedWait, why error) {
+	if ctx.Err() != nil {
+		return
+	}
+	s.logf("claim receipt recheck %s: %v", w.ID, why)
+	nextAt := delayedWaitRetryAt()
+	rescheduled, err := s.rescheduleDelayedWait(ctx, w, nextAt, false)
+	if err != nil {
+		s.logf("rearm receipt recheck %s: %v", w.ID, err)
+		time.AfterFunc(delayedWaitRecoveryDelay, func() { s.rearmReceiptRecheckAfterClaimError(s.runCtx(), w, why) })
+		return
+	}
+	if rescheduled {
+		// The failed callback may already have removed or replaced its map entry. Persist first, then force the new
+		// timer past any older entry so this recheck cannot disappear until the next manager restart.
+		w.At, w.replace = nextAt, true
+		s.armReceiptRecheck(w, true)
+	}
 }
 
 func (s *Service) retryClaimedReceiptRecheck(ctx context.Context, w delayedWait, token string) {

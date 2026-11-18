@@ -39,18 +39,15 @@ func (s *Service) runScheduledLimitRetry(ctx context.Context, w delayedWait, per
 		s.rearmScheduledLimitRetry(ctx, w, persisted, err)
 		return
 	}
-	if !due {
-		if durable {
-			if err := s.cancelPendingDelayedWait(ctx, w.ID); err != nil {
-				s.logf("cancel scheduled retry %s: %v", w.ID, err)
-			}
-		}
-		return
-	}
 	if !durable {
+		if !due {
+			return
+		}
 		s.dispatchScheduledLimitRetry(cur, w)
 		return
 	}
+	// A durable cancellation takes the same claim as a dispatch and revalidates under it. An unclaimed waiter must
+	// never delete a wait another manager is about to claim.
 	token := randomHex(16)
 	claimed, ok, err := s.claimDelayedWait(ctx, w.ID, token, time.Now())
 	if err != nil {
@@ -132,7 +129,20 @@ func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, p
 		return
 	}
 	s.logf("scheduled retry %s: %v", w.ID, why)
-	w.At = delayedWaitRetryAt()
+	nextAt := delayedWaitRetryAt()
+	if persisted || s.store != nil && s.store() != nil {
+		rescheduled, err := s.rescheduleDelayedWait(ctx, w, nextAt, !persisted)
+		if err != nil {
+			s.logf("rearm scheduled retry %s: %v", w.ID, err)
+			time.AfterFunc(delayedWaitRecoveryDelay, func() { s.rearmScheduledLimitRetry(s.runCtx(), w, persisted, why) })
+			return
+		}
+		if !rescheduled {
+			return
+		}
+		persisted = true
+	}
+	w.At = nextAt
 	go s.runScheduledLimitRetry(ctx, w, persisted)
 }
 

@@ -109,6 +109,34 @@ func (s *Service) persistScheduledRetry(ctx context.Context, w delayedWait) erro
 	})
 }
 
+// rescheduleDelayedWait persists a backoff before its local timer is armed. The expected deadline and pending state
+// fence newer claims; a missing row is recreated only while the initial persist is still unacknowledged.
+func (s *Service) rescheduleDelayedWait(ctx context.Context, w delayedWait, nextAt time.Time, allowInsert bool) (rescheduled bool, err error) {
+	err = s.updateDelayedWaits(ctx, func(doc *delayedWaitDoc) (bool, error) {
+		rescheduled = false
+		for i := range doc.Waits {
+			existing := &doc.Waits[i]
+			if existing.ID != w.ID {
+				continue
+			}
+			if existing.Claim != "" || existing.Unknown || !existing.At.Equal(w.At) {
+				return false, nil
+			}
+			existing.At = nextAt
+			rescheduled = true
+			return true, nil
+		}
+		if !allowInsert {
+			return false, nil
+		}
+		w.At = nextAt
+		doc.Waits = append(doc.Waits, w)
+		rescheduled = true
+		return true, nil
+	})
+	return rescheduled, err
+}
+
 // persistReceiptRecheck keeps one earliest pending look per agent and binding. A new task/reopen generation replaces
 // its older pending look and marks the local timer to replace its map entry too. A claimed look is separate: its handler
 // may schedule the next look without the old completion deleting it. arm is false only for a duplicate of a running look.
@@ -177,18 +205,6 @@ func (s *Service) claimDelayedWait(ctx context.Context, id, token string, now ti
 		return false, nil
 	})
 	return claimed, ok, err
-}
-
-func (s *Service) cancelPendingDelayedWait(ctx context.Context, id string) error {
-	return s.updateDelayedWaits(ctx, func(doc *delayedWaitDoc) (bool, error) {
-		for i, w := range doc.Waits {
-			if w.ID == id && w.Claim == "" && !w.Unknown {
-				doc.Waits = append(doc.Waits[:i], doc.Waits[i+1:]...)
-				return true, nil
-			}
-		}
-		return false, nil
-	})
 }
 
 // completeDelayedWait cannot remove a newer claim or a claim recovery has marked unknown.

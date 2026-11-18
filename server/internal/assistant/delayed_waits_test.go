@@ -112,6 +112,17 @@ func TestScheduledRetryDoesNotDispatchUnclaimedAfterAmbiguousSave(t *testing.T) 
 	}
 	second := newServiceOn(t, n, st)
 	second.restoreDelayedWaits(context.Background())
+	if got := n.sent(); got != 0 {
+		t.Fatalf("restored retry ran before its persisted backoff: %d sends", got)
+	}
+	if err := second.updateDelayedWaits(context.Background(), func(doc *delayedWaitDoc) (bool, error) {
+		doc.Waits[0].At = time.Now().Add(-time.Second)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	third := newServiceOn(t, n, st)
+	third.restoreDelayedWaits(context.Background())
 	waitFor(t, "the persistently saved retry to dispatch once", func() bool { return n.sent() == 1 })
 }
 
@@ -594,6 +605,103 @@ func TestReceiptRecheckRetriesReleaseFailure(t *testing.T) {
 	waitFor(t, "the claimed recheck to become pending after the release recovers", func() bool {
 		doc, err := second.readDelayedWaits(context.Background())
 		return err == nil && len(doc.Waits) == 1 && doc.Waits[0].Claim == ""
+	})
+}
+
+func TestScheduledRetryRearmPersistsBackoffDeadline(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	first, n, w := newDelayedRetryFixture(t, st)
+	n.answerNode(DeviceSessionGet, func(string, json.RawMessage) (any, error) { return nil, errors.New("offline") })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	first.runScheduledLimitRetry(ctx, w, true)
+	doc, err := first.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 || !doc.Waits[0].At.After(w.At) {
+		t.Fatalf("rearm did not persist its backoff deadline: %+v, %v", doc.Waits, err)
+	}
+	n.mu.Lock()
+	delete(n.nodes, DeviceSessionGet)
+	n.mu.Unlock()
+	second := newServiceOn(t, n, st)
+	second.restoreDelayedWaits(context.Background())
+	select {
+	case <-time.After(75 * time.Millisecond):
+	}
+	if got := n.sent(); got != 0 {
+		t.Fatalf("restored retry ran before its backoff: %d sends", got)
+	}
+	if err := second.updateDelayedWaits(context.Background(), func(doc *delayedWaitDoc) (bool, error) {
+		doc.Waits[0].At = time.Now().Add(-time.Second)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	third := newServiceOn(t, n, st)
+	third.restoreDelayedWaits(context.Background())
+	waitFor(t, "the retry after its backoff expires", func() bool { return n.sent() == 1 })
+}
+
+func TestScheduledRetryCancellationIsSerializedWithClaim(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	first, n, w := newDelayedRetryFixture(t, st)
+	setTasks(first, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
+	gate := &compareGateStore{Store: st}
+	gate.before = func(int) error {
+		setTasks(first, Task{ID: "p", Title: "Example", Prompt: "go", Repeat: repeatInterval, EveryMinutes: 30,
+			At: time.Now().Add(time.Hour), Enabled: true, MachineID: "server"})
+		return nil
+	}
+	first.store = func() Store { return gate }
+	first.runScheduledLimitRetry(context.Background(), w, true)
+	second := newServiceOn(t, n, st)
+	second.runScheduledLimitRetry(context.Background(), w, true)
+	if got := n.sent(); got != 1 {
+		t.Fatalf("an unclaimed cancellation deleted the wait another manager needed: %d sends", got)
+	}
+}
+
+func TestReceiptRecheckClaimErrorReplacesOlderTimer(t *testing.T) {
+	first, f, st, w := newReceiptWaitFixture(t, time.Now().Add(-time.Second))
+	gate := &compareGateStore{Store: st}
+	gate.before = func(call int) error {
+		if call == 1 {
+			return errors.New("claim store unavailable")
+		}
+		return nil
+	}
+	second := newServiceOn(t, f, gate)
+	copyReceiptFixtureTasks(first, second)
+	ref := SessionRef{MachineID: "box", SessionID: "s1"}
+	second.tasks.mu.Lock()
+	second.tasks.limitLooks = map[SessionRef]time.Time{ref: time.Now().Add(-time.Hour)}
+	second.tasks.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	second.running.Store(&ctx)
+	second.runReceiptRecheck(ctx, w, true)
+	doc, err := second.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 || !doc.Waits[0].At.After(w.At) {
+		t.Fatalf("claim error did not persist the retry deadline: %+v, %v", doc.Waits, err)
+	}
+	second.tasks.mu.Lock()
+	localAt := second.tasks.limitLooks[ref]
+	second.tasks.mu.Unlock()
+	if !localAt.Equal(doc.Waits[0].At) {
+		t.Fatalf("older map entry suppressed the rearm: local=%v durable=%v", localAt, doc.Waits[0].At)
+	}
+	if err := second.updateDelayedWaits(context.Background(), func(doc *delayedWaitDoc) (bool, error) {
+		doc.Waits[0].At = time.Now().Add(-time.Second)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err = second.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 {
+		t.Fatal(err)
+	}
+	second.armReceiptRecheck(doc.Waits[0], true)
+	waitFor(t, "the receipt after the claim store recovers", func() bool {
+		return strings.Count(feedKinds(second, "conv1"), "receipt") == 1
 	})
 }
 
