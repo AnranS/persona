@@ -10649,7 +10649,7 @@ def _fleet_background(s):
 
 def mock_fleet():
     """The fleet as the hub computes it, narrowed by MOCK_FLEET."""
-    mode = MOCK_FLEET or "empty"
+    mode = MOCK_FLEET or "all"
     sessions = {(s["machine_id"], s["session_id"]): s for s in all_sessions()}
     needs, working, unread, asked = [], [], [], set()
     if mode in ("1", "all", "permission"):
@@ -10705,7 +10705,8 @@ def set_fleet_mode(mode):
         return {"error": "mode is one of " + ", ".join(FLEET_MODES)}, 400
     MOCK_FLEET = "" if mode == "off" else mode
     push_fleet()
-    return {"mode": MOCK_FLEET, "fleet": mock_fleet()}, 200
+    fleet = mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}
+    return {"mode": MOCK_FLEET, "fleet": fleet}, 200
 
 
 def mock_notify(interaction_id):
