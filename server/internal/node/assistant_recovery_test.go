@@ -221,18 +221,16 @@ func TestAssistantCodexStructuredRecoveryClasses(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.notification("turn/completed", params)
-			if !tc.want {
-				select {
-				case <-called:
-					t.Fatal("a transient error outside #3204 entered model recovery")
-				case <-time.After(50 * time.Millisecond):
-				}
-				return
-			}
 			select {
 			case <-called:
-			case <-time.After(2 * time.Second):
-				t.Fatal("the structured 5xx did not start a same-model recovery")
+				t.Fatal("model service error bypassed the durable scheduler")
+			default:
+			}
+			p.mu.Lock()
+			busy := p.busy
+			p.mu.Unlock()
+			if busy {
+				t.Fatal("failed turn held the execution process busy")
 			}
 		})
 	}
@@ -380,7 +378,7 @@ while IFS= read -r line; do
     *'"type":"user"'*)
       printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream"}' ;;
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged"}' ;;
   esac
 done
 `
@@ -392,8 +390,8 @@ done
 		t.Fatal(err)
 	}
 	f.idle(t, id)
-	if got := strings.Count(f.file("user.jsonl"), `"type":"user"`); got != 4 {
-		t.Fatalf("two models with one same-model retry each made %d requests, want 4", got)
+	if got := strings.Count(f.file("user.jsonl"), `"type":"user"`); got != 2 {
+		t.Fatalf("two safeguarded models made %d requests, want 2", got)
 	}
 	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" || p.replyModel != "fallback-model" || p.busy {
 		t.Fatalf("the exhausted recovery did not retain the final model and error state: %+v", p)
@@ -479,6 +477,8 @@ func TestAssistantProcessExitClearsItsRecovery(t *testing.T) {
 	f := cliTest(t)
 	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
+echo '{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[{"value":"default"},{"value":"fallback-model"}]}}}'
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
 while IFS= read -r line; do
   case "$line" in *'"type":"user"'*)
     printf '%s\n' "$line" >> "$CLI_FAKE_DIR/user.jsonl"
@@ -486,7 +486,7 @@ while IFS= read -r line; do
     count=$((count+1))
     echo "$count" > "$CLI_FAKE_DIR/attempts"
     if [ "$count" -eq 1 ]; then
-      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 unavailable"}'
     else
       exit 0 # the recovered turn ends without any result event
     fi ;;
@@ -500,14 +500,16 @@ done
 	if err != nil {
 		t.Fatal(err)
 	}
-	cliWait(t, "the exited recovery process to publish its final state", func() bool {
+	f.idle(t, id)
+	if got := strings.Count(f.file("user.jsonl"), `"type":"user"`); got != 1 {
+		t.Fatalf("temporary failure was immediately replayed: %d sends", got)
+	}
+	f.n.stopAssistant(id)
+	cliWait(t, "the exited process to publish its final state", func() bool {
 		f.n.mu.Lock()
 		defer f.n.mu.Unlock()
-		return f.n.procs[id] == nil && f.n.recoveries[id] == nil && strings.Count(f.file("user.jsonl"), `"type":"user"`) >= 2
+		return f.n.procs[id] == nil && f.n.recoveries[id] == nil
 	})
-	if sessions := f.n.assistantSessions(); len(sessions) != 0 {
-		t.Fatalf("an exited process left a working recovery placeholder: %+v", sessions)
-	}
 }
 
 func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
@@ -534,7 +536,7 @@ func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
-	if !n.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
+	if !n.recoverAssistantResult(p, true, "API Error: safeguards flagged") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {
@@ -839,7 +841,7 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoverySend = send })
-	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
+	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged") {
 		t.Fatal("the failed turn did not enter recovery")
 	}
 	select {

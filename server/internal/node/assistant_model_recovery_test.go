@@ -294,9 +294,9 @@ func TestDefaultModelRecoveryReturnsAfterProbe(t *testing.T) {
 			st, _ := n.state.get(id)
 			st.Model = requested
 			n.state.put(id, st)
-			p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: requested}}
+			p := &assistantProc{id: id, agent: "codex", launcher: "claude", model: modelExecution{Model: requested}}
 			n.procs[id] = p
-			const failure = "API Error: 503 no eligible upstream account is currently available"
+			const failure = "API Error: safeguards flagged"
 			if !n.recoverAssistantResult(p, true, failure, "", assistantRecordKind) {
 				t.Fatal("the first default-model failure was not recovered")
 			}
@@ -328,7 +328,7 @@ func TestDefaultModelRecoveryReturnsAfterProbe(t *testing.T) {
 			if st, _ := n.state.get(id); st.ModelRecovery == nil || st.ModelRecovery.From != requested || st.ModelRecovery.ProbeFrom != "primary-model" {
 				t.Fatalf("the default probe identity was not persisted: %+v", st.ModelRecovery)
 			}
-			fp := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
+			fp := &assistantProc{id: id, agent: "codex", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
 			n.mu.Lock()
 			n.procs[id] = fp
 			n.mu.Unlock()
