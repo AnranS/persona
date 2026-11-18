@@ -3,10 +3,17 @@ package persona.platform.shortcuts
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import persona.core.domain.fleet.FleetSummary
 
 /**
@@ -14,18 +21,49 @@ import persona.core.domain.fleet.FleetSummary
  * works. A tap opens the only agent when there is one, otherwise Agents.
  */
 class PersonaTileService : TileService() {
+    private val renderScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    /** A tap must still navigate if closing the shade destroys this service while restoration is pending. */
+    private val clickScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    @Volatile private var destroyed = false
+
+    override fun onCreate() {
+        super.onCreate()
+        destroyed = false
+    }
+
     override fun onStartListening() {
         super.onStartListening()
-        render()
+        val dependencies = SurfacesDependencies.of(this)
+        renderScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            dependencies.fleet().settled()
+            render()
+        }
     }
 
     override fun onClick() {
         super.onClick()
         val dependencies = SurfacesDependencies.of(this)
-        val feed = dependencies.fleet()
-        val intent = SurfaceLinks.fleet(this, feed.paired.value, feed.state.value) { dependencies.sessions().assistant(it) }
+        clickScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val feed = dependencies.fleet()
+            feed.settled()
+            val intent = SurfaceLinks.fleet(applicationContext, feed.paired.value, feed.state.value) { dependencies.sessions().assistant(it) }
+            open(intent)
+        }
+    }
+
+    @Synchronized override fun onDestroy() {
+        destroyed = true
+        renderScope.cancel()
+        super.onDestroy()
+    }
+
+    @Synchronized private fun open(intent: Intent) {
+        if (destroyed) {
+            applicationContext.startActivity(intent)
+            return
+        }
         if (Build.VERSION.SDK_INT >= 34) {
-            startActivityAndCollapse(PendingIntent.getActivity(this, REQUEST, intent,
+            startActivityAndCollapse(PendingIntent.getActivity(applicationContext, REQUEST, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
         } else {
             @Suppress("DEPRECATION", "StartActivityAndCollapseDeprecated")
