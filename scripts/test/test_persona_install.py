@@ -74,7 +74,8 @@ HUB_PROGRAMS = ('persona-hub', 'persona-manager')
 
 class PersonaInstallTests(unittest.TestCase):
     def run_install(self, home, initial='fresh', extra=None, corrupt=False, link=None,
-                    node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1', args=()):
+                    node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1', args=(),
+                    github_latest=False):
         target = {'Darwin': 'darwin', 'Linux': 'linux'}[system or platform.system()] + '-' + {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
@@ -100,6 +101,8 @@ class PersonaInstallTests(unittest.TestCase):
                 (downloads / (program + '-' + target + '.gz')).write_bytes(program_data)
                 sums += hashlib.sha256(program_data).hexdigest() + '  ' + program + '-' + target + '.gz\n'
             (downloads / 'SHA256SUMS').write_text(sums)
+            if github_latest:
+                (downloads / 'latest.json').write_text(json.dumps({'version': release}))
             class Handler(SimpleHTTPRequestHandler):
                 def __init__(self, *args, **kwargs):
                     super().__init__(*args, directory=str(downloads), **kwargs)
@@ -110,7 +113,9 @@ class PersonaInstallTests(unittest.TestCase):
             thread.start()
             try:
                 env = {key: value for key, value in os.environ.items() if not key.startswith(('PERSONA_', FORMER_PREFIX))}
-                env.update({'HOME': str(home), 'PERSONA_DL': f'http://127.0.0.1:{server.server_port}',
+                env.update({'HOME': str(home),
+                            'PERSONA_DL': ('https://github.com/example/project/releases/latest/download' if github_latest
+                                           else f'http://127.0.0.1:{server.server_port}'),
                             FORMER_PREFIX + 'DL': 'https://invalid.example.test', 'PERSONA_SKIP_HERDR': '1',
                             'PERSONA_ROLE': 'hub', 'PERSONA_ADMIN_ACCESS': 'lan'})
                 # The system's tools only besides the fixtures: nothing of the machine running the tests is run.
@@ -121,6 +126,24 @@ class PersonaInstallTests(unittest.TestCase):
                     uname.write_text(f'#!/bin/sh\ncase "$1" in -s) echo {system} ;; -m) echo {platform.machine()} ;; esac\n')
                     uname.chmod(0o755)
                     env['PATH'] = f'{uname.parent}:{env["PATH"]}'
+                if github_latest:
+                    commands = downloads / 'github-commands'
+                    commands.mkdir()
+                    pinned = 'https://github.com/example/project/releases/download/v' + release
+                    curl = commands / 'curl'
+                    curl.write_text(f'''#!/bin/sh
+printf '%s\n' "$2" >> "$HOME/curl-calls"
+url="$2"
+case "$url" in
+  https://github.com/example/project/releases/latest/download/latest.json) path=latest.json ;;
+  https://github.com/example/project/releases/latest/download/*) exit 22 ;;
+  {pinned}/*) path=${{url#{pinned}/}} ;;
+  *) exit 22 ;;
+esac
+exec /usr/bin/curl -fsSL "http://127.0.0.1:{server.server_port}/$path" -o "$4"
+''')
+                    curl.chmod(0o755)
+                    env['PATH'] = f'{commands}:{env["PATH"]}'
                 for key in ('BASH_ENV', 'ENV', 'ZDOTDIR', 'XDG_CONFIG_HOME'):  # nothing of the machine's own setup
                     env.pop(key, None)
                 # Nor its language: install.sh answers in LC_ALL's, then LANG's, and the tests read English (#6938).
@@ -151,6 +174,20 @@ class PersonaInstallTests(unittest.TestCase):
                 self.assertEqual(os.readlink(binary.parent / (FORMER_NAME + 'd')), 'personad')
             # Hub setup is safe to repeat on upgrades.
             self.assertEqual((home / 'personad-calls').read_text().count('hub setup\n'), 2)
+
+    def test_github_latest_is_pinned_before_checksums_and_archives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            result = self.run_install(home, release='1.2.3', github_latest=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            pinned = 'https://github.com/example/project/releases/download/v1.2.3/'
+            self.assertGreaterEqual(len(calls), 3)
+            for url in calls[1:]:
+                self.assertTrue(url.startswith(pinned), url)
+            self.assertTrue(any(url.endswith('/SHA256SUMS') for url in calls))
+            self.assertTrue(any('/personad-' in url for url in calls))
 
     def test_installer_text_catalog_has_every_language(self):
         text = INSTALL.read_text(encoding='utf-8')
@@ -344,6 +381,16 @@ printf 'catalog placeholders preserved in all languages\n'
             installer = (Path(directory) / 'install.sh').read_text()
         download = next(line for line in installer.splitlines() if line.startswith('DL='))
         self.assertEqual(download, 'DL="${PERSONA_DL:-' + update_url + '}"')
+
+    def test_tag_publication_sets_publish_version_from_the_tag(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        assignment = next(line for line in publisher.splitlines() if line.startswith('VERSION='))
+        result = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$VERSION"'],
+                                env={'PATH': '/usr/bin:/bin', 'VERSION': 'wrong-version',
+                                     'PERSONA_RELEASE_VERSION': '1.2.3'},
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '1.2.3')
 
     def test_publish_fixture_indexes_only_current_product_artifacts(self):
         import shutil

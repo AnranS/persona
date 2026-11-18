@@ -262,7 +262,7 @@ def drop_missing_helpers(assets, state_dir):
     return [dict(item, path=str(path)) if item["name"] == "latest.json" else item for item in assets]
 
 
-def check_release_manifest(assets, repository=None):
+def check_release_manifest(assets, repository=None, expected_version=None):
     """A receipt with latest.json (the hub's) is what every release hub installs from once it is uploaded: latest.json
     must describe the downloads uploaded with it, each must be its build, and the personad among them that runs here
     must say its version and build. For a GitHub tag publication, that binary must also carry the Release installer's
@@ -283,6 +283,8 @@ def check_release_manifest(assets, repository=None):
     version, build = manifest.get("version"), manifest.get("build")
     if not isinstance(version, str) or not version or not isinstance(build, int) or not re.fullmatch(r"[0-9]{12}", str(build)):
         raise ConfigError("latest.json has no version or build number")
+    if expected_version is not None and version != expected_version:
+        raise ConfigError("latest.json reports version %s, not the Release tag's %s" % (version, expected_version))
     listed = [("personad", plat, item) for plat, item in (manifest.get("files") or {}).items()]
     for group in ("programs", "nodes"):
         for program, platforms in (manifest.get(group) or {}).items():
@@ -535,6 +537,20 @@ def check_beta_manifest(assets, version):
         raise ConfigError("beta latest.json must carry this beta version/channel")
 
 
+def finish_publication(config, tag, commit, platform, assets):
+    upload(config["repository"], tag, assets)
+    # Once remote digests verify, retain the exact receipt. A transient feed/promotion failure must not rebuild new
+    # binaries under the same Release asset names on the next tick.
+    checkpoint = [dict(item, sha256=hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()) for item in assets]
+    state = config["state_dir"] / "state.json"
+    write_state(state, {"tag": tag, "commit": commit, "platform": platform, "phase": "uploaded",
+                        "store_verified": True, "assets": checkpoint})
+    promote_latest(config["repository"], tag, assets, platform)
+    write_state(state, {"tag": tag, "commit": commit, "platform": platform, "phase": "complete", "assets": assets})
+    print("Published " + platform + " " + tag, flush=True)
+    return 0
+
+
 def publish_once(config, tag, commit):
     platform = config["platform"]
     state = config["state_dir"] / "state.json"
@@ -543,6 +559,9 @@ def publish_once(config, tag, commit):
         if previous.get("tag") == tag and previous.get("commit") == commit and previous.get("phase") == "complete":
             print("Already published " + platform + " " + tag, flush=True)
             return 0
+        if previous.get("tag") == tag and previous.get("commit") == commit and previous.get("phase") == "uploaded":
+            assets = read_receipt(state, commit)
+            return finish_publication(config, tag, commit, platform, assets)
     prepare_worktree(config, commit)
     fields = {key: str(config[key]) for key in ("repo", "worktree", "state_dir")}
     fields.update(tag=tag, commit=commit, version=tag[1:])
@@ -562,13 +581,9 @@ def publish_once(config, tag, commit):
         # A platform receipt is independent: Android has its signed APK and index, iOS only its store receipt.
         # Only the hub worker has latest.json; if present it can never point beta at a stable or another version.
         check_beta_manifest(assets, tag[1:])
-    check_release_manifest(assets, config["repository"])
+    check_release_manifest(assets, config["repository"], tag[1:])
     check_android_index(assets, tag[1:])
-    upload(config["repository"], tag, assets)
-    promote_latest(config["repository"], tag, assets, platform)
-    write_state(state, {"tag": tag, "commit": commit, "platform": platform, "phase": "complete", "assets": assets})
-    print("Published " + platform + " " + tag, flush=True)
-    return 0
+    return finish_publication(config, tag, commit, platform, assets)
 
 
 def invoke_agent(config, tag, commit):

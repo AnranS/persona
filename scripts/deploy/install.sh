@@ -512,6 +512,30 @@ fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+# GitHub's Latest pointer can move between requests. Read its manifest once, then keep checksums and every archive on
+# that immutable tag. Other download sources retain their existing layout.
+case "$DL" in
+https://github.com/*/releases/latest/download)
+	fetch "$DL/latest.json" "$tmp/latest.json" || fail download_failed "$DL/latest.json"
+	release_version="$(python3 - "$tmp/latest.json" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    manifest = json.load(source)
+version = manifest.get("version", "")
+if not isinstance(version, str):
+    raise ValueError("release version is not a string")
+version = version.removeprefix("v")
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+    raise ValueError("invalid stable release version")
+print(version)
+PY
+)" || fail download_failed "$DL/latest.json"
+	DL="${DL%/releases/latest/download}/releases/download/v$release_version"
+	;;
+esac
 fetch "$DL/SHA256SUMS" "$tmp/SHA256SUMS" || fail download_failed "$DL/SHA256SUMS"
 
 # get <name> <installed as>: downloads <name>.gz, checks it against SHA256SUMS and puts it in $DEST.

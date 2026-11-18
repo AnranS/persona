@@ -74,7 +74,9 @@ GitHub update base, or whose immutable tag manifest reports another version or
 build. It uploads `latest.json` after the files it lists. Only after those
 checks and remote digest verification succeed does stable hub publication mark
 the Release Latest; it never moves Latest to an older stable tag, and
-prereleases and other platforms never move that pointer.
+prereleases and other platforms never move that pointer. The uploaded checkpoint
+retains the exact verified receipt and digests, so a feed or promotion retry
+reuses it instead of rebuilding conflicting assets.
 
 For a Windows CLI ZIP, run `scripts/operations/windows_release.py` on Windows
 of the matching architecture before writing the artifact receipt. Include its

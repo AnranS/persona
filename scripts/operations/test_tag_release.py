@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 import urllib.request
 import zipfile
 from unittest.mock import patch
@@ -257,14 +258,14 @@ class TagReleaseTests(unittest.TestCase):
         return assets + [{"path": str(installer), "name": installer.name}]
 
     def publish_receipt(self, assets, tag, platform, label, remote_manifest=None, prerelease=False, events=None,
-                        stable_tags=None):
+                        stable_tags=None, feed_error=None):
         """Run the real deterministic publisher with only its build command, GitHub CLI and tag-feed HTTP mocked."""
         data = json.loads(self.config_path.read_text())
         state = self.root / ("publication-" + label)
         data.update(platform=platform, state_dir=str(state), receipt=str(state / "artifacts.json"))
         self.config_path.write_text(json.dumps(data))
         config = self.config()
-        state.mkdir(parents=True)
+        state.mkdir(parents=True, exist_ok=True)
         Path(config["receipt"]).write_text(json.dumps({"commit": self.commit, "assets": assets}))
         remote = [{"name": item["name"],
                    "digest": "sha256:" + tag_release.hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()}
@@ -275,6 +276,8 @@ class TagReleaseTests(unittest.TestCase):
 
         def run(command, **kwargs):
             if not command or command[0] != "gh":
+                if command and command[0] == "/usr/bin/true":
+                    events.append(("build", command))
                 return real_run(command, **kwargs)
             events.append(("github", command))
             return subprocess.CompletedProcess(command, 0)
@@ -294,6 +297,8 @@ class TagReleaseTests(unittest.TestCase):
         def fetch(request, **kwargs):
             url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
             events.append(("http", url))
+            if feed_error is not None:
+                raise feed_error
             if remote_manifest is None:
                 latest = next(item for item in assets if item["name"] == "latest.json")
                 body = Path(latest["path"]).read_bytes()
@@ -301,8 +306,15 @@ class TagReleaseTests(unittest.TestCase):
                 body = json.dumps(remote_manifest).encode()
             return io.BytesIO(body)
 
+        real_upload = tag_release.upload
+
+        def upload(repository, release_tag, release_assets, gh="gh"):
+            events.append(("upload", release_tag))
+            return real_upload(repository, release_tag, release_assets, gh)
+
         with patch.object(tag_release, "prepare_worktree",
                           side_effect=lambda config, commit: config["worktree"].mkdir(exist_ok=True)), \
+                patch.object(tag_release, "upload", side_effect=upload), \
                 patch.object(tag_release.subprocess, "run", side_effect=run), \
                 patch.object(tag_release.subprocess, "check_output", side_effect=output), \
                 patch("urllib.request.urlopen", side_effect=fetch):
@@ -352,6 +364,26 @@ class TagReleaseTests(unittest.TestCase):
         promotions = self.release_actions(newer, "edit")
         self.assertEqual(len(promotions), 1)
         self.assertEqual(promotions[0][3], "v0.10.0")
+
+    def test_hub_manifest_version_is_rejected_before_upload(self):
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "version"):
+            self.publish_receipt(self.release_receipt(version="0.2.0"), "v0.2.1", "hub",
+                                 "wrong-manifest-version", events=events)
+        self.assertFalse(any(kind == "upload" for kind, _ in events))
+        self.assertEqual(self.release_actions(events, "edit"), [])
+
+    def test_promotion_retry_reuses_the_verified_uploaded_receipt(self):
+        events = []
+        assets = self.release_receipt()
+        with self.assertRaisesRegex(tag_release.ConfigError, "latest.json"):
+            self.publish_receipt(assets, "v0.2.1", "hub", "retry-uploaded-receipt",
+                                 feed_error=urllib.error.URLError("offline"), events=events)
+        self.publish_receipt(assets, "v0.2.1", "hub", "retry-uploaded-receipt", events=events)
+        self.assertEqual(len([command for kind, command in events if kind == "build"]), 1)
+        self.assertEqual(len(self.release_actions(events, "edit")), 1)
+        state = json.loads((self.root / "publication-retry-uploaded-receipt" / "state.json").read_text())
+        self.assertEqual(state["phase"], "complete")
 
     def test_uploaded_tag_manifest_must_match_version_and_build_before_latest_promotion(self):
         assets = self.release_receipt()

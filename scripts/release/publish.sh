@@ -164,7 +164,7 @@ fi
 # The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one.
 BUILD="$(date -u +%Y%m%d%H%M)"
 # The nearest vX.Y.Z tag, a lightweight one too, as deploy.sh names its builds (#7201).
-VERSION="${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}"
+VERSION="${PERSONA_RELEASE_VERSION:-${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}}"
 COMMIT="$(git rev-parse HEAD)"
 # A release is the committed code: latest.json says which commit and lists every one it contains, and a hub
 # installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No regression"). Published with

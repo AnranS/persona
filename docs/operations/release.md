@@ -408,11 +408,11 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
   `deploy.sh` does the same when installing `personad` on each computer (`scripts/deploy/ensure-herdr.sh`; keep the two sets of steps aligned).
 
 - `release.sh` runs this after uploading TestFlight. The version is `<commit>-<build number>`, matching that TestFlight release; `NO_PUBLISH=1` only releases TestFlight,
-  and no publish happens without `publish.site_url` in config. Standalone: `./scripts/release/publish.sh`; `NO_DEPLOY=1` only builds and checks (outputs in `build-publish/`).
+  and no publish happens without `publish.site_url` in config. Standalone: `./scripts/release/publish.sh`; `NO_DEPLOY=1` only builds and checks (outputs in `build-publish/`). When the tag coordinator supplies `PERSONA_RELEASE_VERSION`, `publish.sh` instead uses that exact tag version, and the coordinator rejects a different manifest version before uploading assets.
 - Website-only changes (`site/`): `SITE_ONLY=1 ./scripts/release/publish.sh` skips a new build, fetches the small files of the currently published version (`VERSION`, `SHA256SUMS`, `latest.json`, `SLOT`, `install.sh`) and deploys them with the committed `site/`, leaving archives in R2 unchanged. Afterwards it checks the live small files are unchanged and every archive still exists (`HEAD` size). It refuses if there's no live `dl/SLOT` yet (a release from before R2); do one full publish first. **Don't run `wrangler deploy` directly in `site/`**: it makes `/dl/` and `install.sh` return 404 (`docs/lessons/server.md`).
 - Web dependencies always install from the official npm registry (`npm ci --registry=https://registry.npmjs.org/`, overridable with `PERSONA_NPM_REGISTRY`), ignoring local npm config. `package-lock.json` already points to the official registry; a locally configured mirror may lack packages (on 2026-11-06 it lacked `elkjs`, stopping release before web bundling).
 - Build four platforms (linux / darwin × amd64 / arm64), with `-tags "$(cat server/build-tags.txt)" -trimpath -s -w`, embedding `channel=release`, build number (UTC `YYYYMMDDHHMM`) and `updateURL`
-  (a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url` as written, e.g. a GitHub repository's `releases/latest/download`, else `<publish.site_url>/dl`; the script notes when the binaries look somewhere other than the site it publishes to; a hub's `hub.json` `update.url` replaces it at run time, `docs/operations/hub-update.md` ("Update source")). `install.sh` is rendered from that same update base, so its downloads and the binaries' update checks cannot silently select different feeds:
+  (a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url` as written, e.g. a GitHub repository's `releases/latest/download`, else `<publish.site_url>/dl`; the script notes when the binaries look somewhere other than the site it publishes to; a hub's `hub.json` `update.url` replaces it at run time, `docs/operations/hub-update.md` ("Update source")). `install.sh` is rendered from that same update base, so its downloads and the binaries' update checks cannot silently select different feeds. For GitHub's moving Latest base, the installer reads `latest.json` once and pins `SHA256SUMS` and every archive to that version's immutable tag:
   - **Web bundled into the binary** (`server/internal/hub/webdist`, `go:embed`): the hub uses it when the hub machine has no `~/.persona/web`; otherwise it still uses the directory.
     The plain copy is privacy-scanned first, then its hashed assets and `third-party-licenses.txt` are kept gzipped (`go run ./internal/webasset/precompress`); the script stops if none are, or if a compressible asset of 1 KB or more is left plain. The first screen's brotli copies (`name.br`) come from `npm run build` and stay as they are (`docs/web/web.md` "Precompressed assets").
   - **No skills included**: the skill connecting to the Lark gateway was copied from a private upstream repository (GPL-3.0) and cannot be redistributed. Skills live in `~/.persona/skills/` on each machine,
@@ -567,7 +567,9 @@ A private configuration has only these fields, with no secrets:
   immutable tag's `latest.json`, requires the tag's version and build, and only
   then marks the Release Latest. A backfill of an older stable tag does not
   move Latest backward. Prereleases and non-hub receipts do not move the
-  Latest pointer.
+  Latest pointer. The uploaded checkpoint retains the exact receipt and asset
+  digests, so a feed or promotion retry reuses it and reruns only remote
+  verification and promotion instead of rebuilding conflicting assets.
 - A receipt that carries `android.json` (the Android platform's) must ship the
   APK it names, at its size and sha256, for the tag's version.
 - Windows CLI bundles (`Persona-<version>-windows-<arch>.zip`) also require a
