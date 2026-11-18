@@ -249,6 +249,9 @@ final class ExtensionPackTests: XCTestCase {
                 toggle(enabled, in: app, changingTo: "1")
                 value("1", of: enabled)
                 XCTAssertFalse(confirm.exists, "switching a pack on must not ask")
+                // End each look cleanly; relaunching or tearing down while the previous app is still active can be
+                // reported as a crash by XCTest even after every action and state assertion has passed.
+                app.terminate()
             }
         }
     }
