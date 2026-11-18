@@ -673,7 +673,7 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
                 JAction(stringResource(R.string.settings_ext_open_homepage), icon = PhIcons.ArrowSquareOut, onClick = { runCatching { uri.openUri(url) } })
             },
             JAction(stringResource(R.string.settings_ext_remove_market), icon = PhIcons.Trash, destructive = true, separatorBefore = true, onClick = {
-                scope.launch { model.prepareRemoval(market.id, assistant.id, assistant.roster != null) }
+                scope.launch { model.prepareRemoval(market.id, assistant) }
             }),
         ), { acting = null }, title = market.label, note = market.description?.takeIf { it.isNotBlank() })
     }

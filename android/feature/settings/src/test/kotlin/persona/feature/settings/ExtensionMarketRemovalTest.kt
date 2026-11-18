@@ -173,6 +173,15 @@ class ExtensionMarketRemovalTest {
         rule.onNode(hasText("0 extensions", substring = true) and hasAnyAncestor(isDialog())).assertDoesNotExist()
     }
 
+    @Test fun selectedAssistantDoesNotCountUnstampedDefaultExtensions() {
+        AssistantManagerChoice.choose("hub", "other-manager", "assistant")
+        val api = RemovalApi(listOf(first)) { listOf(installed("default-only", "m1", manager = null)) }
+        show(api)
+        askRemoval()
+        awaitWords("The hub stops reading this market. No installed extension came from it.")
+        assertEquals(1, api.reads)
+    }
+
     @Test fun aLateCountCannotReplaceANewerMarketConfirmation() {
         val releaseFirst = CompletableDeferred<Unit>()
         val api = RemovalApi(listOf(first, second)) { call ->

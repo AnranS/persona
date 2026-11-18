@@ -419,11 +419,21 @@ class ExtensionMarketStateTest {
         val otherMarket = HubExtension("other-market", market = "m2", manager = "assistant", autoUpgrade = true)
         val notFromMarket = HubExtension("local", manager = "assistant", autoUpgrade = null)
         val installed = listOf(ownOn, ownOff, otherManager, otherMarket, notFromMarket)
-        assertEquals(2, affectedExtensionCount("m1", installed, "assistant", ownershipKnown = true))
-        assertEquals(0, affectedExtensionCount("m1", listOf(otherMarket, notFromMarket), "assistant", ownershipKnown = true))
-        assertEquals(1, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), "other", ownershipKnown = true))
-        assertNull(affectedExtensionCount("m1", listOf(ownOn.copy(market = null)), "assistant", ownershipKnown = true))
-        assertNull(affectedExtensionCount("m1", installed, "assistant", ownershipKnown = false))
+        val roster = ManagerRoster(listOf(
+            HubManager("assistant", "Default", online = true, isDefault = true),
+            HubManager("other", "Other", online = true),
+        ), "assistant")
+        val defaultAssistant = CurrentAssistant(roster = roster, choice = AssistantManagerChoice.Choice(defaultId = "assistant"))
+        val selectedAssistant = CurrentAssistant(roster = roster, choice = AssistantManagerChoice.Choice(manager = "other", defaultId = "assistant"))
+        assertEquals(2, affectedExtensionCount("m1", installed, defaultAssistant))
+        assertEquals(0, affectedExtensionCount("m1", listOf(otherMarket, notFromMarket), defaultAssistant))
+        // An unstamped extension belongs to the default assistant, never to a selected non-default assistant.
+        assertEquals(0, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), selectedAssistant))
+        assertEquals(0, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), selectedAssistant.copy(roster = null)))
+        assertEquals(1, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), defaultAssistant))
+        assertEquals(1, affectedExtensionCount("m1", listOf(ownOn.copy(manager = "other")), selectedAssistant))
+        assertNull(affectedExtensionCount("m1", listOf(ownOn.copy(market = null)), defaultAssistant))
+        assertNull(affectedExtensionCount("m1", installed, defaultAssistant.copy(roster = null)))
 
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val en = context.createConfigurationContext(android.content.res.Configuration(res.configuration).apply {

@@ -1,6 +1,7 @@
 package persona.feature.settings
 
 import android.content.res.Resources
+import persona.core.contracts.api.CurrentAssistant
 import persona.core.contracts.api.CatalogExtension
 import persona.core.contracts.api.ExtensionCatalog
 import persona.core.contracts.api.ExtensionDetail
@@ -712,9 +713,11 @@ internal data class MarketRemoval(val marketId: String, val count: Int?)
  * How many of the current assistant's installed extensions stop upgrading when [marketId] is removed.
  * Null when ownership or the hub's market provenance is not knowable; never turn that into a false zero.
  */
-internal fun affectedExtensionCount(marketId: String, extensions: List<HubExtension>, owner: String, ownershipKnown: Boolean): Int? {
+internal fun affectedExtensionCount(marketId: String, extensions: List<HubExtension>, assistant: CurrentAssistant): Int? {
     val own = when {
-        ownershipKnown -> extensions.filter { (it.manager ?: owner) == owner }
+        // A known roster (or an explicit non-default choice) uses the same ownership rule as the rest of Settings.
+        // In particular, an unstamped item remains the default assistant's; it never moves to the selected one.
+        assistant.roster != null || assistant.choice.manager != null -> extensions.filter { assistant.owns(it.manager) }
         extensions.any { it.manager != null && (it.market == marketId || (it.autoUpgrade != null && it.market == null)) } -> return null
         else -> extensions.filter { it.manager == null }
     }
@@ -808,11 +811,11 @@ internal class MarketsModel(private val api: ExtensionManagement, private val re
     }
 
     /** Reads the installed list before the destructive confirmation. A newer request owns the dialog. */
-    suspend fun prepareRemoval(id: String, owner: String, ownershipKnown: Boolean) {
+    suspend fun prepareRemoval(id: String, assistant: CurrentAssistant) {
         val request = ++removalRequest
         mutable.update { it.copy(preparingRemoval = id, removal = null) }
         val count = try {
-            affectedExtensionCount(id, api.extensions(), owner, ownershipKnown)
+            affectedExtensionCount(id, api.extensions(), assistant)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { null }
         if (request == removalRequest) {
