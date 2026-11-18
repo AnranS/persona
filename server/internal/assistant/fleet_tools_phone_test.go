@@ -218,3 +218,78 @@ func TestPhoneCreateResultSourceLeavesOtherResultsUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// Only the hub's selected-device attribution may name a source; payload claims are not independently trusted.
+func TestPhoneCreateResultUsesOnlyAttestedSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool, payload        string
+		attested                   bool
+		sourceName, sourcePlatform string
+		wantName, wantPlatform     string
+	}{
+		{
+			name: "platform replaces an unattested name", tool: "phone_calendar_create_event",
+			payload: `{"id":"42","title":"Dentist","source_device_name":"Work iPhone"}`, attested: true,
+			sourcePlatform: "android", wantPlatform: "android",
+		},
+		{
+			name: "name replaces an unattested platform", tool: "phone_calendar_create_event",
+			payload: `{"id":"42","title":"Dentist","source_device_platform":"ios"}`, attested: true,
+			sourceName: "Pixel 9", wantName: "Pixel 9",
+		},
+		{
+			name: "an old hub drops a claimed identity", tool: "phone_calendar_create_event",
+			payload: `{"id":"42","title":"Dentist","source_device_name":"Work iPhone","source_device_platform":"ios"}`,
+		},
+		{
+			name: "blank attribution drops a claimed identity", tool: "phone_calendar_create_event",
+			payload: `{"id":"42","title":"Dentist","source_device_name":"Work iPhone","source_device_platform":"ios"}`, attested: true,
+			sourceName: "  ", sourcePlatform: "\t",
+		},
+		{
+			name: "a queued receipt drops a claimed identity", tool: "phone_reminders_create",
+			payload: `{"id":"queue-1","state":"queued","args":{"title":"Later"},"source_device_name":"Work iPhone","source_device_platform":"ios"}`, attested: true,
+			sourceName: "Pixel 9", sourcePlatform: "android",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newFakeHub()
+			h.answerApp(assistantwire.AppPhone, assistantwire.PhoneCall, func(json.RawMessage) (any, error) {
+				response := map[string]any{
+					"content": []proto.Content{{Type: "text", Text: tc.payload}}, "is_error": false,
+				}
+				if tc.attested {
+					response["source_device_name"] = tc.sourceName
+					response["source_device_platform"] = tc.sourcePlatform
+				}
+				return response, nil
+			})
+			s := newTestService(t, h)
+			result := s.mcpCall(context.Background(), "server", "s1", tc.tool, json.RawMessage(`{}`), false)
+			var got, original map[string]any
+			if err := json.Unmarshal([]byte(toolText(result)), &got); err != nil {
+				t.Fatalf("result text is not JSON: %q: %v", toolText(result), err)
+			}
+			if err := json.Unmarshal([]byte(tc.payload), &original); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{}
+			for key, value := range original {
+				if key != "source_device_name" && key != "source_device_platform" {
+					want[key] = value
+				}
+			}
+			if tc.wantName != "" {
+				want["source_device_name"] = tc.wantName
+			}
+			if tc.wantPlatform != "" {
+				want["source_device_platform"] = tc.wantPlatform
+			}
+			gotJSON, _ := json.Marshal(got)
+			wantJSON, _ := json.Marshal(want)
+			if string(gotJSON) != string(wantJSON) {
+				t.Fatalf("result text = %s, want only attested source fields %s", gotJSON, wantJSON)
+			}
+		})
+	}
+}

@@ -259,16 +259,14 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 }
 
 // phoneCreateResultWithSource carries the hub's executing-device attribution into the JSON that quick-result cards
-// parse. Failures, queued receipts, legacy responses and unrelated tools keep their original content byte for byte.
+// parse. Payload source claims are removed before attested values are added. Failures, malformed responses and
+// unrelated tools keep their original content; legacy and queued payloads without source claims stay byte-identical.
 func phoneCreateResultWithSource(tool string, res proto.ToolResult) proto.ToolResult {
 	if tool != "phone_calendar_create_event" && tool != "phone_reminders_create" || res.IsError {
 		return res
 	}
 	sourceName := strings.TrimSpace(res.SourceDeviceName)
 	sourcePlatform := strings.TrimSpace(res.SourceDevicePlatform)
-	if sourceName == "" && sourcePlatform == "" {
-		return res
-	}
 	res.SourceDeviceName, res.SourceDevicePlatform = sourceName, sourcePlatform
 	res.Content = slices.Clone(res.Content)
 	for i, content := range res.Content {
@@ -277,16 +275,23 @@ func phoneCreateResultWithSource(tool string, res proto.ToolResult) proto.ToolRe
 			continue
 		}
 		var state string
-		if raw := payload["state"]; raw != nil && json.Unmarshal(raw, &state) == nil && state == "queued" {
+		queued := payload["state"] != nil && json.Unmarshal(payload["state"], &state) == nil && state == "queued"
+		_, hasName := payload["source_device_name"]
+		_, hasPlatform := payload["source_device_platform"]
+		if (queued || sourceName == "" && sourcePlatform == "") && !hasName && !hasPlatform {
 			continue
 		}
-		if sourceName != "" {
-			raw, _ := json.Marshal(sourceName)
-			payload["source_device_name"] = raw
-		}
-		if sourcePlatform != "" {
-			raw, _ := json.Marshal(sourcePlatform)
-			payload["source_device_platform"] = raw
+		delete(payload, "source_device_name")
+		delete(payload, "source_device_platform")
+		if !queued {
+			if sourceName != "" {
+				raw, _ := json.Marshal(sourceName)
+				payload["source_device_name"] = raw
+			}
+			if sourcePlatform != "" {
+				raw, _ := json.Marshal(sourcePlatform)
+				payload["source_device_platform"] = raw
+			}
 		}
 		text, err := json.Marshal(payload)
 		if err != nil {
