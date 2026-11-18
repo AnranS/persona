@@ -591,10 +591,15 @@ func TestACallToAnotherManagersWarmMachineWaitsForIt(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	b := connectGuardManagerWith(t, srv.URL, "m-0b0b0b", bTok, nodeAnswers)
-	// B's own call reaches its machine from its handshake on, before its report; anyone else's still waits for that.
-	if err := b.call(t, assistantwire.MethodDevice, assistantwire.DeviceCall{Device: "mb", Method: "panes.list", Params: json.RawMessage(`{}`)}, nil); err != nil ||
-		!strings.Contains(b.log(), `"method":"panes.list"`) {
-		t.Fatalf("B's own call before its report: %v", err)
+	// A manager's own call waits for its first report too, just as the carrier's does.
+	ownRes := make(chan error, 1)
+	go func() {
+		ownRes <- b.call(t, assistantwire.MethodDevice, assistantwire.DeviceCall{Device: "mb", Method: "panes.list", Params: json.RawMessage(`{}`)}, nil)
+	}()
+	select {
+	case err := <-ownRes:
+		t.Fatalf("B's own call did not wait for its report: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 	select {
 	case err := <-res:
@@ -610,7 +615,15 @@ func TestACallToAnotherManagersWarmMachineWaitsForIt(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the call never went")
 	}
-	if !strings.Contains(b.log(), `"method":"fs.list"`) || strings.Contains(a.log(), "fs.list") {
+	select {
+	case err := <-ownRes:
+		if err != nil {
+			t.Fatalf("B's own call once it reported: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("B's own call never went")
+	}
+	if !strings.Contains(b.log(), `"method":"fs.list"`) || !strings.Contains(b.log(), `"method":"panes.list"`) || strings.Contains(a.log(), "fs.list") {
 		t.Fatalf("the call went to the wrong manager; the carrier saw\n%s\nB saw\n%s", a.log(), b.log())
 	}
 	// Its start is over: without it a call fails at once, as the carrier's do.
