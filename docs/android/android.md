@@ -1153,8 +1153,9 @@ The main activity and share sheet keep their existing restore loading UI. Boot a
 pairing decision. Notification and surface collectors also wait before reading `isPaired`: the initial `false` means
 restoration is pending, not that the user unpaired, so it must not stop services, clear a saved fleet, publish empty
 shortcuts or answer an action against an empty scope. `FleetFeed.settled()` additionally waits for the saved fleet
-snapshot, so a tile or widget cannot navigate or render from the empty pre-restore value. A deferred tile click survives
-the shade destroying its rendering service and falls back to ordinary activity navigation.
+snapshot, so a tile or widget cannot navigate or render from the empty pre-restore value. The tile immediately launches
+`TileRouteActivity` through `startActivityAndCollapse`; that foreground activity waits for the saved fleet and performs the
+final navigation after the tile service is destroyed, without relying on a background `Context.startActivity()`.
 
 `ConnectionRuntimeStartupTest`, `NotificationRuntimePairingRestoreTest`, `ReceiverPairingRestoreTest` and
 `ApproveFirstPairingRestoreTest` cover these barriers with deliberately delayed restoration.

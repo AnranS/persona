@@ -22,14 +22,6 @@ import persona.core.domain.fleet.FleetSummary
  */
 class PersonaTileService : TileService() {
     private val renderScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    /** A tap must still navigate if closing the shade destroys this service while restoration is pending. */
-    private val clickScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    @Volatile private var destroyed = false
-
-    override fun onCreate() {
-        super.onCreate()
-        destroyed = false
-    }
 
     override fun onStartListening() {
         super.onStartListening()
@@ -42,26 +34,8 @@ class PersonaTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        val dependencies = SurfacesDependencies.of(this)
-        clickScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            val feed = dependencies.fleet()
-            feed.settled()
-            val intent = SurfaceLinks.fleet(applicationContext, feed.paired.value, feed.state.value) { dependencies.sessions().assistant(it) }
-            open(intent)
-        }
-    }
-
-    @Synchronized override fun onDestroy() {
-        destroyed = true
-        renderScope.cancel()
-        super.onDestroy()
-    }
-
-    @Synchronized private fun open(intent: Intent) {
-        if (destroyed) {
-            applicationContext.startActivity(intent)
-            return
-        }
+        // Launch the foreground router while this service is alive; it waits for the fleet, not the tile service.
+        val intent = Intent(this, TileRouteActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (Build.VERSION.SDK_INT >= 34) {
             startActivityAndCollapse(PendingIntent.getActivity(applicationContext, REQUEST, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
@@ -69,6 +43,11 @@ class PersonaTileService : TileService() {
             @Suppress("DEPRECATION", "StartActivityAndCollapseDeprecated")
             startActivityAndCollapse(intent)
         }
+    }
+
+    override fun onDestroy() {
+        renderScope.cancel()
+        super.onDestroy()
     }
 
     private fun render() {

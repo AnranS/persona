@@ -8,9 +8,10 @@ the appropriate readiness barrier: pairing restoration and, for a persisted flee
 collector started early can stop a service or erase a saved snapshot before the pairing arrives. An available initial
 network must not dial before the group's data and reconciliation collectors exist. Keep broadcast `goAsync` results pending
 until the barrier and the original action complete, and preserve the foreground service's promote-before-stop ordering. A
-deferred tile click needs a lifetime independent of the rendering service, with an activity fallback after that service is
-destroyed. An undispatched coroutine start keeps demo/test implementations with a no-op restore synchronous while allowing
-the real restore to suspend.
+deferred tile click launches a foreground routing activity through `startActivityAndCollapse` while the tile service is
+alive; that activity waits for restoration and performs the final route. A raw `Context.startActivity()` after the tile
+service is destroyed can be blocked by background-activity-start restrictions. An undispatched coroutine start keeps
+demo/test implementations with a no-op restore synchronous while allowing the real restore to suspend.
 
 ## A cancelled SSH start must still report a rejected host key (#10101)
 
