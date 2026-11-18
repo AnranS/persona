@@ -69,7 +69,11 @@ final class ShellPagerTests: XCTestCase {
 
     /// #9961 AC1: the held strip must not leave the visible main composer beyond a first tap's reach.
     @MainActor func testComposerFirstTapAfterHeldStrip() {
-        launch(["-showShellPagerAt", "0.3"])
+        var args = ["-showShellPagerAt", "0.3"]
+        if ProcessInfo.processInfo.environment["PERSONA_LARGE_TEXT"] == "1" {
+            args += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        }
+        launch(args)
         sleep(1) // the fixture holds the strip one second after the shell appears
         attachScreen("composer-held-strip")
         let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
@@ -79,6 +83,7 @@ final class ShellPagerTests: XCTestCase {
         let probe = "pager probe 9961"
         field.typeText(probe)
         XCTAssertEqual(field.value as? String, probe, "the composer did not accept the probe")
+        XCTAssertTrue(app.expectShell(agents: false, "the composer recovered"), app.shellTrace)
         attachScreen("composer-held-strip-keyboard")
     }
 
