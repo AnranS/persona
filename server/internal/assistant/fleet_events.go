@@ -55,7 +55,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(params, &p) == nil {
-			s.recordEnd(p.ID, "dismissed", nil)
+			s.recordEnd(p.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 			s.finishInteraction(p.ID)
 		}
 		return false
