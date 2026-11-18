@@ -50,6 +50,9 @@ internal class ChatMarkdownCache(
     private var kept: Set<String> = emptySet()
     private val running = HashMap<Parse, Deferred<ChatMarkdownRenderState>>()
     private val streams = ChatMarkdownStream(parseWhole)
+    private val preprocessors = object : LinkedHashMap<String, ChatMarkdownPreprocessor>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ChatMarkdownPreprocessor>) = size > 8
+    }
 
     @Synchronized fun cached(id: String, text: String) = entries[id]?.takeIf { it.text == text }?.result
     @Synchronized fun cachedRenderState(id: String, text: String) = entries[id]?.takeIf { it.text == text }?.render
@@ -84,7 +87,10 @@ internal class ChatMarkdownCache(
         val parse = synchronized(this) {
             when (streaming) {
                 true -> streams.start(id)
-                false -> streams.end(id)
+                false -> {
+                    streams.end(id)
+                    preprocessors.remove(id)
+                }
                 null -> {}
             }
             val whole = !streams.streaming(id)
@@ -100,7 +106,8 @@ internal class ChatMarkdownCache(
     }
 
     private fun compute(parse: Parse): ChatMarkdownRenderState {
-        val markdown = chatMarkdown(parse.text)
+        val markdown = if (parse.whole) chatMarkdown(parse.text)
+            else preprocessors.getOrPut(parse.id) { ChatMarkdownPreprocessor() }.rewrite(parse.text)
         val render = if (parse.whole) {
             ChatMarkdownRenderState(parseWhole(markdown), whole = true, stable = null)
         } else {

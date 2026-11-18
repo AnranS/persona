@@ -237,8 +237,11 @@ private fun DrawParsedMarkdown(
     val result = render.result
     val stable = render.stable
     if (stable != null && result is MarkdownResult.Success) {
-        remember(render) { stable.state.update(result, stable.stableCount) }
-        Markdown(stable.state, modifier = modifier, imageTransformer = imageTransformer, annotator = annotator,
+        val state = remember(render) {
+            stable.state.update(result, stable.stableCount)
+            stable.state
+        }
+        Markdown(state, modifier = modifier, imageTransformer = imageTransformer, annotator = annotator,
             animations = animations, dimens = dimens, padding = padding, colors = colors, typography = typography,
             components = components)
     } else {
