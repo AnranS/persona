@@ -354,8 +354,13 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		d.absorbed = st.Absorbed
 	}
 	// Its machines are reachable and the calls waiting for it go (waitDevicesFor); not on a report sent after it was
-	// removed from the roster (machine_entries.go: that one is dropped too).
+	// removed from the roster (machine_entries.go: that one is dropped too). ReportedSince is visible in the same
+	// transition: a disconnect cannot make a post-report call enter the warm wait again.
 	if !d.upOpen[owner] && !d.reportedForgot[owner] {
+		if d.reportedSince == nil {
+			d.reportedSince = map[string]bool{}
+		}
+		d.reportedSince[owner] = true
 		close(d.upChanLocked(owner))
 		d.upOpen[owner] = true
 	}

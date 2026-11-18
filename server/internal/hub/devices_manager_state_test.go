@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -210,4 +213,47 @@ func TestDevicesListCompleteWaitsForManagersOwnReport(t *testing.T) {
 	eventually(t, 5*time.Second, "the other manager's own report", func() bool {
 		return perManagerDevicesList(t, b).Complete
 	})
+}
+
+// The report's bookkeeping is visible in the same locked transition that releases its waiters. Otherwise a disconnect
+// in between can make a post-report call wait for the hub's warm window again.
+func TestReportBookkeepingIsAtomicWithManagerUp(t *testing.T) {
+	h := newTestHub(t)
+	const count = 2000
+	entries := make([]devicewire.RecMachine, count)
+	h.cfg.Machines = make([]MachineConfig, count)
+	for i := range entries {
+		id := fmt.Sprintf("m-%04d", i)
+		h.cfg.Machines[i] = MachineConfig{ID: id, Name: id, Kind: "ssh"}
+		entries[i] = devicewire.RecMachine{ID: id}
+	}
+	done := make(chan struct{})
+	go func() {
+		h.applyDeviceStatesFrom(devicesOwner, devicewire.States{Entries: entries})
+		close(done)
+	}()
+	for {
+		d := &h.devices
+		d.mu.Lock()
+		up, reported := d.upOpen[devicesOwner], d.reportedSince[devicesOwner]
+		d.mu.Unlock()
+		if up {
+			if !reported {
+				t.Error("the manager is up before its report bookkeeping is visible")
+			}
+			break
+		}
+		select {
+		case <-done:
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if !d.upOpen[devicesOwner] || !d.reportedSince[devicesOwner] {
+				t.Fatal("the report did not complete its up and bookkeeping state")
+			}
+			return
+		default:
+		}
+		runtime.Gosched()
+	}
+	<-done
 }
