@@ -330,6 +330,21 @@ printf 'catalog placeholders preserved in all languages\n'
                 if terminal:
                     self.assertEqual(os.readlink(state / 'bin' / (FORMER_NAME + 'd')), 'personad')
 
+    def test_publish_installer_downloads_from_the_compiled_update_base(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        self.assertIn('-X main.updateURL=$UPDATE_URL', publisher)
+        render = next(line for line in publisher.splitlines() if '--render-installer' in line)
+        update_url = 'https://releases.example.test/owner/project/releases/latest/download'
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(['bash', '-c', render], cwd=ROOT,
+                                    env=dict(os.environ, OUT=directory,
+                                             PERSONA_PUBLISH_URL='https://site.example.test', UPDATE_URL=update_url),
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            installer = (Path(directory) / 'install.sh').read_text()
+        download = next(line for line in installer.splitlines() if line.startswith('DL='))
+        self.assertEqual(download, 'DL="${PERSONA_DL:-' + update_url + '}"')
+
     def test_publish_fixture_indexes_only_current_product_artifacts(self):
         import shutil
         publisher = (ROOT / 'scripts/release/publish.sh').read_text()

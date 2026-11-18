@@ -125,9 +125,12 @@ certificate in the protected `persona-desktop-release` environment, never an
 ad-hoc signature. The job runs only when that environment supplies a Developer ID
 Application identity and the notarization credentials already used by the desktop
 packages. `sign_darwin_cli.py` verifies each signature and rejects a remaining
-ad-hoc `cdhash`; the manifest is rebuilt from the signed downloads before upload,
-so a stable feed never carries a mismatched binary digest. This is a CI publication
-choice, not a local signing requirement for other builders.
+ad-hoc `cdhash`. The manifest is rebuilt from the signed downloads for
+verification, but this partial-platform job does not upload `latest.json`,
+`SHA256SUMS`, `VERSION` or move Latest. It uploads only signed Darwin downloads,
+without `--clobber`; the complete hub receipt owns the indexes and promotion, and
+a digest disagreement stops publication instead of replacing a verified asset.
+This is a CI publication choice, not a local signing requirement for other builders.
 
 The first certificate-signed build after the historical ad-hoc ones is a new
 program to macOS, so grant the privacy permissions once more. Subsequent updates

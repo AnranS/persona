@@ -69,7 +69,12 @@ checks. Build the binaries and write `latest.json` in one run with one build
 number: never write a manifest over binaries an earlier attempt left behind.
 The coordinator refuses a receipt whose `latest.json` does not describe its
 binaries (sizes, sha256s, build number, and this machine's `personad version
--v`), and uploads `latest.json` after the files it lists.
+-v`), whose installer or any `personad` does not carry the Release's exact
+GitHub update base, or whose immutable tag manifest reports another version or
+build. It uploads `latest.json` after the files it lists. Only after those
+checks and remote digest verification succeed does stable hub publication mark
+the Release Latest; it never moves Latest to an older stable tag, and
+prereleases and other platforms never move that pointer.
 
 For a Windows CLI ZIP, run `scripts/operations/windows_release.py` on Windows
 of the matching architecture before writing the artifact receipt. Include its

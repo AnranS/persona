@@ -266,7 +266,7 @@ adhoc_identifiers() {
 # Before anything hashes or packs them.
 adhoc_identifiers "$OUT/bin"
 cleanup
-python3 scripts/persona_identity.py --render-installer scripts/deploy/install.sh "$OUT/install.sh" "$PERSONA_PUBLISH_URL/dl"
+python3 scripts/persona_identity.py --render-installer scripts/deploy/install.sh "$OUT/install.sh" "$UPDATE_URL"
 
 # Anyone can download these: no private values in them (CLAUDE.md), and no copied skill (only the built-in ones
 # assistantskills.Redistributable lists; a copied skill lives in the user's ~/.persona/skills or comes with its

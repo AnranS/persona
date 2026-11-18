@@ -269,6 +269,23 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('gh release create "$RELEASE_TAG" "${args[@]}"', script)
         self.assertNotIn('--target', script)
 
+    def test_stable_release_is_not_latest_before_complete_hub_publication(self):
+        root = Path(__file__).resolve().parents[2]
+        release = yaml.load((root / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+        # The Darwin CLI job uploads only its platform and rebuilds latest.json from that partial set. Neither it nor
+        # desktop package attachment owns the stable Latest pointer; the verified complete hub receipt does.
+        for job in ('darwin-cli-sign', 'desktop-publish'):
+            text = yaml.dump(release['jobs'][job])
+            self.assertNotIn('release edit', text)
+            self.assertNotIn('--latest', text)
+        upload = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                      if step.get('name') == 'Upload signed Darwin downloads')
+        for index in ('latest.json', 'SHA256SUMS', 'VERSION', '--clobber'):
+            self.assertNotIn(index, upload['run'])
+        create = release['jobs']['publish']['steps'][-1]
+        self.assertEqual(create['name'], 'Create GitHub Release')
+        self.assertIn('args=(--latest=false ', create['run'])
+
 
 class RequiredTests(unittest.TestCase):
     def needs(self):

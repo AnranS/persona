@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import ipaddress
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -649,6 +650,15 @@ class GoDependenciesTests(unittest.TestCase):
                 code, output = self.scan(text, words=words + ("site.example.test",), config=config)
                 self.assertNotEqual(code, 0)
                 self.assertIn("private value", output)
+
+    def test_published_binary_scan_uses_the_inherited_update_url_override(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        config = {"publish": {"update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override, words=("override.example.test",), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_url(config), (override, "/releases/latest/download"))
 
     def test_the_app_ssh_algorithm_names_are_not_emails(self):
         names = "\n".join(a + "@" + d for a, d in (("aes256-gcm", "openssh.com"), ("curve25519-sha256", "libssh.org"),

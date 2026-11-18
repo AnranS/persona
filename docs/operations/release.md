@@ -412,7 +412,7 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
 - Website-only changes (`site/`): `SITE_ONLY=1 ./scripts/release/publish.sh` skips a new build, fetches the small files of the currently published version (`VERSION`, `SHA256SUMS`, `latest.json`, `SLOT`, `install.sh`) and deploys them with the committed `site/`, leaving archives in R2 unchanged. Afterwards it checks the live small files are unchanged and every archive still exists (`HEAD` size). It refuses if there's no live `dl/SLOT` yet (a release from before R2); do one full publish first. **Don't run `wrangler deploy` directly in `site/`**: it makes `/dl/` and `install.sh` return 404 (`docs/lessons/server.md`).
 - Web dependencies always install from the official npm registry (`npm ci --registry=https://registry.npmjs.org/`, overridable with `PERSONA_NPM_REGISTRY`), ignoring local npm config. `package-lock.json` already points to the official registry; a locally configured mirror may lack packages (on 2026-11-06 it lacked `elkjs`, stopping release before web bundling).
 - Build four platforms (linux / darwin × amd64 / arm64), with `-tags "$(cat server/build-tags.txt)" -trimpath -s -w`, embedding `channel=release`, build number (UTC `YYYYMMDDHHMM`) and `updateURL`
-  (the config's `publish.update_url` as written, e.g. a GitHub repository's `releases/latest/download`, else `<publish.site_url>/dl`; the script notes when the binaries look somewhere other than the site it publishes to; a hub's `hub.json` `update.url` replaces it at run time, `docs/operations/hub-update.md` ("Update source")):
+  (a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url` as written, e.g. a GitHub repository's `releases/latest/download`, else `<publish.site_url>/dl`; the script notes when the binaries look somewhere other than the site it publishes to; a hub's `hub.json` `update.url` replaces it at run time, `docs/operations/hub-update.md` ("Update source")). `install.sh` is rendered from that same update base, so its downloads and the binaries' update checks cannot silently select different feeds:
   - **Web bundled into the binary** (`server/internal/hub/webdist`, `go:embed`): the hub uses it when the hub machine has no `~/.persona/web`; otherwise it still uses the directory.
     The plain copy is privacy-scanned first, then its hashed assets and `third-party-licenses.txt` are kept gzipped (`go run ./internal/webasset/precompress`); the script stops if none are, or if a compressible asset of 1 KB or more is left plain. The first screen's brotli copies (`name.br`) come from `npm run build` and stay as they are (`docs/web/web.md` "Precompressed assets").
   - **No skills included**: the skill connecting to the Lark gateway was copied from a private upstream repository (GPL-3.0) and cannot be redistributed. Skills live in `~/.persona/skills/` on each machine,
@@ -468,7 +468,7 @@ git tag v1.2.0 && git push origin v1.2.0
 # -> GitHub Release v1.2.0 with generated notes
 ```
 
-- Smoke-test first (amd64 + compose), then build and push both architectures only after it passes. Once image publication succeeds, the same job creates a GitHub Release named for the full tag with automatically generated notes. Prerelease tags containing `-` (`v1.3.0-rc1`) only push the version image, without touching `latest`, and mark the GitHub Release as a prerelease. Creating the Release does not push another tag.
+- Smoke-test first (amd64 + compose), then build and push both architectures only after it passes. Once image publication succeeds, the same job creates a GitHub Release named for the full tag with automatically generated notes. Stable Releases are created with `--latest=false`: the complete verified hub consumer marks one Latest only after its assets and immutable tag manifest pass publication. Prerelease tags containing `-` (`v1.3.0-rc1`) only push the version image, without touching `latest`, and mark the GitHub Release as a prerelease. Creating the Release does not push another tag.
 - To get an image of the current branch without a tag or GitHub Release, `chyroc` can manually run release in Actions (`edge`, `sha-<commit>`).
 - Image smoke tests run through an explicit workflow dispatch; only the documented `v*` release-tag event starts image and GitHub Release publication automatically (`packages: write` and `contents: write` are granted only to the publish job). This exception supplies the version and `latest` images used by Docker installations; no branch push or PR starts it. A manual dispatch never creates a GitHub Release.
 - If Release creation fails after the images were pushed, rerun the failed job for the same tag. Rebuilding and pushing the same immutable image tags does not advance `latest` to another source revision; fix any reported tag or Release conflict rather than creating a replacement tag.
@@ -556,10 +556,18 @@ A private configuration has only these fields, with no secrets:
   is uploaded. It must list only files in the receipt, at their sizes and
   sha256s. Every binary must be its build, and this machine's `personad
   version -v` must say its version and build. Otherwise the platform fails
-  (#4522: v0.2.1's manifest named another build than its binaries). The
-  downloads go up first; `VERSION`, `SHA256SUMS`, `android.json` and then
-  `latest.json` go last, each on its own, so a hub reading
-  `releases/latest/download` never sees a manifest whose files are not there yet.
+  (#4522: v0.2.1's manifest named another build than its binaries). Every
+  `personad` must contain the exact GitHub update base used by the Release's
+  `install.sh`, and the installer's own `DL` default is checked too;
+  `publish.sh` renders that installer from the same base it compiles into the
+  binaries. The downloads go up first; `VERSION`, `SHA256SUMS`, `android.json`
+  and then `latest.json` go last, each on its own, so a hub reading
+  `releases/latest/download` never sees a manifest whose files are not there
+  yet. After remote digest verification, stable hub publication fetches the
+  immutable tag's `latest.json`, requires the tag's version and build, and only
+  then marks the Release Latest. A backfill of an older stable tag does not
+  move Latest backward. Prereleases and non-hub receipts do not move the
+  Latest pointer.
 - A receipt that carries `android.json` (the Android platform's) must ship the
   APK it names, at its size and sha256, for the tag's version.
 - Windows CLI bundles (`Persona-<version>-windows-<arch>.zip`) also require a

@@ -595,10 +595,11 @@ def verified_public_file(path):
 
 
 def public_download_url(cfg):
-    """The update URL every published personad carries and the one path it may have: publish.update_url as configured
-    (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl (persona_config.update_url)."""
-    url = persona_config.update_url(cfg)
-    if url and persona_config.get(cfg, "publish.update_url", "") not in ("", None):
+    """The update URL every published personad carries and the one path it may have: an inherited environment override,
+    then publish.update_url (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl."""
+    override = os.environ.get("PERSONA_UPDATE_URL")
+    url = persona_config.update_url(cfg, override)
+    if url and (override or persona_config.get(cfg, "publish.update_url", "") not in ("", None)):
         return url, urlsplit(url).path
     return url, "/dl"
 

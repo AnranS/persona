@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.request
 import zipfile
 from unittest.mock import patch
 
@@ -210,12 +211,15 @@ class TagReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(tag_release.ConfigError, "verification"):
                 tag_release.upload("example/project", "v1.0.0", assets)
 
-    def release_receipt(self, build=202611110749, binary_builds=None):
+    def release_receipt(self, build=202611110749, binary_builds=None, update_url=None, version="0.2.1", channel=None,
+                        other_update_url=None):
         """A hub receipt as publish.sh leaves it: personad for this machine (a script answering version -v), one for
         another platform (bytes with its build number, as -X main.build leaves it) and latest.json over them.
         binary_builds gives a download another build (the earlier run's)."""
         import gzip
         binary_builds = binary_builds or {}
+        update_url = update_url or "https://github.com/example/project/releases/latest/download"
+        other_update_url = other_update_url or update_url
         here = tag_release.host_platform()
         other = "linux-arm64" if here == "linux-amd64" else "linux-amd64"
         directory = self.root / "receipt"
@@ -224,13 +228,17 @@ class TagReleaseTests(unittest.TestCase):
         for plat in (here, other):
             name = "personad-%s.gz" % plat
             n = binary_builds.get(name, build)
-            body = (("#!/bin/sh\necho 0.2.1\necho 'channel release, build %d'\n" % n) if plat == here
-                    else "\x7fELF\x00main.build\x00%d\x00the rest" % n).encode()
+            body = ((("#!/bin/sh\n# main.updateURL=%s\necho %s\necho 'channel release, build %d'\n"
+                      % (update_url, version, n)) if plat == here else
+                     "\x7fELF\x00main.build\x00%d\x00main.updateURL=%s\x00the rest" % (n, other_update_url)).encode())
             (directory / name).write_bytes(gzip.compress(body, mtime=0))
             data = (directory / name).read_bytes()
             files[plat] = {"name": name, "size": len(data), "sha256": tag_release.hashlib.sha256(data).hexdigest(),
                            "binary_sha256": tag_release.hashlib.sha256(body).hexdigest()}
-        (directory / "latest.json").write_text(json.dumps({"version": "0.2.1", "build": build, "files": files}))
+        manifest = {"version": version, "build": build, "files": files}
+        if channel is not None:
+            manifest["channel"] = channel
+        (directory / "latest.json").write_text(json.dumps(manifest))
         name = "persona-link-windows-amd64.exe.gz"
         body = ("\x00main.build\x00%d\x00the Windows connector" % binary_builds.get(name, build)).encode()
         (directory / name).write_bytes(gzip.compress(body, mtime=0))
@@ -241,6 +249,147 @@ class TagReleaseTests(unittest.TestCase):
                           "binary_sha256": tag_release.hashlib.sha256(body).hexdigest()}}
         (directory / "latest.json").write_text(json.dumps(index))
         return [{"path": str(path), "name": path.name} for path in sorted(directory.iterdir())]
+
+    def with_installer(self, assets, update_url):
+        directory = Path(assets[0]["path"]).parent
+        installer = directory / "install.sh"
+        installer.write_text('#!/bin/sh\nDL="${PERSONA_DL:-%s}"\n' % update_url)
+        return assets + [{"path": str(installer), "name": installer.name}]
+
+    def publish_receipt(self, assets, tag, platform, label, remote_manifest=None, prerelease=False, events=None,
+                        stable_tags=None):
+        """Run the real deterministic publisher with only its build command, GitHub CLI and tag-feed HTTP mocked."""
+        data = json.loads(self.config_path.read_text())
+        state = self.root / ("publication-" + label)
+        data.update(platform=platform, state_dir=str(state), receipt=str(state / "artifacts.json"))
+        self.config_path.write_text(json.dumps(data))
+        config = self.config()
+        state.mkdir(parents=True)
+        Path(config["receipt"]).write_text(json.dumps({"commit": self.commit, "assets": assets}))
+        remote = [{"name": item["name"],
+                   "digest": "sha256:" + tag_release.hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()}
+                  for item in assets]
+        events = [] if events is None else events
+        stable_tags = [tag] if stable_tags is None else stable_tags
+        real_run, real_output = subprocess.run, subprocess.check_output
+
+        def run(command, **kwargs):
+            if not command or command[0] != "gh":
+                return real_run(command, **kwargs)
+            events.append(("github", command))
+            return subprocess.CompletedProcess(command, 0)
+
+        def output(command, **kwargs):
+            if not command or command[0] != "gh":
+                return real_output(command, **kwargs)
+            events.append(("github", command))
+            if command[:3] == ["gh", "release", "list"]:
+                return json.dumps([{"tagName": name} for name in stable_tags])
+            self.assertEqual(command[:3], ["gh", "release", "view"])
+            fields = command[-1].split(",")
+            details = {"tagName": tag, "isDraft": False, "isPrerelease": prerelease, "isLatest": False,
+                       "assets": remote if fields == ["assets"] else []}
+            return json.dumps({field: details[field] for field in fields})
+
+        def fetch(request, **kwargs):
+            url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+            events.append(("http", url))
+            if remote_manifest is None:
+                latest = next(item for item in assets if item["name"] == "latest.json")
+                body = Path(latest["path"]).read_bytes()
+            else:
+                body = json.dumps(remote_manifest).encode()
+            return io.BytesIO(body)
+
+        with patch.object(tag_release, "prepare_worktree",
+                          side_effect=lambda config, commit: config["worktree"].mkdir(exist_ok=True)), \
+                patch.object(tag_release.subprocess, "run", side_effect=run), \
+                patch.object(tag_release.subprocess, "check_output", side_effect=output), \
+                patch("urllib.request.urlopen", side_effect=fetch):
+            tag_release.publish_once(config, tag, self.commit)
+        return events
+
+    @staticmethod
+    def release_actions(events, action):
+        return [command for kind, command in events
+                if kind == "github" and command[:3] == ["gh", "release", action]]
+
+    def test_hub_publication_refuses_a_personad_with_another_compiled_update_url(self):
+        assets = self.release_receipt(update_url="https://stale.example.test/dl")
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
+            self.publish_receipt(assets, "v0.2.1", "hub", "wrong-update-url", events=events)
+        self.assertEqual(self.release_actions(events, "upload"), [])
+        self.assertEqual(self.release_actions(events, "edit"), [])
+
+    def test_hub_publication_refuses_an_installer_with_another_update_url(self):
+        assets = self.with_installer(self.release_receipt(), "https://stale.example.test/dl")
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
+            self.publish_receipt(assets, "v0.2.1", "hub", "wrong-installer-update-url", events=events)
+        self.assertEqual(self.release_actions(events, "upload"), [])
+        self.assertEqual(self.release_actions(events, "edit"), [])
+
+    def test_hub_publication_refuses_a_longer_compiled_update_url(self):
+        expected = "https://github.com/example/project/releases/latest/download"
+        assets = self.release_receipt(update_url=expected + "/stale")
+        with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
+            self.publish_receipt(assets, "v0.2.1", "hub", "longer-update-url")
+
+    def test_hub_publication_refuses_another_platforms_stale_update_url(self):
+        assets = self.release_receipt(other_update_url="https://stale.example.test/dl")
+        with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
+            self.publish_receipt(assets, "v0.2.1", "hub", "other-platform-update-url")
+
+    def test_older_stable_hub_publication_does_not_move_latest_backward(self):
+        stable_tags = ["v0.2.1", "v0.9.0", "v0.10.0"]
+        older = self.publish_receipt(self.release_receipt(), "v0.2.1", "hub", "older-stable-hub",
+                                     stable_tags=stable_tags)
+        self.assertEqual(self.release_actions(older, "edit"), [])
+        self.assertFalse(any(kind == "http" for kind, _ in older))
+        newer = self.publish_receipt(self.release_receipt(version="0.10.0"), "v0.10.0", "hub", "newer-stable-hub",
+                                     stable_tags=stable_tags)
+        promotions = self.release_actions(newer, "edit")
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(promotions[0][3], "v0.10.0")
+
+    def test_uploaded_tag_manifest_must_match_version_and_build_before_latest_promotion(self):
+        assets = self.release_receipt()
+        local = json.loads(Path(next(item["path"] for item in assets if item["name"] == "latest.json")).read_text())
+        expected_url = "https://github.com/example/project/releases/download/v0.2.1/latest.json"
+        for label, change in (("version", {"version": "0.2.0"}), ("build", {"build": local["build"] - 1})):
+            with self.subTest(wrong=label):
+                events = []
+                with self.assertRaisesRegex(tag_release.ConfigError, "latest.json|manifest"):
+                    self.publish_receipt(assets, "v0.2.1", "hub", "wrong-feed-" + label,
+                                         remote_manifest=dict(local, **change), events=events)
+                # Verify this immutable tag, not releases/latest, which still names the previous stable Release.
+                self.assertIn(("http", expected_url), events)
+                self.assertEqual(self.release_actions(events, "edit"), [])
+
+    def test_only_successful_stable_hub_publication_marks_release_latest(self):
+        cases = (
+            ("stable non-hub", self.android_receipt(), "v0.3.0", "android", False),
+            ("prerelease hub", self.release_receipt(version="0.7.0-beta.2", channel="beta"),
+             "v0.7.0-beta.2", "hub", True),
+        )
+        for label, assets, tag, platform, prerelease in cases:
+            with self.subTest(case=label):
+                events = self.publish_receipt(assets, tag, platform, label.replace(" ", "-"), prerelease=prerelease)
+                self.assertEqual(self.release_actions(events, "edit"), [])
+                self.assertFalse(any(kind == "http" for kind, _ in events))
+
+        assets = self.with_installer(self.release_receipt(), "https://github.com/example/project/releases/latest/download")
+        events = self.publish_receipt(assets, "v0.2.1", "hub", "verified-stable-hub",
+                                      stable_tags=["v0.1.0", "v0.2.1"])
+        tag_feed = "https://github.com/example/project/releases/download/v0.2.1/latest.json"
+        self.assertIn(("http", tag_feed), events)
+        promotions = self.release_actions(events, "edit")
+        self.assertEqual(len(promotions), 1)
+        self.assertEqual(promotions[0][3], "v0.2.1")
+        self.assertIn("--latest", promotions[0])
+        self.assertNotIn("--latest=false", promotions[0])
+        self.assertEqual(events[-1], ("github", promotions[0]))
 
     def test_release_manifest_must_be_its_binaries_build(self):
         # v0.2.1 (#4522): latest.json said build 202611110749, its binaries were 202611110745 (an earlier run).
