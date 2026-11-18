@@ -595,7 +595,7 @@ struct AgentsTopBarPlace: ViewModifier {
                 if header.bar != y { header.bar = y }
             }
             // The field on its way up into the bar's row, animated (`AgentsHeader.up`).
-            .modifier(AgentsTopBarFade(progress: header.motion, resting: !header.floating,
+            .modifier(AgentsTopBarFade(progress: header.up ? 1 : 0, published: header.motion, resting: !header.floating,
                                        gone: AgentsTopBarFade.gone(bar: header.bar, field: header.listTop + AgentsHeader.room(shell: true))))
     }
 }
@@ -603,12 +603,18 @@ struct AgentsTopBarPlace: ViewModifier {
 
 /// The shell's top bar while the field comes up into its row: gone before the field gets to it, back only once the
 /// field has gone below it. `progress` is the same animated value as the field's (`AgentsSearchOverlay`).
-struct AgentsTopBarFade: ViewModifier {
+struct AgentsTopBarFade: ViewModifier, Animatable {
     var progress: Double
+    /// The field's published progress. Taking the later value keeps the bar transparent if either animation is late.
+    var published = 0.0
     /// At rest the bar is fully visible, even if the field's last published animation value never arrived.
     var resting = false
     /// The share of the field's way up by which the bar has gone (`gone(bar:field:)`).
     var gone = Self.standard
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
 
     /// At the standard text size the field reaches the bar's bottom at about 0.4 of its way (150 → 62 pt, the bar
     /// 62–112): the bar is gone by 0.35.
@@ -625,6 +631,6 @@ struct AgentsTopBarFade: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content.opacity(resting ? 1 : max(0, 1 - progress / gone))
+        content.opacity(resting ? 1 : max(0, 1 - max(progress, published) / gone))
     }
 }
