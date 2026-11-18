@@ -47,11 +47,12 @@ function validDeepLinkRoute(route: string): boolean {
   try { return new URL(route, "https://desktop.invalid/").origin === "https://desktop.invalid"; } catch { return false; }
 }
 
-/** The view-state keys that docs/protocol/deep-links.md allows for a canonical route. */
+/** The view-state keys that docs/protocol/deep-links.md allows for a canonical route, plus the web's older forms. */
 function deepLinkQueryKeys(url: URL): ReadonlySet<string> {
   const path = url.pathname;
   if (/^\/persona\/[^/]+$/.test(path) && path !== "/persona/new") return new Set(["machine", "manager", "at"]);
-  if (/^\/s\/[^/]+\/[^/]+$/.test(path)) return new Set(["at", "view"]);
+  if (/^\/s\/[^/]+\/[^/]+$/.test(path)) return new Set(["at", "view", "work"]);
+  if (/^\/t\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(path)) return new Set(["at", "view", "work"]);
   if (/^\/inbox\/[^/]+$/.test(path)) return new Set(["manager"]);
   if (path === "/todos") return new Set(["view", "mode", "date", "id"]); // id is the older to-do form.
   if (/^\/machines\/[^/]+$/.test(path)) return new Set(["range"]);
@@ -61,6 +62,7 @@ function deepLinkQueryKeys(url: URL): ReadonlySet<string> {
       case "models": item = "purpose"; break;
       case "channels": item = "channel"; break;
       case "extensions": item = "extension"; break;
+      case "plugins": item = "plugin"; break;
       case "connectors": item = "connector"; break;
     }
     return new Set(item ? ["tab", "manager", item] : ["tab", "manager"]);

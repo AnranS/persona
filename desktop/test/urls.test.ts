@@ -74,6 +74,8 @@ test("malformed canonical and route= app links are refused", () => {
     "persona://open?route=%2Fpersona#settings",
     "persona://open?route=persona",
     "persona://open/\\evil.example/persona",
+    "persona://open/persona%5Csettings",
+    "persona://open/%2Fevil.example/x",
     "persona://open?route=%2Fpersona%5Csettings",
     "persona://open/persona%00hidden",
     "persona://open?route=%2Fpersona%00hidden",
@@ -81,6 +83,26 @@ test("malformed canonical and route= app links are refused", () => {
     "persona://open?route=%2Fpersona%7Fhidden",
   ];
   for (const input of invalid) assert.equal(parseDeepLink(input), undefined, input);
+});
+
+test("canonical app links keep only the query keys for their route", () => {
+  const cases: [string, string][] = [
+    ["persona://open/todos/t-19?at=msg-1&token=x", "/todos/t-19"],
+    ["persona://open/persona/new?machine=mac-1&at=msg-1", "/persona/new"],
+    ["persona://open/inbox/i-1?manager=m2&at=msg-1", "/inbox/i-1?manager=m2"],
+    ["persona://open/machines/m1?range=24h&view=compact", "/machines/m1?range=24h"],
+    ["persona://open/settings?tab=models&purpose=chat&extension=gh", "/settings?tab=models&purpose=chat"],
+    ["persona://open/extension/weather/today?state=x&manager=m", "/extension/weather/today?state=x"],
+  ];
+  for (const [input, route] of cases) assert.equal(parseDeepLink(input)?.route, route, input);
+});
+
+test("canonical app links retain the merged route-table regressions", () => {
+  assert.equal(parseDeepLink("persona://open/settings?tab=extensions&extension=gh&add=1")?.route, "/settings?tab=extensions&extension=gh");
+  assert.equal(parseDeepLink("persona://open/s/m/%2F%2Fevil")?.route, "/s/m/%2F%2Fevil");
+  assert.equal(parseDeepLink("persona://open/s/m/s?view=term&work=1")?.route, "/s/m/s?view=term&work=1");
+  assert.equal(parseDeepLink("persona://open/t/m/space/1/s?work=1&view=term&token=x")?.route, "/t/m/space/1/s?work=1&view=term");
+  assert.equal(parseDeepLink("persona://open/settings?tab=plugins&plugin=weather&token=x")?.route, "/settings?tab=plugins&plugin=weather");
 });
 
 test("pairing links keep their complete existing results", () => {
