@@ -6,6 +6,7 @@ import SwiftUI
 /// one-time hint says how to stop iOS asking every time.
 struct ClipboardSection: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.displayScale) private var displayScale
     let ref: MachineRef
     let machine: Machine
     var listed: MachineClipboard
@@ -128,7 +129,7 @@ struct ClipboardSection: View {
             .font(Theme.Font.label)
             switch content.kind {
             case .image:
-                if let bytes = content.image?.bytes, let image = UIImage(data: bytes) {
+                if let image = model?.fetchedPicture {
                     Image(uiImage: image).resizable().scaledToFit()
                         .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
@@ -217,7 +218,7 @@ struct ClipboardSection: View {
 
     private func fetch() async {
         guard let model else { return }
-        report(await model.fetch(machineID: ref.id))
+        report(await model.fetch(machineID: ref.id, scale: displayScale))
     }
 
     private func report(_ outcome: ClipboardOutcome) {
