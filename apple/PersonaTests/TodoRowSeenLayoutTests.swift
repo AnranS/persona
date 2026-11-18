@@ -45,7 +45,7 @@ import UIKit
         let control = try row(width: 320, size: .xxxLarge, scheme: scheme, gotIt: false, todo: review)
         let gotIt = try row(width: 320, size: .xxxLarge, scheme: scheme, gotIt: true, todo: review)
         let chip = Chip(text: "Got It", symbol: Theme.Icon.seen, look: .tint(Theme.accent), compact: true)
-        let ownLine = fitting(chip, size: .xxxLarge).height - 2 * Chip.compactInset + Theme.Space.xs
+        let ownLine = fitting(chip, size: .xxxLarge).height - Theme.Space.xxs + Theme.Space.xs
         let added = gotIt.layoutHeight - control.layoutHeight
         #expect(abs(added - ownLine) < 0.5,
                 "Got It must add exactly its own line below the long status: added \(added), expected \(ownLine)")
