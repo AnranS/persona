@@ -173,6 +173,17 @@ class ExtensionMarketRemovalTest {
         rule.onNode(hasText("0 extensions", substring = true) and hasAnyAncestor(isDialog())).assertDoesNotExist()
     }
 
+    @Test fun nonMarketItemsCarryingMarketProvenanceDoNotCount() {
+        val api = RemovalApi(listOf(first)) { listOf(
+            installed("configured", "m1").copy(source = "hub.json"),
+            installed("attached", "m1").copy(attached = buildJsonObject { put("online", true) }),
+        ) }
+        show(api)
+        askRemoval()
+        awaitWords("The hub stops reading this market. No installed extension came from it.")
+        assertEquals(1, api.reads)
+    }
+
     @Test fun selectedAssistantDoesNotCountUnstampedDefaultExtensions() {
         AssistantManagerChoice.choose("hub", "other-manager", "assistant")
         val api = RemovalApi(listOf(first)) { listOf(installed("default-only", "m1", manager = null)) }

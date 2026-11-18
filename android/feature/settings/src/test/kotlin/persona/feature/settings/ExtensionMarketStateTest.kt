@@ -413,12 +413,15 @@ class ExtensionMarketStateTest {
     }
 
     @Test fun marketRemovalCountsOnlyKnownAffectedExtensionsAndWordsItsFallbacks() {
-        val ownOn = HubExtension("on", market = "m1", manager = "assistant", autoUpgrade = true)
-        val ownOff = HubExtension("off", market = "m1", manager = "assistant", autoUpgrade = false)
-        val otherManager = HubExtension("other-manager", market = "m1", manager = "other", autoUpgrade = true)
-        val otherMarket = HubExtension("other-market", market = "m2", manager = "assistant", autoUpgrade = true)
+        val ownOn = HubExtension("on", source = "installed", market = "m1", manager = "assistant", autoUpgrade = true)
+        val ownOff = HubExtension("off", source = "installed", market = "m1", manager = "assistant", autoUpgrade = false)
+        val otherManager = HubExtension("other-manager", source = "installed", market = "m1", manager = "other", autoUpgrade = true)
+        val otherMarket = HubExtension("other-market", source = "installed", market = "m2", manager = "assistant", autoUpgrade = true)
         val notFromMarket = HubExtension("local", manager = "assistant", autoUpgrade = null)
-        val installed = listOf(ownOn, ownOff, otherManager, otherMarket, notFromMarket)
+        val configuredWithMarket = HubExtension("configured", source = "hub.json", market = "m1", autoUpgrade = true)
+        val attachedWithMarket = HubExtension("attached", source = "installed", market = "m1", autoUpgrade = true,
+            attached = kotlinx.serialization.json.JsonObject(emptyMap()))
+        val installed = listOf(ownOn, ownOff, otherManager, otherMarket, notFromMarket, configuredWithMarket, attachedWithMarket)
         val roster = ManagerRoster(listOf(
             HubManager("assistant", "Default", online = true, isDefault = true),
             HubManager("other", "Other", online = true),

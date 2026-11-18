@@ -714,12 +714,14 @@ internal data class MarketRemoval(val marketId: String, val count: Int?)
  * Null when ownership or the hub's market provenance is not knowable; never turn that into a false zero.
  */
 internal fun affectedExtensionCount(marketId: String, extensions: List<HubExtension>, assistant: CurrentAssistant): Int? {
+    // Provenance alone is insufficient: configured, builtin, development and attached items never participate in market upgrades.
+    val marketInstalled = extensions.filter { it.source == "installed" && it.attached == null }
     val own = when {
         // A known roster (or an explicit non-default choice) uses the same ownership rule as the rest of Settings.
         // In particular, an unstamped item remains the default assistant's; it never moves to the selected one.
-        assistant.roster != null || assistant.choice.manager != null -> extensions.filter { assistant.owns(it.manager) }
-        extensions.any { it.manager != null && (it.market == marketId || (it.autoUpgrade != null && it.market == null)) } -> return null
-        else -> extensions.filter { it.manager == null }
+        assistant.roster != null || assistant.choice.manager != null -> marketInstalled.filter { assistant.owns(it.manager) }
+        marketInstalled.any { it.manager != null && (it.market == marketId || (it.autoUpgrade != null && it.market == null)) } -> return null
+        else -> marketInstalled.filter { it.manager == null }
     }
     if (own.any { it.autoUpgrade != null && it.market == null }) return null
     return own.count { it.market == marketId }

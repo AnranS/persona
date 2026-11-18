@@ -91,9 +91,9 @@ class ExtensionMarketRemovalShotsTest {
             override suspend fun markets() = listOf(market)
             override suspend fun autoUpgrades() = true
             override suspend fun extensions() = listOf(
-                HubExtension("one", market = "m1", autoUpgrade = true),
-                HubExtension("two", market = "m1", autoUpgrade = false),
-                HubExtension("other", market = "m2", autoUpgrade = true),
+                HubExtension("one", source = "installed", market = "m1", autoUpgrade = true),
+                HubExtension("two", source = "installed", market = "m1", autoUpgrade = false),
+                HubExtension("other", source = "installed", market = "m2", autoUpgrade = true),
             )
         }
         rule.setContent {
