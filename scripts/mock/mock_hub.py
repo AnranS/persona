@@ -2079,8 +2079,6 @@ ASSISTANT = [
     assistant_sess(ASK3, "帮我约周五和韩梅梅吃饭", 60 * 28, "已经在日历里加好了。"),
     assistant_sess(ASK4, "整理这个季度的读书笔记", 60 * 50, "第 30 本整理好了。"),
 ]
-# ComposerKeyboardTests checks a concrete versioned label on the main conversation; the other chats keep the opus alias.
-ASSISTANT[0]["model"] = "claude-opus-5-5"
 
 # MOCK_ASSISTANT_WORKING=1 (#6230): the main conversation is mid-turn with the user's message not answered yet, so the
 # chat draws its live work line in the message stream and nothing repeats it in the dock. The transcript item is added

@@ -1,7 +1,7 @@
 import XCTest
 
 /// Only the app's composer controls are inspected, not the system keyboard's buttons. Synthetic chats on a private
-/// mock hub (`scripts/mock/mock_hub.py`) cover the shared assistant/Agents composer, multiline drafts
+/// mock hub (`scripts/mock/composer_hub.py`) cover the shared assistant/Agents composer, multiline drafts
 /// and drag dismissal (#2200).
 final class ComposerKeyboardTests: XCTestCase {
     private var app: XCUIApplication!
@@ -13,6 +13,16 @@ final class ComposerKeyboardTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] != nil else {
             throw XCTSkip("needs the isolated composer mock hub (PERSONA_MOCK_HUB)")
         }
+        let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]!
+        let data = try Data(contentsOf: URL(string: hub + "/api/v1/sessions")!)
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let rows = try XCTUnwrap(root?["sessions"] as? [[String: Any]])
+        let models = Dictionary(uniqueKeysWithValues: rows.map { ($0["session_id"] as? String ?? "", $0["model"] as? String ?? "") })
+        let agentID = String(agent.split(separator: "/").last!)
+        let assistantID = String(assistant.split(separator: "/").last!)
+        let message = "ComposerKeyboardTests requires scripts/mock/composer_hub.py; scripts/mock/mock_hub.py is a different fixture"
+        XCTAssertEqual(models[agentID], "gpt-6.1-sol-codex-mini-preview-2026-11-05", message)
+        XCTAssertEqual(models[assistantID], "gpt-6.1-sol", message)
     }
 
     override func tearDown() {
@@ -121,7 +131,8 @@ final class ComposerKeyboardTests: XCTestCase {
                 XCTAssertLessThanOrEqual(control.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
                 frames[id] = control.frame
             }
-            XCTAssertTrue((app.buttons["shell-composer-modes"].value as? String ?? "").hasPrefix("Opus 5.5"),
+            let expected = name.hasPrefix("assistant") ? "6.1 Sol" : "6.1 Sol Codex Mini Preview 2026 11 05"
+            XCTAssertTrue((app.buttons["shell-composer-modes"].value as? String ?? "").hasPrefix(expected),
                           "the model label lost the version or variant")
             let mic = frames["shell-composer-mic"]!, send = frames["shell-composer-send"]!
             XCTAssertEqual(mic.height, send.height, accuracy: 1)
@@ -193,9 +204,9 @@ final class ComposerKeyboardTests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let button = app.buttons["shell-composer-modes"]
-        XCTAssertTrue((button.value as? String ?? "").hasPrefix("Opus 5.5"))
+        XCTAssertTrue((button.value as? String ?? "").hasPrefix("6.1 Sol"))
         button.tapCenter()
-        XCTAssertTrue(app.staticTexts["Opus 5.5"].waitForExistence(timeout: 5), "menu and current label disagree")
+        XCTAssertTrue(app.staticTexts["6.1 Sol"].waitForExistence(timeout: 5), "menu and current label disagree")
         shot("assistant-model-menu")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
     }
