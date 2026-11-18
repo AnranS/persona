@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // refreshListedTodo is the hub's owner-facing projection of one to-do, including the needs_user fallback used when
 // there is no complete ask. The clients apply the same triage rules to the fields returned by GET /api/v1/todos.
 func refreshListedTodo(ctx context.Context, s *Service, id string) listedTodo {
-	cur := todoNow(s, id)
+	cur := formatTodo(todoNow(s, id))
 	listed := listedTodo{Todo: cur, DecisionReview: currentDecisionReview(cur)}
 	if ask, ok := s.todoAsks(ctx)[id]; ok {
 		listed.Ask = &ask
@@ -79,6 +80,9 @@ func requireRefreshNotOwnerFacing(t *testing.T, s *Service, id string) {
 		}
 	}
 	listed := refreshListedTodo(ctx, s, id)
+	if listed.DecisionReview != nil {
+		t.Errorf("the handed-back round still exposes decision_review: %+v", listed.DecisionReview)
+	}
 	if tr := triageTodo(listed, noSessions, time.Now(), time.Time{}, time.UTC, false); tr.Section == triageWaiting {
 		t.Errorf("the handed-back needs_user fallback is still in Needs you: %+v", tr)
 	}
@@ -129,6 +133,33 @@ func TestDecisionRefreshRecheckLeavesOwnerQueues(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	recheckPendingDecision(t, s, f, todo, dropTableDecision())
 	requireRefreshNotOwnerFacing(t, s, todo.ID)
+}
+
+// A prior Don't handle receipt cannot resurrect a recheck-pending round on a real client. This exercises the actual
+// GET projection, where listDecisionReviews reads the already-formatted supervision state.
+func TestDecisionRefreshDismissedRecheckLeavesActualGET(t *testing.T) {
+	at := time.Now().UTC()
+	e := dismissalEnv(t, &memStore{}, at, true)
+	dismissReview(t, e, at)
+	e.s.sweepDecisionAges(at.Add(decisionRecheckAfter + time.Minute))
+
+	w := e.must("GET", "/api/v1/todos", "")
+	var out struct {
+		Todos []listedTodo `json:"todos"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Todos) != 1 {
+		t.Fatalf("GET /api/v1/todos: %s", w.Body)
+	}
+	row := out.Todos[0]
+	if row.Ask != nil || row.Supervision.State != "" || row.DecisionReview != nil {
+		t.Fatalf("the handed-back dismissal is still a live owner round: %+v", row)
+	}
+	if tr := triageTodo(row, noSessions, time.Now(), time.Time{}, time.UTC, false); tr.Section == triageWaiting || tr.Rule == ruleOwnerDecides {
+		t.Fatalf("the handed-back dismissal returned to Needs you: %+v", tr)
+	}
 }
 
 // Every way of answering the old round is closed while its facts are rechecked. In particular, explain_first must not
