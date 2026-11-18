@@ -390,7 +390,7 @@ struct MeetingPageBar: View {
                     confirmingStop = true
                 }
                 // On the button, so the question points at End.
-                .confirmationDialog("End the Meeting?", isPresented: $confirmingStop, titleVisibility: .visible) {
+                .accessibleConfirmationDialog("End the Meeting?", isPresented: $confirmingStop, titleVisibility: .visible, hasCancel: true) {
                     Button("End and Write the Minutes", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
                     Button("Keep Going [Meeting Room]", role: .cancel) {}
                 } message: {
