@@ -90,8 +90,9 @@ final class ShellPagerTests: XCTestCase {
     @MainActor func testRecoveryExposesOnlyTheDragStartingPage() {
         launch(["-showShellPagerAt", "0.7"])
         sleep(1)
-        let destination = app.buttons["agents-new"].firstMatch
-        XCTAssertFalse(destination.exists, "the destination page is exposed while recovery returns to Assistant")
+        let destination = app.buttons["agents.filter.unread"].firstMatch
+        destination.tap()
+        XCTAssertFalse(destination.isSelected, "the destination page took a tap while recovery returned to Assistant")
         let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the starting page's composer is not exposed")
         field.tap()
