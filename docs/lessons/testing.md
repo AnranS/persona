@@ -1,5 +1,7 @@
 # Lessons: testing and validation
 
+- A viewer's Close button existing, or being non-hittable, does not prove that its picture and tap recognizers are ready, or that a tap hid the chrome (#8562). The full-screen presentation may still be settling, the decoded page may still be a spinner, or a SpringBoard alert may cover the app. Dismiss the known icon-change alert, wait for the decoded `viewer-page-N` and a hittable Close before the first tap, and only then assert the hide/show sequence. A delayed-decode launch turns the old race into a deterministic failure; a longer poll after a mistimed tap only hides the synchronization gap.
+
 - A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
   app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
   wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
