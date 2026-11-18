@@ -8,8 +8,10 @@ import persona.core.contracts.api.ExtensionHasDependents
 import persona.core.contracts.api.ExtensionFailedMember
 import persona.core.contracts.api.ExtensionPartialUninstall
 import persona.core.contracts.api.ExtensionRemoval
+import persona.core.contracts.api.ExtensionManagement
 import persona.core.contracts.api.ExtensionMarket
 import persona.core.contracts.api.ExtensionMarkets
+import persona.core.contracts.api.HubExtension
 import persona.core.contracts.api.ExtensionOperation
 import persona.core.contracts.api.ExtensionPreview
 import persona.core.contracts.api.hubCodedFailure
@@ -703,6 +705,30 @@ internal class CatalogExtensionModel(
     }
 }
 
+/** A prepared market-removal confirmation. Null count: the hub could not provide an honest count. */
+internal data class MarketRemoval(val marketId: String, val count: Int?)
+
+/**
+ * How many of the current assistant's installed extensions stop upgrading when [marketId] is removed.
+ * Null when ownership or the hub's market provenance is not knowable; never turn that into a false zero.
+ */
+internal fun affectedExtensionCount(marketId: String, extensions: List<HubExtension>, owner: String, ownershipKnown: Boolean): Int? {
+    val own = when {
+        ownershipKnown -> extensions.filter { (it.manager ?: owner) == owner }
+        extensions.any { it.manager != null && (it.market == marketId || (it.autoUpgrade != null && it.market == null)) } -> return null
+        else -> extensions.filter { it.manager == null }
+    }
+    if (own.any { it.autoUpgrade != null && it.market == null }) return null
+    return own.count { it.market == marketId }
+}
+
+/** The existing uncounted warning, a true zero, or a localized singular/plural affected count. */
+internal fun marketRemovalText(res: Resources, count: Int?): String = when (count) {
+    null -> res.getString(R.string.settings_ext_remove_market_text)
+    0 -> res.getString(R.string.settings_ext_remove_market_unused)
+    else -> res.getQuantityString(R.plurals.settings_ext_remove_market_affected, count, count)
+}
+
 internal data class MarketsState(
     val markets: List<ExtensionMarket>? = null,
     val loading: Boolean = false,
@@ -714,15 +740,19 @@ internal data class MarketsState(
     val addError: String? = null,
     /** Why the last refresh, removal or token change did not happen. */
     val actionError: String? = null,
+    /** The market whose installed extensions are being counted, then its prepared confirmation. */
+    val preparingRemoval: String? = null,
+    val removal: MarketRemoval? = null,
     /** The auto-upgrade switch for all market extensions (docs/extensions/extensions.md "Auto-upgrade"); null: a hub without it. */
     val autoUpgrade: Boolean? = null,
     val savingAuto: Boolean = false,
 )
 
 /** "Manage markets": the markets the hub reads. */
-internal class MarketsModel(private val api: ExtensionMarkets, private val res: Resources) {
+internal class MarketsModel(private val api: ExtensionManagement, private val res: Resources) {
     private val mutable = MutableStateFlow(MarketsState())
     val state = mutable.asStateFlow()
+    private var removalRequest = 0
 
     suspend fun load() {
         if (state.value.loading) return
@@ -777,7 +807,27 @@ internal class MarketsModel(private val api: ExtensionMarkets, private val res: 
         } finally { mutable.update { it.copy(adding = false) } }
     }
 
-    suspend fun remove(id: String): Boolean = working(id, R.string.settings_ext_market_not_removed) {
+    /** Reads the installed list before the destructive confirmation. A newer request owns the dialog. */
+    suspend fun prepareRemoval(id: String, owner: String, ownershipKnown: Boolean) {
+        val request = ++removalRequest
+        mutable.update { it.copy(preparingRemoval = id, removal = null) }
+        val count = try {
+            affectedExtensionCount(id, api.extensions(), owner, ownershipKnown)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+        if (request == removalRequest) {
+            mutable.update { it.copy(preparingRemoval = null, removal = MarketRemoval(id, count)) }
+        }
+    }
+
+    /** Cancels the dialog and fences off a count that may still be arriving. */
+    fun dismissRemoval() {
+        removalRequest++
+        mutable.update { it.copy(preparingRemoval = null, removal = null) }
+    }
+
+    suspend fun remove(id: String, onStart: () -> Unit = {}): Boolean = working(id, R.string.settings_ext_market_not_removed) {
+        onStart()
         api.removeMarket(id)
         mutable.update { it.copy(markets = it.markets?.filter { m -> m.id != id }) }
     }
