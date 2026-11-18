@@ -183,7 +183,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		s.work.mu.Unlock()
 	}()
 	e, ok := s.workEntry(k)
-	if !ok || e.WakeAt == nil || e.WakeAt.After(now) || e.Work.RetiredAt != nil {
+	if !ok || e.WakeAt == nil || e.Work.On == proto.WaitTransient && e.WakeAt.After(now) || e.Work.RetiredAt != nil {
 		return
 	}
 	// Read again right before acting: the pass's view may be a send or two old.

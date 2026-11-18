@@ -3,15 +3,15 @@ package modelretry
 
 import (
 	"math/rand/v2"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-var permanentStatus = regexp.MustCompile(`\b(?:400|401|402|403|404|405|409|410|413|422|501|505)\b`)
-var temporaryStatus = regexp.MustCompile(`\b(?:408|429|500|502|503|504|529)\b`)
+var permanentStatus = lazyre.New(`\b(?:400|401|402|403|404|405|409|410|413|422|501|505)\b`)
+var temporaryStatus = lazyre.New(`\b(?:408|429|500|502|503|504|529)\b`)
 
 // Temporary requires positive evidence of a recoverable failure. Permanent
 // evidence wins even when an error also quotes an upstream temporary failure.

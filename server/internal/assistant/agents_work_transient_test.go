@@ -198,7 +198,7 @@ func TestRateLimitWaitsLonger(t *testing.T) {
 	if e.WakeAt == nil {
 		t.Fatalf("not scheduled: %+v", e)
 	}
-	if d := e.WakeAt.Sub(e.Work.At); d < 55*time.Second || d > 65*time.Second {
-		t.Fatalf("first continue after a rate limit in %v, want about 60 s", d)
+	if d := e.WakeAt.Sub(e.Work.At); d < 30*time.Second || d > 61*time.Second {
+		t.Fatalf("first continue after a rate limit in %v, want equal jitter between 30 and 60 s", d)
 	}
 }

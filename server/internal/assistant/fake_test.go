@@ -366,6 +366,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 				}
 			}
 			f.agentSent = append(f.agentSent, a)
+			if f.onSend != nil {
+				f.onSend(f, a)
+			}
 		}
 		return json.RawMessage(`{}`), nil
 	case DeviceSessionsList:

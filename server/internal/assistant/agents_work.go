@@ -702,7 +702,8 @@ func (s *Service) putTriageWork(e db.SessionWork, generation uint64) bool {
 	s.work.mu.Lock()
 	s.work.init()
 	current := s.work.entries[key]
-	if s.work.generation[key] != generation || current != nil && (current.TurnAt.After(e.TurnAt) || current.Work.RetiredAt != nil || current.Work.Deferred && current.TurnAt.Equal(e.TurnAt)) {
+	retired := current != nil && current.Work.RetiredAt != nil && (current.Work.RetiredTurnAt == nil || !e.TurnAt.After(current.Work.RetiredTurnAt.Add(2*time.Second)))
+	if s.work.generation[key] != generation || current != nil && (current.TurnAt.After(e.TurnAt) || retired || current.Work.Deferred && current.TurnAt.Equal(e.TurnAt)) {
 		s.work.mu.Unlock()
 		return false
 	}

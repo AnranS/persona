@@ -445,6 +445,8 @@ func (s *Service) sendModelRetry(ctx context.Context, e db.SessionWork, text str
 	s.work.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	id := fmt.Sprintf("model-retry:%s:%d:%d", e.SessionID, e.TurnAt.UnixNano(), e.Retries)
+	// PostgreSQL timestamps retain microseconds. Use that same precision before
+	// and after loading a due row so a crash cannot change its once-only send ID.
+	id := fmt.Sprintf("model-retry:%s:%d:%d", e.SessionID, e.TurnAt.Truncate(time.Microsecond).UnixNano(), e.Retries)
 	return s.call(ctx, e.MachineID, DeviceSessionSendOnce, map[string]any{"session_id": e.SessionID, "text": text, "client_msg_id": id}, nil)
 }
