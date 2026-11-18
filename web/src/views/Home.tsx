@@ -16,7 +16,7 @@ import { cardToolName } from "../lib/turns";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { homeOverview, paneRoute, type TabGroup } from "../lib/herdr-tree";
 import { agentLabel } from "../lib/mentions";
-import { hubLabel, machineWithHub } from "../lib/mesh";
+import { machineWithHub } from "../lib/mesh";
 import { isPending, machineErrorText } from "../lib/add-computer";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
@@ -39,6 +39,7 @@ import { MarkSeenDialog } from "./AgentMenus";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
 import { OverviewCards } from "./extensions/ExtensionSlots";
+import { OverviewMachineCards } from "./OverviewMachineCards";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
@@ -251,29 +252,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
 
           {loaded && machines.length > 0 && (
             <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
-                {machines.map((m) => {
-                  const count = agentCounts && (agentCounts.get(m.id) ?? 0);
-                  const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
-                  const hub = hubLabel(m, machines);
-                  const detail = { name: "machine" as const, mid: m.id };
-                  return (
-                    <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover">
-                      <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
-                        <Icon name="machine" size={15} />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
-                          {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
-                        </span>
-                        <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && offlineLine(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
-                      </span>
-                      <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
-                    </a>
-                  );
-                })}
-              </div>
+              <OverviewMachineCards machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
             </Group>
           )}
         </div>
