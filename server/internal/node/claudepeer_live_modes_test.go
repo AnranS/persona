@@ -181,6 +181,15 @@ func TestOutsideClaudeOwnerLiveFooterBypassToDefault(t *testing.T) {
 	checkLivePeer(t, head, err, livePeerBareHead, "")
 }
 
+func peerScreenFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "screen", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // A draft or dialog can hide default's idle hint, and dontAsk has different wording. The visible composer is still
 // newer prompting evidence than a stale bypass transcript. Without a composer, transcript fallback remains intact.
 func TestOutsideClaudeOwnerLivePromptingComposerOverridesStaleBypass(t *testing.T) {
@@ -195,6 +204,8 @@ func TestOutsideClaudeOwnerLivePromptingComposerOverridesStaleBypass(t *testing.
 		{"default draft", "default", "────\n❯ half-typed draft\n────\n", peerModePrompting, livePeerBareHead, ""},
 		{"default dialog", "default", "────\n❯ \n────\n  Settings  Status  Config\n", peerModePrompting, livePeerBareHead, ""},
 		{"dontAsk", "dontAsk", "────\n❯ \n────\n  ⏵⏵ don't ask on (shift+tab to cycle)\n", peerModePrompting, livePeerBareHead, ""},
+		{"question dialog keeps bypass", "bypassPermissions", peerScreenFixture(t, "claude-2.1.303-questions-preview-198.txt"), peerModeBypass, livePeerBypassHead, ""},
+		{"permission dialog keeps bypass", "bypassPermissions", "────────────────────────────────────────────────\n Bash command\n\n   git push origin main\n   Push the release commit\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for git push commands in /code/app\n   3. No, and tell Claude what to do differently (esc)\n", peerModeBypass, livePeerBypassHead, ""},
 		{"no composer falls back", "bypassPermissions", "no composer here\n", peerModeBypass, livePeerBypassHead, ""},
 	}
 	for _, tc := range cases {

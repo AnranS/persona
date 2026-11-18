@@ -369,15 +369,38 @@ func (n *Node) noPaneForModes(id string) error {
 	return refusal(proto.CodeModesNotRunning, i18n.T(i18n.Default, "rpc-errors.modes_not_running"), nil)
 }
 
-// tuiFooterLines returns the lines under the input box's bottom rule, or nil when no rule is visible.
-func tuiFooterLines(screen string) []string {
-	lines := strings.Split(screen, "\n")
+// tuiFooterLines returns the lines under a real input box's bottom rule, or nil when no composer is visible. Two
+// rules alone are not enough: question and permission dialogs draw them too, and their hints are not permission modes.
+func tuiFooterLines(text string) []string {
+	lines := strings.Split(text, "\n")
+	end := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.HasPrefix(strings.TrimSpace(lines[i]), "──") {
-			return lines[i+1:]
+			end = i
+			break
 		}
 	}
-	return nil
+	if end < 1 {
+		return nil
+	}
+	start := -1
+	for i := end - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "──") {
+			start = i
+			break
+		}
+	}
+	if start < 0 || start+1 >= end {
+		return nil
+	}
+	prompt := strings.TrimSpace(lines[start+1])
+	if !strings.HasPrefix(prompt, "❯") && !strings.HasPrefix(prompt, "!") {
+		return nil
+	}
+	if screen.ParseDialog(text) != nil {
+		return nil
+	}
+	return lines[end+1:]
 }
 
 // tuiComposerVisible reports whether the input box's bottom rule is visible, even when a draft or dialog hides the
