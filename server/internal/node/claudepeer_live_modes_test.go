@@ -23,6 +23,7 @@ type livePeerCase struct {
 	transcriptMode string
 	argv           []string
 	footerMode     string
+	footerText     string
 	receiverClass  string
 	owner          bool
 }
@@ -57,10 +58,13 @@ func sendLivePeer(t *testing.T, c livePeerCase) (string, error) {
 		t.Skip("the external tmux capture fixture is a POSIX shell script")
 	}
 	if c.footerMode != "" {
-		footer := map[string]string{
-			"default":           "────\n❯ \n────\n  ? for shortcuts\n",
-			"bypassPermissions": "────\n❯ \n────\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
-		}[c.footerMode]
+		footer := c.footerText
+		if footer == "" {
+			footer = map[string]string{
+				"default":           "────\n❯ \n────\n  ? for shortcuts\n",
+				"bypassPermissions": "────\n❯ \n────\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n",
+			}[c.footerMode]
+		}
 		if footer == "" {
 			t.Fatalf("no footer fixture for mode %q", c.footerMode)
 		}
@@ -87,8 +91,15 @@ func sendLivePeer(t *testing.T, c livePeerCase) (string, error) {
 		}
 		pane := outsidePane(proc)
 		captured, err := n.readPane(context.Background(), pane, "visible", 60)
-		if pane == "" || err != nil || tuiMode(captured) != c.footerMode {
+		if pane == "" || err != nil {
 			t.Fatalf("external footer %q: pane %q, capture %q, %v", c.footerMode, pane, captured, err)
+		}
+		if c.footerText != "" {
+			if captured != c.footerText {
+				t.Fatalf("external capture = %q, want fixture %q", captured, c.footerText)
+			}
+		} else if tuiMode(captured) != c.footerMode {
+			t.Fatalf("external footer %q: pane %q, capture %q", c.footerMode, pane, captured)
 		}
 	}
 
@@ -168,6 +179,36 @@ func TestOutsideClaudeOwnerLiveFooterBypassToDefault(t *testing.T) {
 		owner:          true,
 	})
 	checkLivePeer(t, head, err, livePeerBareHead, "")
+}
+
+// A draft or dialog can hide default's idle hint, and dontAsk has different wording. The visible composer is still
+// newer prompting evidence than a stale bypass transcript. Without a composer, transcript fallback remains intact.
+func TestOutsideClaudeOwnerLivePromptingComposerOverridesStaleBypass(t *testing.T) {
+	cases := []struct {
+		name       string
+		footerMode string
+		footerText string
+		receiver   string
+		wantHead   string
+		wantCode   string
+	}{
+		{"default draft", "default", "────\n❯ half-typed draft\n────\n", peerModePrompting, livePeerBareHead, ""},
+		{"default dialog", "default", "────\n❯ \n────\n  Settings  Status  Config\n", peerModePrompting, livePeerBareHead, ""},
+		{"dontAsk", "dontAsk", "────\n❯ \n────\n  ⏵⏵ don't ask on (shift+tab to cycle)\n", peerModePrompting, livePeerBareHead, ""},
+		{"no composer falls back", "bypassPermissions", "no composer here\n", peerModeBypass, livePeerBypassHead, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			head, err := sendLivePeer(t, livePeerCase{
+				transcriptMode: "bypassPermissions",
+				footerMode:     tc.footerMode,
+				footerText:     tc.footerText,
+				receiverClass:  tc.receiver,
+				owner:          true,
+			})
+			checkLivePeer(t, head, err, tc.wantHead, tc.wantCode)
+		})
+	}
 }
 
 // AC4: receiver-side evidence never authorizes somebody else's words. With no readable footer or bypass-enabling

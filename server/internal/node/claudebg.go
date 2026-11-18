@@ -409,14 +409,19 @@ func peerSessionClass(n *Node, c claudeProc, id string) string {
 }
 
 // peerSessionClassAt is the from-mode class session id runs in. A readable external tmux footer is the freshest mode:
-// shift+tab changes it before Claude writes the transcript. Without one, read the newest transcript copy in claude c's
-// own config directory (not another profile's copy), bypassing the ordinary metadata cache. Plan needs one more fact:
-// process arguments say whether bypass is available to that session. No mode, or plan without that evidence, is "".
+// shift+tab changes it before Claude writes the transcript. A visible composer without a recognized mode is prompting:
+// bypass and plan keep their indicators when a draft or dialog hides default's hint. Without live evidence, read the newest
+// transcript copy in claude c's own config directory (not another profile's copy), bypassing the ordinary metadata cache.
+// Plan needs one more fact: process arguments say whether bypass is available to that session. No mode, or plan without
+// that evidence, is "".
 func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
 	mode := ""
 	if pane := outsidePane(c); pane != "" {
 		if text, err := n.readPane(ctx, pane, "visible", 60); err == nil {
 			mode = tuiMode(text)
+			if mode == "" && tuiPromptingScreen(text) {
+				return peerModePrompting
+			}
 		}
 	}
 	if mode == "" {

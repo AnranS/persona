@@ -367,20 +367,32 @@ func (n *Node) noPaneForModes(id string) error {
 	return refusal(proto.CodeModesNotRunning, i18n.T(i18n.Default, "rpc-errors.modes_not_running"), nil)
 }
 
-// tuiMode reads the permission mode off the TUI's footer: the lines under the input box's bottom rule.
-func tuiMode(screen string) string {
+// tuiFooterLines returns the lines under the input box's bottom rule, or nil when no rule is visible.
+func tuiFooterLines(screen string) []string {
 	lines := strings.Split(screen, "\n")
-	rule := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.HasPrefix(strings.TrimSpace(lines[i]), "──") {
-			rule = i
-			break
+			return lines[i+1:]
 		}
 	}
-	if rule < 0 {
-		return ""
-	}
-	for _, l := range lines[rule+1:] {
+	return nil
+}
+
+// tuiComposerVisible reports whether the input box's bottom rule is visible, even when a draft or dialog hides the
+// idle hint that would identify a specific mode.
+func tuiComposerVisible(screen string) bool {
+	return tuiFooterLines(screen) != nil
+}
+
+// tuiPromptingScreen reports a visible composer without a recognized bypass or plan mode. Other screens, including a
+// status panel that exposes no current mode, do not override transcript evidence.
+func tuiPromptingScreen(text string) bool {
+	return tuiComposerVisible(text)
+}
+
+// tuiMode reads the permission mode off the TUI's footer: the lines under the input box's bottom rule.
+func tuiMode(screen string) string {
+	for _, l := range tuiFooterLines(screen) {
 		switch {
 		case strings.Contains(l, "accept edits on"):
 			return "acceptEdits"
@@ -388,6 +400,8 @@ func tuiMode(screen string) string {
 			return "plan"
 		case strings.Contains(l, "auto mode on"):
 			return "auto"
+		case strings.Contains(l, "don't ask"):
+			return "dontAsk"
 		case strings.Contains(l, "bypass permissions on"):
 			return "bypassPermissions"
 		case strings.Contains(l, "manual mode on"), strings.Contains(l, "? for shortcuts"):
