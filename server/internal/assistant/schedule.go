@@ -1394,21 +1394,22 @@ func (s *Service) Run(ctx context.Context) {
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
 	s.recoverApprovalJournals(recoverCtx)
 	cancel()
-	go s.taskCloseLoop(ctx)      // the agents of finished tasks (tasks_close.go)
-	go s.superviseLoop(ctx)      // the tasks the main conversation follows up (supervise_signals.go)
-	go s.workLoop(ctx)           // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
-	go s.replyLoop(ctx)          // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)          // the Lark bot's cards left unanswered (feishu_nudge.go)
-	go s.sourceReportLoop(ctx)   // the reports back to where a todo was asked (todo_source.go)
-	go s.remindLoop(ctx)         // the todos' reminders (todo_plan.go)
-	go s.urgentLoop(ctx)         // urgent calls' retries and reminders (urgent_call_loop.go)
-	go s.channelLoop(ctx)        // the channels' runs that lost their watcher (channels.go)
-	go s.kbLoop(ctx)             // the knowledge base (kb.go)
-	go s.kbHistoryLoop(ctx)      // importing chats' older history into it, off by default (kbhistory/history.go)
-	go s.memoryDreamLoop(ctx)    // consolidating assistant memory, off by default
-	go s.viewActionLoop(ctx)     // durable card reply outbox
-	go s.acceptLoop(ctx)         // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
-	go s.admissionQueueLoop(ctx) // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
+	go s.delayedWaitsRecoveryLoop(ctx) // usage-limit retries and task receipt rechecks left by the previous manager
+	go s.taskCloseLoop(ctx)            // the agents of finished tasks (tasks_close.go)
+	go s.superviseLoop(ctx)            // the tasks the main conversation follows up (supervise_signals.go)
+	go s.workLoop(ctx)                 // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
+	go s.replyLoop(ctx)                // questions the user looked at and left unanswered (agents_reply.go)
+	go s.nudgeLoop(ctx)                // the Lark bot's cards left unanswered (feishu_nudge.go)
+	go s.sourceReportLoop(ctx)         // the reports back to where a todo was asked (todo_source.go)
+	go s.remindLoop(ctx)               // the todos' reminders (todo_plan.go)
+	go s.urgentLoop(ctx)               // urgent calls' retries and reminders (urgent_call_loop.go)
+	go s.channelLoop(ctx)              // the channels' runs that lost their watcher (channels.go)
+	go s.kbLoop(ctx)                   // the knowledge base (kb.go)
+	go s.kbHistoryLoop(ctx)            // importing chats' older history into it, off by default (kbhistory/history.go)
+	go s.memoryDreamLoop(ctx)          // consolidating assistant memory, off by default
+	go s.viewActionLoop(ctx)           // durable card reply outbox
+	go s.acceptLoop(ctx)               // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
+	go s.admissionQueueLoop(ctx)       // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
@@ -2123,10 +2124,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 			return // the unavailable refusal fallback needs the user's recovery, never an automatic replay
 		}
 	}
-	var limitTurn time.Time // the turn a usage limit stopped, when one did: the retry goes only while it is still the last
-	var limitedRun bool
 	if reset, turn, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {
-		limitedRun = true
 		// A subscription's usage limit (docs/assistant/agent-work.md "Usage limits"): a retry before it resets is
 		// refused at once. The conversation that goes on by itself then needs none; otherwise the retry waits for the
 		// reset, however long that is — the watcher's time is for the turn, not for this.
@@ -2135,10 +2133,24 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 				reset.UTC().Format(time.RFC3339))
 			return
 		}
-		wait := s.limitRetryWait(reset, time.Now())
+		now := time.Now()
+		wait := s.limitRetryWait(reset, now)
 		s.logf("task %s run %s: the usage limit resets at %s: retried in %s", t.ID, run.ID, reset.UTC().Format(time.RFC3339), wait.Round(time.Second))
-		time.Sleep(wait)
-		limitTurn = turn
+		w := delayedWait{ID: "limit_" + run.ID, Kind: delayedScheduledRetry, At: now.Add(wait),
+			Retry: &scheduledLimitRetry{Run: run, RunOf: run.of, MachineName: m.Name, LimitTurn: turn}}
+		persisted := false
+		if s.store != nil && s.store() != nil {
+			pctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
+			err := s.persistScheduledRetry(pctx, w)
+			cancel()
+			persisted = err == nil
+			if err != nil {
+				s.logf("task %s run %s: persist usage-limit retry: %v", t.ID, run.ID, err)
+			}
+		}
+		// Keep this watcher (and its state-draft ownership) until the retry finishes, just as the old in-memory wait did.
+		s.runScheduledLimitRetry(s.runCtx(), w, persisted)
+		return
 	} else {
 		delay := runRetryDelay
 		if s.runRetry > 0 {
@@ -2155,14 +2167,6 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	// again regardless, with the old prompt, and silently (a retry that fails is not pushed).
 	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
 	cur, ok := s.retryStillDue(rctx, t.ID, run)
-	if ok && limitedRun {
-		// The wait for the reset is long: the conversation may have gone on meanwhile (the user said "go on" after the
-		// reset), and the work it did (a mail, a message) is not to be done twice.
-		if c, found := s.session(rctx, m.ID, run.SessionID); found && (c.Status == proto.StatusWorking || !sameTurn(c, limitTurn)) {
-			s.logf("task %s run %s: its conversation went on after the usage limit: not retried", t.ID, run.ID)
-			ok = false
-		}
-	}
 	rcancel()
 	if !ok {
 		return
@@ -2207,10 +2211,17 @@ func (s *Service) limitRetryWait(reset, now time.Time) time.Duration {
 // (#5320): a Run now meanwhile already ran it (the retry ran it a second time: the mail, the message went twice), and
 // a one-off moved to another time runs then (the retry ran it now, early, and it was then done).
 func (s *Service) retryStillDue(ctx context.Context, id string, failed ScheduleRun) (Task, bool) {
+	cur, ok, _ := s.retryStillDueChecked(ctx, id, failed)
+	return cur, ok
+}
+
+// retryStillDueChecked distinguishes cancellation from an unreadable schedule. A recovered wait may retry the latter;
+// it must not mistake a database outage for the owner's cancellation.
+func (s *Service) retryStillDueChecked(ctx context.Context, id string, failed ScheduleRun) (Task, bool, error) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		s.logf("task %s retry: %v", id, err)
-		return Task{}, false
+		return Task{}, false, err
 	}
 	var cur Task
 	i := sc.indexLocked(id)
@@ -2225,9 +2236,9 @@ func (s *Service) retryStillDue(ctx context.Context, id string, failed ScheduleR
 	}
 	if why := retryCancelled(cur, i >= 0, failed, runs, now); why != "" {
 		s.logf("task %s: %s since its run failed; not retried", id, why)
-		return Task{}, false
+		return Task{}, false, nil
 	}
-	return cur, true
+	return cur, true, nil
 }
 
 // retryCancelled is why the retry of failed, due at now, does not go ("" when it does). cur is the task now (found:

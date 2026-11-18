@@ -46,5 +46,6 @@
   "cron_never": "{cron} 永远不会运行：未来 5 年里没有符合的日期。",
   "run_if_approval": "允许在每次定时运行前，在任务电脑上执行此命令吗？",
   "run_if_skipped": "运行前检查要求跳过本次运行。",
-  "run_if_failed": "运行前检查失败：{error}"
+  "run_if_failed": "运行前检查失败：{error}",
+  "retry_unknown": "定时任务自动重试时 Persona 重启了，无法确认是否已发送，因此没有再次发送。"
 }

@@ -46,5 +46,6 @@
   "cron_never": "{cron} never runs: no date in the next 5 years matches it.",
   "run_if_approval": "Allow this command to run on the routine’s computer before each scheduled run?",
   "run_if_skipped": "The pre-run command asked to skip this run.",
-  "run_if_failed": "Pre-run check failed: {error}"
+  "run_if_failed": "Pre-run check failed: {error}",
+  "retry_unknown": "Persona restarted during the automatic retry. Delivery is unknown, so it was not sent again."
 }

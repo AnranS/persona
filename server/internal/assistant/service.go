@@ -200,6 +200,7 @@ type Service struct {
 	brief            briefBook    // briefing.go
 	reporters        reporterBook // reporters.go
 	sched            schedule     // schedule.go
+	delayedMu        sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
 	tasks            tasksState   // tasks.go
 	questions        questions    // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
