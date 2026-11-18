@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
@@ -144,10 +145,10 @@ class ExtensionMarketRemovalShotsTest {
                 Box(Modifier.testTag("shot").fillMaxSize().background(PersonaTheme.palette.background)) { ExtensionPage(api, "example-notes", {}) }
             }
         }
-        rule.waitUntil { rule.onAllNodesWithText(recovery, substring = true).fetchSemanticsNodes().size == 2 }
-        rule.onAllNodesWithText(recovery, substring = true).assertCountEquals(2)
+        rule.waitUntil { rule.onAllNodesWithText(recovery, substring = true).fetchSemanticsNodes().size == 1 }
+        rule.onAllNodesWithText(recovery, substring = true).assertCountEquals(1)
         rule.onNodeWithText("Auto-upgrade").assertIsOn().assertIsNotEnabled()
-        rule.onNodeWithText("Check for updates").assertIsNotEnabled()
+        rule.onNodeWithText("Check for updates").assertIsEnabled()
     }
 
     private fun settingsShots(large: Boolean) {

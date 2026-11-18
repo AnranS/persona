@@ -826,8 +826,7 @@ internal class MarketsModel(private val api: ExtensionManagement, private val re
         mutable.update { it.copy(preparingRemoval = null, removal = null) }
     }
 
-    suspend fun remove(id: String, onStart: () -> Unit = {}): Boolean = working(id, R.string.settings_ext_market_not_removed) {
-        onStart()
+    suspend fun remove(id: String): Boolean = working(id, R.string.settings_ext_market_not_removed) {
         api.removeMarket(id)
         mutable.update { it.copy(markets = it.markets?.filter { m -> m.id != id }) }
     }

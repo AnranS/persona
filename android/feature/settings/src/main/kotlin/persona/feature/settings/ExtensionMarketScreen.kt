@@ -697,11 +697,9 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
             JDialog({ model.dismissRemoval() }, title = stringResource(R.string.settings_ext_remove_market_title, market.label),
                 text = marketRemovalText(res, removal.count),
                 confirm = stringResource(R.string.settings_ext_remove) to {
-                    scope.launch {
-                        val removed = model.remove(market.id) { model.dismissRemoval() }
-                        if (removed) feedback?.notice(res.getString(R.string.settings_ext_market_removed))
-                    }
-                }, destructive = true, confirmEnabled = state.working == null)
+                    model.dismissRemoval()
+                    scope.launch { if (model.remove(market.id)) feedback?.notice(res.getString(R.string.settings_ext_market_removed)) }
+                }, destructive = true)
         }
     }
 }

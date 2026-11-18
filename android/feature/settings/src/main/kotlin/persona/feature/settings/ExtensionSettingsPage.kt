@@ -21,11 +21,10 @@ internal data class ExtensionSettingsCapabilities(val detail: ExtensionDetail) {
     val market: String? get() = detail.origin?.takeIf { it.startsWith("market:") }
         ?.removePrefix("market:")?.substringBefore('/')?.takeIf { it.isNotBlank() }
         ?: extension.upgrade?.market?.takeIf { it.isNotBlank() }
-    val check get() = installed && market != null && extension.autoUpgradePaused != "market_removed"
+    val check get() = installed && market != null
     val automatic get() = installed && extension.autoUpgrade != null
     val uninstall get() = installed && detail.fromMarket
     fun reason(removing: Boolean): Int = when {
-        !removing && extension.autoUpgradePaused == "market_removed" -> R.string.settings_extension_market_removed_check
         extension.source == "builtin" -> if (removing) R.string.settings_extension_builtin_uninstall else R.string.settings_extension_builtin_updates
         external || extension.attached != null || extension.source == "installed" ->
             if (removing) R.string.settings_extension_external_uninstall else R.string.settings_extension_external_updates

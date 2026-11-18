@@ -1,8 +1,6 @@
 package persona.feature.settings
 
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -56,17 +54,10 @@ class ExtensionMarketRemovalTest {
         var reads = 0
             private set
         val removed = mutableListOf<String>()
-        val refreshed = mutableListOf<String>()
-        var refreshGate: CompletableDeferred<Unit>? = null
 
         override suspend fun markets() = markets
         override suspend fun extensions(): List<HubExtension> = answer(++reads)
         override suspend fun removeMarket(id: String) { removed += id }
-        override suspend fun refreshMarket(id: String): ExtensionMarket {
-            refreshed += id
-            refreshGate?.await()
-            return markets.first { it.id == id }
-        }
     }
 
     /**
@@ -180,32 +171,6 @@ class ExtensionMarketRemovalTest {
         assertEquals(1, api.reads)
         rule.onNodeWithText("2 extensions installed", substring = true).assertDoesNotExist()
         rule.onNode(hasText("0 extensions", substring = true) and hasAnyAncestor(isDialog())).assertDoesNotExist()
-    }
-
-    @Test fun anotherMarketOperationCannotSilentlyDropAConfirmedRemoval() {
-        val releaseCount = CompletableDeferred<Unit>()
-        val releaseRefresh = CompletableDeferred<Unit>()
-        val api = RemovalApi(listOf(first, second)) {
-            releaseCount.await()
-            listOf(installed("notes", "m1", manager = "assistant"))
-        }
-        api.refreshGate = releaseRefresh
-        show(api)
-        askRemoval(first)
-        rule.onNodeWithText(second.name).performClick()
-        rule.onNodeWithText("Read again now").performClick()
-        rule.waitUntil(5_000) { api.refreshed.isNotEmpty() }
-
-        releaseCount.complete(Unit)
-        awaitWords("The hub stops reading this market. 1 extension installed from it stays, but stops upgrading until the market is added again with the same address.")
-        val confirm = rule.onNode(hasText("Remove") and hasAnyAncestor(isDialog()) and hasClickAction())
-        confirm.assertIsNotEnabled()
-        releaseRefresh.complete(Unit)
-        rule.waitForIdle()
-        confirm.assertIsEnabled().performClick()
-        rule.waitUntil(5_000) { api.removed.isNotEmpty() }
-        assertEquals(listOf("m1"), api.removed)
-        rule.onNode(isDialog()).assertDoesNotExist()
     }
 
     @Test fun aLateCountCannotReplaceANewerMarketConfirmation() {
