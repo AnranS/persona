@@ -38,56 +38,28 @@ export interface DesktopDeepLink {
   readonly route?: string;
 }
 
-function hasUnsafeRouteCharacters(value: string): boolean {
-  return value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value);
+/** The query keys a page of the route table reads (docs/protocol/deep-links.md); an app link's others (`hub`, and
+ *  anything that would act, such as a token) are not handed on. */
+const ROUTE_KEYS = new Set(["at", "view", "work", "machine", "manager", "id", "mode", "date", "range", "tab", "purpose", "channel", "extension", "connector", "plugin", "state"]);
+
+/** A route to hand to the web app: one leading "/", never "//", no backslash or control character, staying on the hub. */
+function safeRoute(route: string): boolean {
+  if (!route.startsWith("/") || route.startsWith("//") || route.includes("\\") || /[\u0000-\u001f\u007f]/.test(route)) return false;
+  try {
+    return new URL(route, "https://desktop.invalid/").origin === "https://desktop.invalid";
+  } catch { return false; }
 }
 
-function validDeepLinkRoute(route: string): boolean {
-  if (!route.startsWith("/") || route.startsWith("//") || hasUnsafeRouteCharacters(route)) return false;
-  try { return new URL(route, "https://desktop.invalid/").origin === "https://desktop.invalid"; } catch { return false; }
+/** Keep the same view-state query keys in both app-link forms. */
+function routeWithViewState(url: URL): string {
+  const kept = new URLSearchParams();
+  for (const [key, value] of url.searchParams) if (ROUTE_KEYS.has(key) && value) kept.append(key, value);
+  return url.pathname + (kept.size ? `?${kept}` : "");
 }
 
-/** The view-state keys that docs/protocol/deep-links.md allows for a canonical route, plus the web's older forms. */
-function deepLinkQueryKeys(url: URL): ReadonlySet<string> {
-  const path = url.pathname;
-  if (/^\/persona\/[^/]+$/.test(path) && path !== "/persona/new") return new Set(["machine", "manager", "at"]);
-  if (/^\/s\/[^/]+\/[^/]+$/.test(path)) return new Set(["at", "view", "work"]);
-  if (/^\/t\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(path)) return new Set(["at", "view", "work"]);
-  if (/^\/inbox\/[^/]+$/.test(path)) return new Set(["manager"]);
-  if (path === "/todos") return new Set(["view", "mode", "date", "id"]); // id is the older to-do form.
-  if (/^\/machines\/[^/]+$/.test(path)) return new Set(["range"]);
-  if (path === "/settings") {
-    let item: string | undefined;
-    switch (url.searchParams.get("tab")) {
-      case "models": item = "purpose"; break;
-      case "channels": item = "channel"; break;
-      case "extensions": item = "extension"; break;
-      case "plugins": item = "plugin"; break;
-      case "connectors": item = "connector"; break;
-    }
-    return new Set(item ? ["tab", "manager", item] : ["tab", "manager"]);
-  }
-  if (/^\/(?:extension|plugin)\/[^/]+\/[^/]+$/.test(path)) return new Set(["state"]);
-  return new Set();
-}
-
-function canonicalDeepLinkRoute(url: URL): string | undefined {
-  let decodedPath: string;
-  try { decodedPath = decodeURIComponent(url.pathname); } catch { return undefined; }
-  if (!decodedPath.startsWith("/") || decodedPath.startsWith("//") || hasUnsafeRouteCharacters(decodedPath)) return undefined;
-  for (const [key, value] of url.searchParams) {
-    if (hasUnsafeRouteCharacters(key) || hasUnsafeRouteCharacters(value)) return undefined;
-  }
-  if (!validDeepLinkRoute(`${url.pathname}${url.search}`)) return undefined;
-  const allowed = deepLinkQueryKeys(url);
-  const query = new URLSearchParams();
-  for (const [key, value] of url.searchParams) {
-    if (key !== "hub" && allowed.has(key)) query.append(key, value);
-  }
-  return `${url.pathname}${query.size ? `?${query}` : ""}`;
-}
-
-/** Deep links are data, never automatic pairing or navigation to an arbitrary web origin. */
+/** Deep links are data, never automatic pairing or navigation to an arbitrary web origin. A page link is
+ *  persona://open<path> (the route table's app link: the hub's web path after persona://open) or the first form,
+ *  persona://open?route=<path>; the web app in the window opens the path (and refuses what is no page of it). */
 export function parseDeepLink(raw: string): DesktopDeepLink | undefined {
   let url: URL;
   try { url = new URL(raw); } catch { return undefined; }
@@ -96,14 +68,14 @@ export function parseDeepLink(raw: string): DesktopDeepLink | undefined {
   if (url.host === "link") return { kind: "pair-link", url: raw };
   if (url.host === "pair") return { kind: "pair-app", url: raw };
   if (url.host !== "open" || url.hash) return undefined;
-  if (url.searchParams.size === 1 && url.searchParams.has("route")) {
-    const route = url.searchParams.get("route");
-    if (!route || !validDeepLinkRoute(route)) return undefined;
-    return { kind: "open", url: raw, route };
+  if (url.pathname) {
+    const route = routeWithViewState(url);
+    return safeRoute(route) ? { kind: "open", url: raw, route } : undefined;
   }
-  if (!url.pathname) return undefined;
-  const route = canonicalDeepLinkRoute(url);
-  return route ? { kind: "open", url: raw, route } : undefined;
+  if (url.searchParams.size !== 1) return undefined;
+  const route = url.searchParams.get("route");
+  if (!route || !safeRoute(route)) return undefined;
+  return { kind: "open", url: raw, route: routeWithViewState(new URL(route, "https://desktop.invalid/")) };
 }
 
 export function hubRoute(hub: HubAddress, route: string): string {
