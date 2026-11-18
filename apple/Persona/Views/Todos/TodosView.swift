@@ -652,14 +652,7 @@ struct TodoRow: View {
                     }
                 }
 
-                HStack(spacing: Theme.Space.sm) {
-                    statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
-                    // Got It ends the status line, under the time (#6578)
-                    if let onSeen {
-                        Spacer(minLength: Theme.Space.xs)
-                        seenButton(onSeen)
-                    }
-                }
+                statusLine(status: status, urgent: urgent, activeAgents: activeAgents, onSeen: onSeen)
 
                 // Nobody is working on it (#3618): under its state, where its supervision shows.
                 OrphanedLine(todo: todo, state: status)
@@ -743,6 +736,36 @@ struct TodoRow: View {
                 }
             }
             .padding(.vertical, Theme.Space.xs)
+        }
+    }
+
+    /// Got It ends the status line when the words and chip fit whole. Otherwise only Got It moves to the trailing end
+    /// of the next line; the status keeps the wrapping it has without the button. MeasuredOnce avoids remeasuring the
+    /// candidates whenever the row moves on screen (#7148, docs/apple/performance.md P7).
+    @ViewBuilder private func statusLine(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent],
+                                        onSeen: (() -> Void)?) -> some View {
+        let words = statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+        if let onSeen {
+            ViewThatFits(in: .horizontal) {
+                MeasuredOnce {
+                    HStack(spacing: Theme.Space.sm) {
+                        words.fixedSize(horizontal: true, vertical: false)
+                        Spacer(minLength: Theme.Space.xs)
+                        seenButton(onSeen)
+                    }
+                }
+                MeasuredOnce {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        HStack(spacing: Theme.Space.sm) { words }
+                        HStack {
+                            Spacer()
+                            seenButton(onSeen)
+                        }
+                    }
+                }
+            }
+        } else {
+            HStack(spacing: Theme.Space.sm) { words }
         }
     }
 

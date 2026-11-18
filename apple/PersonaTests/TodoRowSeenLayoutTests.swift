@@ -32,6 +32,27 @@ import UIKit
         }
     }
 
+    /// A supervised Just finished row can have a long status even at the interface cap. Got It then takes its own line
+    /// below the untouched status, still at the right, rather than squeezing or overflowing the supported layout.
+    @Test(arguments: [ColorScheme.light, .dark])
+    func gotItFallsBelowALongReviewStatusAt320xxxLarge(scheme: ColorScheme) throws {
+        let date = Date(timeIntervalSince1970: 1_760_000_000)
+        let review = TodoItem(id: "seen-review", title: "Check the supervised result",
+                              createdAt: date.addingTimeInterval(-3600), updatedAt: date,
+                              agents: [TodoItem.Agent(machineID: "m", sessionID: "s")],
+                              supervision: TaskSupervision(supervisor: "main", doneWhen: ["one", "two"],
+                                                           state: "pending_review"))
+        let control = try row(width: 320, size: .xxxLarge, scheme: scheme, gotIt: false, todo: review)
+        let gotIt = try row(width: 320, size: .xxxLarge, scheme: scheme, gotIt: true, todo: review)
+        let chip = Chip(text: "Got It", symbol: Theme.Icon.seen, look: .tint(Theme.accent), compact: true)
+        let ownLine = fitting(chip, size: .xxxLarge).height - 2 * Chip.compactInset + Theme.Space.xs
+        let added = gotIt.layoutHeight - control.layoutHeight
+        #expect(abs(added - ownLine) < 0.5,
+                "Got It must add exactly its own line below the long status: added \(added), expected \(ownLine)")
+        #expect(gotIt.width == control.width, "the long status and Got It overflow the 320 pt row")
+        try save(gotIt, name: "todos-seen-review-320-xxxLarge-\(scheme)")
+    }
+
     /// The component itself gains a symbol only in its compact drawing; its capsule stays much smaller than the hit area.
     @Test(arguments: [DynamicTypeSize.large, .xxxLarge])
     func compactChipDrawsItsSymbolWithoutBecomingAButton(size: DynamicTypeSize) throws {
@@ -75,11 +96,12 @@ import UIKit
 
     private static let apple = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 
-    private func row(width: CGFloat, size: DynamicTypeSize, scheme: ColorScheme, gotIt: Bool) throws -> RowDrawing {
+    private func row(width: CGFloat, size: DynamicTypeSize, scheme: ColorScheme, gotIt: Bool,
+                     todo supplied: TodoItem? = nil) throws -> RowDrawing {
         let date = Date(timeIntervalSince1970: 1_760_000_000)
-        let todo = TodoItem(id: "seen-layout", title: "Ship the faster page without reducing the title's room",
-                            doneAt: date, createdAt: date.addingTimeInterval(-3600), updatedAt: date, doneBy: "auto")
-        let triage = TodoTriage(section: .justDone, rule: .closed, last: date)
+        let todo = supplied ?? TodoItem(id: "seen-layout", title: "Ship the faster page without reducing the title's room",
+                                        doneAt: date, createdAt: date.addingTimeInterval(-3600), updatedAt: date, doneBy: "auto")
+        let triage = TodoTriage(section: .justDone, rule: todo.doneAt == nil ? .finishedUnseen : .closed, last: date)
         let content = TodoRow(todo: todo, triage: triage, onToggleDone: {}, onSeen: gotIt ? {} : nil)
             .environment(AppModel.shared)
             .environment(\.dynamicTypeSize, size)
@@ -89,6 +111,12 @@ import UIKit
         let fitting = UIHostingController(rootView: content).sizeThatFits(in: CGSize(width: width, height: 2000))
         return try RowDrawing(content.background(scheme == .light ? Color.white : Color.black),
                               scheme: scheme, layoutHeight: fitting.height)
+    }
+
+    private func save(_ drawing: RowDrawing, name: String) throws {
+        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
+        let data = try #require(drawing.png)
+        try data.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
     }
 
     private func fitting(_ view: some View, size: DynamicTypeSize) -> CGSize {
@@ -183,6 +211,7 @@ private struct RowDrawing {
     let layoutHeight: CGFloat
     let scale: CGFloat
     let scheme: ColorScheme
+    let png: Data?
     private let pixels: [UInt8]
     private let background: UInt32
 
@@ -190,6 +219,7 @@ private struct RowDrawing {
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
         let image = try #require(renderer.cgImage)
+        png = UIImage(cgImage: image).pngData()
         width = image.width; height = image.height; scale = renderer.scale
         self.scheme = scheme; self.layoutHeight = layoutHeight
         background = scheme == .light ? 0xFFFFFFFF : 0x000000FF
