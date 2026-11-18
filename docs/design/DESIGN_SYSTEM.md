@@ -731,7 +731,7 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 - the loop as the first Running row (Persona's own; cindy lists none), its Stop confirmed inline;
 - a run's detail: Back, the run's mark and name, then the run's card;
 - a command's title, status and mono command line share one rounded hover / focus target (#9169). The independent Copy command icon appears on hover, keyboard focus and touch, without opening the output;
-- a command's output opens inside the same panel (`BackgroundCommandDetail.tsx`), reusing the run's Back bar and existing Button / IconButton controls. Back restores list scroll and row focus; Escape returns to the list first, then closes, except while a menu, dialog or IME owns it. Read-only text follows new output until scrolled up, says **No output yet** while running empty, and retains the last good output with Retry on a failed read. A command removed from the running list says **Not listed as running**, without an inferred outcome or a still-ticking clock. **Copy command** and **Open as file** remain secondary actions. Why a command-specific detail: the file viewer does not follow running output or preserve the Background tasks list; a generic panel-history stack is unnecessary here.
+- a command's detail opens inside the same panel (`BackgroundCommandDetail.tsx`), reusing the run's Back bar and existing Button / IconButton controls. Status, runtime and start time are label / value rows. Running time updates; an ended command shows its retained result, known exit code and fixed runtime. The full command is wrapped monospace, folded to three lines with **Show full command**; its Copy command icon sits beside it. Output has a label and line count, follows new text until scrolled up, and retains the last good text with Retry on a failed read. An open detail follows the command into Completed. On an older hub / node without retained outcomes, removal from Running says **Not listed as running**, without an inferred outcome or a still-ticking clock. Back restores list scroll and row focus; Escape returns to the list first, then closes, except while a menu, dialog or IME owns it. **Open as file** remains a secondary action. Why a command-specific detail: the file viewer does not follow running output or preserve the Background tasks list; a generic panel-history stack is unnecessary here.
 
 The status words are the task cards' (`taskStatusWord`), and the count on the top bar's button is the running background tasks and runs (`backgroundCount`), the same number the panel's Running section shows without the loop.
 
@@ -1177,6 +1177,11 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
   recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
   launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Provider identity on model rows (#7360): every row in New Agent and in the All, Recent and Favorites model lists names
+  its owning launcher at the start of the second line, on web, Android and Apple. The rest of that line keeps the model
+  ID, resolved model, description or typed-model explanation; a launcher's own filtered view may keep its description
+  alone. A sign-in, key or model-availability error that offers a repair names the affected launcher in its title, and
+  the repair opens that launcher's provider settings. This is a content rule, not a new badge, token or visual style.
 - Rail cells (`web/src/ui/model-panel/Rail.tsx`): each cell is 60 px wide, its mark (16 px
   icon or the provider's letter tile) above a caption of up to two lines (the 11.5 px `text-submeta` on a 14 px line, centred, wrapping anywhere), the cell
   growing to fit. A provider's caption is the part of its name that tells it apart (`railCaptions`): a trailing note in
