@@ -128,8 +128,11 @@ packages. `sign_darwin_cli.py` verifies each signature and rejects a remaining
 ad-hoc `cdhash`. The manifest is rebuilt from the signed downloads for
 verification, but this partial-platform job does not upload `latest.json`,
 `SHA256SUMS`, `VERSION` or move Latest. It uploads only signed Darwin downloads,
-without `--clobber`; the complete hub receipt owns the indexes and promotion, and
-a digest disagreement stops publication instead of replacing a verified asset.
+without `--clobber`: an existing asset with the same digest is skipped, a missing
+one is uploaded and read back for digest verification, and different bytes are a
+conflict that stops the job. Failed-job reruns therefore resume without replacing
+verified assets. The complete hub receipt owns the indexes and promotion, and a
+digest disagreement stops publication instead of replacing a verified asset.
 This is a CI publication choice, not a local signing requirement for other builders.
 
 The first certificate-signed build after the historical ad-hoc ones is a new

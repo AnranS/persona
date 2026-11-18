@@ -285,6 +285,74 @@ class ManualWorkflowTests(unittest.TestCase):
         create = release['jobs']['publish']['steps'][-1]
         self.assertEqual(create['name'], 'Create GitHub Release')
         self.assertIn('args=(--latest=false ', create['run'])
+    def test_darwin_upload_reruns_verify_identical_assets_and_reject_conflicts(self):
+        root = Path(__file__).resolve().parents[2]
+        release = yaml.load((root / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+        upload = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                      if step.get('name') == 'Upload signed Darwin downloads')
+
+        def exercise(existing):
+            with tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                binaries = fixture / 'build-publish/bin'
+                binaries.mkdir(parents=True)
+                payloads = {'personad-darwin-amd64.gz': b'amd64', 'personad-darwin-arm64.gz': b'arm64'}
+                for name, body in payloads.items():
+                    (binaries / name).write_bytes(body)
+                remote = fixture / 'remote.json'
+                remote.write_text(json.dumps(existing))
+                fake_bin = fixture / 'bin'
+                fake_bin.mkdir()
+                gh = fake_bin / 'gh'
+                gh.write_text('''#!/usr/bin/env python3
+import hashlib, json, os, re, sys
+from pathlib import Path
+root = Path(os.environ["FIXTURE"])
+remote_path = root / "remote.json"
+assets = json.loads(remote_path.read_text())
+args = sys.argv[1:]
+if args[0] == "api":
+    match = re.search(r'\\.name == "([^"]+)"', args[-1])
+    for asset in assets:
+        if asset["name"] == match.group(1):
+            print(asset["digest"])
+    raise SystemExit(0)
+if args[:2] == ["release", "upload"]:
+    path = Path(args[3])
+    name = path.name
+    with (root / "uploads.log").open("a") as log:
+        log.write(name + "\\n")
+    if any(asset["name"] == name for asset in assets):
+        print("asset already exists", file=sys.stderr)
+        raise SystemExit(1)
+    assets.append({"name": name, "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()})
+    remote_path.write_text(json.dumps(assets))
+    raise SystemExit(0)
+raise SystemExit(2)
+''')
+                gh.chmod(0o755)
+                result = subprocess.run(['bash', '-c', upload['run']], cwd=fixture,
+                                        env={'PATH': str(fake_bin) + ':/usr/bin:/bin', 'FIXTURE': str(fixture),
+                                             'GH_REPO': 'example/project', 'RELEASE_TAG': 'v1.2.3', 'GH_TOKEN': 'fixture'},
+                                        capture_output=True, text=True, timeout=20)
+                attempts = (fixture / 'uploads.log').read_text().splitlines() if (fixture / 'uploads.log').exists() else []
+                return result, attempts
+
+        import hashlib
+        def asset(name, body):
+            return {'name': name, 'digest': 'sha256:' + hashlib.sha256(body).hexdigest()}
+
+        both = [asset('personad-darwin-amd64.gz', b'amd64'), asset('personad-darwin-arm64.gz', b'arm64')]
+        result, attempts = exercise(both)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(attempts, [])
+        result, attempts = exercise(both[:1])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(attempts, ['personad-darwin-arm64.gz'])
+        result, attempts = exercise([asset('personad-darwin-amd64.gz', b'changed'), both[1]])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('conflicting Release asset', result.stderr)
+        self.assertEqual(attempts, [])
 
 
 class RequiredTests(unittest.TestCase):

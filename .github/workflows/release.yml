@@ -174,8 +174,17 @@ jobs:
           set -euo pipefail
           for f in build-publish/bin/*-darwin-amd64.gz build-publish/bin/*-darwin-arm64.gz; do
             test -f "$f" || continue
+            name="${f##*/}"
+            local_digest="sha256:$(shasum -a 256 "$f" | awk '{print $1}')"
+            existing="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.assets[] | select(.name == "'"$name"'") | .digest')"
+            if [ -n "$existing" ]; then
+              [ "$existing" = "$local_digest" ] || { echo "conflicting Release asset: $name" >&2; exit 1; }
+              echo "verified existing Release asset: $name"
+              continue
+            fi
             gh release upload "$RELEASE_TAG" "$f"
-            gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.assets[] | select(.name == "'"${f##*/}"'") | .digest'
+            uploaded="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.assets[] | select(.name == "'"$name"'") | .digest')"
+            [ "$uploaded" = "$local_digest" ] || { echo "Release asset digest mismatch after upload: $name" >&2; exit 1; }
           done
 
   # they are signed: without the signing secrets the release still succeeds and this job says what was skipped and why.
