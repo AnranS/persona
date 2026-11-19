@@ -356,6 +356,7 @@ class AssistantDrawerShotsTest {
     @Test fun directionAgentRowsMoveAndClearTheSingleSidebarSelection() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
+        var compactDrawer by mutableStateOf(false)
         val parentKey = SessionKey("hub", "selection-parent")
         val otherKey = SessionKey("hub", "selection-other")
         val lead = Session(machineId = "hub", sessionId = "selection-lead", title = "1110 | 探索 | 增长", status = "idle",
@@ -371,10 +372,12 @@ class AssistantDrawerShotsTest {
             names = mapOf(lead.sessionId to "增长"), tree = tree)
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
-                    AssistantDrawer("", {}, groups, active = lead.key, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
-                        onInfo = {}, onNew = {}, onSettings = {}, onOpenAgent = { shadedPlace = "agent:${it.path}" },
-                        shadedPlace = shadedPlace)
+                CompositionLocalProvider(LocalHomeDrawer provides compactDrawer) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                        AssistantDrawer("", {}, groups, active = lead.key, hasMain = true, onEnd = null, onMain = {}, onOpen = {},
+                            onInfo = {}, onNew = {}, onSettings = {}, onOpenAgent = { shadedPlace = "agent:${it.path}" },
+                            shadedPlace = shadedPlace)
+                    }
                 }
             }
         }
@@ -417,6 +420,13 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("Child Agent").performClick()
         rule.waitForIdle()
         assertEquals("agent:${parentKey.path}", shadedPlace)
+        assertOnlySelected("Parent Agent")
+        assertNotSelected(*retainedRows, "Other Agent", "Child Agent")
+
+        // Compact Glass draws its own selected background; it exposes the same selected semantics as the other layouts.
+        compactDrawer = true
+        rule.waitForIdle()
+        rule.onNodeWithText("Child Agent").assertExists()
         assertOnlySelected("Parent Agent")
         assertNotSelected(*retainedRows, "Other Agent", "Child Agent")
     }
