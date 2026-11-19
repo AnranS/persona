@@ -74,7 +74,7 @@ Optional `wait_seconds` observes this launch or input for at most 50 seconds aft
           },
           "model": {
             "type": "string",
-            "description": "model id the agent takes (an alias such as opus, a gateway's own id, or a provider/model such as ag-chat/cursor/grok-4.7 for pi; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
+            "description": "model id or alias the agent takes; empty: the launcher's default"
           },
           "permission": {
             "type": "string",

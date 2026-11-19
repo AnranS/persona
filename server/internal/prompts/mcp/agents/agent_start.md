@@ -82,7 +82,7 @@ Optional `wait_seconds` observes this launch or input for at most 50 seconds aft
     },
     "model": {
       "type": "string",
-      "description": "Explicit model override: a model id the agent takes (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest). Omit to use the tier or purpose default."
+      "description": "Explicit model id or alias the agent takes; omit for the tier or purpose default."
     }
   }
 }
