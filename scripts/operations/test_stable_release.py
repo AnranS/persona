@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -40,6 +41,18 @@ class StableReleaseTests(unittest.TestCase):
             self.assertFalse(stable_release.promote_stable(self.repository, self.tag, self.manifest, "gh"))
         feed.assert_not_called()
         edit.assert_not_called()
+
+    def test_main_invocation_uses_the_manifest_path(self):
+        def output(command, **kwargs):
+            if command[:3] == ["gh", "release", "list"]:
+                return json.dumps([{"tagName": self.tag}])
+            return json.dumps({"isLatest": True, "isPrerelease": False})
+
+        argv = ["stable_release.py", "--repository", self.repository, "--tag", self.tag, "--manifest", str(self.manifest)]
+        with patch.object(sys, "argv", argv), patch.object(stable_release, "check_tag_feed"), \
+                patch.object(stable_release.subprocess, "check_output", side_effect=output), \
+                patch.object(stable_release.subprocess, "run"):
+            stable_release.main()
 
     def test_latest_readback_failure_is_an_error(self):
         def output(command, **kwargs):

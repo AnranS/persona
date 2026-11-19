@@ -434,8 +434,9 @@ printf 'catalog placeholders preserved in all languages\n'
     def test_identical_release_retry_verifies_served_manifest(self):
         publisher = (ROOT / 'scripts/release/publish.sh').read_text()
         start = publisher.index('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json"')
-        end = publisher.index('# The privacy scan checked the raw binaries', start)
+        end = publisher.index('# Only current product names', start)
         block = publisher[start:end].replace('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"', ':')
+        self.assertLess(publisher.index('for bin in "$OUT/bin"/personad-*'), publisher.index('if [ "$RETRY_SAME_BUILD" = 1 ]'))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             host = root / 'host-bin'
@@ -471,7 +472,7 @@ printf 'catalog placeholders preserved in all languages\n'
                          'persona-link-windows-amd64.exe', 'persona-link-windows-arm64.exe',
                          'persona-hub-linux-amd64', 'persona-manager-linux-amd64'):
                 (binaries / name).write_bytes(('fixture ' + name).encode())
-            command = 'set -eu\nOUT=release-fixture\nVERSION=fixture\n' + publisher[start:end]
+            command = 'set -eu\nOUT=release-fixture\nVERSION=fixture\nRETRY_SAME_BUILD=0\n' + publisher[start:end]
             result = subprocess.run(['bash', '-c', command], cwd=root,
                                     env={'HOME': str(root), 'PATH': '/usr/bin:/bin'},
                                     capture_output=True, text=True, timeout=10)

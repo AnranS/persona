@@ -2,6 +2,7 @@
 """Advance a stable GitHub Release only after its immutable manifest and newest-stable status verify."""
 import argparse
 import json
+from pathlib import Path
 import subprocess
 
 from tag_release import check_tag_feed, stable_version
