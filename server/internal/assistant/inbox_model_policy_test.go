@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -203,9 +204,10 @@ func TestOrdinaryOriginsKeepNotifyDelegationAndConversationSend(t *testing.T) {
 	}
 }
 
-// Inbox starts are Plan even if the caller asks for bypass, and the initial node request carries origin. Ordinary
-// starts retain their selected mode.
-func TestInboxStartForcesPlanAndAttestsOrigin(t *testing.T) {
+// Inbox starts use non-bypass default even if the caller asks for bypass, and the initial node request carries origin.
+// Unlike Plan, default lets the node's explicit Persona MCP allowlist run investigation and inbox_suggest unasked.
+// Ordinary starts retain their selected mode.
+func TestInboxStartForcesDefaultAndAttestsOrigin(t *testing.T) {
 	h := agentHub(t)
 	sess, err := h.Start(t.Context(), StartParams{Text: "Investigate", Origin: OriginInbox, PermissionMode: proto.ModeBypass})
 	if err != nil {
@@ -214,7 +216,7 @@ func TestInboxStartForcesPlanAndAttestsOrigin(t *testing.T) {
 	h.f.mu.Lock()
 	inboxStart := h.f.sends[len(h.f.sends)-1]
 	h.f.mu.Unlock()
-	if inboxStart["permission_mode"] != proto.ModePlan || inboxStart["origin"] != OriginInbox || sess.PermissionMode != proto.ModePlan {
+	if inboxStart["permission_mode"] != "default" || inboxStart["origin"] != OriginInbox || sess.PermissionMode != "default" {
 		t.Fatalf("Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
 	}
 	sess, err = h.Start(t.Context(), StartParams{Text: "Ordinary", Origin: OriginUser, PermissionMode: proto.ModeBypass})
@@ -244,6 +246,25 @@ func TestInboxLaterSendReattestsManagerOrigin(t *testing.T) {
 	}
 	if params["origin"] != OriginInbox {
 		t.Fatalf("later send origin=%v, want the manager's Inbox attestation", params["origin"])
+	}
+}
+
+// The real continuation path is deliverNotes -> sendToSession -> session.send, not assistant.send's SendParams.
+// Re-attest there too: the manager's origin book, not a caller-supplied field or the node's pre-reload memory, is authoritative.
+func TestInboxDeliverNotesReattestsSessionSendOrigin(t *testing.T) {
+	h, _, it := handledHub(t)
+	h.originSet(t.Context(), "server", "s1", OriginInbox, it.ID, "")
+	h.inbox.mu.Lock()
+	h.inbox.tell(it, inboxNote{Name: prompts.NoteNewMessages, Text: "A new message"}, true, time.Now())
+	h.inbox.mu.Unlock()
+	h.deliverNotes(t.Context(), it)
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	if len(h.f.agentSent) != 1 {
+		t.Fatalf("deliverNotes made %d session.send calls, want 1", len(h.f.agentSent))
+	}
+	if got := h.f.agentSent[0]["origin"]; got != OriginInbox {
+		t.Fatalf("session.send origin=%v, want the manager's Inbox attestation", got)
 	}
 }
 
