@@ -163,6 +163,8 @@ export function stepsToItems(steps, opts = {}) {
     const step = steps[i]
     if (!step || typeof step !== 'object') continue
     const idx = typeof step.step_index === 'number' ? step.step_index : i
+    // Synthetic notices can move the projected sequence without moving the native record's files or message binding.
+    const nativeIdx = typeof step.native_step_index === 'number' ? step.native_step_index : idx
     const seq = idx + 1
     if (seq > maxSeq) maxSeq = seq
     const ts = step.created_at || new Date().toISOString()
@@ -178,7 +180,7 @@ export function stepsToItems(steps, opts = {}) {
         afterWork = false
         const text = cleanUserText(step.content)
         if (!text) break
-        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(idx, text)
+        const msgId = (typeof step.client_msg_id === 'string' && step.client_msg_id) || opts.clientMsgIdFor?.(nativeIdx, text)
         const item = { id: `${line}#0`, seq, role: 'user', kind: 'text', text, ts, ...(msgId ? { client_msg_id: msgId } : {}) }
         items.push(opts.full ? item : light(item))
         break
@@ -225,7 +227,7 @@ export function stepsToItems(steps, opts = {}) {
         const callId = paired ? paired.callId : `call_${line}_0`
         let rawOut = step.error || step.content || ''
         if (opts.full && opts.brainDir && Array.isArray(step.truncated_fields) && step.truncated_fields.includes('content')) {
-          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(idx), 'output.txt')
+          const outFile = join(opts.brainDir, '.system_generated', 'steps', String(nativeIdx), 'output.txt')
           if (existsSync(outFile)) {
             try {
               rawOut = readFileSync(outFile, 'utf8')
@@ -260,6 +262,11 @@ export function stepsToItems(steps, opts = {}) {
             }
           })
         }
+        break
+      }
+      case 'PERSONA_MODE_NOTICE': {
+        const item = { id: `${line}#0`, seq, role: 'system', kind: 'notice', text: String(step.content || ''), ts }
+        items.push(opts.full ? item : light(item))
         break
       }
       case 'ERROR_MESSAGE': {
