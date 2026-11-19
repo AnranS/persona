@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -211,6 +212,8 @@ DECLARATION_FIELDS = {
     "path": r"\bpath\b",
     "request schema": r"\brequest(?: body)?(?: schema)?\b",
     "response schema": r"\bresponse(?: body)?(?: schema)?\b",
+    "callers": r"\bcallers\b",
+    "reconciliation schema": r"\breconciliation schema\b",
 }
 
 
@@ -294,6 +297,9 @@ class SourceApiContractTests(unittest.TestCase):
             "manager admission": r"\badmission\b",
             "manager dispatch": r"\bdispatch\b",
             "manager lifecycle": r"\blifecycle\b",
+            "nonempty closed caller classes": r"\bnonempty\b.{0,80}\bcallers\b|\bcallers\b.{0,80}\bnonempty\b",
+            "GET and HEAD are read-only": r"\bget\b.{0,50}\bhead\b.{0,100}\bread\b|\bread\b.{0,100}\bget\b.{0,50}\bhead\b",
+            "write reconciliation schema is required": r"\bwrite\b.{0,120}\breconciliation schema\b|\breconciliation schema\b.{0,80}\brequired\b",
             "hub is an authenticated relay": r"\bhub\b.{0,80}\bauthenticat\w*\b.{0,80}\brelay\b|\bauthenticat\w*\b.{0,80}\brelay\b.{0,80}\bhub\b",
             "no source listener/socket/generic-proxy capability": r"\b(?:no|never|not|forbid|forbidden|reject)\b.{0,160}\blistener\b.{0,160}\bunix socket\b.{0,160}\bgeneric proxy\b|\blistener\b.{0,160}\bunix socket\b.{0,160}\bgeneric proxy\b.{0,160}\b(?:forbidden|not allowed|rejected)\b",
         })
@@ -313,8 +319,13 @@ class SourceApiContractTests(unittest.TestCase):
             "account binding where applicable": r"\baccount\b",
             "process-generation binding": r"\b(?:process generation|generation)\b",
             "request-ID binding": r"\brequest id\b",
+            "caller-visible idempotency key": r"\bidempotency key\b",
+            "embedded replay expiry": r"\bnot after\b",
+            "replay requires a current grant": r"\bcurrent grant\b",
+            "expired replay is rejected": r"\brequest expired\b",
             "host-derived context": r"\b(?:host derived|host provided|verified host)\b",
             "forged identity-header stripping": r"\b(?:strip|remove|drop)\w*\b.{0,80}\bforg\w*\b.{0,80}\bheader\b|\bforg\w*\b.{0,80}\bheader\b.{0,80}\b(?:strip|remove|drop)\w*\b",
+            "schema-allowlisted headers survive": r"\ballowlisted\b.{0,100}\bsurvive\b|\bsurvive\b.{0,100}\ballowlisted\b",
             "no bearer credential forwarding": r"\bbearer\b.{0,100}\b(?:never|not|no)\b|\b(?:never|not|no)\b.{0,100}\bbearer\b",
             "a handle is not authorization": r"\bhandle\b.{0,100}\b(?:not|never|no)\b.{0,80}\bauthoriz|\bauthoriz\w*\b.{0,100}\bhandle\b.{0,80}\b(?:not|never|no)\b",
         })
@@ -394,6 +405,7 @@ class SourceApiContractTests(unittest.TestCase):
             "uninstall propagation": r"\buninstall\b",
             "generation replacement": r"\bgeneration\b.{0,60}\b(?:replac\w*|supersed\w*)\b|\b(?:replac\w*|supersed\w*)\b.{0,60}\bgeneration\b",
             "late-result rejection": r"\blate\b.{0,60}\b(?:result|callback)\b.{0,80}\b(?:reject|drop|discard|ignore)\b|\b(?:reject|drop|discard|ignore)\w*\b.{0,80}\blate\b.{0,60}\b(?:result|callback)\b",
+            "unknown releases live occupancy": r"\bunknown\b.{0,100}\brelease\b|\brelease\b.{0,100}\bunknown\b",
             "existing frame limits are not silently raised": r"\bframe\b.{0,100}\b(?:unchanged|not.{0,40}increas|cannot.{0,40}increas|never.{0,40}increas)\b|\b(?:unchanged|not.{0,40}increas|cannot.{0,40}increas|never.{0,40}increas)\b.{0,100}\bframe\b",
         })
 
@@ -412,6 +424,8 @@ class SourceApiContractTests(unittest.TestCase):
             "Range": r"\brange\b",
             "206": r"\b206\b",
             "416": r"\b416\b",
+            "malformed and multiple ranges return 400": r"\bmalformed\b.{0,60}\bmultiple ranges\b.{0,60}\b400\b",
+            "oversized source response uses 502": r"\b502\b.{0,80}\bresponse too large\b|\bresponse too large\b.{0,80}\b502\b",
             "content type": r"\bcontent type\b",
             "content length": r"\bcontent length\b",
             "cache validators": r"\bcache validator\b|\betag\b|\blast modified\b",
@@ -464,6 +478,7 @@ class SourceApiContractTests(unittest.TestCase):
             "no new-ID replay": r"\bnew id\b.{0,100}\b(?:not|never|no|forbid)\b.{0,80}\b(?:retr\w*|replay)\b|\b(?:not|never|no|forbid)\b.{0,100}\b(?:retr\w*|replay)\b.{0,100}\bnew id\b|\bnew id\b.{0,100}\bunsafe\b",
             "no duplicate writes": r"\bduplicate write\b|\bduplicate\b.{0,50}\bexternal effect\b",
             "bounded receipt retention": r"\bbounded\b.{0,80}\b(?:receipt|retention)\b|\b(?:receipt|retention)\b.{0,80}\bbounded\b",
+            "expired replay is rejected without a tombstone": r"\brequest expired\b.{0,100}\btombstone\b|\btombstone\b.{0,100}\brequest expired\b",
             "redacted receipts": r"\bredact\w*\b.{0,60}\breceipt\b|\breceipt\b.{0,60}\bredact\w*\b",
             "real Postgres restart recovery": r"\breal postgres\b.{0,100}\brestart\b|\bpostgres\b.{0,100}\brestart\b",
             "manager restart recovery": r"\bmanager\b.{0,100}\brestart\b|\brestart\b.{0,100}\bmanager\b",
@@ -505,6 +520,7 @@ class SourceApiContractTests(unittest.TestCase):
             "ordinary session scopes are separate": r"\bordinary session\b.{0,100}\b(?:read|control|scope)\b|\b(?:read|control)\b.{0,80}\bordinary\b.{0,50}\bscope\b",
             "explicit rename target": r"\brename\b.{0,80}\btarget\b|\btarget\b.{0,80}\brename\b",
             "bounded rename schema": r"\brename\b.{0,80}\bbounded schema\b|\bbounded schema\b.{0,80}\brename\b",
+            "atomic current-title mutation fence": r"\bcurrent title\b.{0,100}\bcompare and swap\b|\bcompare and swap\b.{0,100}\bcurrent title\b",
             "genuine account-owner/user authorization": r"\b(?:account owner|account owner user|owner user)\b.{0,100}\b(?:explicit|genuine)\b.{0,60}\bauthoriz|\b(?:explicit|genuine)\b.{0,80}\b(?:account owner|owner user)\b",
             "operation-specific ticket": r"\boperation specific\b.{0,60}\bticket\b|\bticket\b.{0,60}\boperation specific\b",
             "expiring ticket": r"\bticket\b.{0,80}\bexpir\w*\b|\bexpir\w*\b.{0,80}\bticket\b",
@@ -544,7 +560,7 @@ class SourceApiContractTests(unittest.TestCase):
         for table in markdown_tables(text):
             indices = {
                 "id": column(table, r"^(?:case |test |acceptance )?id$"),
-                "scenario": column(table, r"scenario|case|behavior|behaviour"),
+                "scenario": column(table, r"^(?:scenario|case|behavior|behaviour)$"),
                 "expected": column(table, r"expected|assertion|outcome"),
                 "reference": column(table, r"contract|requirement|section|source"),
                 "evidence": column(table, r"test level|level|layer|evidence|acceptance"),
@@ -623,6 +639,16 @@ class SourceApiContractTests(unittest.TestCase):
         for label, patterns in cases.items():
             with self.subTest(acceptance_coverage=label):
                 self.assertTrue(covered(*patterns), f"acceptance matrix has no traceable row/series covering {label}")
+
+    def test_acceptance_matrix_rejects_blank_scenario(self):
+        case = SourceApiContractTests(methodName="test_traceable_implementation_acceptance_matrix")
+        matrix = """| Case ID | Scenario | Expected assertion | Contract section | Test level/evidence |
+| --- | --- | --- | --- | --- |
+| NEG-EXAMPLE |  | No dispatch occurs | 2 | Manager admission test |
+"""
+        with patch.object(case, "section", return_value=matrix):
+            with self.assertRaisesRegex(AssertionError, "lacks scenario"):
+                case.test_traceable_implementation_acceptance_matrix()
 
     def test_design_track_phase_boundary(self):
         text = self.section("phase boundary")

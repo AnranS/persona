@@ -41,7 +41,7 @@ Docker, socket, execution or execution-mode authority follows from this design.
 
 ## 2. Declarations and ownership
 
-The existing `api` contribution keeps its outbound/native-HTTP meaning. A new, independently reviewed `source_handlers`
+The existing `api` contribution keeps its native-HTTP, hub-proxied inbound endpoint meaning. A new, independently reviewed `source_handlers`
 declaration is REQUIRED so that an existing `api` installation never acquires an inbound route by upgrade alone.
 
 ### 2.1 Typed v1 declarations
@@ -64,15 +64,29 @@ interface SourceHandlerDeclaration {
   commands: AssistantCommandDeclaration[];
 }
 
-interface SourceRouteDeclaration {
+type CallerClass = "app" | "assistant" | "extension";
+
+interface SourceRouteBase {
   route_id: RouteID;
-  method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: RoutePath;
-  request_schema: SchemaRef;             // path, query, allowed headers and body
-  response_schema: SchemaRef;            // allowed headers, metadata and body/chunks
+  request_schema: SchemaRef;             // path, query, allowlisted headers and body
+  response_schema: SchemaRef;            // allowlisted headers, metadata and body/chunks
   budget: "unary-v1" | "media-v1";
-  effect: "read" | "write";
+  callers: CallerClass[];                // required, nonempty and unique
 }
+
+interface ReadRouteDeclaration extends SourceRouteBase {
+  method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
+  effect: "read";
+}
+
+interface WriteRouteDeclaration extends SourceRouteBase {
+  method: "POST" | "PUT" | "PATCH" | "DELETE";
+  effect: "write";
+  reconciliation_schema: SchemaRef;      // required request-ID recovery and outcome query
+}
+
+type SourceRouteDeclaration = ReadRouteDeclaration | WriteRouteDeclaration;
 
 interface AssistantCommandDeclaration {
   command: "assistant.credentials";
@@ -97,10 +111,13 @@ interface AssistantCaller { kind: "assistant"; manager_id: string; conversation_
 interface ExtensionCaller { kind: "extension"; installation_id: string; process_generation: string }
 ```
 
-A declaration, its exact method/path/schema allowlists and its caller classes are part of the reviewed permissions
-digest. Adding or widening one requires owner approval. An unsupported version, duplicate ID, missing schema, wildcard,
-implicit caller or unknown budget profile MUST fail closed. GET does not implicitly declare HEAD, and no method creates
-an implicit OPTIONS or CORS route.
+A declaration, its exact method/path/schema allowlists, nonempty closed `callers` set and write reconciliation schema
+are part of the reviewed permissions digest. Adding or widening one requires owner approval. An unsupported version,
+duplicate ID, missing schema, omitted/empty/duplicate/unknown caller class, wildcard, implicit caller or unknown budget
+profile MUST fail closed. Admission intersects the declared `callers` with the verified caller class and independent
+grant. GET and HEAD MUST be `effect: "read"`; `effect: "write"` is valid only on POST, PUT, PATCH or DELETE and
+registration rejects a write without `reconciliation_schema`. GET does not implicitly declare HEAD, and no method
+creates an implicit OPTIONS or CORS route.
 
 ### 2.2 Route namespace and canonical matching
 
@@ -147,14 +164,32 @@ a separate decision for the exact target and operation.
 | Extension-to-extension | The caller installation and process generation attested by its runtime/manager | An explicit caller-installation → target-installation → contribution → route grant; `extensions.call` alone is insufficient |
 
 The manager MUST construct a host-derived `CallerContextV1` containing the verified caller, target installation,
-contribution, host-selected account where applicable, target process generation and a host-generated request ID. The
-request ID is unique and is the idempotency identity; a caller-supplied correlation string is untrusted data and cannot
-replace it. An account ID comes from the approved binding, never from a query, body or identity header.
+contribution, host-selected account where applicable, target process generation and a host-derived request ID. An account
+ID comes from the approved binding, never from a query, body or identity header.
+
+Every write HTTP request declares `Idempotency-Key: v1.<not_after>.<128-bit random>` in its request schema; a write
+assistant command carries the equivalent bounded `request_key` argument. On first admission, the host requires
+`not_after` to be between 120 seconds and seven minutes in the future. The seven-minute replay horizon is the five-minute
+confirmation expiry plus the 120-second request deadline. The request ID is
+`shr_<not_after>_<SHA-256(canonical caller scope, key, not_after)>`, where caller scope is the verified caller kind and
+stable ID, target installation, contribution, account and route. Target process generation is deliberately excluded from
+that stable derivation, but remains fenced at dispatch.
+
+A retry presents the original key and fingerprint with a current grant; the host derives the same request ID even when
+the caller never received an internal ID or the first response was lost. Current authentication, caller scope and grant
+are still REQUIRED, and the key never authorizes a lookup or dispatch. The response also returns the derived request ID
+for status lookup. A changed key or expiry is a different operation and automatic retry MUST NOT change either. An
+expired request ID is rejected `request_expired` before receipt lookup, even if its tombstone is gone. Read requests
+without a replay requirement may instead use a host-generated random request ID.
 
 Before relaying, the manager MUST strip each forged identity header and all credentials, including `Authorization`,
-`Proxy-Authorization`, `Cookie`, `X-Persona-*`, `Forwarded`, `X-Forwarded-*` and `X-Real-IP`. Only the route's declared
-content/negotiation headers survive. Identity travels in the structured host-derived context, not in forwarded headers.
-A bearer credential is never forwarded to source code. Response identity headers and `Set-Cookie` are likewise removed.
+`Proxy-Authorization`, `Cookie`, `X-Persona-*`, `Forwarded`, `X-Forwarded-*` and `X-Real-IP`. Credentials, identity and
+hop-by-hop transport headers are forbidden even if a schema tries to declare them. After that unconditional removal,
+only headers explicitly allowlisted by the route's request schema survive, with their validated values carried through
+typed dispatch. This includes declared `Range`, `If-None-Match`, `If-Modified-Since`, `If-Range`, `If-Match`,
+`Idempotency-Key` and `Content-Type`; it is not limited to content/negotiation headers. Identity travels in the
+structured host-derived context, not in forwarded headers. A bearer credential is never forwarded to source code.
+Response identity headers and `Set-Cookie` are likewise removed.
 
 App, assistant and extension-to-extension grants are separate and independently revocable. A handler handle is not
 authorization, and neither a credential reference nor an account handle is a command grant. Every admission rechecks the
@@ -176,7 +211,8 @@ closed schemas before dispatch, and MUST retain caller attribution through the c
 receipt. Result validation uses the same declared schema.
 
 Read and write commands are explicitly classified. Every write requires its own section 7 confirmation bound to the
-validated arguments/body; an `allow` rule cannot silently turn a write into an unconfirmed one. Shell execution and
+validated arguments/body and includes the bounded `request_key` from section 3 in that argument schema; an `allow` rule
+cannot silently turn a write into an unconfirmed one. Shell execution and
 arbitrary command forwarding are forbidden; a generic hub endpoint is also forbidden. There is no `command`, `args`,
 `path` or `url` passthrough that lets the model choose an undeclared operation.
 
@@ -200,7 +236,8 @@ frame limits remain unchanged and MUST never be increased to admit a media test.
 | Encoded RPC frame | 8 | MiB | Complete JSON/base64 frame bytes; the pre-existing ceiling is not raised |
 | Encoded media data frame | 64 | KiB | One media message including chunk envelope and base64 data |
 | Media chunk | 32 | KiB | Decoded bytes in one ordered data-plane chunk |
-| Concurrent requests | 8 per installation; 64 per manager | requests | Admitted and streaming operations, including writes awaiting reconciliation |
+| Concurrent requests | 8 per installation; 64 per manager | requests | Only admitted work with active execution or streaming transport; terminal `unknown`, deadline and cancellation release the slot |
+| Reconciliation work | 4 per installation; 16 per manager | operations | Background recovery attempts for durable `unknown` rows, tracked separately from live request occupancy and receipt capacity |
 | Queued work | 128 per installation; 512 per manager | requests | Admitted work not yet executing, including a reconnect backlog |
 | Queue wait | 5 | seconds | Admission timestamp to execution start |
 | CPU | 5 per request; 30 per installation-minute | CPU seconds | Runtime CPU attributed to handler execution, not client wait time |
@@ -217,7 +254,8 @@ next byte rather than truncating it successfully. No error may be hidden by sile
 | Condition | Caller-visible result | Stable source/RPC error code |
 | --- | --- | --- |
 | Schema, canonical path or media argument invalid | 400 JSON error, no dispatch | `invalid_request` |
-| Header, URL or body over budget | 431, 414 or 413 respectively, no dispatch | `payload_too_large` |
+| Header, URL or request body over budget | 431, 414 or 413 respectively, no dispatch | `payload_too_large` |
+| Declared source response over budget | 502 JSON error before response headers | `response_too_large` |
 | Installation queue/rate/aggregate exhausted | 429 with bounded `Retry-After` | `overloaded` |
 | Manager capacity exhausted or receipt capacity full | 503, retry only when the operation is known safe | `unavailable` / `receipt_capacity` |
 | Deadline, timeout or CPU budget exhausted | 504 if a response is still possible; streaming abort otherwise | `deadline_exceeded` |
@@ -271,9 +309,9 @@ GET and HEAD are separate declarations over the same reviewed media metadata sch
 - Cache validators `ETag` and `Last-Modified`, `Cache-Control`, `If-None-Match`, `If-Modified-Since` and `If-Range` keep
   their HTTP meanings, including 304 and revalidation before a partial response. A validator is bound to the selected
   representation and account; it is not an authorization handle.
-- A selected full or partial response larger than the 64 MiB per-request budget is refused with 413 before headers. A
-  client can request bounded ranges; a source MUST NOT silently truncate a larger response. If this cannot preserve an
-  existing integration's behavior, that integration is not accepted for migration.
+- A selected full or partial response larger than the 64 MiB per-request budget is refused with 502 and the stable
+  `response_too_large` code before headers. A client can request bounded ranges; a source MUST NOT silently truncate a
+  larger response. If this cannot preserve an existing integration's behavior, that integration is not accepted for migration.
 
 Partial-response cancellation stops further chunks, releases outstanding credit and closes the relay. Bytes already
 emitted remain charged. An error before `headers` becomes the declared HTTP error; an error afterward aborts the stream
@@ -308,7 +346,7 @@ maintainer decision. If the current caller cannot produce that evidence, the wri
 | Caller and grant | Full verified caller context, target installation/contribution/account and process generation |
 | Target | Exact canonical resource/target, not a class or prefix |
 | Payload fingerprint | SHA-256 of canonical validated path/query/body, every admitted validated request header, target and schema revision; the payload itself is not stored in the receipt |
-| Request ID | The host-generated idempotency identity; cannot be replaced by a retry |
+| Request ID | The section 3 caller-replayable, host-derived idempotency identity and its embedded `not_after`; cannot be replaced by a retry |
 | Ticket ID and owner | Single-use random ticket, stored by hash, and the trusted owner/device that approved it |
 | Expiry | At most five minutes from issue and always checked again at reservation/admission |
 
@@ -346,8 +384,9 @@ a replay license.
 A reservation save failure means no external effect and no handler invocation. A timeout, lost response or cancelled
 call after admission is `unknown`, never assumed failure. A new ID is never safe for an automatic retry or replay. An
 automatic retry under a new ID and a retry with a changed fingerprint are forbidden; either could cause duplicate
-writes. Repeating the same request ID and fingerprint returns the durable state or performs manager-led reconciliation;
-it does not blindly dispatch again.
+writes. Before `not_after`, repeating the original caller idempotency key and fingerprint with a current grant derives
+the same request ID and returns its durable state or performs manager-led reconciliation; it does not blindly dispatch
+again. After `not_after`, the same request is rejected `request_expired` without dispatch even when no tombstone remains.
 
 A write declaration MUST define an idempotency/reconciliation schema keyed by request ID. Without a trustworthy way to
 distinguish committed from no-effect, the operation remains `unknown` and requires owner-visible resolution. Generic
@@ -358,17 +397,29 @@ exactly-once external effects are not claimed. A late result from a replaced gen
 
 Disable, uninstall and revocation cancel `reserved` work only when they win the same atomic compare-and-swap proving it
 was never sent; `dispatched` work becomes `unknown`. Generation replacement never transfers a reservation to a new
-process. On manager restart, `reserved` work may win the dispatch transition once only if its current durable state is
-still `reserved`; every `dispatched` row without a final
-receipt is recovered as `unknown` first. Real Postgres manager restart recovery is required, including crash points on
-both sides of the reservation and dispatch markers.
+process. On manager restart, every `reserved` row from the previous generation MUST win only the transition to
+`cancelled`: no dispatch marker exists, so no effect is proven, and a fresh confirmation and a new idempotency key are
+required. Every
+`dispatched` row without a final receipt is recovered as `unknown` first. A previous-generation `reserved` row MUST NOT
+be dispatched after restart. Real Postgres manager restart recovery is required, including crash points on both sides
+of the reservation and dispatch markers.
 
-Receipt retention is bounded and receipts are redacted: at most 1,024 receipts/tombstones per installation, terminal receipts for 30 days and
-compact rejection tombstones for 90 days. The cap includes unresolved rows. Expiry removes detailed metadata, never the
-request-ID/fingerprint tombstone needed to refuse replay during the retry horizon; after that horizon the request is
-stale, not a new operation. When the cap is full, new writes fail `receipt_capacity` instead of evicting an unresolved
-row or reusing an ID. Receipts store category, target binding, fingerprint, state, timestamps, budget usage and redacted
-result code, not payloads or secrets.
+Receipt retention is bounded and receipts are redacted, with three independent budgets:
+
+- At most 1,024 unresolved `reserved`/`dispatched`/`unknown` rows per installation. Only this durable-operation cap
+  rejects new writes with `receipt_capacity`; unresolved rows are never evicted, and reaching a terminal state frees
+  their slots. Durable `unknown` rows do not occupy live request concurrency and may continue bounded reconciliation.
+- At most 1,024 terminal audit receipts per installation for 30 days. Older terminal receipts may be compacted or
+  evicted after their live replay tombstone is recorded; these audit receipts are not replay authority.
+- At most 4,096 live request-ID/fingerprint replay tombstones per installation, each retained until its embedded
+  `not_after`, never for 90 days. The replay horizon is exactly the section 3 expiry, at most seven minutes. A full live
+  tombstone cap rejects new writes only until the oldest entries expire, a bounded wait of at most seven minutes.
+
+After `not_after`, the request-ID expiry itself requires `request_expired` rejection before lookup, so an expired
+tombstone can be deleted without making an old retry indistinguishable from a new operation. Expiry never authorizes a
+new request under the same ID. Manager reconciliation of an `unknown` row may continue after caller replay expiry, but
+no caller retry can dispatch it again. Receipts store category, target binding, fingerprint, state, issue/expiry
+timestamps, budget usage and redacted result code, not payloads or secrets.
 
 The host reservation/receipt composes with the extension-owned durable-state contract from #1187 but is not guest state.
 Extension memory is not durable, and extension-owned durable state is a reconciliation cache, not proof of owner
@@ -432,7 +483,11 @@ review; it is not silently performed here.
 Rename is separate from mode changes and targets an exact `(manager, machine, session)` tuple. The rename operation's
 bounded schema accepts only `title`: valid UTF-8, NFC-normalized, trimmed, 1–200 characters, with no control characters
 or path syntax. The manager revalidates target ownership/existence and binds the section 7 operation confirmation to that exact rename
-target, current title and requested title. Target substitution is refused.
+target, current title and requested title. Target substitution is refused. The actual rename mutation MUST either
+serialize with every other title writer under the same lock or carry an atomic expected-current-title compare-and-swap
+through the manager/node/session write. A title change between admission and mutation makes the ticket stale; a mismatch
+is a definite no-effect refusal and an indeterminate result is `unknown`. A host/session API without that atomic fence
+MUST leave source rename blocked.
 
 ### 9.2 Execution mode
 
@@ -486,6 +541,9 @@ suite.
 | --- | --- | --- | --- | --- |
 | NEG-FORGED-PRINCIPAL | Send forged principal/caller identity headers and bearer values | Headers are stripped; only verified host context reaches the handler; no bearer reaches source | 2, 3 | Hub→manager→adapter integration with captured context |
 | NEG-UNDECLARED-ROUTE | Call an undeclared route, method, HEAD or OPTIONS | 404/405 before source dispatch and no implicit method appears | 2 | Manager route/admission tests |
+| NEG-DECLARATION-CALLERS | Register omitted, empty, duplicate or unknown caller classes, then call outside the declared set | Registration/admission fails closed; only the nonempty declared `app`/`assistant`/`extension` intersection proceeds | 2, 3 | Declaration schema and caller-class admission tests |
+| NEG-SAFE-METHOD-WRITE | Declare GET or HEAD with `effect: "write"`, or a write without `reconciliation_schema` | Registration rejects both declarations; no safe-method mutation or schema-less recovery path exists | 2, 7 | Discriminated route-declaration tests |
+| AUTH-HEADER-ALLOWLIST | Send declared Range/conditional/precondition/idempotency headers beside forged credentials and identity headers | Every schema-allowlisted value survives typed dispatch while every credential, identity and hop-by-hop header is stripped | 3, 6, 7 | Relay/header capture and validation tests |
 | NEG-PATH-COLLISION | Register a path collision and try encoded separators, dot segments and double encoding | Registration is atomic/fail-closed; normalization bypasses never select another route | 2 | Declarative registry and escaped-path relay tests |
 | NEG-WRONG-BINDING | Use the wrong installation and wrong account for a valid route/reference | Both bindings are rejected and no source or upstream effect occurs | 2, 3, 8 | Manager admission matrix |
 | NEG-STALE-GENERATION | Invoke or answer with a stale process generation | Invocation/result is rejected and cannot complete a replacement request | 2, 3, 5 | Runtime generation replacement tests |
@@ -497,27 +555,32 @@ suite.
 | NEG-MEDIA-TARGET | Request a denied media target, protected address or checked-DNS failure | Denied media target has no dial, credential injection or media bytes | 6 | Egress broker adversarial fixtures |
 | NEG-REDIRECT | Follow unapproved public HTTPS, approved cross-origin, downgrade, loop and excessive redirects | No unapproved target is dialed; every approved hop is reauthorized; credentials never cross origin and the chain stays bounded | 6 | Redirect-chain integration tests |
 | COMMAND-CREDENTIALS | Call `assistant.credentials` through the typed `namespaces.api` route with valid and invalid arguments and grants | Typed dispatch and argument/result schemas hold, caller attribution survives, only opaque references return, command and credential-reference grants stay separate, and the existing 10-second RPC bound holds | 4, 8 | Positive assistant RPC/handler integration plus timeout evidence |
-| NEG-OVERSIZED-FRAME | Exceed URL/header/body/chunk limits and send an oversized encoded RPC frame | Correct 413/414/431/overload result; existing 8 MiB ceiling is unchanged and memory stays bounded | 5, 6 | Encoded-frame, adapter and relay boundary tests |
-| BUDGET-CONCURRENCY-QUEUE | Saturate installation/manager concurrency and queues beyond their wait ceilings | Occupancy never exceeds 8/64 active or 128/512 queued; excess work returns stable 429/503 within five seconds and no queued handler runs late | 5 | Deterministic occupancy, queue-wait and overload tests |
+| NEG-OVERSIZED-FRAME | Exceed URL/header/request-body/chunk limits and send an oversized encoded RPC frame | Correct 413/414/431/overload result; existing 8 MiB ceiling is unchanged and memory stays bounded | 5, 6 | Encoded-frame, adapter and relay boundary tests |
+| NEG-RESPONSE-TOO-LARGE | Declare a source response larger than the response budget | 502 `response_too_large` before response headers; 413 is used only for oversized request content | 5, 6 | Response-budget gateway tests |
+| BUDGET-CONCURRENCY-QUEUE | Saturate installation/manager concurrency and queues beyond their wait ceilings, then finish calls as `unknown` | Occupancy never exceeds 8/64 active or 128/512 queued; excess work returns stable 429/503 within five seconds; `unknown` releases live slots while its durable row remains bounded | 5, 7 | Deterministic occupancy, queue-wait, overload and release tests |
+| BUDGET-RECONCILIATION | Saturate background reconciliation independently of live requests | Reconciliation stays within 4/16 operations, consumes no live request slot and observes unresolved receipt capacity | 5, 7 | Reconciliation scheduler and occupancy tests |
 | BUDGET-CPU-DEADLINE | Exceed per-request and per-installation CPU and the 120-second request/deadline budget | Stable 429/504 results and cancellation occur at the measured ceiling; late results are rejected | 5 | Instrumented CPU/deadline and cancellation tests |
 | BUDGET-AGGREGATE-OVERLOAD | Exceed rolling installation request/byte and manager byte aggregates | Stable 429/503 overload results preserve the 120-request, 256-MiB and 1-GiB ceilings; accounting includes disconnected responses | 5 | Rolling-window and aggregate-overload tests |
 | NEG-LATE-CALLBACK | Deliver a late callback/result after cancellation or replacement | Late result is dropped, audited and cannot mutate a newer request/receipt | 5, 7 | Deterministic callback reordering tests |
 | CRED-REFRESH-REVOKE | Exercise provider selection, host-only field injection, credential refresh after expiry, identity change and revocation | Only the approved companion/profile works; no raw credential reaches source; identity change re-approves; revocation blocks every handle reuse | 8 | Independent provider integration and negative suite |
 | SESSION-RENAME-MODE | Attempt rename, mode elevation, stale tickets and ordinary-scope substitution | Exact rename schema/target holds; each mode change needs a fresh owner ticket and no default elevation occurs | 9 | Independent session subcontract suite |
 | SESSION-MODE-CAS | Change the session mode again after ticket admission but before the actual mutation | The atomic current-mode precondition refuses the stale write with no effect; an indeterminate result becomes unknown | 7, 9 | Mode-writer race and current-mode CAS tests |
+| SESSION-RENAME-CAS | Change the session title again after rename admission but before the actual mutation | The atomic current-title precondition refuses the stale rename with no effect; an indeterminate result becomes unknown | 7, 9 | Title-writer race and current-title CAS tests |
 | STREAM-GET | Stream known- and unknown-length full media and vary client read speed | 200 metadata is exact, known lengths use `Content-Length`, unknown lengths terminate by bounded HTTP chunks with exact final accounting, and memory is independent of response size | 5, 6 | Real relay streaming tests |
-| STREAM-RANGE | Request valid, malformed, multiple and unsatisfiable Range values | Valid single range is exact 206; unsatisfiable is 416 with size; unsupported forms never truncate | 6 | `http.ServeContent`-style parity and source handler tests |
+| STREAM-RANGE | Request a valid single Range and an unsatisfiable Range | Valid single range is exact 206 with validated Range/conditional headers surviving the relay; unsatisfiable is 416 with size | 3, 6 | `http.ServeContent`-style parity and source handler tests |
+| STREAM-RANGE-REJECT | Send malformed and multiple Range values | Each returns 400 before source dispatch with no full 200, partial 206 or multipart success body | 6 | Explicit malformed/multiple rejection tests |
 | STREAM-HEAD | Run HEAD against every media fixture | GET-equivalent metadata/status, zero body and no source data-plane chunks | 6 | HEAD/GET parity tests |
 | STREAM-CACHE | Exercise ETag, Last-Modified, conditional GET and If-Range | Cache validators produce correct 304/partial behavior without cross-account reuse | 6 | Cache-validator matrix |
 | STREAM-ERROR | Fail before headers, during a stream and when an unknown-length response crosses its aggregate cap | Early typed error is correct; late error/overrun aborts rather than yielding clean truncated success or a terminal chunk | 5, 6 | Fault-injected relay tests |
 | STREAM-BACKPRESSURE | Slow and pause the client while a source produces media | Credit bounds in-flight chunks; backpressure reaches the source and queues stay bounded | 5, 6 | Instrumented slow-client tests with allocation evidence |
 | STREAM-DISCONNECT-CANCEL | Disconnect during full/partial responses and cancel explicitly | Cancellation reaches source, credit is released and no late end succeeds | 5, 6 | Disconnect/cancellation race suite |
 | DURABLE-SAVE-FAILURE | Fail reservation save immediately before dispatch | Reservation save failure has no external effect; upstream invocation count is zero | 7 | Postgres failure injection plus synthetic upstream counter |
-| DURABLE-UNKNOWN-REPLAY | Lose the response after admission, then retry same/new IDs | Ambiguous outcome stays unknown; same ID reconciles; new-ID replay is refused and no duplicate write occurs | 7 | Lost-acknowledgement fault injection |
+| DURABLE-UNKNOWN-REPLAY | Lose the response after admission, then retry the original caller idempotency key when no internal request ID was received | The authenticated original key derives the same ID; ambiguous outcome stays unknown and reconciles; a new key/ID replay is refused and no duplicate write occurs | 3, 7 | Lost-acknowledgement and caller-visible idempotency fault injection |
 | DURABLE-CANCEL | Race cancellation against dispatch before admission and cancel after external admission | One atomic compare-and-swap winner is durable; cancelled means no invocation, while post-admission cancellation becomes unknown and reconciles honestly | 5, 7 | Concurrent dispatch/cancel and crash-point matrix |
-| DURABLE-RETENTION | Fill receipt capacity and age terminal/unknown records | Redacted receipts/tombstones stay bounded; unresolved rows are not silently evicted and replay cannot recur | 7, 10 | Retention, capacity and log-redaction tests |
+| DURABLE-RETENTION | Fill unresolved, terminal-receipt and live-tombstone capacities, then age entries past their horizons | Only unresolved rows hold the durable write cap; terminal audit rows compact; live tombstones expire within seven minutes and no replay occurs | 3, 7, 10 | Retention, capacity, expiry and log-redaction tests |
+| DURABLE-EXPIRED-REPLAY | Retry an old ID/key after its replay tombstone has expired and been deleted | Embedded `not_after` returns `request_expired` before lookup and no second reservation or dispatch occurs | 3, 7 | Post-expiry replay test with an empty tombstone store |
 | RESTART-POSTGRES | Restart real Postgres around reservation, dispatch and receipt commits | Durable receipt/state recovers without replay; failures are unknown rather than falsely failed | 7 | Real Postgres crash/restart suite |
-| RESTART-MANAGER | Restart the manager at every reservation/dispatch/unknown transition | Durable receipt and request binding survive manager restart; no memory-only recovery or duplicate effect | 7 | Manager process restart against real Postgres |
+| RESTART-MANAGER | Restart the manager at every reservation/dispatch/unknown transition | Previous-generation `reserved` rows become cancelled without dispatch and need fresh confirmation; `dispatched` rows recover as unknown; durable receipts survive without duplicate effect | 7 | Manager process restart against real Postgres |
 | E2E-INSTALLED-SOURCE | Install a source profile on an isolated development hub with synthetic data and exercise its API, assistant command, media and writes end to end | Captured and inspected authentication, assistant-command, media and confirmation flows match sections 3, 4, 6 and 7, including opaque-only credential references and no real account/data | 2–10 | Installed-package E2E plus captured relay/provider/Postgres evidence reviewed by a person |
 
 Source profiles and isolated-development acceptance precede any default-package change. Synthetic routing tests alone are

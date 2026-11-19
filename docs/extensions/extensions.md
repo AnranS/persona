@@ -1809,9 +1809,9 @@ When a request goes to the extension's own HTTP (the last row of the table above
 
 ## App endpoints
 
-An extension contributes `api` to provide a set of app-facing endpoints `/api/v1/<prefix>/…` on its own HTTP side (`PERSONA_EXTENSION_SOCKET`):
-
 The [source handler contract](source-api-handlers.md) deliberately keeps this native contribution separate from a future source-dispatched `namespaces.api` handler; an existing `api` grant does not open an inbound source route.
+
+An extension contributes `api` to provide a set of app-facing endpoints `/api/v1/<prefix>/…` on its own HTTP side (`PERSONA_EXTENSION_SOCKET`):
 
 - The hub authenticates first (like any other endpoint; read-only devices are restricted as usual), then forwards as-is to the extension: path unchanged, `Authorization` and `token` removed, `X-Persona-Device` (device id, empty for the master token) and
   `X-Persona-Role` added; any `X-Persona-*` headers the caller sent are dropped. Parts of the path the caller escaped (`%2F`) reach the extension as-is; the extension reads `EscapedPath()`.
