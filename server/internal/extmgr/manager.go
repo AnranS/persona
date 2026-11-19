@@ -157,9 +157,12 @@ type Manager struct {
 	bots          botHub
 	channels      channelsHub
 	chans         struct{ in inbound }
-	inbox         inboxSources
-	larkDefault   larkDefault
-	admin         struct {
+	// clarificationProofs are one-time owner-question attestations issued after
+	// a fresh channel action, never reusable approval capabilities.
+	clarificationProofs clarificationProofBook
+	inbox               inboxSources
+	larkDefault         larkDefault
+	admin               struct {
 		extensions extensionGate
 		now        func() time.Time // the admin UI's clock (tests move it)
 	}

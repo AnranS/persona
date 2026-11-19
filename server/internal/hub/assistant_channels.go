@@ -42,15 +42,22 @@ func (h *Hub) channelsDeviceCall(ctx context.Context, m *Machine, p assistantwir
 		if id, _ := a["client_msg_id"].(string); id == "" {
 			return nil, true, errors.New("session.send_once needs client_msg_id")
 		}
-		return json.RawMessage(`{}`), true, h.sendOnce(ctx, m, a)
+		manager, _ := callerOf(ctx)
+		return json.RawMessage(`{}`), true, h.sendOnce(ctx, m, a, manager)
 	}
 	return nil, false, nil
 }
 
 // sendOnce sends with the same once-only guard as the app (send.go): a message id is sent at most once.
-func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any) error {
+// A clarification proof is consumed only after that guard agrees to send, and is
+// valid for its exact card, manager, destination, text and client_msg_id.
+func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any, manager string) error {
 	id, _ := p["client_msg_id"].(string)
 	sid, _ := p["session_id"].(string)
+	token, _ := p[assistantwire.ClarificationProofParam].(string)
+	interactionID, _ := p[assistantwire.ClarificationInteractionParam].(string)
+	delete(p, assistantwire.ClarificationProofParam)
+	delete(p, assistantwire.ClarificationInteractionParam)
 	if h.store != nil {
 		state, err := h.store.ClaimSend(ctx, id, m.cfg.ID, sid)
 		switch {
@@ -61,6 +68,26 @@ func (h *Hub) sendOnce(ctx context.Context, m *Machine, p map[string]any) error 
 		case state == sendSending || state == sendUnknown:
 			return i18n.Err("hub-assistant_channels.send_in_doubt")
 		}
+	}
+	if token != "" {
+		proof, err := h.takeClarificationProof(ctx, manager, token)
+		if err == nil {
+			text, _ := p["text"].(string)
+			if !clarificationProofMatches(proof, interactionID, m.cfg.ID, sid, id, text) {
+				err = errors.New("clarification proof does not match this message")
+			}
+		}
+		if err != nil {
+			if h.store != nil {
+				// Validation happened before any node call: this is a definite failed
+				// claim, never an uncertain delivery.
+				if serr := h.store.SettleSend(context.WithoutCancel(ctx), id, ""); serr != nil {
+					h.logf("channels: settle unverified clarification: %v", serr)
+				}
+			}
+			return err
+		}
+		ctx = withVerifiedClarification(ctx, proof.Text)
 	}
 	err := m.call(ctx, "session.send", p, nil)
 	if h.store != nil {
