@@ -637,6 +637,8 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 			if m, ok := s.quietMarks(last.MachineID)[last.SessionID]; e.Silent != "" && (!ok || !m.holds(last)) {
 				s.markQuietTurn(last, e.Silent)
 			}
+			// An external event's no-output turn still has to be reconciled with its retry ledger (#10050);
+			// a turn Persona's Stop interrupted neither acknowledges nor retries its event.
 			if e.Silent == proto.TurnErrorNoOutput {
 				s.taskInboxTurnEnded(cctx, t, last, items, true)
 			}
