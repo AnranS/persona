@@ -333,7 +333,8 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
     tasks: persona.core.domain.tasks.TasksStore?, taskTodos: List<persona.core.contracts.Todo>, search: ChatSearchState,
     openWork: Set<String>, projection: persona.core.domain.lines.ChatSnapshot, feed: List<persona.core.contracts.FeedItem>,
     taskPlans: Map<String, TaskPlan>, taskCardProjection: Map<String, List<AssistantTaskCard>>,
-    children: List<Session> = emptyList()): ChatPageLines {
+    children: List<Session> = emptyList(), modeChanges: List<persona.core.contracts.ModeChange> = emptyList(),
+    modeChangesUntil: java.time.Instant? = null): ChatPageLines {
     val jumpItemState = remember { mutableStateOf<String?>(null) }
     var jumpItem by jumpItemState
     // Glass draws the hub's task records among the lines, as iOS does (#4339 C13), and folds a supervision round into one
@@ -359,7 +360,7 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
     val modelChanges = PersonaTheme.style == AppStyle.Glass
     val childPlaces = remember(key) { persona.core.domain.lines.ChildSessionPlaces() }
     val places = remember(children) { childPlaces.places(children) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents, viewedStrips, modelChanges, places, snapshot.hasOlder, openWork) {
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents, viewedStrips, modelChanges, places, snapshot.hasOlder, openWork, modeChanges, modeChangesUntil) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -373,7 +374,14 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
             .let { persona.core.domain.lines.ChildSessionCards.lines(it, places, !snapshot.hasOlder, openWork) }
             // The strip of what a turn's work looked at is Glass's, as iOS draws it (#4339 C9); Brief and Board keep their lines.
             .let { if (viewedStrips) it else it.filterNot { line -> line is ChatLine.Viewed } }
-            .let { if (modelChanges) persona.core.domain.lines.ModelChanges.mark(it) else it }.asReversed()
+            .let { if (modelChanges) persona.core.domain.lines.ModelChanges.mark(it) else it }
+            .let {
+                if (renderStyle == ChatRenderStyle.Assistant) it else persona.core.domain.lines.ModeChanges.merge(it, modeChanges,
+                    earliest = if (snapshot.hasOlder) snapshot.items.firstNotNullOfOrNull { item ->
+                        persona.core.contracts.parseTime(item.ts)
+                    } ?: java.time.Instant.MAX else null,
+                    until = modeChangesUntil)
+            }.asReversed()
     }
     return ChatPageLines(jumpItemState, assistantPresentation, subagentCards, lines)
 }
@@ -442,10 +450,11 @@ internal class ChatPageSubagents(
 /** ChatPage's reader state: the plan sheet, seen tracking, the newest visible item, the image loader (moved as is). */
 @Composable
 internal fun rememberChatPageReader(key: SessionKey, repository: ChatRepository,
-    snapshot: persona.core.contracts.api.ChatSnapshot, chatList: ChatListState, lines: List<ChatLine>): ChatPageReader {
+    snapshot: persona.core.contracts.api.ChatSnapshot, chatList: ChatListState, lines: List<ChatLine>,
+    liveItems: ChatLiveItems): ChatPageReader {
     val planSheetState = remember { mutableStateOf(false) }
     val sheetPlanState = remember { mutableStateOf<LinePlan?>(null) }
-    val currentItemsState = rememberUpdatedState(snapshot.items)
+    val currentItems = remember(liveItems) { { liveItems.currentItems() } }
     // Rows map to lines by key, never by position: a failed send can sit between lines (#2769).
     val currentLinesByKeyState = rememberUpdatedState(remember(lines) { lines.associateBy { it.contentKey } })
     val currentLinesByKey by currentLinesByKeyState
@@ -466,7 +475,7 @@ internal fun rememberChatPageReader(key: SessionKey, repository: ChatRepository,
         pairingLoader ?: chatImageLoader(context.applicationContext, repository)
     }
     val markdownCache = remember { ChatMarkdownCache() }
-    return ChatPageReader(planSheetState, sheetPlanState, currentItemsState, currentLinesByKeyState, list, reportedSeenState,
+    return ChatPageReader(planSheetState, sheetPlanState, currentItems, currentLinesByKeyState, list, reportedSeenState,
         newestVisibleItemState, readThrough, context, pairingLoader, loader, markdownCache)
 }
 
@@ -474,7 +483,7 @@ internal fun rememberChatPageReader(key: SessionKey, repository: ChatRepository,
 internal class ChatPageReader(
     val planSheet: MutableState<Boolean>,
     val sheetPlan: MutableState<LinePlan?>,
-    val currentItems: State<List<Item>>,
+    val currentItems: () -> List<Item>,
     val currentLinesByKey: State<Map<String, ChatLine>>,
     val list: androidx.compose.foundation.lazy.LazyListState,
     val reportedSeen: MutableState<Item?>,
@@ -664,19 +673,15 @@ internal class ChatPageCloseout(
 @Composable
 internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository, sender: MessageSender,
     interactions: InteractionCenter, sessions: SessionsRepository, chrome: ChatChromeBindings,
-    textUpdates: Map<String, ChatTextUpdate>, statusBindings: ChatStatusBindings): ChatPageSources {
+    statusBindings: ChatStatusBindings): ChatPageSources {
     val scope = rememberCoroutineScope()
     val haptics = persona.core.designsystem.rememberHaptics()
     val res = LocalResources.current
     val recovery = remember(key, statusBindings.recovery) { ChatStatusRecovery(res, statusBindings.recovery, scope, sessions::refresh) }
-    val source = remember(repository, key) { repository.observe(key) }
+    val source = remember(repository, key) { repository.observeStructure(key) }
     val snapshotState = source.collectAsStateWithLifecycle(ChatSnapshot())
     val snapshot by snapshotState
-    val liveTextUpdates = remember(snapshot.items, snapshot.streamingItemIds, textUpdates) {
-        snapshot.items.filter { it.id in snapshot.streamingItemIds }.associate {
-            it.id to ChatTextUpdate(it.text.orEmpty(), streaming = true)
-        } + textUpdates
-    }
+    val liveItems = rememberChatLiveItems(snapshot.items, snapshot.liveText, snapshot.streamingItemIds)
     val application = LocalContext.current.applicationContext
     val renamer = chrome.renamer ?: remember(application) {
         if (application is GeneratedComponentManager<*>)
@@ -709,7 +714,7 @@ internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository
     val sendReceipts = allSendReceipts.filter { receipt -> receipt.session == key ||
         (receipt.session == PendingMainConversation && receipt.mainTarget &&
             allMessages.any { it.session == key && it.clientMessageId == receipt.clientMessageId }) }
-    return ChatPageSources(scope, haptics, res, recovery, snapshotState, liveTextUpdates, renamer, sessionListState,
+    return ChatPageSources(scope, haptics, res, recovery, snapshotState, liveItems, renamer, sessionListState,
         managerChoiceState, machinesState, allRequestsState, allMessagesState, adoptedSessionsState, startedThreadsState,
         writtenAtState, sendReceipts)
 }
@@ -721,7 +726,7 @@ internal class ChatPageSources(
     val res: android.content.res.Resources,
     val recovery: ChatStatusRecovery,
     val snapshot: State<persona.core.contracts.api.ChatSnapshot>,
-    val liveTextUpdates: Map<String, ChatTextUpdate>,
+    val liveItems: ChatLiveItems,
     val renamer: persona.core.domain.sort.SessionRenamer?,
     val sessionList: State<List<Session>>,
     val managerChoice: State<AssistantManagerChoice.Choice>,
