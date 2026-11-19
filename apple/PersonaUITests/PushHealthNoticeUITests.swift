@@ -74,8 +74,8 @@ final class PushHealthNoticeUITests: XCTestCase {
 
         XCTAssertEqual(notice.buttons.count, 1, "the notice must offer exactly one repair action")
         let action = notice.buttons.firstMatch
-        XCTAssertTrue(action.label.contains("通知设置") || action.label.contains("Notification Settings"),
-                      "the action must name its actual destination: \(action.label)")
+        XCTAssertEqual(action.label, "Persona 通知设置",
+                       "the action must name its actual in-app destination: \(action.label)")
         action.tap()
 
         // The action uses the existing repair surface; no physical APNs registration or external App Store is involved.

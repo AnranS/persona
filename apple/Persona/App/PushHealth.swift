@@ -72,7 +72,7 @@ extension PushHealth {
             return PushNoticeContent(text: String(localized: "Notifications can't reach this device. Allow them in Settings."),
                                      actionTitle: String(localized: "Open Settings"), repair: .systemSettings)
         }
-        let settings = String(localized: "Notification Settings")
+        let settings = String(localized: "Persona Notification Settings")
         if missingRoutes?.contains(group) == true {
             return PushNoticeContent(text: String(localized: "Notifications can't reach this device. Keep Persona open while it tries again."),
                                      actionTitle: settings, repair: .notificationSettings)

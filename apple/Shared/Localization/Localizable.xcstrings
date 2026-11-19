@@ -122303,6 +122303,29 @@
         }
       }
     },
+    "Persona Notification Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Notification Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaの通知設定"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 通知设置"
+          }
+        }
+      }
+    },
     "Persona Settings" : {
       "localizations" : {
         "en" : {
