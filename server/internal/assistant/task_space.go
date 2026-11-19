@@ -142,7 +142,7 @@ func taskSpaceLabel(title, id string) string {
 func herdrTaskHost(m Device, params map[string]any) bool {
 	host, _ := params["host"].(string)
 	if host == "" {
-		host = m.Engine
+		host = proto.EngineHostsOf(m.Engine).Default
 	}
 	return host == "" || host == proto.EngineHerdr
 }
@@ -332,12 +332,31 @@ func (s *Service) taskSpaceTried(root string) time.Time {
 	return s.taskSpaces.tried[root]
 }
 
+// taskSpaceMachines are all computers with an Agent under root, including workers on other machines.
+func (s *Service) taskSpaceMachines(root string) map[string]bool {
+	out := map[string]bool{}
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	for _, todo := range s.todos.todos {
+		for _, agent := range todo.Agents {
+			belongs := agent.Source == sourceLeader && todo.ID == root || agent.Source == sourceWorker && agent.Via == root
+			if belongs && agent.ReleasedAt == nil && agent.DismissedAt == nil {
+				out[s.canonical(agent.MachineID)] = true
+			}
+		}
+	}
+	return out
+}
+
 // taskSpaceBusy requires every Agent under the top-level task, and anything else live in that workspace, to be gone
-// or confirmed stopped. lastStop distinguishes a stale idle row from a genuinely resumed Agent with newer activity.
-func (s *Service) taskSpaceBusy(root, workspace string, sessions []proto.Session, seen doneSeen) bool {
-	rows := make(map[[2]string]proto.Session, len(sessions))
-	for _, row := range sessions {
-		rows[[2]string{s.canonical(row.MachineID), row.SessionID}] = row
+// or confirmed stopped. Every agent's own machine must have answered a session list; a missing machine is never
+// proof of retirement. lastStop distinguishes a stale idle row from a genuinely resumed Agent with newer activity.
+func (s *Service) taskSpaceBusy(root, workspace string, lists map[string][]proto.Session, seen doneSeen) bool {
+	rows := map[[2]string]proto.Session{}
+	for machine, sessions := range lists {
+		for _, row := range sessions {
+			rows[[2]string{machine, row.SessionID}] = row
+		}
 	}
 	retired := map[[2]string]bool{}
 	busy := false
@@ -349,13 +368,17 @@ func (s *Service) taskSpaceBusy(root, workspace string, sessions []proto.Session
 				continue
 			}
 			key := [2]string{s.canonical(agent.MachineID), agent.SessionID}
+			if _, listed := lists[key[0]]; !listed {
+				busy = true
+				continue
+			}
 			row, ok := rows[key]
 			if !ok || row.PaneID == "" || row.Status == proto.StatusOffline {
 				retired[key] = true
 				continue
 			}
 			watched := seen[key]
-			if watched.stopped && (watched.lastStop.IsZero() || !row.UpdatedAt.After(watched.lastStop)) {
+			if watched.stopped && !watched.lastStop.IsZero() && !row.UpdatedAt.After(watched.lastStop) {
 				retired[key] = true
 				continue
 			}
@@ -392,6 +415,7 @@ func (s *Service) closeDoneTaskSpaces(ctx context.Context, now time.Time, seen d
 		reachable[s.canonical(device.ID)] = device.Reachable
 	}
 	lists := map[string][]proto.Session{}
+nextTask:
 	for root, recorded := range spaces {
 		if recorded.ID == "" || !reachable[s.canonical(recorded.Machine)] || now.Sub(s.taskSpaceTried(root)) < taskCloseRetry {
 			continue
@@ -404,16 +428,24 @@ func (s *Service) closeDoneTaskSpaces(ctx context.Context, now time.Time, seen d
 			continue
 		}
 		machine := s.canonical(space.Machine)
-		list, loaded := lists[machine]
-		if !loaded {
-			got, err := s.sessions(ctx, machine)
-			if err != nil {
+		machines := s.taskSpaceMachines(root)
+		machines[machine] = true
+		for machineID := range machines {
+			if !reachable[machineID] {
 				unlock()
+				continue nextTask
+			}
+			if _, loaded := lists[machineID]; loaded {
 				continue
 			}
-			list, lists[machine] = got, got
+			got, err := s.sessions(ctx, machineID)
+			if err != nil {
+				unlock()
+				continue nextTask
+			}
+			lists[machineID] = got
 		}
-		if s.taskSpaceBusy(root, space.ID, list, seen) {
+		if s.taskSpaceBusy(root, space.ID, lists, seen) {
 			unlock()
 			continue
 		}

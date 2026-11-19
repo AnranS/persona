@@ -134,7 +134,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		plan, _, _ := s.taskTerminalPlan(ctx, t)
 		if plan.CloseTabOnAccept || plan.TerminalCleanup != "" {
 			s.sendsAccepted(ctx, t.ID, time.Now())
-			return fmt.Sprintf("Task %s is already accepted and closed. Terminal cleanup: %s.", t.ID, terminalCleanupStatus(plan)), nil
+			return fmt.Sprintf("Task %s is already accepted and closed.", t.ID) + terminalCleanupWords(terminalCleanupStatus(plan)), nil
 		}
 	}
 	if err := restated(t, a.Verdict, decision); err != nil {
@@ -346,7 +346,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		authorized := isMain || background || t.Supervision != nil && t.Supervision.Supervisor == self ||
 			t.Supervision == nil && t.Origin == self
 		cleanup := s.finishTaskTerminal(ctx, t, acceptedHere && authorized && a.Outcome != outcomeCannot && !a.UserCheck)
-		against := fmt.Sprintf(" Terminal cleanup: %s.", cleanup) + result.words()
+		against := terminalCleanupWords(cleanup) + result.words()
 		if gaps := result.unsettled(); len(gaps) > 0 {
 			against += " You accepted it with criteria of its brief not shown met: if one no longer applies, say so with task_scope before accepting next time."
 		}
@@ -610,16 +610,16 @@ func pickTaskAgent(agents []proto.Session) proto.Session {
 // (routedFromAssistant); an agent closed after a stretch of work is resumed first (that can take minutes: it goes on in
 // the background). What it says about it: "sent to the agent" or "being sent".
 func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, error) {
-	return s.sendToTaskAs(ctx, t, text, false)
+	return s.sendTaskInput(ctx, t, text, false, nil, true)
 }
 
 // sendToTaskAs is sendToTask; with wait, a closed agent's resume and send is waited for too (up to 5 minutes), so the
-// caller learns whether the text reached it (inboxToAgent, #7346).
+// caller learns whether the text reached it (inboxToAgent, #7346). It is a relay, not rework, and never resumes a stopped Agent.
 func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bool) (string, error) {
-	return s.sendTaskInput(ctx, t, text, wait, nil)
+	return s.sendTaskInput(ctx, t, text, wait, nil, false)
 }
 
-func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait bool, event *taskInboxEvent) (string, error) {
+func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait bool, event *taskInboxEvent, rework bool) (string, error) {
 	agents := s.taskAgents(ctx, t)
 	if len(agents) == 0 {
 		return "", errors.New("the task has no agent")
@@ -638,12 +638,12 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 		if event != nil && event.Retried {
 			return "", errors.New("the event's agent is stopped and read-only")
 		}
+		if !rework {
+			return "", errTaskAgentsStopped // relays, digests and external events never resume a stopped Agent
+		}
 		if _, ok := s.taskSpaceOf(ctx, t.ID); !ok {
 			return "", errTaskAgentsStopped // other stopped tasks' follow-ups still start nothing (tasks_successor.go)
 		}
-		// A herdr leader task explicitly resumes the same session for rework (#4786). The node still checks the
-		// recorded stop cause; the shared call path supplies its task workspace and tab label.
-		s.ensureSupervisor(ctx, t.ID) // this resume stays under the task's existing supervision ledger
 		resumeStopped = true
 	}
 	c := pickTaskAgent(agents)
@@ -652,6 +652,9 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 	}
 	if _, ok := s.device(ctx, c.MachineID); !ok {
 		return "", errors.New("its machine is offline")
+	}
+	if resumeStopped {
+		return s.resumeStoppedTaskAgent(ctx, t, c, text)
 	}
 	send := func(ctx context.Context) error {
 		// The user may complete or reopen the task during session lookup or before an offline send starts.
@@ -674,11 +677,7 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 				return nil
 			}
 		}
-		if resumeStopped {
-			if err := s.call(ctx, c.MachineID, DeviceSessionStart, resumeParams(c, text), nil); err != nil {
-				return err
-			}
-		} else if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
+		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err
 		}
 		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant,
@@ -689,14 +688,6 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 			return nil
 		}
 		return err
-	}
-	if resumeStopped {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
-		defer cancel()
-		if err := send(sctx); err != nil {
-			return "", err
-		}
-		return "sent to the agent after resuming it in the task workspace", nil
 	}
 	if c.Status == proto.StatusOffline && wait {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
@@ -722,6 +713,19 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 		return "", err
 	}
 	return "sent to the agent", nil
+}
+
+// resumeStoppedTaskAgent resumes only an explicit rework of a recorded herdr leader task. The ordinary guarded
+// resume path supplies context compaction, stop provenance, the task workspace, and the resume note on the card.
+func (s *Service) resumeStoppedTaskAgent(ctx context.Context, t Todo, c proto.Session, text string) (string, error) {
+	am, ok := s.device(ctx, c.MachineID)
+	if !ok {
+		return "", errors.New("its machine is offline")
+	}
+	if err := s.resumeAllowed(ctx, t.Origin, am, c, "rework of this task", nil); err != nil {
+		return "", err
+	}
+	return s.resumeAndSend(ctx, t.Origin, am, c, map[string]any{"text": text}, "rework of this task", text, "", nil)
 }
 
 // ownerWaitError refuses accepting task id while its latest stretch of work stopped on a decision only the owner can

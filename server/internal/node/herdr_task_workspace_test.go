@@ -208,3 +208,22 @@ func TestHerdrTaskResumeDoesNotAdoptAUserWorkspace(t *testing.T) {
 		}
 	}
 }
+
+func TestHerdrTaskCloseUsesFreshHerdrSnapshot(t *testing.T) {
+	n, f, _, cwd := startHerdrWorkspaceSession(t, true)
+	h := n.hosts.Get(host.Herdr).(*herdrHost)
+	n.hosts = host.NewRegistry(h, &launchHost{setHost: newSetHost(host.Orca)}) // an unrelated host that cannot refresh
+	workspace := map[string]any{"workspace_id": "w-task", "label": "Ship the change", "cwd": cwd}
+	f.reply("session.snapshot", snapshot([]any{workspace}, nil, []any{claudeAgent(startID, proto.StatusWorking, "w-task:p1", "w-task:t1", "w-task", cwd, "working")}, nil))
+	if _, err := n.closeTaskSpace(context.Background(), "todo-1", "w-task"); err == nil {
+		t.Fatal("closed while the fresh herdr snapshot had a live Agent")
+	}
+	if got := f.trace("workspace.close"); len(got) != 0 {
+		t.Fatalf("live workspace reached herdr close: %v", got)
+	}
+	f.reply("session.snapshot", snapshot([]any{workspace}, nil, nil, nil))
+	res, err := n.closeTaskSpace(context.Background(), "todo-1", "w-task")
+	if err != nil || res["closed"] != true {
+		t.Fatalf("close with no live Agent and an unrelated failed host = %v, %v", res, err)
+	}
+}

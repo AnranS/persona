@@ -188,15 +188,13 @@ func (n *Node) closeTaskSpace(ctx context.Context, task, id string) (map[string]
 	if !found {
 		return map[string]any{"closed": false, "gone": true}, nil
 	}
-	if err := n.refreshHosts(ctx, h); err != nil {
-		return nil, err
-	}
-	n.mu.Lock()
 	busy := false
-	for _, agent := range n.agents {
+	for _, agent := range layout.Agents {
 		busy = busy || agent.WorkspaceID == id && agent.PaneID != ""
 	}
-	n.mu.Unlock()
+	for _, pane := range layout.Panes {
+		busy = busy || pane.Agent != "" && pane.WorkspaceID == id && pane.PaneID != ""
+	}
 	if busy {
 		return nil, refusal(taskSpaceBusyCode, fmt.Sprintf("task workspace %s still has a live Agent", id), nil)
 	}

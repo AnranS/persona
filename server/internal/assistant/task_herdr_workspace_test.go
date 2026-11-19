@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -302,5 +303,150 @@ func TestTaskWorkspaceSessionRowsVerifyOwnership(t *testing.T) {
 	s.taskSpacesSessionsChanged(context.Background(), DeviceSessions{MachineID: "box", Sessions: []proto.Session{row}})
 	if space, _ := s.taskSpaceOf(context.Background(), leader.ID); space.ID != "w-recreated" {
 		t.Fatalf("node-confirmed recreated workspace was not recorded: %+v", space)
+	}
+}
+
+func TestStoppedTaskFollowupsDoNotResumeExceptRework(t *testing.T) {
+	s, f, leader := stoppedTaskLeader(t)
+	if _, err := s.sendToTaskAs(context.Background(), leader, "ordinary follow-up", false); !errors.Is(err, errTaskAgentsStopped) {
+		t.Fatalf("ordinary stopped follow-up resumed the Agent: %v", err)
+	}
+	if starts := resumeTaskStarts(f); len(starts) != 0 {
+		t.Fatalf("ordinary follow-up started a resume: %v", starts)
+	}
+}
+
+func TestStoppedTaskReworkChecksContextAndWritesResumeNote(t *testing.T) {
+	s, f, leader := stoppedTaskLeader(t)
+	c := stoppedBoxAgent(resumedTaskLeaderSession)
+	c.ContextTokens, c.ContextWindow, c.Agent = 90, 100, "pi"
+	f.setSessions("box", c)
+	resumingNode(f)
+	res, err := runJSON(t, s, "conv1", "task_review", map[string]any{
+		"todo_id": leader.ID, "verdict": "rework", "note": "finish the missing checks",
+	})
+	if err == nil && !strings.Contains(res, "nearly full") {
+		t.Fatalf("rework skipped the context check: result=%q error=%v", res, err)
+	}
+	if starts := resumeTaskStarts(f); len(starts) != 0 {
+		t.Fatalf("uncompactable context started a resume: %v", starts)
+	}
+
+	s, f, leader = stoppedTaskLeader(t)
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{
+		"todo_id": leader.ID, "verdict": "rework", "note": "finish the missing checks",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, _, _ := s.feed(context.Background(), "conv1", time.Time{})
+	found := false
+	for _, item := range items {
+		found = found || strings.Contains(string(item.Body), "rework of this task")
+	}
+	if !found {
+		t.Fatalf("rework wrote no resume note on the task card: %+v", items)
+	}
+}
+
+func TestTaskLeaderHerdrBothUsesTaskWorkspace(t *testing.T) {
+	s, f := taskHerdrHub(t, nil)
+	for i := range f.devices {
+		if f.devices[i].ID == "box" {
+			f.devices[i].Engine = proto.EngineHerdrBoth
+		}
+	}
+	leader := startTaskLeader(t, s, f)
+	worker := planWorker(t, s, f, nil)
+	starts := f.started()
+	if len(starts) != 2 || starts[0]["workspace_label"] != leader.Title || starts[1]["workspace_id"] != taskHerdrWorkspaceID {
+		t.Fatalf("herdr-both leader/worker placement = %v", starts)
+	}
+	create := taskWorktreeCreate(f)
+	if create == nil || create["open_workspace"] != false || starts[1]["cwd"] != create["path"] || worker.ID == leader.ID {
+		t.Fatalf("herdr-both worker lost checkout-only placement: start=%v create=%v", starts[1], create)
+	}
+}
+
+func TestTaskWorkspaceCloseChecksEveryAgentMachine(t *testing.T) {
+	s, f, leader, worker := leaderWithAcceptedWorker(t)
+	const remote = "remote"
+	f.devices = append(f.devices, Device{ID: remote, Name: remote, Home: "/home/me", Online: true, Reachable: true})
+	s.todos.mu.Lock()
+	s.todos.todos[worker.ID].Agents[0].MachineID = remote
+	s.todos.mu.Unlock()
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{
+		"todo_id": leader.ID, "verdict": "accepted", "note": "finish the whole task", "checks": completeReviewChecks(todoNow(s, leader.ID)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldIdle := taskCloseIdle
+	taskCloseIdle = 0
+	t.Cleanup(func() { taskCloseIdle = oldIdle })
+	refused, seen := taskCloseRefused{}, doneSeen{}
+	f.setSessions("box", taskCloseSession("s1", false, true))
+	remoteRow := taskCloseSession(worker.Agents[0].SessionID, true, false)
+	remoteRow.MachineID = remote
+	f.setSessions(remote, remoteRow)
+	s.closeDoneTaskAgents(context.Background(), refused, seen)
+	s.closeDoneTaskAgents(context.Background(), refused, seen)
+	if got := taskWorkspaceCloses(f); len(got) != 0 {
+		t.Fatalf("closed with a live worker on another machine: %v", got)
+	}
+
+	remoteRow = taskCloseSession(worker.Agents[0].SessionID, false, true)
+	remoteRow.MachineID = remote
+	f.setSessions(remote, remoteRow)
+	f.answerNode(DeviceSessionsList, func(machine string, raw json.RawMessage) (any, error) {
+		if machine == remote {
+			return nil, errors.New("session list unavailable")
+		}
+		return map[string]any{"sessions": []any{}}, nil
+	})
+	s.closeDoneTaskAgents(context.Background(), refused, seen)
+	if got := taskWorkspaceCloses(f); len(got) != 0 {
+		t.Fatalf("closed while another machine's snapshot was unavailable: %v", got)
+	}
+
+	f.mu.Lock()
+	delete(f.nodes, DeviceSessionsList)
+	f.mu.Unlock()
+	f.setSessions(remote, remoteRow)
+	f.devices = []Device{
+		{ID: "server", Name: "server", Home: "/home/me", Online: true, Reachable: true},
+		{ID: "box", Name: "box", Home: "/home/me", Online: true, Reachable: true},
+		{ID: remote, Name: remote, Home: "/home/me", Online: true, Reachable: true},
+	}
+	boxList, boxErr := s.sessions(context.Background(), "box")
+	remoteList, remoteErr := s.sessions(context.Background(), remote)
+	lists := map[string][]proto.Session{"box": boxList, remote: remoteList}
+	if busy := s.taskSpaceBusy(leader.ID, taskHerdrWorkspaceID, lists, seen); busy {
+		t.Fatalf("task still busy with every machine retired: seen=%+v rows=%+v errors=%v/%v", seen, lists, boxErr, remoteErr)
+	}
+	s.closeDoneTaskAgents(context.Background(), refused, seen)
+	s.closeDoneTaskAgents(context.Background(), refused, seen)
+	if got := taskWorkspaceCloses(f); len(got) != 1 {
+		t.Fatalf("did not close after every machine retired: %v", got)
+	}
+}
+
+func TestTaskWorkspaceCloseRequiresConfirmedStopTime(t *testing.T) {
+	s, _, leader := stoppedTaskLeader(t)
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{
+		"todo_id": leader.ID, "verdict": "accepted", "note": "finish", "checks": completeReviewChecks(todoNow(s, leader.ID)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row := taskCloseSession(resumedTaskLeaderSession, false, false)
+	key := [2]string{"box", resumedTaskLeaderSession}
+	seen := doneSeen{key: {stopped: true}}
+	lists := map[string][]proto.Session{"box": {row}}
+	if !s.taskSpaceBusy(leader.ID, taskHerdrWorkspaceID, lists, seen) {
+		t.Fatal("a zero-time stale stop marked a live Agent retired")
+	}
+	watched := seen[key]
+	watched.lastStop = time.Now()
+	seen[key] = watched
+	if s.taskSpaceBusy(leader.ID, taskHerdrWorkspaceID, lists, seen) {
+		t.Fatal("a confirmed stop older than the row did not count as retired")
 	}
 }
