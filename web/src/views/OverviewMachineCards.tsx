@@ -10,6 +10,7 @@ import type { Machine, MachineMetrics } from "../lib/types";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Segmented } from "./assistant/parts";
+import { OverlayBoundary } from "./LazyOverlay";
 
 const MachineMetricsSummary = lazyPage(() => import("./machines/MachineMetricsSummary").then((m) => m.MachineMetricsSummary));
 
@@ -18,9 +19,19 @@ export const OVERVIEW_MACHINE_VIEW_KEY = "persona.overview.machines.view";
 
 /** The browser's Computers display choice, like the Machines and Files view preferences. Cards are the default. */
 export function useOverviewMachineView(): [OverviewMachineView, (view: OverviewMachineView) => void] {
-  const [view, setView] = useState<OverviewMachineView>(() => storedValue(OVERVIEW_MACHINE_VIEW_KEY) === "rows" ? "rows" : "cards");
+  const [view, setView] = useState<OverviewMachineView>(() => {
+    try {
+      return storedValue(OVERVIEW_MACHINE_VIEW_KEY) === "rows" ? "rows" : "cards";
+    } catch {
+      return "cards";
+    }
+  });
   const choose = (next: OverviewMachineView) => {
-    storeValue(OVERVIEW_MACHINE_VIEW_KEY, next);
+    try {
+      storeValue(OVERVIEW_MACHINE_VIEW_KEY, next);
+    } catch {
+      // A page-only choice still works when browser storage is disabled or full.
+    }
     setView(next);
   };
   return [view, choose];
@@ -112,6 +123,7 @@ const OverviewMachineCard = memo(function OverviewMachineCard({ m, count, hub, m
   const detail = { name: "machine" as const, mid: m.id };
   const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineText(m);
   const monitored = hasCurrentSample(m, metrics);
+  const summaryRetryKey = metrics?.latest?.t ?? JSON.stringify(metrics?.usage?.today ?? 0);
   return (
     <a href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className={cx("block rounded-card bg-surface shadow-card transition-colors hover:bg-hover", monitored ? "h-full" : "self-start")}>
       <span className={cx("flex items-center gap-3 px-3", monitored ? "pt-2.5" : "py-2.5")}>
@@ -127,14 +139,20 @@ const OverviewMachineCard = memo(function OverviewMachineCard({ m, count, hub, m
         </span>
         <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
       </span>
-      {monitored && <Suspense fallback={null}><MachineMetricsSummary machine={m} metrics={metrics} /></Suspense>}
+      {monitored && (
+        <OverlayBoundary key={summaryRetryKey} open onClose={() => {}} fallback={null}>
+          <Suspense fallback={null}><MachineMetricsSummary machine={m} metrics={metrics} /></Suspense>
+        </OverlayBoundary>
+      )}
     </a>
   );
 });
 
 function hasCurrentSample(machine: Machine, metrics?: MachineMetrics): boolean {
-  if (!machine.online || isPending(machine) || metrics?.online === false || !metrics?.latest) return false;
+  if (!machine.online || isPending(machine) || metrics?.online === false || !metrics) return false;
+  if (metrics.usage) return true;
   const latest = metrics.latest;
-  return [latest.cpu, latest.load, latest.mem_used, latest.mem_total, latest.net_rx, latest.net_tx, latest.disk_used, latest.disk_total]
+  if (!latest) return false;
+  return [latest.cpu, latest.load, latest.mem_used, latest.mem_total, latest.net_rx, latest.net_tx, latest.battery_percent, latest.temp_c]
     .some((value) => typeof value === "number" && Number.isFinite(value));
 }

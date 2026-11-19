@@ -198,4 +198,46 @@ describe("Overview computer monitoring cards", () => {
     expect(host.querySelector("[role=alert]")?.textContent).toContain("10");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")?.textContent).toContain("42%");
   });
+
+  it("keeps the display choice working in memory when browser storage is unavailable", async () => {
+    const getItem = localStorage.getItem;
+    const setItem = localStorage.setItem;
+    localStorage.getItem = (key) => key === OVERVIEW_MACHINE_VIEW_KEY ? (() => { throw new Error("storage blocked"); })() : getItem(key);
+    localStorage.setItem = (key, value) => key === OVERVIEW_MACHINE_VIEW_KEY ? (() => { throw new Error("storage blocked"); })() : setItem(key, value);
+    act(() => root.render(<ViewHarness />));
+    await flush();
+
+    expect(option("卡片").getAttribute("aria-checked")).toBe("true");
+    click(option("行"));
+    await flush();
+    expect(option("行").getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
+    expect(metricCalls()).toHaveLength(1);
+  });
+
+  it("shows supported power, thermal and token reports, but not empty disk-only gauges", async () => {
+    const supported = [
+      { id: "battery", name: "Battery", online: true },
+      { id: "tokens", name: "Tokens", online: true },
+      { id: "disk", name: "Disk", online: true },
+      { id: "empty", name: "Empty", online: true },
+    ] as Machine[];
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (String(input).split("?")[0] !== "/api/v1/metrics") return Promise.resolve(json({ error: "not found" }, 404));
+      return Promise.resolve(json({ machines: [
+        { machine_id: "battery", online: true, latest: { t: now, battery_percent: 82, temp_c: 54.2 }, points: [] },
+        { machine_id: "tokens", online: true, points: [], usage: { today: { in: 123 }, per_minute: 0, recent: [] } },
+        { machine_id: "disk", online: true, latest: { t: now, disk_used: 1, disk_total: 2 }, points: [] },
+        { machine_id: "empty", online: true, latest: { t: now }, points: [] },
+      ] }));
+    });
+    act(() => root.render(<OverviewMachineCards machines={supported} offlineText={offlineText} />));
+    await flush();
+
+    expect(host.querySelector("a[href='/machines/battery'] [data-testid='machine-power-thermal']")).not.toBeNull();
+    expect(host.querySelector("a[href='/machines/tokens'] [data-testid='machine-metrics-summary']")).not.toBeNull();
+    expect(host.querySelector("a[href='/machines/disk'] [data-testid='machine-metrics-summary']")).toBeNull();
+    expect(host.querySelector("a[href='/machines/empty'] [data-testid='machine-metrics-summary']")).toBeNull();
+    expect(host.querySelector("a[href='/machines/disk']")?.classList.contains("self-start")).toBe(true);
+  });
 });
