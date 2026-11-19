@@ -37,16 +37,25 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if err := b.h.waitDevicesFor(ctx, owner); err != nil {
 		return fmt.Errorf("%s: %w", b.id, err)
 	}
+	var streamVersion int
+	if dial, ok := params.(devicewire.PortDial); method == devicewire.MethodPortDial && ok {
+		// An old manager ignores the outer offer and forwards only the legacy port.dial parameters.
+		streamVersion, dial.StreamVersion = dial.StreamVersion, 0
+		params = dial
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw}
+	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw, StreamVersion: streamVersion}
 	if method == "session.interrupt" {
 		attachNodeCaller(ctx, &p)
 	}
 	if method == "session.modes" { // the manager records who changed a mode (#10297)
 		p.Actor = modesActor(ctx)
+	}
+	if method == "session.send" { // the owner's message to an Agent: after held ones, maybe held itself (send.go, #10661)
+		p.Hold, p.Ordered = holdOf(ctx), orderedOf(ctx)
 	}
 	if devicewire.IsSessionStart(method) || method == "session.send" {
 		attachNodeCaller(ctx, &p)
