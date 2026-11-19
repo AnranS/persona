@@ -262,17 +262,17 @@ class KnowledgeImportedMeetingScreenTest {
             dark = isDark
             rule.waitForIdle()
             val appearance = if (isDark) "dark" else "light"
-            val lark = rule.onNodeWithTag("knowledge-imported-avatar-r1").assertExists().captureToImage().asAndroidBitmap()
+            val lark = rule.onNodeWithTag("knowledge-imported-avatar-r1", useUnmergedTree = true).assertExists().captureToImage().asAndroidBitmap()
             assertTrue("$appearance: Lark's published blue mark", lark.hasColorNear(0x33, 0x70, 0xff))
             assertTrue("$appearance: third-party marks keep their white backing", lark.hasWhiteBacking())
-            val other = rule.onNodeWithTag("knowledge-imported-avatar-r2").assertExists().captureToImage().asAndroidBitmap()
+            val other = rule.onNodeWithTag("knowledge-imported-avatar-r2", useUnmergedTree = true).assertExists().captureToImage().asAndroidBitmap()
             assertFalse("$appearance: another connector must not borrow Lark's mark", other.hasColorNear(0x33, 0x70, 0xff))
             assertTrue("$appearance: another connector has a gray link badge", other.hasGrayBadge())
             rule.onNode(hasText("R1") and hasClickAction()).assert(
                 SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Lark Meeting Notes"))
             rule.onNode(hasText("R2") and hasClickAction()).assert(
                 SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Original Meeting Notes"))
-            rule.onAllNodesWithTag("knowledge-imported-avatar-r3").assertCountEquals(0)
+            rule.onAllNodesWithTag("knowledge-imported-avatar-r3", useUnmergedTree = true).assertCountEquals(0)
             assertFalse(rule.onNode(hasText("R3") and hasClickAction()).fetchSemanticsNode().config.contains(SemanticsProperties.StateDescription))
             shot("imported-meetings-shot", "knowledge-imported-meetings-en-$appearance.png")
         }
