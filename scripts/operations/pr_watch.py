@@ -30,7 +30,7 @@ from pr_watch_review import review as semantic_review
 from pr_watch_verify import verify
 
 FORMAT_VERSION = 1
-VERIFICATION_POLICY_VERSION = 2
+VERIFICATION_POLICY_VERSION = 3
 REVIEW_POLICY_VERSION = 3
 REPAIR_LIMIT = 3
 INFRASTRUCTURE_ATTEMPT_LIMIT = 3
@@ -556,6 +556,9 @@ class Watcher:
                     "Local checks completed:\n%s\n\n"
                     "This records only the checks listed above; it does not claim unrun device or visual acceptance.") % (
                 pr["headRefOid"][:9], checks)
+        if self.repositories[repo]["verify"].get("profile") == "semantic_only":
+            body += ("\n\nSemantic-only mode: no full build/vet, cross-platform, build-tag or full-test suite was run. "
+                     "Only the lightweight checks listed above and the exact-head merge gates apply.")
         if visual_missing:
             body += "\n\nScreenshot acceptance was not performed: no UI evidence adapter is configured."
         result = run(["gh", "pr", "review", str(number), "--repo", repo, "--comment", "--body", body], timeout=90)
@@ -682,17 +685,21 @@ class Watcher:
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
                            outcome="retry", retry_after=0, failure=None, checks=checks)
+            self.publication_comment(repo, number, published_head, published_key,
+                                     "The watcher pushed an automated repair for the P0 semantic findings. The new head will receive a fresh semantic review and verification.")
         else:
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
-                           outcome="continuation", continuation=new_number, failure=None)
-        self.publication_comment(repo, number,
-                                 published_head if new_number == number else pr["headRefOid"],
-                                 published_key if new_number == number else evidence_key,
-                                 "The watcher pushed an automated repair for the P0 semantic findings. The new head will receive a fresh semantic review and verification.")
-        if new_number != number:
-            self.publication_comment(repo, number, pr["headRefOid"], evidence_key,
-                                     "A continuation PR was opened for the fork branch: #%d." % new_number)
+            self.record_continuation(repo, pr, evidence_key, new_number, checks)
         return False
+
+    def record_continuation(self, repo, pr, evidence_key, continuation, checks, **fields):
+        number, head = pr["number"], pr["headRefOid"]
+        self.state.put(repo, number, head, evidence_key=evidence_key, base=pr["baseRefOid"],
+                       outcome="continuation", continuation=continuation, failure=None, **fields)
+        if checks is None:
+            self.log("%s#%s already has continuation PR #%d" % (repo, number, continuation))
+        else:
+            self.publication_comment(repo, number, head, evidence_key,
+                                     "A continuation PR was opened for the fork branch: #%d." % continuation)
 
     def publication_comment(self, repo, number, head, evidence_key, body):
         """A push is already durable; a later comment outage cannot roll it back."""
@@ -744,10 +751,8 @@ class Watcher:
                     cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
             if pr.get("isCrossRepository"):
                 new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, str(error), config["verify"], allow_merge_only=True, original_pr=pr)
-                self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                               outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
-                self.publication_comment(repo, number, pr["headRefOid"], old.get("evidence_key"),
-                                         "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
+                self.record_continuation(repo, pr, old.get("evidence_key"), new_number, repair_checks,
+                                         repair_rounds=rounds + 1)
             else:
                 pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
                 updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
@@ -791,16 +796,10 @@ class Watcher:
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
                            outcome="retry", retry_after=0, failure=None, checks=repair_checks)
+            self.publication_comment(repo, number, published_head, published_key,
+                                     "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         else:
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                           outcome="continuation", continuation=new_number, failure=None)
-        self.publication_comment(repo, number,
-                                 published_head if new_number == number else pr["headRefOid"],
-                                 published_key if new_number == number else old.get("evidence_key"),
-                                 "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
-        if new_number != number:
-            self.publication_comment(repo, number, pr["headRefOid"], old.get("evidence_key"),
-                                     "A continuation PR was opened for the fork branch: #%d." % new_number)
+            self.record_continuation(repo, pr, old.get("evidence_key"), new_number, repair_checks)
         return False
 
     def mergeable(self, pr):
@@ -936,6 +935,9 @@ class Watcher:
             return
         head = pr["headRefOid"]
         old = self.state.get(repo, number)
+        # A continuation covers the fork head even as the base branch advances.
+        if old.get("outcome") == "continuation" and old.get("head") == head:
+            return
         if old.get("outcome") in ("stale_closed", "stale_close_pending"):
             # Closing or an interrupted close invalidates the old approval.
             # A later reopen must produce new semantic and verification evidence.
@@ -1000,8 +1002,14 @@ class Watcher:
             # The completed backoff permits a fresh independent attempt budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  review_attempts=0, repair_attempts=0, retry_after=0)
-        if old.get("outcome") == "continuation":
-            return
+        if pr.get("isCrossRepository"):
+            # Skip review when another continuation already contains this head.
+            # A failed lookup raises so a later poll can retry it.
+            existing = pr_watch_repair.existing_continuation(repo, pr)
+            if existing:
+                self.record_continuation(repo, pr, evidence_key, existing, None,
+                                         repair_rounds=int(old.get("repair_rounds", 0)), format=FORMAT_VERSION)
+                return
         if (old.get("head") == head and old.get("evidence_key") == evidence_key
                 and old.get("outcome") == "retry" and old.get("retry_reason") == "failed_verification"):
             # The migration record is a failed verification, not a success to
@@ -1225,9 +1233,8 @@ class Watcher:
                                 cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
                         if pr.get("isCrossRepository"):
                             new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr)
-                            self.state.put(repo, number, head, evidence_key=evidence_key,
-                                           outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
-                            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+                            self.record_continuation(repo, pr, evidence_key, new_number, repair_checks,
+                                                     repair_rounds=rounds + 1)
                         else:
                             pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
                             updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
