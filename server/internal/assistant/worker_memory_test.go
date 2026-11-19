@@ -374,3 +374,18 @@ func TestWorkerReportIndexYieldsCompletedTurn(t *testing.T) {
 		t.Fatalf("WorkDone did not reuse report item: %d", got)
 	}
 }
+
+// With triage disabled no WorkDone will arrive, so a completed report turn still writes through the report route.
+func TestWorkerMemoryReportWritesWithTriageDisabled(t *testing.T) {
+	env := newWorkerMemoryEnv(t)
+	env.setProject(t, "explicit")
+	env.s.work.switches = &TriageSwitches{Enabled: false}
+	env.f.setItems(
+		proto.Item{Seq: 1, Kind: proto.KindText, Role: "user", Text: "Start"},
+		proto.Item{Seq: 2, Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "report-call",
+			ToolName: "report_to_supervisor", ToolInput: workerMemoryReportInput()},
+		proto.Item{Seq: 3, Kind: proto.KindToolResult, Role: "tool", ToolUseID: "report-call"},
+		proto.Item{Seq: 4, Kind: proto.KindText, Role: "assistant", Text: workerMemoryConclusion})
+	env.reportDone(t, turnEnd)
+	assertOriginalWorkerMemory(t, workerMemoryRecords(t, env.e, "explicit"))
+}

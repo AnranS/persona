@@ -38,9 +38,9 @@ func (s *Service) goRecordWorkerReport(ctx context.Context, t Todo, machine, ses
 	ctx = context.WithoutCancel(ctx)
 	s.goWorkerOutcome(func() {
 		items, read := s.lastTurnItems(ctx, machine, session)
-		// A final answer after the report means this read caught a completed turn. Let WorkDone use its pinned items
-		// rather than attributing the report to whatever turn happens to be latest now.
-		index := workerReportIndex(items, text, at, true)
+		// With triage on, a final answer means WorkDone owns the write with its pinned items. With triage off there is
+		// no WorkDone fallback, so the successful done report itself must still be recorded.
+		index := workerReportIndex(items, text, at, s.workOn(ctx))
 		if !read || len(items) == 0 || index < 0 {
 			return
 		}
