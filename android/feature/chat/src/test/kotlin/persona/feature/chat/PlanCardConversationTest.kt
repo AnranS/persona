@@ -221,7 +221,7 @@ class PlanCardConversationTest {
         rule.onAllNodesWithText("Preset review", substring = true).assertCountEquals(2)
     }
 
-    private fun everyStyleNamesTiers(style: AppStyle) {
+    private fun everyStyleNamesTiers(style: AppStyle, largeText: Boolean = false) {
         val dark = mutableStateOf(false)
         if (style == AppStyle.Glass) show(style, dark, plans = listOf(tiered),
             items = listOf(FeedItem("tiered-feed", "main", at(6), "plan", "tiered")))
@@ -230,7 +230,8 @@ class PlanCardConversationTest {
         for (night in listOf(false, true)) {
             dark.value = night; settle()
             tierNamesTheModels()
-            colors += capture("plan-tiers-${style.name.lowercase()}-${if (night) "dark" else "light"}")
+            val size = if (largeText) "-large" else ""
+            colors += capture("plan-tiers-${style.name.lowercase()}-${if (night) "dark" else "light"}$size")
         }
         assertNotEquals("dark capture must differ from light", colors[0], colors[1])
     }
@@ -238,6 +239,15 @@ class PlanCardConversationTest {
     @Test fun glassNamesTiersWithLaunchersAndKeepsModelPrecedence() = everyStyleNamesTiers(AppStyle.Glass)
     @Test fun briefNamesTiersWithLaunchersAndKeepsModelPrecedence() = everyStyleNamesTiers(AppStyle.Brief)
     @Test fun boardNamesTiersWithLaunchersAndKeepsModelPrecedence() = everyStyleNamesTiers(AppStyle.Board)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi", fontScale = 2f)
+    @Test fun glassNamesTiersAtLargestText() = everyStyleNamesTiers(AppStyle.Glass, largeText = true)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi", fontScale = 2f)
+    @Test fun briefNamesTiersAtLargestText() = everyStyleNamesTiers(AppStyle.Brief, largeText = true)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi", fontScale = 2f)
+    @Test fun boardNamesTiersAtLargestText() = everyStyleNamesTiers(AppStyle.Board, largeText = true)
 
     private fun namesTheModels() {
         rule.onNodeWithText("Opus 4.8").assertIsDisplayed()
