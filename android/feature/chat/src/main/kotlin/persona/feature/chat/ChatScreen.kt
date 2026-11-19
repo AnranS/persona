@@ -237,9 +237,7 @@ private fun ChatPage(
     var linkContexts by rememberSaveable(stateSaver = ChatLinkContextsSaver) { mutableStateOf(emptyList<ChatLinkContext>()) }
     var conversationLauncher by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
-    // Forward (#3901): what another chat forwarded here waits over the composer, whether this page was open or not.
-    val forwarding = LocalChatForwarding.current
-    var forwardDraft by remember { mutableStateOf<ForwardDraft?>(null) }
+    // Forward placements arrive over the composer; the message action and forward-sheet UI lives in ChatMessageActions.
     val placedForwards = ForwardPlacements.waiting(key)
     LaunchedEffect(placedForwards, readOnly, canSend) {
         if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
@@ -350,8 +348,15 @@ private fun ChatPage(
     var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
+    val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
+    DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
+    LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
+        session?.let { modeChangeStore.watch(key, it, agentChat = renderStyle != ChatRenderStyle.Assistant) }
+    }
+    val modeChangesUntil = remember(timelineVersion, projection) { modeChangesCutoff(timeline.isFrozen(), projection.lines) }
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, supervisingConversation, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList())
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList(), modeChanges = modeChangeStore.changes,
+        modeChangesUntil = modeChangesUntil)
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
     val subagentCards = pageLines.subagentCards
@@ -1147,7 +1152,7 @@ private fun ChatPage(
                                                 catch (e: CancellationException) { throw e }
                                                 catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
                                             }
-                                        }, style = renderStyle, textUpdates = textUpdates,
+                                        }, style = renderStyle, agentSession = session, textUpdates = textUpdates,
                                             liveText = snapshot.liveText, streamingItemIds = snapshot.streamingItemIds,
                                             userImages = contentUserImages[line.id].orEmpty(),
                                             imagesInUserBubble = line.id in contentHiddenImages,
@@ -1245,20 +1250,14 @@ private fun ChatPage(
                 onOpenSession = chrome.onOpenSession?.let { open -> { target -> statusSheet = false; open(target) } })
             fullText?.let { FullTextReader(it, onDismiss = { fullText = null }) }
             sheetPlan?.takeIf { planSheet }?.let { PlanSheet(it, onDismiss = { planSheet = false }) }
-            val menuTitle = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled)
-            MessageMenuSheet(messageMenu, messageMenuWrites(readOnly, session),
-                onQuote = quoteTarget, onEdit = composer::edit,
-                onContext = { text -> linkContexts = linkContexts + messageContext(menuTitle, text, context.resources); notice = res.getString(R.string.chat_screen_added_context) },
-                onForward = forwarding?.let { { target: MessageTarget -> forwardDraft = forwardDraftOf(target, key, session, machine, renderStyle, it) } },
-                onNotice = { notice = it }, onFork = onFork, rewind = rewindMenu,
+            ChatMessageActions(key, session, machine, renderStyle, repository, readOnly, composer, messageMenu,
+                quoteTarget = quoteTarget,
+                onContext = { text -> linkContexts = linkContexts + messageContext(session?.displayTitle ?: res.getString(R.string.chat_screen_untitled), text, context.resources)
+                    notice = res.getString(R.string.chat_screen_added_context) },
+                onNotice = { notice = it }, onFork = onFork, rewindMenu = rewindMenu,
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
-                } }, share = shareCardSource(session, LocalPersonaName.current))
-            val forwardFrom = forwardDraft
-            if (forwardFrom != null && forwarding != null) ForwardSheet(forwardFrom, forwarding,
-                complete = { ForwardMessage.ref(forwardFrom.cut?.let { repository.fullText(key, it) } ?: forwardFrom.raw, forwardFrom.source, res) },
-                onDismiss = { forwardDraft = null },
-                onPicked = { target, ref -> deliverForward(target, ref, key, forwarding, res) })
+                } })
             viewer?.let { request ->
                 ChatImageViewer(request.images, request.index, onDismiss = { viewer = null },
                     onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),
