@@ -182,6 +182,26 @@ func TestFeishuHeldRunQuietEndWithoutItsCard(t *testing.T) {
 	}
 }
 
+// An unrelated user turn ends the held wait without an answer or a quiet-ending card, even while background work
+// remains. Reaction cleanup still uses the normal sink; no conversation content is posted back to the chat.
+func TestFeishuHeldRunUnrelatedUserTurnSaysNothing(t *testing.T) {
+	s, f, r, posts := heldRunWithoutCard(t)
+	sess := proto.Session{Status: proto.StatusDone, State: proto.StateIdle, MachineID: "server", SessionID: "c1",
+		Background: []proto.BackgroundTask{{ID: "background-work", Kind: "shell"}}}
+	f.setSessions("server", sess)
+	f.setItems(
+		proto.Item{Seq: 5, Role: "user", Kind: proto.KindText, Text: "an unrelated private question"},
+		proto.Item{Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "the unrelated private answer"},
+	)
+	s.checkChannelRun(r.ID)
+	if run, _ := s.channelRunByID(r.ID); run != nil {
+		t.Fatalf("the unrelated turn did not end the held run")
+	}
+	if len(*posts) != 0 {
+		t.Fatalf("the unrelated turn posted to the original chat: %v", *posts)
+	}
+}
+
 // heldRunWithoutCard is a run answered once (held) whose card went back with its message, and whose background wait is
 // older than HeldIdleMost: its next end is a quiet one.
 func heldRunWithoutCard(t *testing.T) (*Service, *fakeHub, *channel.Run, *[]map[string]any) {

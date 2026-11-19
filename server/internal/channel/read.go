@@ -85,6 +85,9 @@ func ReadTurn(ctx context.Context, src ItemSource, r *Run) (Reading, error) {
 			return Reading{Last: after}, nil // a message folded in is not in the conversation yet
 		}
 	}
+	if r.Held && !named && unrelatedHeldTurn(kept) {
+		return Reading{Found: true, Last: after, Unrelated: true}, nil
+	}
 	if named && found && !slices.ContainsFunc(kept, func(it proto.Item) bool { return it.Role == "assistant" }) {
 		// Its message is in, nothing after it yet: its turn has not answered (the session's status can come before its
 		// lines, two messages one right after the other): as one still waiting. Unless the turn was stopped before it
@@ -160,6 +163,20 @@ func RunAnswer(r *Run, items []proto.Item) ([]proto.Item, bool) {
 		out = append(out, Answer(p)...)
 	}
 	return out, true
+}
+
+// unrelatedHeldTurn reports whether the first turn-starting item is ordinary user input rather than a background
+// wake. Tool results and transcript bookkeeping do not decide; without either kind of input there is no verdict.
+func unrelatedHeldTurn(items []proto.Item) bool {
+	for _, it := range items {
+		switch {
+		case it.Wake:
+			return false
+		case it.Role == "user" && (it.Kind == proto.KindText || it.Kind == proto.KindImage):
+			return true
+		}
+	}
+	return false
 }
 
 // endsInWords: the last of items that says anything is the assistant's text (a turn that ended with its answer).

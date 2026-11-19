@@ -195,13 +195,14 @@ const (
 type End string
 
 const (
-	EndDone     End = ""
-	EndStopped  End = "stopped"  // interrupted (/stop, the app, the terminal)
-	EndError    End = "error"    // the turn ended in a model API error
-	EndGaveUp   End = "gave_up"  // not done in RunMost (HeldMost for a held run)
-	EndGone     End = "gone"     // the conversation was closed or deleted
-	EndOffline  End = "offline"  // its machine is offline
-	EndRecalled End = "recalled" // the owner recalled the message it answers
+	EndDone      End = ""
+	EndStopped   End = "stopped"   // interrupted (/stop, the app, the terminal)
+	EndError     End = "error"     // the turn ended in a model API error
+	EndGaveUp    End = "gave_up"   // not done in RunMost (HeldMost for a held run)
+	EndGone      End = "gone"      // the conversation was closed or deleted
+	EndOffline   End = "offline"   // its machine is offline
+	EndRecalled  End = "recalled"  // the owner recalled the message it answers
+	EndUnrelated End = "unrelated" // an ordinary user turn superseded a held wait; send nothing
 )
 
 // Step is Check's verdict.
@@ -256,6 +257,8 @@ type Reading struct {
 	Stopped string
 	// Words: the turn's items end in the assistant's words (else its last words may not be written yet).
 	Words bool
+	// Unrelated: an ordinary user turn followed a held run, rather than the background wake it was waiting for.
+	Unrelated bool
 }
 
 // Result is what to send when a run is over (or held: answered once, waiting on its background work).
@@ -265,7 +268,8 @@ type Result struct {
 	Held   bool
 	End    End // how a final one ended
 	Last   int
-	// Quiet: nothing to send (a held run whose background work ended without a word).
+	// Quiet: no answer to send (a held run whose background work ended without a word, or one superseded by an
+	// unrelated user turn). End tells those cases apart; EndUnrelated suppresses the quiet ending card too.
 	Quiet bool
 	// Stopped is why the turn ended without words, when known (Reading.Stopped).
 	Stopped string
@@ -277,6 +281,9 @@ type Result struct {
 func (r *Run) Decide(rd Reading, l Look) *Result {
 	age := l.Now.Sub(r.Started)
 	held := l.Background > 0
+	if r.Held && rd.Unrelated {
+		return &Result{Quiet: true, End: EndUnrelated, Last: rd.Last}
+	}
 	if strings.TrimSpace(rd.Answer) == "" {
 		switch {
 		case held:
@@ -318,12 +325,16 @@ func endOf(rd Reading, l Look) End {
 	return EndDone
 }
 
-// Hold makes r wait for the turn its background work starts, from last on: answered once already.
+// Hold makes r wait for the turn its background work starts, from last on: answered once already. Started stays at
+// the original message, so later holds cannot renew HeldMost; now only initializes a zero-value run.
 func (r *Run) Hold(last int, now time.Time) {
 	if last > r.Base {
 		r.Base = last
 	}
-	r.MsgIDs, r.Probe, r.Head, r.Seen, r.Held, r.Started, r.Folded, r.Again = nil, "", false, false, true, now, nil, time.Time{}
+	if r.Started.IsZero() {
+		r.Started = now
+	}
+	r.MsgIDs, r.Probe, r.Head, r.Seen, r.Held, r.Folded, r.Again = nil, "", false, false, true, nil, time.Time{}
 }
 
 // Find is where the run's message is in items: by its client_msg_id, else by its probe (holds says whether a user
