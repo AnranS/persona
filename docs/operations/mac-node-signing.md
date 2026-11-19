@@ -124,7 +124,7 @@ under fixed `com.nwverse.<program>` identifiers on stable and prerelease version
 tags. It uses the existing Developer ID certificate in the protected
 `persona-desktop-release` environment, never an ad-hoc signature. Its availability
 check needs only `MAC_CSC_LINK` and `MAC_CSC_KEY_PASSWORD`, independently of the
-stable-only desktop package gate and its notarization credentials. If either is
+desktop package version gate and its notarization credentials. If either is
 missing, the gate reports `Darwin CLI signing blocked` and the job does not build
 or upload. `sign_darwin_cli.py` verifies each signature and rejects a remaining
 ad-hoc `cdhash`; the downloads are then recompressed from the signed binaries and
