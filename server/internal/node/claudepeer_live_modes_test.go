@@ -103,6 +103,20 @@ func sendLivePeer(t *testing.T, c livePeerCase) (string, error) {
 		}
 	}
 
+	if c.footerMode != "" {
+		// Ordinary owner messages now use tmux's direct pane path. Forced priority models a card answer, which still
+		// exercises the remaining inbox path and its receiver-class attestation.
+		ctx := context.Background()
+		if c.owner {
+			ctx, _ = withOwnerDelivery(ctx)
+		}
+		handled, err := n.sendOutsidePriority(ctx, sidA, "ship it", nil, peerNow)
+		if !handled {
+			t.Fatal("forced outside-Claude send was not handled")
+		}
+		return envelopeHead(t, inbox, 0), err
+	}
+
 	params := map[string]any{"session_id": sidA, "text": "ship it", "client_msg_id": "live-peer-1"}
 	if c.owner {
 		params["owner_input"] = true
