@@ -75,7 +75,7 @@ HUB_PROGRAMS = ('persona-hub', 'persona-manager')
 class PersonaInstallTests(unittest.TestCase):
     def run_install(self, home, initial='fresh', extra=None, corrupt=False, link=None,
                     node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1', args=(),
-                    github_latest=False):
+                    github_latest=False, no_python=False):
         target = {'Darwin': 'darwin', 'Linux': 'linux'}[system or platform.system()] + '-' + {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
@@ -144,6 +144,13 @@ exec /usr/bin/curl -fsSL "http://127.0.0.1:{server.server_port}/$path" -o "$4"
 ''')
                     curl.chmod(0o755)
                     env['PATH'] = f'{commands}:{env["PATH"]}'
+                if no_python:
+                    blocked = downloads / 'no-python'
+                    blocked.mkdir()
+                    python = blocked / 'python3'
+                    python.write_text('#!/bin/sh\nexit 127\n')
+                    python.chmod(0o755)
+                    env['PATH'] = f'{blocked}:{env["PATH"]}'
                 for key in ('BASH_ENV', 'ENV', 'ZDOTDIR', 'XDG_CONFIG_HOME'):  # nothing of the machine's own setup
                     env.pop(key, None)
                 # Nor its language: install.sh answers in LC_ALL's, then LANG's, and the tests read English (#6938).
@@ -199,6 +206,17 @@ exec /usr/bin/curl -fsSL "http://127.0.0.1:{server.server_port}/$path" -o "$4"
             self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
             for url in calls[1:]:
                 self.assertTrue(url.startswith('https://github.com/example/project/releases/download/v1.2.3/'), url)
+
+    def test_github_latest_does_not_require_python(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            script = home / 'install-no-python.sh'
+            script.write_text(INSTALL.read_text())
+            result = self.run_install(home, release='1.2.3', github_latest=True, no_python=True, script=script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            self.assertTrue(all('/releases/download/v1.2.3/' in url for url in calls[1:]))
 
     def test_installer_text_catalog_has_every_language(self):
         text = INSTALL.read_text(encoding='utf-8')

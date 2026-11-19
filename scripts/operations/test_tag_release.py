@@ -340,7 +340,7 @@ class TagReleaseTests(unittest.TestCase):
                 return real_output(command, **kwargs)
             events.append(("github", command))
             if command[:2] == ["gh", "run"]:
-                return json.dumps([{"databaseId": 123}] if ci_assets is not None else [])
+                return json.dumps([{"databaseId": 123, "status": "completed"}] if ci_assets is not None else [])
             if command[:2] == ["gh", "api"]:
                 if "/actions/runs/" in command[2]:
                     return json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "status": "completed",
@@ -494,6 +494,17 @@ class TagReleaseTests(unittest.TestCase):
                                  ci_conclusion="failure", events=events)
         self.assertFalse(any(kind == "upload" for kind, _ in events))
         self.assertEqual(self.release_actions(events, "edit"), [])
+
+    def test_ci_signing_waits_for_pending_run_before_jobs_exist(self):
+        responses = iter([
+            json.dumps([{"databaseId": 123, "status": "queued"}]),
+            json.dumps({"jobs": []}),
+            json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "conclusion": "success"}]}),
+        ])
+        with patch.object(tag_release.subprocess, "check_output", side_effect=responses), \
+                patch.object(tag_release.time, "sleep") as sleep:
+            self.assertEqual(tag_release.ci_signing_conclusion("example/project", "v0.2.1"), "success")
+        sleep.assert_called_once_with(10)
 
     def test_uploaded_tag_manifest_must_match_version_and_build_before_latest_promotion(self):
         assets = self.release_receipt()

@@ -549,7 +549,7 @@ def check_beta_manifest(assets, version):
 def ci_signing_conclusion(repository, tag, gh="gh"):
     """The signing job's conclusion, or None when this tag's workflow has no such job."""
     runs = json.loads(subprocess.check_output(
-        [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId", "--limit", "1"],
+        [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId,status", "--limit", "1"],
         text=True, timeout=60))
     if not runs:
         return None
@@ -559,6 +559,9 @@ def ci_signing_conclusion(repository, tag, gh="gh"):
             [gh, "api", "repos/%s/actions/runs/%s/jobs" % (repository, run_id), "--paginate"], text=True, timeout=60))
         job = next((item for item in data.get("jobs", []) if item.get("name") == "Sign Darwin command-line programs"), None)
         if job is None:
+            if runs[0].get("status") != "completed":
+                time.sleep(10)
+                continue
             return None
         conclusion = job.get("conclusion")
         if conclusion in ("success", "skipped"):

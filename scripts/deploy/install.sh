@@ -521,22 +521,18 @@ esac
 case "$DL" in
 https://github.com/*/releases/latest/download)
 	fetch "$DL/latest.json" "$tmp/latest.json" || fail download_failed "$DL/latest.json"
-	release_version="$(python3 - "$tmp/latest.json" <<'PY'
-import json
-import re
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    manifest = json.load(source)
-version = manifest.get("version", "")
-if not isinstance(version, str):
-    raise ValueError("release version is not a string")
-version = version.removeprefix("v")
-if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-    raise ValueError("invalid stable release version")
-print(version)
-PY
-)" || fail download_failed "$DL/latest.json"
+	release_version="$(awk '
+	  match($0, /"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"/) {
+	    value = substr($0, RSTART, RLENGTH)
+	    sub(/^.*:[[:space:]]*/, "", value)
+	    gsub(/"/, "", value)
+	    sub(/^v/, "", value)
+	    print value
+	    found = 1
+	    exit
+	  }
+	  END { if (!found) exit 1 }
+	' "$tmp/latest.json")" || fail download_failed "$DL/latest.json"
 	DL="${DL%/releases/latest/download}/releases/download/v$release_version"
 	;;
 esac

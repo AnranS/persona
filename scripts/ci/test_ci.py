@@ -324,6 +324,9 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('resume_github_release.py prepare', darwin)
         self.assertIn('resume_github_release.py restore', darwin)
         self.assertIn('PERSONA_RELEASE_BUILD', darwin)
+        resume = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                      if step.get('name') == 'Select reusable Release build')
+        self.assertEqual(resume['if'], "steps.owner.outputs.release_pr == 'false'")
         create = release['jobs']['publish']['steps'][-1]
         self.assertEqual(create['name'], 'Create GitHub Release')
         self.assertIn('args=(--latest=false ', create['run'])

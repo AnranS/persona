@@ -137,8 +137,10 @@ verification, and different bytes are a conflict that stops the job. Before
 building, `resume_github_release.py` selects the existing manifest's build number
 or the tag commit's UTC timestamp; after signing it restores existing assets with
 digest verification, so failed-job reruns reuse bytes instead of rejecting a new
-timestamp. The hub coordinator waits for this job, downloads the staging manifest
-and CI files, merges them with the locally verified Windows archives and reports,
+timestamp. The resume step runs only when release-publish owns the tag, not for a
+release PR's already-owned artifacts. The hub coordinator waits for the current
+run, including while it is queued before the signing job has been registered,
+then downloads the staging manifest and CI files, merges them with the locally verified Windows archives and reports,
 and publishes the only final `latest.json` and `SHA256SUMS`. A failed job stops
 publication; a skipped job keeps the unsigned private-build path. A prerelease
 manifest belongs to that prerelease and does not move `releases/latest`. This is

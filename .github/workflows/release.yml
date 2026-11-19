@@ -138,6 +138,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Select reusable Release build
+        if: steps.owner.outputs.release_pr == 'false'
         id: resume
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
