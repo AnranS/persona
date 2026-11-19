@@ -78,4 +78,31 @@ final class PairPhotoPickerUITests: XCTestCase {
         alert.buttons["pair.cancel"].firstMatch.tap()
         XCTAssertFalse(app.buttons["engine.save"].exists, "Cancel paired anyway")
     }
+
+    @MainActor func testPhotoActionInLightDarkAndLargeText() throws {
+        let env = ProcessInfo.processInfo.environment
+        for (scheme, large) in [("light", false), ("dark", false), ("light", true)] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-openWelcome", "YES", "-pairURL", "", "-ui.scheme", scheme]
+            if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+            app.launchPinned()
+            XCTAssertTrue(app.buttons["welcome.pair"].waitForExistence(timeout: 10), "no welcome page")
+            app.buttons["welcome.pair"].tap()
+            let scanOrToken = app.buttons["扫码或其他配对方式"]
+            XCTAssertTrue(scanOrToken.waitForExistence(timeout: 10), "no scan-or-token pairing method")
+            scanOrToken.tap()
+            let choose = app.buttons["pair.choosePhoto"]
+            XCTAssertTrue(choose.waitForExistence(timeout: 10), "no photo action")
+            let screen = app.screenshot()
+            let name = "pair-photo-screen-\(scheme)-\(large ? "large" : "default")"
+            let attachment = XCTAttachment(screenshot: screen)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            if let dir = env["PERSONA_SHOTS"] {
+                try? screen.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
+            }
+            app.terminate()
+        }
+    }
 }
