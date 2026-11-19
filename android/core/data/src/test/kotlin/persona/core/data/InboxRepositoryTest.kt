@@ -688,6 +688,59 @@ class InboxRepositoryTest {
         }
     }
 
+    @Test fun connectorRowsUseAvatarUrlAtLarkThumbnailSizeAndCacheIt() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-connector-avatar-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val picture = "/api/v1/avatars/telegram/YS51MS41MDE"
+        val sized = "$picture?size=144"
+        try {
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(
+                    buildJsonObject {
+                        put("id", "telegram:1"); put("source", "telegram"); put("kind", "dm"); put("title", "Person")
+                        // A connector's top-level avatar and its superseded raw media ref are not its picture URL.
+                        put("avatar", "/api/v1/lark/media/not-the-connector-picture")
+                        putJsonObject("connector") {
+                            put("thread", "u1"); put("avatar_url", picture); put("media_ref", "raw-connector-ref")
+                        }
+                    },
+                    buildJsonObject {
+                        put("id", "telegram:2"); put("source", "telegram"); put("kind", "dm"); put("title", "No picture")
+                        putJsonObject("connector") { put("thread", "u2"); put("media_ref", "raw-connector-ref") }
+                    },
+                    buildJsonObject {
+                        put("id", "lark:chat:1"); put("source", "lark"); put("kind", "group"); put("title", "Group")
+                        put("avatar", "/api/v1/lark/media/key"); putJsonObject("lark") { put("feed_id", "chat") }
+                    },
+                ))
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val records = repository.snapshot.value.records.associate { it.item.id to it }
+            val connector = records.getValue("telegram:1")
+            assertEquals("hub/generation:$sized", connector.avatar?.cacheKey)
+            assertNull(records.getValue("telegram:2").avatar)
+            assertEquals("hub/generation:/api/v1/lark/media/key?size=144", records.getValue("lark:chat:1").avatar?.cacheKey)
+            val decoded = JsonCodec.encodeToJsonElement(InboxConnectorRef.serializer(), connector.connector!!).jsonObject
+            assertEquals(picture, decoded["avatar_url"]?.jsonPrimitive?.content)
+
+            connector.avatar!!.read()
+            connector.avatar!!.read()
+            records.getValue("lark:chat:1").avatar!!.read()
+            assertEquals(listOf(sized, "/api/v1/lark/media/key?size=144"), transport.avatarRefs)
+            // Rebuilding the same row retains its equal image and the authenticated bytes cache.
+            repository.refresh()
+            val rebuilt = repository.snapshot.value.records.single { it.item.id == "telegram:1" }
+            assertEquals(connector, rebuilt)
+            rebuilt.avatar!!.read()
+            assertEquals(listOf(sized, "/api/v1/lark/media/key?size=144"), transport.avatarRefs)
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun bulkDoneKeepsWhatWasAlreadyDoneElsewhereAndDropsWhatIsGone() = runBlocking {
         val directory = Files.createTempDirectory("inbox-bulk-unchanged-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
