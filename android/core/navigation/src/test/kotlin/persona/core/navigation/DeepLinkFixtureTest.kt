@@ -87,6 +87,7 @@ class DeepLinkFixtureTest {
             SettingsPage.Sent -> values("settings", "tab" to "connectors", "item" to "-sent")
             SettingsPage.Connectors -> values("settings", "tab" to "connectors")
             SettingsPage.Hubs -> values("settings", "tab" to "hub")
+            SettingsPage.ModelConfig -> values("settings", "tab" to "models")
             else -> error("No shared deep-link fields for $key")
         }
         else -> error("No shared deep-link fields for $key")

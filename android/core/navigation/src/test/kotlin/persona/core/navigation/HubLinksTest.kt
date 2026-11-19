@@ -46,7 +46,7 @@ class HubLinksTest {
         assertEquals(HubPage.Conversation(null), page(hub))
         assertEquals(HubPage.Conversation(null), page("$hub/"))
         assertEquals(HubPage.Conversation(null), page("$hub/persona"))
-        assertEquals(HubPage.Conversation(null), page("$hub/persona/new"))
+        assertEquals(HubPage.NewConversation, page("$hub/persona/new"))
         assertEquals(HubPage.Screen(TodoDetailRoute("todo_1")), page("$hub/todos/todo_1"))
         assertEquals(HubPage.Screen(TodosRoute), page("$hub/todos"))
         assertEquals(HubPage.Screen(InboxRoute), page("$hub/inbox"))
@@ -78,7 +78,7 @@ class HubLinksTest {
         assertNull(page("http://hub.example.com:18661/s/m1/abc-1"))
         assertNull(page("$hub/s/m1/abc-1", emptyList()))
         assertNull(page("http://user@hub.example.com:18660/s/m1/abc-1"))
-        assertNull(page("persona://session/m1/abc-1"))
+        assertEquals(HubPage.Agent("m1", "abc-1"), page("persona://session/m1/abc-1"))
         assertNull(page("not a url"))
         // the host's case, IPv6 literals, an address given without a scheme, and the default ports
         assertEquals(HubPage.Agent("m1", "a"), page("http://HUB.example.com:18660/s/m1/a"))
