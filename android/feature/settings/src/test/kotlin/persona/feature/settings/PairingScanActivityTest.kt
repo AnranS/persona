@@ -314,6 +314,33 @@ class PairingScanActivityTest {
         assertNull(shadowOf(closed.activity).resultIntent)
     }
 
+    @Test fun cameraDenialKeepsPhotoSelectionAvailable() {
+        val scanner = openScanner()
+        scanner.activity.onRequestPermissionsResult(
+            com.journeyapps.barcodescanner.CaptureManager.getCameraPermissionReqCode(),
+            arrayOf(Manifest.permission.CAMERA), intArrayOf(PackageManager.PERMISSION_DENIED),
+        )
+        assertFalse("Pairing must still offer a photo after camera denial", scanner.activity.isFinishing)
+        choosePhoto(scanner)
+    }
+
+    @Test fun browserSignInKeepsItsCameraOnlyScanner() {
+        val intent = ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
+            .addExtra(PairingScanActivity.DisablePhoto, true)
+            .setOrientationLocked(false).setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("").setBeepEnabled(false).createScanIntent(rule.activity)
+        val scanner = openScanner(intent)
+        assertEquals(View.GONE, scanner.activity.findViewById<View>(R.id.pairing_scan_photo).visibility)
+        assertNotNull(scanner.activity.findViewById<DecoratedBarcodeView>(R.id.zxing_barcode_scanner))
+        scanner.activity.onRequestPermissionsResult(
+            com.journeyapps.barcodescanner.CaptureManager.getCameraPermissionReqCode(),
+            arrayOf(Manifest.permission.CAMERA), intArrayOf(PackageManager.PERMISSION_DENIED),
+        )
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(scanner.activity).resultCode)
+        assertTrue("Browser sign-in keeps the library's original denial result",
+            shadowOf(scanner.activity).resultIntent.getBooleanExtra(com.google.zxing.client.android.Intents.Scan.MISSING_CAMERA_PERMISSION, false))
+    }
+
     @Config(qualifiers = "zh-rCN-w400dp-h1600dp-xhdpi")
     @Test fun chooseFromPhotosUsesSimplifiedChineseCopyAndOpensThePicker() {
         val scanner = openScanner()
