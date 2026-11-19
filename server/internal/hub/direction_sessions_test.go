@@ -133,3 +133,77 @@ func TestDirectionSessionRoutesRelayToTheManager(t *testing.T) {
 		}
 	}
 }
+
+// A filing names the manager whose direction book should change; it does not belong to whichever manager owns the
+// session's computer. The default manager's own 404 must reach the app instead of the computer owner accepting it.
+func TestDirectionFilingIgnoresSessionComputerOwnershipWhenSelectingManager(t *testing.T) {
+	const ownerID = "m-0a0b0c"
+	h, srv, _ := newBusHub(t)
+	h.cfg.Machines = []MachineConfig{{ID: "mb", Name: "mb", Kind: "local"}}
+	defaultGot := make(chan assistantwire.HTTPRequest, 2)
+	helloAssistant(t, h, srv, func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		if method == assistantwire.MethodTools {
+			return map[string]any{"tools": []any{}}, nil
+		}
+		var req assistantwire.HTTPRequest
+		if method != assistantwire.MethodHTTP || json.Unmarshal(params, &req) != nil {
+			return nil, errors.New("unexpected " + method)
+		}
+		defaultGot <- req
+		return assistantwire.HTTPResponse{Status: http.StatusNotFound, Header: map[string][]string{"Content-Type": {"application/json"}},
+			Body: []byte(`{"code":"session_not_found","error":"the default manager cannot see this session"}`)}, nil
+	})
+	owner := connectFakeManager(t, h, srv, ownerID) // its generic answer is 200, which must never be used here
+	if _, err := h.moveMachine(context.Background(), "mb", ownerID); err != nil {
+		t.Fatal(err)
+	}
+	owner.report(t, "mb")
+	eventually(t, 5*time.Second, "the other manager owns mb", func() bool {
+		return h.machineOwner("mb") == ownerID && h.localMachine("mb") != nil
+	})
+
+	for _, tc := range []struct {
+		name   string
+		path   string
+		header map[string]string
+	}{
+		{name: "implicit default", path: "/api/v1/assistant/sessions/mb/chat-a/direction"},
+		{name: "explicitly requested default", path: "/api/v1/assistant/sessions/mb/chat-a/direction", header: map[string]string{ManagerHeader: assistantwire.AssistantID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPut, srv.URL+tc.path, strings.NewReader(`{"direction":"conv_lead_a"}`))
+			req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+			req.Header.Set("Content-Type", "application/json")
+			for key, value := range tc.header {
+				req.Header.Set(key, value)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			var answer map[string]any
+			_ = json.Unmarshal(body, &answer)
+			if resp.StatusCode != http.StatusNotFound || answer["code"] != "session_not_found" {
+				t.Fatalf("computer owner silently accepted or hub refused early: %d %s", resp.StatusCode, body)
+			}
+			select {
+			case forwarded := <-defaultGot:
+				if forwarded.Method != http.MethodPut || forwarded.Path != tc.path || string(forwarded.Body) != `{"direction":"conv_lead_a"}` {
+					t.Fatalf("default manager received %+v", forwarded)
+				}
+			default:
+				t.Fatal("the default manager did not receive the filing")
+			}
+			select {
+			case call := <-owner.got:
+				t.Fatalf("session computer's owner received the filing: %s", call)
+			default:
+			}
+		})
+	}
+}
