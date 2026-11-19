@@ -128,7 +128,7 @@ The manager derives `supervision_instructions` from settings and the task ledger
 
 Node applies the bytes with Claude CLI `--append-system-prompt` or Codex `developerInstructions` on both `thread/start` and `thread/resume` (after its existing memory instructions). The policy belongs to the execution fingerprint, so identical policy with new task facts reuses a process, a different role resumes in a fresh process, and a warm spare cannot cross role boundaries. A role-changing send while a turn or background work is active is refused as busy, without killing work or delivering input on the old system policy; manager-generated messages remain queued for an idle retry. Other model-only changes keep their existing busy-turn behavior. Tool authorization remains manager-enforced throughout. Per-session state retains the policy for node-local resume; explicit empty manager metadata clears it even without a model fingerprint. Compacting a stopped conversation refreshes it from the manager when available.
 
-Custom assistant runtimes currently expose only user-message context, not an isolated system/developer instruction channel. A supervisor send or warm through that path is explicitly refused with a request to use Claude Code or Codex, before starting/sending anything; ordinary runtime chats are unchanged. This is a deliberate fail-closed compatibility boundary, not system-policy injection into ordinary message text.
+Custom assistant runtimes expose user-message context only. A runtime-backed conversation takes ordinary replies on its own runtime, even if it appears in `assistant.leaders` or owns a task from an earlier release. When `task_plan` would assign work to a runtime-backed reviewer, the hub uses the main conversation's supervision route, which normally includes the background supervisor. The planning conversation keeps its task card. If that route has no compatible reviewer, the plan stays available to start after the supervision setup is corrected. The node still refuses any attempt to send separate supervision policy through a runtime. The hub retires a relay refused with `assistant_supervision_runtime` and tells the owner how to follow up using the saved task and worker reports. [#10338](https://github.com/nwverse/persona/issues/10338)
 
 Supervision event bodies contain facts only, including the signal kind and any question-routing timeout/mode. Direction/background role context and the background startup notice likewise contain role facts, not another supervision manual. All fixed and kind-conditioned handling lives in the static fragment, not in each event. `TestSupervisionInstructionsDispatchIsolation`, `TestSupervisionInstructionsFirstStartAndWarm`, `TestAssistantSupervisionStartupResumeIsolation`, `TestCodexSupervisionDeveloperInstructionsStartResume` and `TestSupervisionWarmSpareIsolation` exercise dispatch and startup/resume isolation. The instruction and event goldens pin the bytes; the size ratchet measures the fragment once along with shared instructions and event payloads.
 
@@ -1291,6 +1291,46 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   unblocked: a gate holds the queue, never the owner's own answers (`relayMsg.Owner`).
 - **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
   attend, so it is not held. Interrupting a round already running is F2 of the proposal.
+
+## Replies where it wrote as the user (#10777)
+
+A conversation of the assistant (the main chat, a leader or a side conversation) that wrote into a Lark chat in the
+user's name used to hear that the other side answered only when a follow-up or a patrol happened to look again: the
+answer reached Persona through the Inbox alone, and none of the Inbox's routes lead back to the conversation that wrote
+(`server/internal/assistant/chat_reply.go`).
+
+- **What opens it.** The send itself, as the sent-as-user ledger records it (`docs/extensions/connectors.md` "Sent as
+  the user"): a message the node's gate let into a chat (`POST /conversations/<chat>/messages`, or `images`, `files`,
+  `attachments`), or a connector's send whose target names the chat, with the machine and conversation that asked. A
+  recalled message counts as not sent. A reply to one message (`/messages/<id>/replies`) is recorded without the chat
+  and opens nothing; neither does a reaction, an edit or a read receipt.
+- **What tells it.** The Lark connector's (`lark`) batches of other people's new messages in a chat
+  (`docs/assistant/inbox.md` "Event grouping"), read in `collectSource` before they are related to events; a bot's chat
+  is left out. Each conversation of this manager's machine that wrote a message into the batch's chat in the last 24
+  hours (`chatReplyWindow`), before the batch's newest message, gets the messages it was not told yet. Not told: a
+  conversation of another machine, an archived or deleted one, the Inbox's own conversations (the AI twin hears of the
+  chat through its item) and the background supervisor.
+- **How.** Through the conversation's relay queue, as `chat_reply` ("Messages from the system wait for the owner"): it
+  waits for a running turn and for the owner, ranks with everything else, and is no hop of any chain. The text
+  (`server/internal/prompts/assistant/chat_reply.md`, in the owner's language) names the chat, when the conversation last
+  wrote there, how many new messages there are and, in a group, who wrote the newest, and puts the messages in a
+  `<persona-context kind="quoted-message">` block as other people's words: not the owner's instructions, nor their
+  consent to anything. To write there again the conversation goes through the gate and its confirmation as before. The
+  queue above the composer shows it as the chat's new messages, without their words.
+- **Once, and spaced.** Each message reaches a conversation once, by the connector's message ids: the connector hands a
+  batch again until it is in an event, and a batch can grow meanwhile, so only its new messages count, and the text says
+  when it repeats some told before. One conversation hears of one chat at most once every 10 minutes (`chatReplyGap`): a
+  batch within that waits in the queue until the 10 minutes are over (the message's `due`), and the batches after it
+  merge into the one waiting (the count added up, the texts put together, the newest 3000 characters kept). What was
+  told is remembered in memory: after a manager restart, a batch not yet in an event may be told once more; one still
+  queued is not, since the queued message keeps its message ids (`chat` in `assistant.relay`).
+- **Unchanged.** The Inbox's own handling of the batch (triage, the AI twin, `inbox_signals`), the connector's
+  hand-over timing, the gate and its cards. There is no setting: the window and the spacing are fixed.
+- **Not covered.** Task Agents that write as the user (#9763 wakes a task's Agent on follow-ups in a topic bound to the
+  task; they are left out here so that one answer does not wake the same Agent twice), a single topic within a chat,
+  replies to one message, and the lark-cli source, whose ledger rows name a different chat id.
+- **Compatibility.** `chat` is an optional field of a queued message: a previous version drops it on its next save, after
+  which the message goes in as it is and a later batch queues a message of its own.
 
 ## Messages that could not go in (#10194)
 
