@@ -339,6 +339,21 @@ func (l ManagedLauncher) AgentType() string {
 	return "claude"
 }
 
+// CustomHeadersSupported reports whether this managed runtime has a real launch-time channel for every configured
+// header. A probe may send a header over HTTP even when the runtime cannot; those combinations must be refused instead
+// of presenting the probe as proof of a working launch.
+func (l ManagedLauncher) CustomHeadersSupported() bool {
+	switch l.AgentType() {
+	case "claude", "codex":
+		return true
+	case "omp":
+		// omp documents ANTHROPIC_CUSTOM_HEADERS for its Anthropic provider behind a non-Anthropic base URL.
+		return (l.API == "" || l.API == "messages") && !AnthropicAPI(l.LaunchBaseURL())
+	default:
+		return false
+	}
+}
+
 // PiAPI is the pi API (pi's registerProvider "api") a provider speaks when pi can use it too (docs/integrations/pi.md
 // "Persona's model providers"): "anthropic-messages" for a Messages provider that runs Claude Code (or Oh My Pi, which
 // takes the same gateway), "openai-responses" for a Codex one; "" for the rest (Antigravity, a direct API connection

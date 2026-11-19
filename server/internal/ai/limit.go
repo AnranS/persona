@@ -437,7 +437,22 @@ type httpError struct {
 	noRetry    bool
 }
 
-func newHTTPError(resp *http.Response, raw []byte) *httpError {
+func (c *Client) newHTTPError(resp *http.Response, raw []byte, key string) *httpError {
+	secrets := []string{key}
+	for _, value := range c.cfg.Headers {
+		secrets = append(secrets, value)
+	}
+	return newHTTPError(resp, raw, secrets...)
+}
+
+func newHTTPError(resp *http.Response, raw []byte, secrets ...string) *httpError {
+	text := string(raw)
+	for _, secret := range secrets {
+		if len(secret) >= 4 {
+			text = strings.ReplaceAll(text, secret, "***")
+		}
+	}
+	raw = []byte(text)
 	code, message, errorType, envelope := gatewayErrorDetailsWithType(raw)
 	after := parseRetryAfter(resp.Header.Get("Retry-After"))
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),

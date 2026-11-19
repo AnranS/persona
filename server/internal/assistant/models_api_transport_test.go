@@ -274,7 +274,7 @@ func TestDirectAPITransportProbe(t *testing.T) {
 
 func TestDirectAPITransportRuntime(t *testing.T) {
 	for _, api := range []string{"", "messages", "responses"} {
-		for _, field := range []string{"headers", "proxy", "no_proxy"} {
+		for _, field := range []string{"proxy", "no_proxy"} {
 			t.Run(api+"/"+field, func(t *testing.T) {
 				var calls atomic.Int32
 				gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(http.StatusBadRequest) }))
