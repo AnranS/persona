@@ -619,8 +619,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// Codex conversation has no id yet: it can't be the main one.
 	hasInput := strings.TrimSpace(text) != "" || len(images) > 0
 	snapc := make(chan contextAnswer, 1)
-	if guest != nil || !hasInput {
-		snapc <- contextAnswer{} // guests get no owner state; empty starts leave it for the first real message
+	if guest != nil || !hasInput || execution.Public {
+		snapc <- contextAnswer{} // guests and public mentions get no owner state; empty starts leave it for the first real message
 	} else {
 		go func(id string) { snapc <- n.assistantContext(id) }(id)
 	}

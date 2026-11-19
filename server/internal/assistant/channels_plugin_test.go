@@ -497,6 +497,10 @@ func TestMentionChannelMainTurnCarriesOriginContextAndPublicCaution(t *testing.T
 	if len(runs) != 1 || runs[0].SessionID != "m1" || runs[0].ReplyTo != "om_request" {
 		t.Fatalf("main run: %+v", runs)
 	}
+	waitUntil(t, func() bool {
+		_, live := s.channelRunByID(runs[0].ID)
+		return live != nil
+	})
 	s.finishChannelRun(&runs[0], &channel.Result{Answer: "Only the documentation changed."})
 	if len(*sent) != 1 || (*sent)[0]["text"] != "Only the documentation changed." || (*sent)[0]["kind"] != channel.OutAnswer ||
 		(*sent)[0]["reply_to"] != "om_request" {

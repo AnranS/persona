@@ -271,6 +271,7 @@ func TestChannelMentionMessageCarriesOriginAndLocalizedPublicCaution(t *testing.
 				t.Fatal(err)
 			}
 			got := prompts.RenderChannelMessage(in)
+			golden(t, "channel_mention_message."+tc.name, got)
 			for _, want := range []string{"Release chat", "Release 1.3", "We ship on Friday.", "The migration is done.", "What changed?"} {
 				if !strings.Contains(got, want) {
 					t.Errorf("origin/context lost %q:\n%s", want, got)
