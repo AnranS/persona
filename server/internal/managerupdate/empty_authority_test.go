@@ -48,18 +48,12 @@ func TestEmptyAuthorityRecordRejectsPartialIdentities(t *testing.T) {
 	}
 }
 
-func TestEmptyAuthorityRecordAcceptsLegitimatelyUnsetSettingsRow(t *testing.T) {
+func TestEmptyAuthorityRecordRejectsUnsetSettingsRow(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	base, err := authorityRecord("m-empty", "", "", "", time.Time{}, at)
-	if err != nil || !base.Unassigned || len(base.Revision) != 64 {
-		t.Fatalf("unset settings row was not explicit empty authority: %+v %v", base, err)
-	}
-	fresh, err := authorityRecord("m-empty", "", "", "", time.Time{}, at.Add(time.Second))
-	if err != nil || fresh.Revision != base.Revision || !fresh.ObservedAt.After(base.ObservedAt) {
-		t.Fatalf("unset-row proof was not stable across observations: %+v %v", fresh, err)
-	}
-	if _, err := authorityRecord("m-empty", "", "", "", at, at); err == nil {
-		t.Fatal("unset row with an existing-row timestamp was accepted")
+	for _, changed := range []time.Time{time.Time{}, at} {
+		if _, err := authorityRecord("m-empty", "", "", "", changed, at); err == nil {
+			t.Fatalf("unset settings row was accepted as explicit empty authority: changed=%v", changed)
+		}
 	}
 }
 

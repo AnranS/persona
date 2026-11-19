@@ -121,10 +121,8 @@ func authorityRecord(manager, main, machine, version string, changed, observed t
 	unassigned := main == "" && machine == ""
 	partial := (main == "") != (machine == "")
 	validPersistedRevision := valid(version) && !changed.IsZero()
-	absentRow := unassigned && version == "" && changed.IsZero()
-	if !idPattern.MatchString(manager) || partial || observed.IsZero() ||
-		(!unassigned && (!valid(main) || !valid(machine) || !validPersistedRevision)) ||
-		(unassigned && !validPersistedRevision && !absentRow) {
+	if !idPattern.MatchString(manager) || partial || observed.IsZero() || !validPersistedRevision ||
+		(!unassigned && (!valid(main) || !valid(machine))) {
 		return Authority{}, errors.New("persisted main, machine or authority revision unavailable")
 	}
 	data, err := json.Marshal([]any{manager, main, machine, version, changed.UTC()})

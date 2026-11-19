@@ -23,10 +23,10 @@ func TestAuthorityWireReadsPersistedIdentityWithoutMigrationOrWrites(t *testing.
 	assertAuthorityWire(t, values, "persisted-main", "original-machine", false, false)
 }
 
-func TestAuthorityWireReadsAbsentSettingsAsExplicitUnassigned(t *testing.T) {
+func TestAuthorityWireRejectsAbsentSettingsWithoutExplicitEmptyRow(t *testing.T) {
 	at := time.Now().UTC().Truncate(time.Microsecond)
 	values := [][]byte{nil, nil, nil, nil, []byte(at.Format("2006-01-02 15:04:05.999999-07:00")), nil, nil, nil}
-	assertAuthorityWire(t, values, "", "", true, false)
+	assertAuthorityWire(t, values, "", "", false, true)
 }
 
 func TestAuthorityWireRejectsMalformedExistingSettings(t *testing.T) {
