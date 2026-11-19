@@ -31,6 +31,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.annotation.DelicateCoilApi
+import coil3.request.ImageRequest
+import coil3.request.ImageResult
+import coil3.size.Size
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
@@ -63,6 +66,7 @@ class ConnectorInboxAvatarTest {
     @get:Rule val rule = createComposeRule()
 
     private lateinit var pictures: ImageLoader
+    private val requestedSizes = mutableListOf<Size>()
     private var loading: CompletableDeferred<ByteArray>? = null
     private val picture: ByteArray by lazy {
         val bitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.MAGENTA) }
@@ -72,12 +76,19 @@ class ConnectorInboxAvatarTest {
     }
 
     @Before fun installPictures() {
-        pictures = ImageLoader.Builder(ApplicationProvider.getApplicationContext<Context>())
+        requestedSizes.clear()
+        val delegate = ImageLoader.Builder(ApplicationProvider.getApplicationContext<Context>())
             .coroutineContext(Dispatchers.Unconfined)
             .components {
                 // Robolectric's static decoder rejects real PNG bytes; use the Android bitmap decoder instead.
                 add(coil3.decode.BitmapFactoryDecoder.Factory())
             }.build()
+        pictures = object : ImageLoader by delegate {
+            override suspend fun execute(request: ImageRequest): ImageResult {
+                requestedSizes += request.sizeResolver.size()
+                return delegate.execute(request)
+            }
+        }
         SingletonImageLoader.setUnsafe(pictures)
     }
 
@@ -102,8 +113,8 @@ class ConnectorInboxAvatarTest {
     }
 
     private fun record(avatar: AuthenticatedLarkImage?, id: String = "telegram:1", title: String = "Connector conversation",
-        sender: String = "Zoe Example", kind: String = "dm") = InboxRecord(
-        InboxItem(id, kind = kind, title = title, sender = sender, preview = "Latest message"),
+        sender: String = "Zoe Example", kind: String = "dm", tier: String? = null) = InboxRecord(
+        InboxItem(id, kind = kind, title = title, sender = sender, preview = "Latest message", tier = tier),
         source = "telegram", connector = InboxConnectorRef("u1"), avatar = avatar,
     )
 
@@ -115,11 +126,11 @@ class ConnectorInboxAvatarTest {
         val reads = AtomicInteger()
         val started = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<ByteArray>().also { loading = it }
-        val avatar = AuthenticatedLarkImage("hub/a:/api/v1/avatars/telegram/loaded?size=144") {
+        val avatar = larkAvatar("/api/v1/avatars/telegram/loaded", "hub/a") { _ ->
             reads.incrementAndGet()
             started.complete(Unit)
             gate.await()
-        }
+        }!!
         var visible by mutableStateOf(true)
         var busy by mutableStateOf(false)
         rule.setContent {
@@ -158,11 +169,11 @@ class ConnectorInboxAvatarTest {
     @Test fun initialStaysWithoutAPictureAndWhenItsReadFails() {
         val reads = AtomicInteger()
         val attempted = CompletableDeferred<Unit>()
-        val failed = AuthenticatedLarkImage("hub/a:/api/v1/avatars/telegram/failed?size=144") {
+        val failed = larkAvatar("/api/v1/avatars/telegram/failed", "hub/a") { _ ->
             reads.incrementAndGet()
             attempted.complete(Unit)
             throw IOException("offline")
-        }
+        }!!
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true) {
                 Column(Modifier.width(400.dp).background(PersonaTheme.palette.background)) {
@@ -192,10 +203,10 @@ class ConnectorInboxAvatarTest {
 
     @Test fun picturedPrivateAndGroupRowsInEveryStyleThemeAndTextSize() {
         val reads = AtomicInteger()
-        fun avatar(name: String) = AuthenticatedLarkImage("hub/a:/api/v1/avatars/telegram/$name?size=144") {
+        fun avatar(name: String) = larkAvatar("/api/v1/avatars/telegram/$name", "hub/a") { _ ->
             reads.incrementAndGet()
             picture
-        }
+        }!!
         val rows = listOf(
             record(avatar("private"), id = "telegram:private", title = "Private chat", sender = "Private Example"),
             record(avatar("group"), id = "telegram:group", title = "Group chat", sender = "Group Example", kind = "group"),
@@ -233,5 +244,38 @@ class ConnectorInboxAvatarTest {
             }
         }
         assertEquals("the appearance matrix must reuse the loaded pictures", 2, reads.get())
+    }
+
+    @Test fun connectorRowsRequestAndDecodeAtTheirDrawnPixelSize() {
+        val refs = mutableListOf<String>()
+        fun avatar(name: String) = larkAvatar("/api/v1/avatars/telegram/$name", "hub/a") { sized ->
+            refs += sized
+            picture
+        }!!
+        val rows = listOf(
+            record(avatar("normal"), id = "telegram:normal", title = "Normal conversation", sender = "Normal Example", tier = "fyi"),
+            record(avatar("action"), id = "telegram:action", title = "Action conversation", sender = "Action Example", tier = "action"),
+        )
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(4f)) {
+                PersonaTheme(darkTheme = false, reduceMotion = true) {
+                    Column(Modifier.width(400.dp).background(PersonaTheme.palette.background)) {
+                        rows.forEach { shown ->
+                            InboxItemRow(shown, repository, navigator, ReplyComposers(repository, rememberCoroutineScope()),
+                                GroupPosition.Single, done = false, busy = false, onlineSince = 1, onDone = {}, onHandOff = {})
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("N", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() &&
+                rule.onAllNodesWithText("A", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
+        assertEquals(setOf(
+            "/api/v1/avatars/telegram/normal?size=152",
+            "/api/v1/avatars/telegram/action?size=168",
+        ), refs.toSet())
+        assertEquals(setOf(Size(152, 152), Size(168, 168)), requestedSizes.toSet())
     }
 }
