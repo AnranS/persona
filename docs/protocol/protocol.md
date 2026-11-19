@@ -2763,6 +2763,7 @@ Runtime summaries keep the existing snake_case names and decode as a `Session` w
 - State/freshness: `state`, `status`, `updated_at`, `state_since`, `seen_at`, `pending_interactions`, `rev`, `quiet`, `awaits_reply`, `background_working`, `background_waiting`, `starting`, `awaiting_first_message`, `start_error`, turn-error fields; `bypass_pending` when Allow Everything waits for a restart after the current turn (#10309).
 - Session hierarchy (see "Session hierarchy" below): `parent_agent_id`, `folded_under`, `folded_as`, `folded_side`, `children`, `started_at`, `asking_parent_session_id`, and the node's `aliases`.
 - Row content/progress: `last_text`, `activity`, `activity_at`, `model`, `effort`, context-token/window counts; bounded `work` (phase/on/line/wait/then/wake/attempts/agent/deferred/just_finished), `plan`, `goal`, and `loop` timing with its prompt omitted.
+- Model identity: `model` is the runtime/transcript-reported display name. A node may also send `requested_model` on a Persona-managed session: the last model ID passed to its process, persisted with node state. An empty string explicitly means launcher default; omission means no recorded identity (observed session or older node). Assistant carry-over uses this identity before the reported name; explicit picks and configured model purposes still win. Missing-model fallback is returned through the existing localized `launcher_note` response, as with launcher replacement.
 - Routing/action safety: `capabilities`, `attached`, `can_fork`, `read_only_reason`, `started_by_persona`, `assistant`, `archived`, `space`, `origin`, `origin_ref`, and an assistant chat's `model_pick` (clients that replace a chat with its summary row keep it, #5033).
 - Additional scalar summaries: **`waiting`** (loop, running background tasks/subagents/workflows or an eligible hub wake), **`background_count`**, **`running_subagents`**, **`running_workflows`**. Counts of zero may be omitted; `waiting` is always a boolean. A summary-aware client uses these rather than inferring “none running” from missing arrays.
 
@@ -3173,6 +3174,8 @@ When Claude Code answers an upstream refusal with another model and keeps the se
   **A rewind done in the terminal** (`/rewind` or Esc Esc, then "Restore conversation") writes nothing either, and while the rewound prompt sits in the input box Claude writes no recap (#5396). The node sees it on the screen of a resting Claude
   (the box holds the words of the transcript's last prompt, which was answered and whose turn ended, and the conversation above the box no longer shows that prompt) and marks the segment the same way (`File.RewoundAt`), so `history` changes within a few seconds.
   If Claude then writes a message or a reply **under** the segment (the guess was wrong: the user had typed the same words again), the segment comes back: the node reads the file again and `history` changes once more (it then differs from what a freshly started node would compute, so clients re-fetch once more after a node restart).
+
+Optional inline tool waits use the input-echo ledger below: a successful `session.start` with `client_msg_id` records its first prompt, or a resume prompt after the transcript boundary captured before resuming. This does not make `session.start` a retry-deduplicating endpoint. The assistant generates the correlator and observes it through `session.items`; older nodes without this echo cannot satisfy the wait. `task_plan` persists its hub-generated `wait_input_id` with its single task across asynchronous admission/start; caller-supplied values are discarded. No public item or session schema changes. See [Assistant](../assistant/assistant.md) for `wait_seconds` and observation states.
 
 ### Matching pending messages
 
@@ -3591,14 +3594,16 @@ on or off, and from which device:
   Once the node took it, the manager writes a `set` row: `from` (the mode the session ran in), `to`, and `applied` as
   the node's answer says (`now`, `restart` for a queued restart into Full access, `""` from an older node). Effort- or
   model-only changes, refused picks and calls that did not come through `/modes` are not recorded (the assistant's own
-  changes and plan approvals: #10308).
+  changes and plan approvals: #10308), nor is a pick of the mode the session already runs in (`from` equals `to`): it
+  changed nothing, and when it withdrew a waiting restart the node's `cancelled` drop is the record of it (#11089).
 - **What became of a queued restart**: the node's `session.mode_restart` event becomes a `restart_done`,
   `restart_failed` or `restart_dropped` row with its `reason`, a code the apps put in words (`proto.ModeRestartReason…`):
-  dropped for `replaced` (another mode picked first), `process_exited`, `process_replaced` or `process_unknown` (the
+  dropped for `replaced` (another mode picked first), `cancelled` (the mode the session runs in picked again, #11089;
+  older nodes say `replaced`), `process_exited`, `process_replaced` or `process_unknown` (the
   process it was picked for is gone, docs/integrations/claude-integration.md "Full access by a restart"), `expired`
   (picked over two hours ago); done with `already_in` (put in the mode at the computer meanwhile); failed with
   `not_stopped`, `start_failed` (it runs as before) or `stopped`. `""` says nothing more; rows from before the codes hold
-  English words, which the apps leave out.
+  English words, which the apps leave out, as they leave out a code they do not know yet (the plain line, no error).
 
 Rows are never changed or deleted. `GET /api/v1/sessions/{mid}/{sid}/mode-changes` gives a session's latest 200 to the
 owner's devices, which draw a line for each in the session's chat.
