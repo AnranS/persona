@@ -622,14 +622,16 @@ def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
                         "--pattern", name, "--dir", str(directory)], check=True, timeout=300)
         return directory / name
 
-    manifest = json.loads(download("ci-latest.json").read_text())
+    manifest_path = download("ci-latest.json")
+    manifest = json.loads(manifest_path.read_text())
     if manifest.get("commit") != commit:
         raise ConfigError("CI latest.json is for another source commit")
-    names = {"VERSION", "install.sh", "ci-latest.json"}
+    names = {"VERSION", "install.sh"}
     for item in manifest_descriptors(manifest):
         if not item["name"].endswith(".exe.gz"):
             names.add(item["name"])
-    downloaded = {name: download(name) for name in sorted(names)}
+    downloaded = {"ci-latest.json": manifest_path}
+    downloaded.update({name: download(name) for name in sorted(names)})
     merge_ci_windows(manifest, assets, directory)
     downloaded["latest.json"] = directory / "latest.json"
     downloaded["SHA256SUMS"] = directory / "SHA256SUMS"

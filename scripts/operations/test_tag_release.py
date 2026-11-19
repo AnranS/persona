@@ -325,7 +325,8 @@ class TagReleaseTests(unittest.TestCase):
                 source = next(Path(item["path"]) for item in remote_source if item["name"] == name)
                 destination = Path(command[command.index("--dir") + 1])
                 destination.mkdir(parents=True, exist_ok=True)
-                destination.joinpath(name).write_bytes(source.read_bytes())
+                with destination.joinpath(name).open("xb") as output:
+                    output.write(source.read_bytes())
             if command[:3] == ["gh", "release", "upload"]:
                 for filename in command[6:]:
                     path = Path(filename)
