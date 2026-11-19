@@ -245,7 +245,11 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 	// The extensions' MCP servers whose command is on this machine (assistant_mcp.go).
 	var allow, deny []string
 	builtins := assistantBuiltinTools
+	inbox := toolSet == "" && n.assistantOrigin(id) == originInbox
 	if toolSet == "" {
+		if inbox {
+			builtins = assistantInboxBuiltinTools
+		}
 		var extra map[string]any
 		extra, allow, deny = assistantMCPServers(n.assistantLark(context.Background()).MCPServers)
 		for name, s := range extra {
@@ -255,6 +259,9 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 		builtins = roundBuiltinTools
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
+	if inbox {
+		allow = append(allow, n.inboxReadRules()...) // inbox_policy.go
+	}
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
 	toolFlags := []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", builtins}
 	if toolSet != "" {
