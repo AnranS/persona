@@ -9,6 +9,7 @@ import persona.core.contracts.api.AssistantSnapshot
 import persona.core.contracts.api.KnowledgeKind
 import persona.core.navigation.*
 import persona.feature.knowledge.KnowledgeDetailRoute
+import persona.feature.knowledge.KnowledgeKindRoute
 import persona.feature.knowledge.KnowledgeRoute
 
 class ShellHubLinksTest {
@@ -108,6 +109,16 @@ class ShellHubLinksTest {
         for ((route, links) in cases) for (link in links) assertOpens(link, route)
         assertOpens("$hub/kb", KnowledgeRoute)
         assertOpens("persona://open/kb", KnowledgeRoute)
+    }
+
+    @Test fun knowledgeKindOpensTheFilteredListAndColdKnowledgeUsesTheShellResolver() {
+        for (link in listOf("$hub/kb/people", "persona://open/kb/people")) {
+            assertOpens(link, KnowledgeKindRoute(KnowledgeKind.People))
+        }
+        val router = Router(hubLink = { link -> resolveHubRoute(link, listOf(hub), null, emptyList(), assistant) })
+        val cold = router.parse(RouteInput.DeepLink("persona://open/kb/docs/notes%2Fplan.md"))
+        assertEquals(AppTab.Persona, cold?.tab)
+        assertEquals(KnowledgeDetailRoute(KnowledgeKind.Docs, "notes/plan.md"), cold?.key)
     }
 
     @Test fun extensionPagesAndSettingsOpenTheExistingRoutesForEveryEquivalentLink() {

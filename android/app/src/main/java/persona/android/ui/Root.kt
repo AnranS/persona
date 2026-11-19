@@ -228,9 +228,16 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val saved = remember(store) { if (shell.automation) ShellPosition() else store.load() }
     // With the embedded assistant chat (not in demo), assistant conversations open inside the Persona home.
     val embeddedAssistant = session.demo == null
+    fun hubRouter(kind: (String, String) -> ConversationKind?) = Router(
+        hubLink = { link ->
+            resolveHubRoute(link, session.hubAddresses(), session.groups.groups.value.firstOrNull { it.selected }?.namespace,
+                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.selectedHubIds())
+        },
+        conversationKind = kind,
+    )
     val initialLaunch = remember { openNavigation.value }
     val initialRoute = remember {
-        initialLaunch?.invoke(Router { m, s ->
+        initialLaunch?.invoke(hubRouter { m, s ->
             val key = SessionKey(m, s)
             val assistant = session.assistant.assistant.value
             if (key == assistant.mainSession || assistant.conversations.any { it.key == key }) ConversationKind.Assistant
@@ -426,7 +433,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         assistantRequest = conversation
         assistantPending = null
     }
-    val router = remember { Router { m, s -> currentKind(SessionKey(m, s)) } }
+    val router = remember { hubRouter { m, s -> currentKind(SessionKey(m, s)) } }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
     SideEffect {
@@ -972,6 +979,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             session.knowledge?.let { knowledgeEntries(navigator, it, session.assistant, session.sender, uriHandler::openUri,
                 onNewAgent = { start -> navigator.navigate(NewAgentRoute(start.machineId, start.cwd, start.prompt)) }) } ?: run {
                 entry<KnowledgeRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
+                entry<KnowledgeKindRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
                 entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
             }
             settingsDetailEntries(navigator, services, askSubscriptions)
