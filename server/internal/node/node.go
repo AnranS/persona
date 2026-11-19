@@ -771,7 +771,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ResumeSessionID         string        `json:"resume_session_id"`
 		ResumeAutomatic         bool          `json:"resume_automatic"`
 		Host                    string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
+		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
+		WorkspaceLabel          string        `json:"workspace_label"`
 		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
 		Text                    string        `json:"text"`
 		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
@@ -1294,6 +1296,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		ctx, taskSpace := withTaskSpace(ctx, p.TaskID, p.WorkspaceID, p.WorkspaceLabel)
 		if p.ResumeSessionID != "" {
 			unlock := n.recovery.lock(p.ResumeSessionID)
 			defer unlock()
@@ -1404,44 +1407,46 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if work.runtime != nil {
 			rp.Model = work.runtimeModel // the runtime's configured default, never a caller override
 			s, instead, err := n.runtimeStartOn(ctx, work.runtime, rp)
-			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			return withInstead(res, err, instead)
 		}
 		if method == "session.start" && p.ResumeSessionID == "" {
 			if s, err, ok := n.startInDesktopApp(ctx, rp, p.NameHint); ok { // a new session in Claude's desktop app (claudedesktop_new.go)
-				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			}
 			if s, err, ok := n.startInCodexApp(ctx, rp, p.NameHint); ok { // a new chat in the Codex App (codexapp_new.go)
-				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			}
 			// A runtime's launcher; on a host whose engine runs only its own launchers, any name it offers (#8140).
 			if s, instead, err, ok := n.runtimeStart(withStartHost(ctx, p.Host), rp); ok {
-				res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+				res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 				return withInstead(res, err, instead)
 			}
 		}
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := withStartHost(ctx, p.Host)
+		ctx = withStartHost(ctx, p.Host)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, instead, err := n.startOnEngineRuntime(ctx, rp)
-			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			res, err := n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 			return withInstead(res, err, instead)
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		asyncAgent := n.startAgentType(p.Launcher, p.AgentType)
 		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") && asyncAgent != traexAgent && asyncAgent != ompAgent {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal})
-			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, taskSpace: taskSpace})
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 		}
 		r := resumed{cwd: p.Cwd, launcher: p.Launcher, mode: p.PermissionMode, effort: p.Effort, tab: tab,
-			execution: modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal}}
+			taskID: p.TaskID, workspaceID: p.WorkspaceID, workspaceLabel: p.WorkspaceLabel,
+			execution: modelExecution{InPane: p.InPane, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode, SecretTicket: p.SecretTicket, Goal: goal, taskSpace: taskSpace}}
 		if p.ResumeSessionID != "" {
 			// A message carrying out a launcher switch quits the agent and starts it again in its terminal
 			// (launcher_switch.go): the Resume waits for it, then finds the agent running, or resumes it as it is.
 			defer n.resumeTurn(ctx, p.ResumeSessionID)() // and a switch to the other engine does not resume it beside this
 			r = n.fillResume(p.ResumeSessionID, r)       // what it ran with, for what the start leaves out (retire.go)
+			ctx, taskSpace = withTaskSpace(ctx, r.taskID, r.workspaceID, r.workspaceLabel)
 			// The user's Resume (the only way a stopped agent runs again, #4754): in the shell it left when that is
 			// still there (stopped.go).
 			ctx = n.inKeptTerminal(ctx, p.ResumeSessionID, r.cwd)
@@ -1454,11 +1459,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if validID(p.SessionID) {
 			newID = p.SessionID
 		}
-		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
+		s, err := n.start(ctx, r.cwd, r.launcher, p.Prompt, p.ResumeSessionID, r.workspaceID, r.mode, r.effort, r.tab, newID, p.AgentType, r.execution)
 		if err == nil && p.ResumeSessionID != "" {
 			n.forkStarted(p.ResumeSessionID)
 		}
-		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
+		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation, taskSpace)
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
@@ -1581,6 +1586,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.send":
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		ctx, sendSpace := withTaskSpace(ctx, opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel)
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
 		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
@@ -1617,6 +1623,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				res["relay_reason"] = owner.reason
 			}
 		}
+		withTaskSpaceReply(res, sendSpace)
 		return res, nil
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
@@ -1812,7 +1819,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.worktreeCreateAutomatic(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.ParentWorkspaceID)
 		}
-		return n.worktreeCreate(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID)
+		return n.worktreeCreate(withAgentWorktree(worktreeComposerContext(ctx, params), in.ForAgent), in.Kind, in.WorkspaceID, in.Cwd, in.Branch, in.Path, in.ParentWorkspaceID, in.OpenWorkspace)
 	case methodWorktreeSource, methodWorktreePreset, methodWorktreeDelete:
 		var in worktreeSourceParams
 		if err := json.Unmarshal(params, &in); err != nil {
@@ -2290,6 +2297,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return map[string]any{"sent": true}, nil
+	case "workspace.close":
+		return n.closeTaskSpace(ctx, p.TaskID, p.WorkspaceID)
 	case "session.close":
 		var closeParams struct {
 			Force bool `json:"force"`
@@ -2370,6 +2379,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
 		"stop_cause": st.StopCause,
+		"task_id":    st.TaskID, "task_workspace_id": st.WorkspaceID, "workspace_label": st.WorkspaceLabel,
 	}, nil
 }
 

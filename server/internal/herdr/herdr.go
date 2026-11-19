@@ -646,6 +646,33 @@ func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path st
 	return &res, err
 }
 
+// WorktreeCreateCheckout makes the Git checkout without opening a workspace for it (#4786). The task's session.start
+// opens its Agent tab in the shared task workspace instead.
+func (c *Client) WorktreeCreateCheckout(ctx context.Context, workspace, branch, path, base string) (*WorktreeCreated, error) {
+	params := map[string]any{"workspace_id": workspace, "branch": branch, "path": path, "focus": false, "open_workspace": false}
+	args := []string{"worktree", "create", "--workspace", workspace, "--branch", branch, "--path", path, "--open-workspace=false"}
+	if base != "" {
+		params["base"] = base
+		args = append(args, "--base", base)
+	}
+	var res WorktreeCreated
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
+	return &res, err
+}
+
+// WorktreeCreateFromCwdCheckout is WorktreeCreateCheckout from a main checkout that has no open workspace.
+func (c *Client) WorktreeCreateFromCwdCheckout(ctx context.Context, cwd, branch, path, base string) (*WorktreeCreated, error) {
+	params := map[string]any{"cwd": cwd, "branch": branch, "path": path, "focus": false, "open_workspace": false}
+	args := []string{"worktree", "create", "--cwd", cwd, "--branch", branch, "--path", path, "--open-workspace=false"}
+	if base != "" {
+		params["base"] = base
+		args = append(args, "--base", base)
+	}
+	var res WorktreeCreated
+	err := c.call(ctx, "worktree.create", params, &res, append(args, "--no-focus")...)
+	return &res, err
+}
+
 // TabCreate opens a tab in a workspace without moving the computer's focus; env ("KEY=VALUE") is added to the
 // environment its shell starts with.
 func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string, env ...string) (*Created, error) {
