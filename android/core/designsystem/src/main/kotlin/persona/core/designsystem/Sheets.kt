@@ -140,6 +140,8 @@ fun JSheet(
 fun JActionSheet(
     actions: List<JAction>, onDismiss: () -> Unit, title: String? = null, note: String? = null,
     preview: String? = null, previewCaption: String? = null,
+    /** Show action subtitles and wrap long labels instead of losing their meaning at accessibility text sizes. */
+    multilineActions: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     // When some actions have an icon, the others keep its place, so every label starts in one column.
@@ -171,7 +173,15 @@ fun JActionSheet(
                 val icon = action.icon
                 if (icon != null) { JIcon(icon, null, size = 22.dp, tint = if (action.destructive) palette.danger.dot else palette.ink2); Spacer(Modifier.width(16.dp.dense)) }
                 else if (iconColumn) Spacer(Modifier.width(22.dp + 16.dp))
-                Text(action.label, style = PersonaTheme.type.body, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (multilineActions) {
+                    Column(Modifier.weight(1f)) {
+                        Text(action.label, style = PersonaTheme.type.body, color = color, maxLines = Int.MAX_VALUE)
+                        action.subtitle?.let {
+                            Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = Int.MAX_VALUE)
+                        }
+                    }
+                } else Text(action.label, style = PersonaTheme.type.body, color = color, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (action.checked) JIcon(persona.core.designsystem.icons.PhIcons.Check, null, size = 18.dp, tint = palette.ink)
             }
         }
