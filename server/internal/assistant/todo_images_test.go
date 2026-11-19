@@ -178,8 +178,15 @@ func TestTodoTaskPlanCarriesImages(t *testing.T) {
 	if len(starts) != 1 {
 		t.Fatalf("starts = %d, want 1", len(starts))
 	}
-	images, ok := starts[0]["images"].([]proto.Image)
-	if !ok || len(images) != 1 || images[0].Mime != "image/png" || images[0].Data != data {
+	raw, err := json.Marshal(starts[0]["images"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var images []proto.Image
+	if err := json.Unmarshal(raw, &images); err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 || images[0].Mime != "image/png" || images[0].Data != data {
 		t.Fatalf("task_plan images = %#v, want the stored PNG", starts[0]["images"])
 	}
 }
