@@ -491,6 +491,7 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	}
 	ts.opened(created.SpaceID)
 	markPersonaTab(ctx, launch, created.Pane, id)
+	markTaskTerminal(ctx, launch, created.Pane)
 	n.agentTerminalOpened(launch, created.Pane) // finished_close.go
 	return created, nil
 }
