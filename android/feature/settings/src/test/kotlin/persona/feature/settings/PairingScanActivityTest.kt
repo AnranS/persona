@@ -324,6 +324,18 @@ class PairingScanActivityTest {
         choosePhoto(scanner)
     }
 
+    @Test fun cameraFailureKeepsPhotoSelectionAvailable() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+        val scanner = openScanner()
+        scanner.controller.resume()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("An unusable camera must not close pairing's photo path", scanner.activity.isFinishing)
+        assertTrue("The camera failure must leave a usable explanation: ${visibleTexts(scanner)}",
+            visibleTexts(scanner).any { it.contains("Camera is unavailable") })
+        choosePhoto(scanner)
+    }
+
     @Test fun browserSignInKeepsItsCameraOnlyScanner() {
         val intent = ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
             .addExtra(PairingScanActivity.DisablePhoto, true)
