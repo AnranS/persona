@@ -93,6 +93,17 @@ class BrowserLoginApprovalTest {
         assertEquals(1, dismissed)
     }
 
+    @Test fun olderHubWithoutNumberMatchKeepsSuccessfulAllowDismissal() {
+        val hub = ScriptedBrowserLoginHub { _, _ -> browserLoginDetails(state = null, network = null) }
+        show(hub)
+        waitForRequest()
+        tapAllow()
+
+        rule.waitUntil(5_000) { dismissed == 1 }
+        assertEquals(listOf(null, true), hub.calls.map { it.allow })
+        rule.onAllNodesWithText("47").assertCountEquals(0)
+    }
+
     @Test fun cancellationIsAvailableBeforeInspectionAnswers() {
         val inspectionStarted = CompletableDeferred<Unit>()
         val hub = ScriptedBrowserLoginHub { _, allow ->

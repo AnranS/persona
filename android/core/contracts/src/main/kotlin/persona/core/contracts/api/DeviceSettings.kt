@@ -76,7 +76,8 @@ data class BrowserLoginDetails(
     val name: String,
     val source: String,
     val ageSeconds: Int,
-    val state: String = "scanned",
+    /** Null from a hub before number matching; such a hub keeps the legacy successful-Allow dismissal. */
+    val state: String? = null,
     val network: String? = null,
     val number: String? = null,
 )

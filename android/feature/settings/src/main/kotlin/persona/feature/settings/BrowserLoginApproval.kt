@@ -57,7 +57,7 @@ private fun browserLoginPhase(details: BrowserLoginDetails?, failed: Boolean, un
     unavailable -> BrowserLoginPhase.Decided
     details == null -> BrowserLoginPhase.Loading
     else -> when (details.state) {
-        "pending", "scanned" -> BrowserLoginPhase.Asking
+        "pending", "scanned", null -> BrowserLoginPhase.Asking
         "confirm" -> if (details.number == null) BrowserLoginPhase.Decided else BrowserLoginPhase.Number
         "approved" -> BrowserLoginPhase.SignedIn
         "voided" -> BrowserLoginPhase.Voided
@@ -86,7 +86,9 @@ internal fun BrowserLoginApproval(api: DeviceSettings, request: BrowserLoginRequ
         scope.launch {
             try {
                 val answer = decideBrowserLogin(api, request, allow, onDismiss)
-                if (allow && answer != null) details = answer
+                if (allow && answer != null) {
+                    if (answer.state == null) onDismiss() else details = answer
+                }
             }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { failed = true; feedback?.failure(error) }

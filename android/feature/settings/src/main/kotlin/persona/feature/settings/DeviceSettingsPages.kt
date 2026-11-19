@@ -53,7 +53,7 @@ internal fun DevicesPage(
     JListPage(title = stringResource(R.string.settings_devices_title), onBack = onBack) {
         if (!available) item { JEmptyState(stringResource(R.string.settings_devices_unavailable), stringResource(R.string.settings_check_pairing_and_hub)) }
         else {
-            if (connect != null && "browser_qr_match" in features) item("scan-browser") {
+            if (connect != null && "browser_qr_login" in features) item("scan-browser") {
                 JButton(stringResource(R.string.settings_browser_login_scan), {
                     scanner.launch(com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
                         .setOrientationLocked(false).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("").setBeepEnabled(false))

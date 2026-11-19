@@ -36,7 +36,7 @@ internal fun browserLoginDetails(
     name: String = "Chrome · Mac",
     source: String = "203.0.113.77",
     ageSeconds: Int = 12,
-    state: String = "scanned",
+    state: String? = "scanned",
     network: String? = "lan",
     number: String? = null,
 ): BrowserLoginDetails {

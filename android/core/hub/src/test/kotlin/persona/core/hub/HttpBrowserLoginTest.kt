@@ -90,6 +90,19 @@ class HttpBrowserLoginTest {
         }
     }
 
+    @Test fun olderHubWithoutStateKeepsItAbsent() = runBlocking {
+        MockWebServer().use { server ->
+            val api = api(server.url("/").toString())
+            server.enqueue(MockResponse().setBody("""{"name":"Chrome · Mac","source":"203.0.113.8","age_seconds":12}"""))
+            val details = api.browserLogin(id, hub, allow = true)
+
+            assertTrue(body(server.takeRequest()).getValue("show_number").jsonPrimitive.boolean)
+            assertNull("an old hub has no number-match state", field(details, "state"))
+            assertNull(field(details, "network"))
+            assertNull(field(details, "number"))
+        }
+    }
+
     private fun api(address: String) = HttpDeviceSettings(address, "example-token", "phone", OkHttpClient())
 
     private fun answer(state: String, network: String = "lan", number: String? = null): String {

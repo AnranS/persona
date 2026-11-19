@@ -101,7 +101,7 @@ class HttpDeviceSettings(
             name = data.getValue("name").jsonPrimitive.content,
             source = data.getValue("source").jsonPrimitive.content,
             ageSeconds = data.getValue("age_seconds").jsonPrimitive.int,
-            state = data.text("state") ?: "scanned",
+            state = data.text("state"),
             network = data.text("network"),
             number = data.text("number"),
         )
