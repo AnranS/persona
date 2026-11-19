@@ -38,4 +38,44 @@ final class PairPhotoPickerUITests: XCTestCase {
             ["Allow Full Access", "允许完全访问", "フルアクセスを許可"])).firstMatch
         XCTAssertFalse(fullAccess.exists, "the system PhotosPicker should not request full photo-library access")
     }
+
+    @MainActor func testPickingAValidPhotoAsksBeforePairing() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["PERSONA_MOCK_HUB"] != nil else { throw XCTSkip("needs the mock hub that names the seeded QR") }
+        let app = XCUIApplication()
+        app.launchArguments = ["-openWelcome", "YES", "-pairURL", "", "-ui.scheme", "light"]
+        app.launchPinned()
+        defer { app.terminate() }
+
+        XCTAssertTrue(app.buttons["welcome.pair"].waitForExistence(timeout: 10), "no welcome page")
+        app.buttons["welcome.pair"].tap()
+        let scanOrToken = app.buttons["扫码或其他配对方式"]
+        XCTAssertTrue(scanOrToken.waitForExistence(timeout: 10), "no scan-or-token pairing method")
+        scanOrToken.tap()
+        let choose = app.buttons["pair.choosePhoto"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 10), "no photo action")
+        choose.tap()
+
+        let pictures = app.images.matching(identifier: "PXGGridLayout-Info")
+        XCTAssertTrue(pictures.firstMatch.waitForExistence(timeout: 20), "no seeded QR photo in the system picker")
+        XCTAssertGreaterThanOrEqual(pictures.count, 3, "the seeded QR photos are not all present")
+        pictures.element(boundBy: 0).tap()
+        let addButton = app.buttons.matching(identifier: "Add").firstMatch
+        if addButton.waitForExistence(timeout: 2) { addButton.tap() }
+
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 15), "the valid photo paired without the existing confirmation")
+        XCTAssertTrue(alert.label.contains("127.0.0.1"), "the confirmation names a different hub: \(alert.label)")
+        XCTAssertTrue(alert.buttons["pair.confirm"].exists, "the photo did not reach the normal Connect action")
+        let screen = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screen)
+        attachment.name = "pair-photo-confirm-light"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        if let dir = env["PERSONA_SHOTS"] {
+            try? screen.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("pair-photo-confirm-light.png"))
+        }
+        alert.buttons["pair.cancel"].firstMatch.tap()
+        XCTAssertFalse(app.buttons["engine.save"].exists, "Cancel paired anyway")
+    }
 }
