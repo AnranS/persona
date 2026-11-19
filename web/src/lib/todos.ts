@@ -789,7 +789,11 @@ export async function confirmTodoCreate(result: TodoCreateResponse, images: Todo
     const stored = todo.images ?? [];
     const matches = stored.length === images.length && images.every((wanted) => stored.some((image) => image.id === wanted.id && image.mime === wanted.mime));
     if (!matches) {
-      await api(`/todos/${enc(todo.id)}`, { ...request, method: "DELETE" }).catch(() => undefined);
+      try {
+        await api(`/todos/${enc(todo.id)}`, { ...request, method: "DELETE" });
+      } catch {
+        throw new Error(t("lib-todos.images_cleanup_failed"));
+      }
       throw new Error(t("lib-todos.images_not_saved"));
     }
   }

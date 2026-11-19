@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -122,6 +123,26 @@ func TestTodoImageHandoffCarriesStoredBytes(t *testing.T) {
 	if withCredentials.Code != http.StatusOK || !bytes.Equal(withCredentials.Body.Bytes(), want) ||
 		withCredentials.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("authenticated image read = %d %v (%d bytes)", withCredentials.Code, withCredentials.Header(), withCredentials.Body.Len())
+	}
+}
+
+// Image creation is offered only while every manager whose to-dos the list merges can persist them. An older manager
+// must never receive a create whose additive images field it would drop (#11084).
+func TestTodoImagesFeatureWhileEveryManagerNamesIt(t *testing.T) {
+	h, _, a, b, _, _ := todoViewHub(t)
+	listed := func() bool { return slices.Contains(h.features(), featureTodoImages) }
+	todoViewCapabilities(t, a, assistantwire.CapabilityTodoImages)
+	todoViewCapabilities(t, b, assistantwire.CapabilityTodoView)
+	if listed() {
+		t.Fatal("listed while an older manager cannot store images")
+	}
+	todoViewCapabilities(t, b, assistantwire.CapabilityTodoImages)
+	if !listed() {
+		t.Fatal("not listed with every manager capable of storing images")
+	}
+	todoViewCapabilities(t, a)
+	if listed() {
+		t.Fatal("listed after the default manager became too old to store images")
 	}
 }
 

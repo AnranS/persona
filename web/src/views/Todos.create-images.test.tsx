@@ -29,6 +29,7 @@ let root: Root;
 let failNextCreate: ApiError | undefined;
 let pendingCreates = 0;
 let dropImages = false;
+let deleteFails = false;
 const before = { ...getState() };
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
@@ -67,6 +68,7 @@ beforeEach(async () => {
   failNextCreate = undefined;
   pendingCreates = 0;
   dropImages = false;
+  deleteFails = false;
   api.mockImplementation(async (path, init) => {
     const method = (init as { method?: string })?.method;
     if (path === "/todos" && method === "POST") {
@@ -83,13 +85,17 @@ beforeEach(async () => {
       const images = dropImages ? undefined : (body.images as { id: string; mime: string }[] | undefined)?.map((img) => ({ id: img.id, mime: img.mime, width: 2, height: 3, url: `/api/v1/todos/t2/images/${img.id}` }));
       return { todo: { ...existing, id: "t2", title: body.title, notes: body.notes, images } };
     }
+    if (path === "/todos/t2" && method === "DELETE") {
+      if (deleteFails) throw new ApiError(503, "cleanup unavailable", { error: "cleanup unavailable" });
+      return {};
+    }
     if (path === "/todos") return { todos: [existing] };
     if (path === "/assistant/repositories") return { manager: "assistant", catalog_revision: 1, repositories: [{ id: "web", provider: "github", instance_url: "https://github.com", path: "example/web", canonical_url: "https://github.com/example/web", name: "Web app", verified_at: "2026-01-01T00:00:00Z" }] };
     if (path.endsWith("/launchers")) return { launchers: [] };
     if (path.endsWith("/decisions")) return { decisions: [] };
     return {};
   });
-  seed({ todos: [existing], todosLoaded: true, sessions: {}, interactions: [], answered: {}, machines: [{ id: "m1", name: "Remote box", online: true }] });
+  seed({ todos: [existing], todosLoaded: true, sessions: {}, interactions: [], answered: {}, features: ["todo_images"], machines: [{ id: "m1", name: "Remote box", online: true }] });
   let objectURL = 0;
   URL.createObjectURL = vi.fn(() => `blob:todo-${++objectURL}`);
   URL.revokeObjectURL = vi.fn();
@@ -202,6 +208,26 @@ describe("New to-do images", () => {
     expect(dialog().textContent).toContain(t("lib-todos.images_not_saved"));
     expect([...dialog().querySelectorAll("img")].map((img) => img.alt)).toEqual(["old-manager.png"]);
     expect(api.mock.calls.some(([path, init]) => path === "/todos/t2" && (init as { method?: string })?.method === "DELETE")).toBe(true);
+    expect(launched).not.toHaveBeenCalled();
+  });
+
+  it("offers no image picker when any manager is too old to store them", async () => {
+    seed({ features: [] });
+    await openNew();
+    expect(dialog().querySelector('input[type="file"][accept*="image"]')).toBeNull();
+    expect(dialog().textContent).not.toContain(t("todos.add_images"));
+  });
+
+  it("says when fallback cleanup fails instead of hiding it", async () => {
+    await openNew();
+    await pick([file("old-manager.png")]);
+    dropImages = true;
+    deleteFails = true;
+    await act(async () => button(t("todos.create"), dialog())!.click());
+    await flush();
+    expect(dialog()).toBeTruthy();
+    expect(dialog().textContent).toContain(t("lib-todos.images_cleanup_failed"));
+    expect([...dialog().querySelectorAll("img")].map((img) => img.alt)).toEqual(["old-manager.png"]);
     expect(launched).not.toHaveBeenCalled();
   });
 

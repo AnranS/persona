@@ -111,6 +111,10 @@ const (
 	// the to-do's results and what changed since the owner looked (TodoItemDetail). The hub lists the todo_timeline
 	// feature only while every manager whose to-dos it merges names it; until then clients draw none of them.
 	CapabilityTodoTimeline = "todo_timeline"
+	// CapabilityTodoImages: the manager creates to-dos with images and serves their private bytes (#11084). The hub
+	// lists todo_images only while every manager whose to-dos it merges names it, so an older manager never receives an
+	// image create it would silently drop. Existing image metadata and byte reads remain available on capable managers.
+	CapabilityTodoImages = "todo_images"
 )
 
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath

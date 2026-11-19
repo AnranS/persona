@@ -1302,7 +1302,8 @@ one single-flight busy action, with its failure inline in the dialog. Retry keep
 operation ID; cancel releases the previews. The to-do detail uses the same tray and existing `ImageViewer` for zoom and
 download, not another gallery. Private image bytes are fetched with the to-do's credentials and manager, three at a
 time, with localized Retry on failure and object URLs released when replaced or closed. The no-image dialog and detail
-keep their previous layout and behavior. All controls use the existing 44 px touch expansion and en, zh-Hans and ja
+keep their previous layout and behavior. When `todo_images` is absent because any manager is too old to persist images,
+the picker is hidden and an image-less create is never sent. All controls use the existing 44 px touch expansion and en, zh-Hans and ja
 copy. The assistant manager owns persistence and handoff; the Web client does not invent a temporary upload or a local
 machine path.
 

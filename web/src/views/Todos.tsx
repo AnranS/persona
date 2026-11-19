@@ -3073,6 +3073,7 @@ function NewTodoDialog({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
+  const imagesSupported = useStore((s) => s.features.includes("todo_images"));
   const keptAttachments = useRef<LocalAttachment[]>([]);
   const operationId = useRef(uuid());
   const operationKey = useRef("");
@@ -3170,6 +3171,10 @@ function NewTodoDialog({
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!title.trim() || creating.current || !bindingsValid || !repositoryContext.isCurrent()) return;
+    if (keptAttachments.current.length > 0 && !imagesSupported) {
+      setFailure(t("lib-todos.images_unsupported"));
+      return;
+    }
     const nextOperationKey = JSON.stringify({
       title: title.trim(), notes: notes.trim(), due: due(), repositoryBindings,
       images: keptAttachments.current.map((image) => image.id),
@@ -3269,6 +3274,7 @@ function NewTodoDialog({
           />
         </div>
 
+        {imagesSupported && (
         <div>
           <input
             ref={imageInput}
@@ -3293,6 +3299,7 @@ function NewTodoDialog({
             </div>
           )}
         </div>
+        )}
 
         <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} onCatalog={setRepositoryCatalog} />
         {!bindingsValid && <p role="alert" className="text-submeta text-red">{t(duplicateLinks ? "task-repositories.duplicate_link" : "task-repositories.draft_invalid")}</p>}
