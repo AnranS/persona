@@ -259,7 +259,7 @@ private fun KnowledgeImportedAvatar(entry: KnowledgeEntry) {
     val brand = connectorBrand(imported.source.orEmpty())
     val palette = PersonaTheme.palette
     Box(Modifier.testTag("knowledge-imported-avatar-${entry.id}")) {
-        JAvatar(entry.name, icon = PhIcons.Microphone)
+        JAvatar(entry.name, icon = PersonaIcons.recording)
         Box(
             Modifier.align(Alignment.BottomEnd).offset(Tokens.Space.xs, Tokens.Space.xs).size(Tokens.Size.badge)
                 .clip(CircleShape).background(if (brand == null) palette.ink3 else palette.catalogLogoBackground)
