@@ -10,7 +10,7 @@ import { interactionCanAnswer } from "./format";
 import { apiOp } from "./ops";
 import { endInteraction, getSession, keepDelegated, useStore } from "./store";
 import { isSecretHandoff, isSecretRun } from "./tool-detail";
-import { isSessionReview } from "./session-review-agent";
+import { isSessionReview } from "./types";
 import type { Interaction } from "./types";
 
 /** Sent (`already`: it had been answered, here or elsewhere), or why not, as a sentence to show. */

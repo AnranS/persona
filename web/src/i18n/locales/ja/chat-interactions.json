@@ -122,5 +122,13 @@
   "secret_handoff_note": "Persona とアシスタントは値を見ません。",
   "secret_handoff_always_scope": "常に許可：{scope}。",
   "secret_handoff_card_only": "チャットのカードで承認してください。",
-  "show_card": "リクエスト全体を表示"
+  "show_card": "リクエスト全体を表示",
+  "review_this_work": "この作業を独立レビュー",
+  "review_busy": "Agent が実行中、起動中、または別の回答を待っています",
+  "review_running": "レビューはすでに実行中です",
+  "review_no_change": "レビューする変更はありません",
+  "review_checking": "レビューできるか確認しています…",
+  "review_starting": "レビューを開始しています…",
+  "review_requested": "レビューをリクエストしました",
+  "review_failed": "レビューを開始できませんでした：{error}"
 }

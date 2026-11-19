@@ -1,10 +1,9 @@
 // An independent, read-only review of one Agent session's work (#1808). The hub owns the reviewer and its lifecycle;
 // the web asks for availability only while the session menu is open and starts one only from that menu.
 import { api, enc } from "./api";
-import type { Interaction } from "./types";
+import { isSessionReview } from "./types";
 
-export const SESSION_REVIEW_FEATURE = "session_review";
-export const SESSION_REVIEW_TOOL = "persona_session_review";
+export { isSessionReview };
 
 export interface SessionReviewStatus {
   running: boolean;
@@ -22,8 +21,4 @@ export function loadSessionReview(mid: string, sid: string): Promise<SessionRevi
 
 export function startSessionReview(mid: string, sid: string): Promise<unknown> {
   return api<unknown>(sessionReviewRoute(mid, sid), { method: "POST" });
-}
-
-export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
-  return ix.kind === "question" && ix.tool_name === SESSION_REVIEW_TOOL;
 }

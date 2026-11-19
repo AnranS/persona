@@ -122,5 +122,13 @@
   "secret_handoff_note": "Persona 和助手都看不到这些值。",
   "secret_handoff_always_scope": "总是允许：{scope}。",
   "secret_handoff_card_only": "请在聊天里的卡片上批准。",
-  "show_card": "查看完整请求"
+  "show_card": "查看完整请求",
+  "review_this_work": "独立审查这项工作",
+  "review_busy": "Agent 正忙、正在启动，或正在等待其他回答",
+  "review_running": "已有一项审查正在进行",
+  "review_no_change": "没有可审查的改动",
+  "review_checking": "正在检查是否可以审查…",
+  "review_starting": "正在启动审查…",
+  "review_requested": "已请求审查",
+  "review_failed": "无法启动审查：{error}"
 }

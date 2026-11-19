@@ -128,5 +128,13 @@
   "secret_handoff_note": "Persona and the assistant never see the values.",
   "secret_handoff_always_scope": "Always allow {scope}.",
   "secret_handoff_card_only": "Approve it on its card in the chat.",
-  "show_card": "Show the whole request"
+  "show_card": "Show the whole request",
+  "review_this_work": "Review this work",
+  "review_busy": "The Agent is busy, starting, or waiting on another answer",
+  "review_running": "A review is already running",
+  "review_no_change": "There are no changes to review",
+  "review_checking": "Checking review availability…",
+  "review_starting": "Starting review…",
+  "review_requested": "Review requested",
+  "review_failed": "Couldn't start the review: {error}"
 }

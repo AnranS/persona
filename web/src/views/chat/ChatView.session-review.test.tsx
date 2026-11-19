@@ -21,6 +21,7 @@ vi.mock("../../ui/atoms", async (load) => ({
   toast: vi.fn(),
 }));
 
+import { loadPages } from "../../lib/lazy-page";
 import { applyCompleteSessions, reset } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
@@ -97,6 +98,7 @@ async function openMenu() {
   const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`);
   expect(more).not.toBeNull();
   act(() => more!.click());
+  await loadPages();
   await settle();
 }
 
