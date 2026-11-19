@@ -344,23 +344,12 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 		parent = workspace
 	}
 	if checkoutOnly {
-		hh, ok := h.(*herdrHost)
-		if !ok {
+		if _, ok := h.(*herdrHost); !ok {
 			return res, errors.New("open_workspace=false is supported only on herdr")
 		}
-		if workspace == "" && repo.mainRoot == "" {
-			created, err = n.worktreeByGit(ctx, h, repo, branch, dest, false)
-		} else {
-			base := ""
-			if repo.mainRoot != "" && !branchExists(ctx, repo.root, branch) {
-				base, err = git(ctx, repo.root, "rev-parse", "HEAD")
-				if err != nil {
-					return res, err
-				}
-				base = strings.TrimSpace(base)
-			}
-			created, err = hh.createWorktree(ctx, workspace, repo.mainRoot, base, branch, dest, false)
-		}
+		// Older herdr versions have no checkout-only RPC. Use the node's existing Git fallback for every
+		// source workspace, then open the Agent's tab in the task workspace instead of opening a new one.
+		created, err = n.worktreeByGit(ctx, h, repo, branch, dest, false)
 	} else if parent != workspace {
 		w, ok := h.(interface {
 			CreateWorktreeUnder(context.Context, string, string, string, string) (*host.Created, error)

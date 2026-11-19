@@ -124,7 +124,7 @@ func (h *herdrHost) CreateWorktreeFromMain(ctx context.Context, space, mainRoot,
 	return h.createWorktree(ctx, space, mainRoot, base, branch, path)
 }
 
-func (h *herdrHost) createWorktree(ctx context.Context, space, mainRoot, base, branch, path string, open ...bool) (*host.Created, error) {
+func (h *herdrHost) createWorktree(ctx context.Context, space, mainRoot, base, branch, path string) (*host.Created, error) {
 	t, err := h.target(ctx, space)
 	if err != nil {
 		return nil, err
@@ -141,22 +141,16 @@ func (h *herdrHost) createWorktree(ctx context.Context, space, mainRoot, base, b
 		}
 	}
 	var c *herdr.WorktreeCreated
-	checkoutOnly := len(open) > 0 && !open[0]
-	switch {
-	case checkoutOnly && mainRoot != "":
-		c, err = t.c.WorktreeCreateFromCwdCheckout(ctx, mainRoot, branch, path, base)
-	case checkoutOnly:
-		c, err = t.c.WorktreeCreateCheckout(ctx, space, branch, path, base)
-	case mainRoot != "":
+	if mainRoot != "" {
 		c, err = t.c.WorktreeCreateFromCwd(ctx, mainRoot, branch, path, base)
-	default:
+	} else {
 		c, err = t.c.WorktreeCreate(ctx, space, branch, path, base)
 	}
 	if err != nil {
 		return nil, err
 	}
 	out := fromHerdrCreated(t.session, &c.Created)
-	if out.SpaceID == "" && !checkoutOnly {
+	if out.SpaceID == "" {
 		return nil, errors.New("herdr did not return the new workspace")
 	}
 	return out, nil

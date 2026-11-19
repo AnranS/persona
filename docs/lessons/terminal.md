@@ -6,7 +6,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   `task_id` and the actual `workspace_id` with every task session, select resumes by that ID, and require the same pair
   before `workspace.close`. A label is needed only to create or recreate the task workspace. `worktree.create`'s
   `open_workspace` defaults to true; only a herdr leader task's checkout sets it false, with its Agent tab opening in
-  the shared task workspace instead. Closing that workspace is not deleting its Git checkout.
+  the shared task workspace instead. Older herdr versions have no checkout-only RPC, so the node uses its existing Git
+  fallback for this path. Closing that workspace is not deleting its Git checkout.
 - herdr `pane read --source recent` returns at most about 1000 lines (even with a larger --lines), has no offset or scrolling API, and does not persist them: terminal history can only be read in chunks within those 1000 lines; the transcript holds the complete history.
 - For keys that distinguish single tap / quick double tap / hold (terminal key-bar modifiers), do not track press and release with `DragGesture(minimumDistance: 0)`: it misses the second tap of a quick double tap
   (XCUITest's doubleTap sends only one down / up pair). Overlay a UIView that overrides touchesBegan / Ended (`TouchArea` in `TerminalKeys.swift`).

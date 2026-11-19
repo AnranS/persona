@@ -160,7 +160,8 @@ workspace behavior.
   the node also persists `task_id`, `workspace_id` and `workspace_label` with each session it starts.
 - **Workers.** A worker's start carries the same `task_id` and the recorded `workspace_id`, so its tab opens beside the
   leader. A writable worker still gets its own Git worktree and runs there: `worktree.create` with
-  `open_workspace:false` makes the checkout without opening another herdr workspace. The leader uses the same
+  `open_workspace:false` makes the checkout through the node's existing Git fallback, without opening another herdr
+  workspace and without needing a new herdr RPC. The leader uses the same
   checkout-only rule when it needs a new worktree. The checkout and branch are not deleted when the task ends.
 - **Rework and continue.** A stopped session's explicit resume reads its recorded task identity from the node, and the
   manager supplies it through the same start path. A new tab selects the recorded workspace by ID, never a workspace
