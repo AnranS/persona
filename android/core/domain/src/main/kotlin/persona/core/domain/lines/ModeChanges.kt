@@ -20,12 +20,15 @@ object ModeChanges {
     /**
      * Put each valid change before the first later exchange, or after the last. While older history remains, [earliest]
      * holds changes from before its first loaded item for that page. IDs survive additions and removals elsewhere in the
-     * record; an empty chat keeps its placeholder.
+     * record; an empty chat keeps its placeholder. A frozen view's [until] is the last shown item's time: newer changes
+     * wait with the rest of the transcript.
      */
-    fun merge(lines: List<ChatLine>, changes: List<ModeChange>, earliest: Instant? = null): List<ChatLine> {
+    fun merge(lines: List<ChatLine>, changes: List<ModeChange>, earliest: Instant? = null, until: Instant? = null): List<ChatLine> {
         if (changes.isEmpty()) return lines
         val shown = changes.mapIndexedNotNull { index, change ->
-            val at = parseTime(change.at)?.takeIf { earliest == null || !it.isBefore(earliest) }
+            val at = parseTime(change.at)
+                ?.takeIf { earliest == null || !it.isBefore(earliest) }
+                ?.takeIf { until == null || !it.isAfter(until) }
             if (change.kind !in kinds || at == null) null else Timed(change, at, index)
         }.sortedWith(compareBy<Timed> { it.at }.thenBy { it.order })
         if (lines.isEmpty() || shown.isEmpty()) return lines

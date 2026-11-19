@@ -87,6 +87,19 @@ class ModeChangesTest {
         assertEquals(before.last().contentKey, after.last().contentKey)
     }
 
+    @Test fun changesNewerThanAFrozenWindowWaitForLiveFollowing() {
+        val lines = chatLines(listOf(sent(1, t0), sent(2, t0.plusSeconds(60), role = "assistant"))).lines
+        val during = change(t0.plusSeconds(30))
+        val atCutoff = change(t0.plusSeconds(60), to = "plan")
+        val newer = change(t0.plusSeconds(120), to = "auto")
+
+        val frozen = ModeChanges.merge(lines, listOf(during, atCutoff, newer), until = t0.plusSeconds(60))
+
+        assertEquals(listOf(during, atCutoff), frozen.filterIsInstance<ChatLine.ModeChange>().map { it.change })
+        assertTrue(ModeChanges.merge(lines, listOf(during), until = t0.minusSeconds(1)).none { it is ChatLine.ModeChange })
+        assertEquals(3, ModeChanges.merge(lines, listOf(during, atCutoff, newer)).count { it is ChatLine.ModeChange })
+    }
+
     @Test fun validRecordsAppearOnceAndMalformedRecordsAddNoLine() {
         val lines = chatLines(listOf(sent(1, t0), sent(2, t0.plusSeconds(60), role = "assistant"))).lines
         val valid = change(t0.plusSeconds(30))

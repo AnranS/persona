@@ -1,15 +1,21 @@
 package persona.feature.chat
 
 import java.io.IOException
+import java.time.Instant
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.ModeChange
+import persona.core.contracts.Item
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.domain.lines.ChatLine
+import persona.core.domain.lines.ChatRow
+import persona.core.domain.lines.LineItem
 
 /** An Agent reads its mode history on the mode-key edges, never on a timer; a Persona conversation never reads it. */
 class ModeChangeStoreTest {
@@ -93,5 +99,16 @@ class ModeChangeStoreTest {
             runCurrent()
             assertEquals(listOf(record), store.changes)
         }
+    }
+
+    @Test fun frozenCutoffIsTheLastShownItemTimeAndLiveFollowingHasNone() {
+        val t0 = Instant.parse("2026-11-18T09:00:00Z")
+        fun row(id: String, seq: Int, at: Instant?) = ChatLine.Row(ChatRow("reply", LineItem(
+            Item(id, seq, role = "assistant", kind = "text", text = id, ts = at?.toString()))))
+        val lines = listOf(row("first", 1, t0), row("second", 2, t0.plusSeconds(60)), row("untimed", 3, null))
+
+        assertEquals(t0.plusSeconds(60), modeChangesCutoff(frozen = true, lines))
+        assertNull(modeChangesCutoff(frozen = false, lines))
+        assertEquals(Instant.EPOCH, modeChangesCutoff(frozen = true, listOf(row("untimed", 1, null))))
     }
 }

@@ -29,12 +29,21 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Instant
 import persona.core.contracts.ModeChange
+import persona.core.contracts.parseTime
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
+import persona.core.domain.lines.ChatLine
 import persona.core.domain.sort.listedModes
+
+/** Only records up to the last item a frozen projection shows; live following has no cutoff (iOS `shownModes`). */
+internal fun modeChangesCutoff(frozen: Boolean, lines: List<ChatLine>): Instant? {
+    if (!frozen) return null
+    return lines.asReversed().firstNotNullOfOrNull { line -> line.lastItem()?.let { parseTime(it.ts) } } ?: Instant.EPOCH
+}
 
 /** Reads an Agent's mode history on open and mode-key edges; no timer, refresh or foreground poll (#10297). */
 internal class ModeChangeStore(

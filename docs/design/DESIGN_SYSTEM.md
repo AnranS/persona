@@ -675,7 +675,8 @@ on-demand model panel, not the everyday Assistant home (#6887).
   colon. Hairlines only where the words fit on one line with at least 16 px / `Theme.Space.l` / `Tokens.Space.l` of
   rule each side; otherwise the words alone, wrapped and centered (the owner, 2026-11-18: rules beside the first of
   two lines read as crooked, rules a pixel or two long as dots). The web loads its code and words (`chat-modes`) with
-  an Agent's chat, off the first screen. The record is read when the chat opens and when its mode or waiting restart
+  an Agent's chat, off the first screen. A frozen window shows only changes up to its last shown item; newer changes wait
+  with the newer transcript. The record is read when the chat opens and when its mode or waiting restart
   changes, never on a timer, a refresh or the app back in front.
 
 ### 3.3 Cards and surfaces
