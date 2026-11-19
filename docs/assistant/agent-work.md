@@ -330,6 +330,15 @@ later without sending.
 
 ### Transient errors: automatic continuation
 
+- An unrecoverable conversation error overrides a runtime's generic transient kind and any upstream status.
+  Account-sealed native compaction is `turn_error_code: compaction_sealed`, `turn_error_kind: unrecoverable`:
+  the context belongs to another account, so the conversation is invalid. Clients explain the reason and direct
+  the owner to a new conversation instead of offering Continue. The manager neither schedules another retry nor
+  sends a retry queued before the cause was recognized. Adding permanent causes extends
+  `proto.UnrecoverableTurnErrorCode` and the clients' error parsers, with positive and negative regression cases.
+- An old interrupted participant does not override another participant that is working or waiting to resume.
+  Interrupted task rows stay out of Needs you when the task is parked or closed. Archive visibility still follows
+  new activity; it is not a substitute for the task-state filter.
 - On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
   turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.
 - Exponential backoff (`retryBackoff`): `retry_base_seconds` (default 15) doubled for each attempt, so 15 s, 30 s, 60 s, 120 s, 240 s; a rate limit (429, "rate limit",
@@ -591,7 +600,7 @@ A process can be redeployed and cleared at any time, so triage results, retry co
 The main chat's live snapshot (`prompts/assistant/snapshot*.md`):
 
 - Each Agent under "Needs you" includes what it is waiting for;
-- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). "Done (within 24 hours)" and "Muted" carry only counts; `agents_list state=done` / `state=muted` returns their names, session ids and conclusions when the assistant needs them;
+- Adds "Waiting" (Persona is waiting for it: retrying, deployment, another Agent). Working agents render only their count in the Agents heading (#11261), and "Done (within 24 hours)" and "Muted" carry only counts; `agents_list` returns working agents' names, session ids and running workflows (`state=working`) and done or muted agents' conclusions (`state=done` / `state=muted`) when the assistant needs them;
 - "Unread" contains only sessions not yet successfully triaged, and those whose closeout says the turn is not finished, with that line ("Closeout");
 - An Agent's line ends with what its closeout claims of merging and deploying, and the hub's finding where it differs.
 

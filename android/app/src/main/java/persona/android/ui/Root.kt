@@ -285,6 +285,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         sidebarOverlayShown.value = false
     }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    persona.android.navigation.TrackDevScreen(selected, stacks.getValue(selected).lastOrNull(), settingsOpened, settingsSheetStack.lastOrNull())
     // Where each stack's Inbox list goes when an item is opened from outside it (#9053): one per stack, so a list kept
     // composed in a hidden tab never takes another stack's landing.
     val inboxLandings = remember(session.identity) { AppTab.entries.associateWith { InboxLanding() } }
@@ -959,7 +960,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
                 ::openWithCard, navigator::groupGone, chatTerminal(it.chat)) }
-            inboxEntries(navigator, session.inbox, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
+            inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
+                persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
+            }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
             })
             entry<InboxItemRoute> { InboxLink(it, session.inbox, navigator, ::replace) }
