@@ -8,6 +8,7 @@ import {
   formFromView,
   formModel,
   formProblems,
+  headersProblem,
   importCanSplit,
   importCount,
   importCreates,
@@ -248,6 +249,54 @@ describe("providerBody", () => {
     expect(providerBody(form, old)).toMatchObject({ kind: "api", api: "chat", auth: "api_key" });
     expect(formProblems({ ...form, api_key: "" }, true).connect).toBe("要填 API Key");
     expect(formProblems(form, false, true).connect).toBe("");
+  });
+});
+
+describe("request header payloads (#11075)", () => {
+  it.each([
+    "Authorization: protocol-managed",
+    "x-api-key: protocol-managed",
+    "Anthropic-Version: 2023-06-01",
+    "Content-Type: application/json",
+    "Content-Length: 10",
+    "Host: gateway.example.com",
+  ])("rejects the reserved or protocol-managed name in %s", (raw) => {
+    expect(headersProblem(raw)).not.toBe("");
+  });
+
+  it("allows custom names, including an intentionally custom User-Agent", () => {
+    expect(headersProblem("X-Custom-Header: example-value\nX-Team: blue\nUser-Agent: example-agent")).toBe("");
+  });
+
+  it.each(["messages", "responses", "chat"] as const)("%s direct API saves and probes header replacement and removal", (api) => {
+    const old: ProviderView = { name: "gw", kind: "api", api, base_url: "https://gw.example.com", model: "m1", has_key: true, has_headers: true, models: [{ id: "m1" }] };
+    const opened = formFromView(old);
+    for (const headers of ["X-Custom-Header: replacement-value", ""]) {
+      const draft = { ...opened, headers, headers_touched: true };
+      expect(providerBody(draft, old)).toHaveProperty("headers", headers);
+      expect(probeBody(draft, old.name, "m1")).toHaveProperty("headers", headers);
+      expect(probeBody(draft, old.name)).toHaveProperty("headers", headers);
+    }
+  });
+
+  it.each(["messages", "responses", "chat"] as const)("%s direct API leaves existing no-header save and probe payloads unchanged", (api) => {
+    const fresh = ready({ kind: "api", api, headers: "", headers_touched: false });
+    expect(providerBody(fresh, null)).not.toHaveProperty("headers");
+    expect(probeBody(fresh, null, "m1")).not.toHaveProperty("headers");
+    expect(probeBody(fresh, null)).not.toHaveProperty("headers");
+
+    const old: ProviderView = { name: "gw", kind: "api", api, base_url: "https://gw.example.com", model: "m1", has_key: true, models: [{ id: "m1" }] };
+    const opened = formFromView(old);
+    expect(providerBody(opened, old)).not.toHaveProperty("headers");
+    expect(probeBody(opened, old.name, "m1")).not.toHaveProperty("headers");
+    expect(probeBody(opened, old.name)).not.toHaveProperty("headers");
+  });
+
+  it.each(["X-Custom-Header: replacement-value", ""])("automatically rechecks a saved provider after header replacement or removal: %s", (headers) => {
+    const old: ProviderView = { name: "gw", base_url: "https://gw.example.com", model: "m1", has_key: true, has_headers: true, auth: "bearer" };
+    const opened = formFromView(old);
+    expect(autoCheckable(opened, old)).toBe(false);
+    expect(autoCheckable({ ...opened, headers, headers_touched: true }, old)).toBe(true);
   });
 });
 
