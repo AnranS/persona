@@ -614,7 +614,7 @@
   },
   {
     "name": "machine_redeploy",
-    "description": "Redeploy a machine's node by ID or exact name; return the confirmed result.",
+    "description": "Redeploy by ID or exact name; return the confirmed outcome.",
     "input_schema": {
       "type": "object",
       "required": [

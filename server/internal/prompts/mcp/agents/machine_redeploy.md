@@ -1,4 +1,4 @@
-Redeploy a machine's node by ID or exact name; return the confirmed result.
+Redeploy by ID or exact name; return the confirmed outcome.
 
 ```json
 {"type":"object","required":["machine"],"properties":{"machine":{"type":"string"}}}

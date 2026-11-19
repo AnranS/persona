@@ -480,13 +480,14 @@ func TestLinkedDeployPreflightFailureEndsConfirmation(t *testing.T) {
 	h, m, n, bin := linkedDeployFixture(t, kindLink)
 	h.opts.Store = newMemStore()
 	n.stayOld = true
-	if err := m.startRPCDeployment(nodePackage{Version: h.hubVersion(), path: bin}, nil); err != nil {
+	run, err := m.startRPCDeploymentRun(nodePackage{Version: h.hubVersion(), path: bin}, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	outcome := make(chan error, 1)
-	go func() { outcome <- m.waitDeploy(ctx) }()
+	go func() { outcome <- m.waitDeploy(ctx, run) }()
 	waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return s.DeployPhase == "confirming" })
 	for _, failure := range []proto.NodeUpdatePreflightFailure{
 		{ID: "old-update", Error: "stale failure"},

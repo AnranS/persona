@@ -158,6 +158,7 @@ func TestMachineRedeployRejectsSelectionWithoutDeploying(t *testing.T) {
 		{name: "ambiguous exact display name", selector: "Studio Mac", machines: online, wants: []string{"ambiguous"}},
 		{name: "display name is not case folded", selector: "studio mac", machines: online[:1], wants: []string{"no machine", "unknown machine", "not found"}},
 		{name: "unavailable", selector: "box-1", machines: []Device{{ID: "box-1", Name: "Studio Mac"}}, wants: []string{"offline", "unavailable"}},
+		{name: "current assistant machine", selector: "server", machines: []Device{{ID: "server", Name: "Studio Mac", Online: true, Reachable: true}}, wants: []string{"another machine"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, d := newMachineRedeployService(t, tc.machines...)
@@ -173,5 +174,28 @@ func TestMachineRedeployRejectsSelectionWithoutDeploying(t *testing.T) {
 				t.Fatalf("an unresolved selection reached the deployment operation: %v", d.calledIDs())
 			}
 		})
+	}
+}
+
+func TestMachineRedeployRequiresCompleteNameInventory(t *testing.T) {
+	s, d := newMachineRedeployService(t, Device{ID: "box-1", Name: "Studio Mac", Online: true, Reachable: true})
+	s.hub.(*fakeHub).devicesFull = false
+	out, err := callMachineRedeploy(t, s, "Studio Mac")
+	if out != "" || err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("result %q, error %v: an incomplete name inventory was not refused", out, err)
+	}
+	if got := d.calledIDs(); len(got) != 0 {
+		t.Fatalf("an incomplete name inventory reached the deployment operation: %v", got)
+	}
+}
+
+func TestMachineRedeployAllowsIDWithIncompleteInventory(t *testing.T) {
+	s, d := newMachineRedeployService(t, Device{ID: "box-1", Name: "Studio Mac", Online: true, Reachable: true})
+	s.hub.(*fakeHub).devicesFull = false
+	if _, err := callMachineRedeploy(t, s, "box-1"); err != nil {
+		t.Fatalf("redeploy by an unambiguous ID: %v", err)
+	}
+	if got := d.startedIDs(); !slices.Equal(got, []string{"box-1"}) {
+		t.Fatalf("shared manager operation started deployments on %v, want only box-1", got)
 	}
 }

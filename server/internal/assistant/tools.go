@@ -312,7 +312,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "machines_list":
 		return s.toolMachinesList(ctx)
 	case "machine_redeploy":
-		return s.toolMachineRedeploy(ctx, args)
+		return s.toolMachineRedeploy(ctx, machine, args)
 	case "agents_list":
 		var a struct{ State, Machine, Query string }
 		_ = json.Unmarshal(args, &a)
