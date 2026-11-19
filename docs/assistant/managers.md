@@ -434,6 +434,18 @@ activation. One exact owned machine must be covered; additional machines fail cl
 After candidate checks, the publisher reads authority again and binds the fresh real digest
 to the activation plan. A maintenance window alone never establishes idle state.
 
+A newly created manager can instead have no main or machine yet, including no assistant
+settings row. Its private target has both `main` and `machine_id` as empty strings. The
+publisher accepts this only while two complete Hub reads confirm empty ownership and no
+conversation state, and passes an explicit `unassigned` inventory plan with all three
+identity flags deliberately empty. The CLI reads the selected manager's own database twice,
+binding either the empty row's revision or a stable proof that the row is absent. It produces
+two complete empty-runtime inventories without dialing a node or inventing an identity.
+A failed read, malformed settings object or identity field, partial identity, missing
+existing-row revision, runtime row, background activity, changed revision, owned machine,
+or newly assigned main/machine fails closed. An empty display list alone is not evidence.
+Candidate checks and the final pre-start authority read are the same as for a populated manager.
+
 ### Confirmation and recovery
 
 The formal artifact is staged in the manager's own `.manager-updates/<run-id>` directory.
