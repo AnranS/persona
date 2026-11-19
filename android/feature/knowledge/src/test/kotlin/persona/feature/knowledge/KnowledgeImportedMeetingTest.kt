@@ -241,8 +241,9 @@ class KnowledgeImportedMeetingScreenTest {
         val connection = object : KnowledgeConnection { override val current = MutableStateFlow<KnowledgeRepository?>(repository) }
         val model = KnowledgeViewModel(connection).also { it.kind(KnowledgeKind.Meetings) }
         var dark by mutableStateOf(false)
+        var style by mutableStateOf(AppStyle.Glass)
         rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("imported-meetings-shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
                     KnowledgeScreen(model, NoImportedNavigator)
                 }
@@ -258,10 +259,12 @@ class KnowledgeImportedMeetingScreenTest {
         rule.onNodeWithText("R2").assertExists()
         rule.onNodeWithText("R3").assertExists()
 
-        for (isDark in listOf(false, true)) {
+        for ((pageStyle, isDark) in listOf(AppStyle.Glass to false, AppStyle.Glass to true,
+            AppStyle.Brief to false, AppStyle.Brief to true, AppStyle.Board to false, AppStyle.Board to true)) {
+            style = pageStyle
             dark = isDark
             rule.waitForIdle()
-            val appearance = if (isDark) "dark" else "light"
+            val appearance = "${pageStyle.name.lowercase()}-${if (isDark) "dark" else "light"}"
             val lark = rule.onNodeWithTag("knowledge-imported-avatar-r1", useUnmergedTree = true).assertExists().captureToImage().asAndroidBitmap()
             assertTrue("$appearance: Lark's published blue mark", lark.hasColorNear(0x33, 0x70, 0xff))
             assertTrue("$appearance: third-party marks keep their white backing", lark.hasWhiteBacking())
@@ -284,8 +287,9 @@ class KnowledgeImportedMeetingScreenTest {
         val model = KnowledgeDetailViewModel(KnowledgeKind.Recordings, "r1", connection, NoImportedSender)
         val opened = mutableListOf<String>()
         var dark by mutableStateOf(false)
+        var style by mutableStateOf(AppStyle.Glass)
         rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("imported-detail-shot").width(400.dp).height(1700.dp).background(PersonaTheme.palette.background)) {
                     KnowledgeDetailScreen(model, NoImportedNavigator, openLinkInApp = { opened += it })
                 }
@@ -293,11 +297,14 @@ class KnowledgeImportedMeetingScreenTest {
         }
         rule.waitUntilExactlyOneExists(hasText("Lark Meeting Notes"), 10_000)
 
-        for (isDark in listOf(false, true)) {
+        for ((pageStyle, isDark) in listOf(AppStyle.Glass to false, AppStyle.Glass to true,
+            AppStyle.Brief to false, AppStyle.Brief to true, AppStyle.Board to false, AppStyle.Board to true)) {
+            style = pageStyle
             dark = isDark
             rule.waitForIdle()
+            val appearance = "${pageStyle.name.lowercase()}-${if (isDark) "dark" else "light"}"
             assertNotesDirectlyUnderFacts("Lark Meeting Notes")
-            shot("imported-detail-shot", "knowledge-imported-detail-en-${if (isDark) "dark" else "light"}.png")
+            shot("imported-detail-shot", "knowledge-imported-detail-en-$appearance.png")
         }
         rule.onAllNodesWithText("Lark Meeting Notes").assertCountEquals(1)
         rule.onNodeWithText("Lark Meeting Notes").performClick()
