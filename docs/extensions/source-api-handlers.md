@@ -75,10 +75,19 @@ interface SourceRouteBase {
   callers: CallerClass[];                // required, nonempty and unique
 }
 
-interface ReadRouteDeclaration extends SourceRouteBase {
-  method: "GET" | "HEAD" | "POST";
+interface SafeReadRouteDeclaration extends SourceRouteBase {
+  method: "GET" | "HEAD";
   effect: "read";
 }
+
+interface QueryReadRouteDeclaration extends SourceRouteBase {
+  method: "POST";
+  effect: "read";
+  query_only: true;
+  read_justification: string;          // bounded, nonempty no-side-effect rationale
+}
+
+type ReadRouteDeclaration = SafeReadRouteDeclaration | QueryReadRouteDeclaration;
 
 interface WriteRouteDeclaration extends SourceRouteBase {
   method: "POST" | "PUT" | "PATCH" | "DELETE";
@@ -111,12 +120,14 @@ interface AssistantCaller { kind: "assistant"; manager_id: string; conversation_
 interface ExtensionCaller { kind: "extension"; installation_id: string; process_generation: string }
 ```
 
-A declaration, its exact method/path/schema allowlists, nonempty closed `callers` set and write reconciliation schema
-are part of the reviewed permissions digest. Adding or widening one requires owner approval. An unsupported version,
+A declaration, its exact method/path/schema allowlists, nonempty closed `callers` set, POST-read no-side-effect
+justification and write reconciliation schema are part of the reviewed permissions digest. Adding or widening one requires owner approval. An unsupported version,
 duplicate ID, missing schema, omitted/empty/duplicate/unknown caller class, wildcard, implicit caller or unknown budget
 profile MUST fail closed. Admission intersects the declared `callers` with the verified caller class and independent
 grant. GET and HEAD MUST be `effect: "read"`; read declarations are limited to GET, HEAD and query-style POST.
-PUT, PATCH and DELETE MUST be `effect: "write"`, and `effect: "write"` is valid only on POST, PUT, PATCH or DELETE.
+A POST read additionally requires `query_only: true` and a bounded, nonempty `read_justification`, reviewed separately
+as having no side effects and included in the permissions digest. Registration rejects a POST read without either field
+or whose behavior contradicts that justification. PUT, PATCH and DELETE MUST be `effect: "write"`, and `effect: "write"` is valid only on POST, PUT, PATCH or DELETE.
 Registration rejects a read declaration on PUT/PATCH/DELETE and a write without `reconciliation_schema`. GET does not
 implicitly declare HEAD, and no method creates an implicit OPTIONS or CORS route.
 
@@ -208,6 +219,9 @@ section 8.
 | Command | Handler | Argument/body schema | Grant/permission |
 | --- | --- | --- | --- |
 | `assistant.credentials` | `namespaces.api`, route `credentials.read` | `AssistantCredentialsRequest` → `AssistantCredentialsResult` | `source.command.credentials`; never `credential.reference` |
+
+The `credentials.read` route is a query-style POST with `query_only: true` and the separately reviewed justification
+"return opaque references without changing provider, companion, account or session state".
 
 Adding a command requires a new reviewed row, an exact handler route and a permissions-digest change; pattern matching
 and user-supplied handler names are invalid. The manager MUST validate each argument and validate the body against the
@@ -554,6 +568,7 @@ suite.
 | NEG-DECLARATION-CALLERS | Register omitted, empty, duplicate or unknown caller classes, then call outside the declared set | Registration/admission fails closed; only the nonempty declared `app`/`assistant`/`extension` intersection proceeds | 2, 3 | Declaration schema and caller-class admission tests |
 | NEG-SAFE-METHOD-WRITE | Declare GET or HEAD with `effect: "write"`, or a write without `reconciliation_schema` | Registration rejects both declarations; no safe-method mutation or schema-less recovery path exists | 2, 7 | Discriminated route-declaration tests |
 | NEG-UNSAFE-METHOD-READ | Declare PUT, PATCH or DELETE with `effect: "read"` | Registration rejects the declaration and admission cannot bypass write confirmation, idempotency or reconciliation | 2, 7 | Unsafe-method read declaration and admission tests |
+| NEG-POST-READ-JUSTIFICATION | Declare a POST read without `query_only` or `read_justification`, or contradict its no-side-effect review | Registration/admission rejects it; only a separately reviewed query-only POST read can bypass write confirmation | 2, 4, 7 | POST-read schema, justification-review and side-effect tests |
 | AUTH-HEADER-ALLOWLIST | Send declared Range/conditional/precondition/idempotency headers beside forged credentials and identity headers | Every schema-allowlisted value survives typed dispatch while every credential, identity and hop-by-hop header is stripped | 3, 6, 7 | Relay/header capture and validation tests |
 | NEG-PATH-COLLISION | Register a path collision and try encoded separators, dot segments, `%2e%2e`, `%5c`, `%00`, percent-encoded invalid UTF-8 and double encoding | Registration is atomic/fail-closed; decoded-segment revalidation returns 400 with no dispatch, and normalization bypasses never select another route | 2 | Declarative registry and escaped-path relay tests |
 | NEG-WRONG-BINDING | Use the wrong installation and wrong account for a valid route/reference | Both bindings are rejected and no source or upstream effect occurs | 2, 3, 8 | Manager admission matrix |

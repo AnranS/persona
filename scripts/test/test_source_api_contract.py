@@ -214,6 +214,8 @@ DECLARATION_FIELDS = {
     "response schema": r"\bresponse(?: body)?(?: schema)?\b",
     "callers": r"\bcallers\b",
     "reconciliation schema": r"\breconciliation schema\b",
+    "query only": r"\bquery only\b",
+    "read justification": r"\bread justification\b",
 }
 
 
@@ -300,7 +302,8 @@ class SourceApiContractTests(unittest.TestCase):
             "manager lifecycle": r"\blifecycle\b",
             "nonempty closed caller classes": r"\bnonempty\b.{0,80}\bcallers\b|\bcallers\b.{0,80}\bnonempty\b",
             "GET and HEAD are read-only": r"\bget\b.{0,50}\bhead\b.{0,100}\bread\b|\bread\b.{0,100}\bget\b.{0,50}\bhead\b",
-            "PUT PATCH and DELETE cannot be reads": r"\bput\b.{0,50}\bpatch\b.{0,50}\bdelete\b.{0,100}\beffect read\b|\bread declarations\b.{0,100}\bput\b",
+            "PUT PATCH and DELETE cannot be reads": r"\bput\b.{0,50}\bpatch\b.{0,50}\bdelete\b.{0,100}\beffect write\b|\bread declarations\b.{0,160}\bput\b",
+            "POST reads require query-only justification": r"\bquery only\b.{0,100}\bread justification\b|\bread justification\b.{0,100}\bquery only\b",
             "write reconciliation schema is required": r"\bwrite\b.{0,120}\breconciliation schema\b|\breconciliation schema\b.{0,80}\brequired\b",
             "hub is an authenticated relay": r"\bhub\b.{0,80}\bauthenticat\w*\b.{0,80}\brelay\b|\bauthenticat\w*\b.{0,80}\brelay\b.{0,80}\bhub\b",
             "no source listener/socket/generic-proxy capability": r"\b(?:no|never|not|forbid|forbidden|reject)\b.{0,160}\blistener\b.{0,160}\bunix socket\b.{0,160}\bgeneric proxy\b|\blistener\b.{0,160}\bunix socket\b.{0,160}\bgeneric proxy\b.{0,160}\b(?:forbidden|not allowed|rejected)\b",
