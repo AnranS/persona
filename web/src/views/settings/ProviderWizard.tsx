@@ -56,6 +56,7 @@ import {
   firstConnectProblem,
   formProblems,
   headerRuntimeHint,
+  headersProblem,
   hostOf,
   mergeDiscovered,
   legacyChatClears,
@@ -63,7 +64,6 @@ import {
   probeBody,
   providerBody,
   referencePending,
-  requestHeaderProblem,
   testModel,
   testText,
   withoutAutoAuth,
@@ -328,7 +328,6 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
   const problems = formProblems(f, isNew, !!old?.has_key, autoName, !!old?.has_headers);
-  const headerProblem = requestHeaderProblem(f, !!old?.has_headers);
   const fieldProblems = connectProblems(f, isNew, !!old?.has_key, autoName);
   // what a field says under it once Next was pressed (the display name's and a typed startup ID's say it as typed)
   const shownProblem = (k: ConnectField) => (tried ? fieldProblems[k] || undefined : undefined);
@@ -744,7 +743,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
                 </select>
               </Labelled>
             )}
-            <RequestHeaders f={f} setF={setF} hadHeaders={!!old?.has_headers} savedNames={old?.header_names} error={headerProblem} />
+            <RequestHeaders f={f} setF={setF} hadHeaders={!!old?.has_headers} savedNames={old?.header_names} error={f.headers_touched ? headersProblem(f.headers) : ""} />
             <div className="flex flex-col gap-2 rounded-card bg-inset p-3 shadow-hairline">
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}

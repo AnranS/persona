@@ -327,4 +327,22 @@ describe("runtime header support is explained before checks (#11075)", () => {
     await advance(AUTO * 3);
     expect(pending).toHaveLength(0);
   });
+
+  it("Antigravity keeps saved names and the explicit removal action visible beside its limitation", async () => {
+    const runtime = RUNTIMES.find((r) => r.id === "agy")!;
+    await draw(existingFor(runtime, true));
+    expect(headersText()).toContain(t("settings-providerwizard.headers_runtime_agy"));
+    expect(headersText()).toContain("X-Custom-Header");
+    expect(headersText()).toContain("X-Team");
+
+    click("settings-providerwizard.headers_clear");
+    expect(headersText()).toContain(t("settings-providerwizard.headers_cleared"));
+    click("settings-providerwizard.test");
+    click("settings-providerwizard.discover");
+    expect(probes("test")[0]!.body).toHaveProperty("headers", "");
+    expect(probes("discover")[0]!.body).toHaveProperty("headers", "");
+    await resolve(probes("test")[0]!);
+    await resolve(probes("discover")[0]!);
+    expect(await saveEdit()).toHaveProperty("headers", "");
+  });
 });
