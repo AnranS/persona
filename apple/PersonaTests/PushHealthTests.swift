@@ -118,6 +118,19 @@ struct PushHealthTests {
         #expect(h.unchecked == ["b": "timed out"] && h.routes["a"] == nil)
     }
 
+    /// The main-screen notice distinguishes a current hub confirming this credential has no route (#9612 item 4) from
+    /// an older hub that supplied no route data at all, which stays silent.
+    @Test func aConfirmedMissingRouteIsAnOutageWhileAnOlderHubStaysUnknown() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        #expect(h.status(group: "g", allowed: true).level == .unknown)
+
+        h.routes["g"] = APIClient.PushRoute(route: "relay")
+        h.read(nil, group: "g")
+        let missing = h.status(group: "g", allowed: true)
+        #expect(missing.level == .unavailable)
+        #expect(missing.action == String(localized: "Open Persona again to register once more."))
+    }
+
     @Test func theStoreKeepsWhatChanged() {
         let store = PushHealthStore(health: PushHealth())
         store.update { $0.relay = .registered; $0.routes["g"] = APIClient.PushRoute(route: "relay") }
