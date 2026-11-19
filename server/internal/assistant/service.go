@@ -856,6 +856,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	if exitText(text) {
+		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
+	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
