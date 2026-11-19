@@ -483,6 +483,20 @@ func TestDirectionFilingHasNoModelSendOrWakeSideEffects(t *testing.T) {
 	}
 }
 
+func TestDirectionFilingPreviousIgnoresNonDirectionOrigin(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	// conversation_new records any opener, not only a direction. An ordinary opener was not a direction placement.
+	e.s.originSet(context.Background(), "server", "chat-opened", OriginSpawned, "chat-b", "")
+	filed := directionFilingMustPut(t, e.s, "server", "chat-opened", "conv_lead_a")
+	if filed.Previous != "" {
+		t.Fatalf("ordinary opener became an invalid previous direction: %+v", filed)
+	}
+	undo := directionFilingMustPut(t, e.s, "server", "chat-opened", filed.Previous)
+	if undo.Direction != "" || undo.Previous != "conv_lead_a" || !undo.Changed {
+		t.Fatalf("undo did not restore the ordinary opener's standalone placement: %+v", undo)
+	}
+}
+
 func TestDirectionFilingAddsNoMCPToolAndSessionsChangeDoesNotFile(t *testing.T) {
 	e := directionFilingEnv(t, nil)
 	for _, tool := range append(e.s.Tools(context.Background()), e.s.AgentTools()...) {

@@ -292,7 +292,12 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	s.todos.mu.RLock()
 	all := make([]listedTodo, 0, len(s.todos.todos))
 	for _, t := range s.todos.todos {
-		all = append(all, listedTodo{Todo: formatTodo(copyTodoLocked(t))}) // as GET /api/v1/todos lists it
+		raw := copyTodoLocked(t)
+		shown := formatTodo(raw)
+		// formatTodo uses "review" for older clients' cancellation labels. Keep the stored marker in this internal
+		// projection so the single-direction read can distinguish cancellation from ordinary completion.
+		shown.DoneBy = raw.DoneBy
+		all = append(all, listedTodo{Todo: shown})
 	}
 	s.todos.mu.RUnlock()
 	slices.SortFunc(all, func(a, b listedTodo) int { return cmp.Compare(a.ID, b.ID) })

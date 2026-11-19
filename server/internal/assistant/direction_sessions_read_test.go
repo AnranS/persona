@@ -196,6 +196,20 @@ func TestDirectionReadEndedTaskKeepsOpenOwnership(t *testing.T) {
 	}
 }
 
+func TestDirectionReadEndedTaskUsesStoredCancellation(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	now := time.Now().UTC()
+	taskID := e.task("Cancelled in review", func(todo *Todo) {
+		todo.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+		todo.DoneAt = &now
+		todo.DoneBy = "cancelled"
+	})
+	got := directionMustRead(t, e.s, "", "conv_lead_a")
+	if len(got.EndedTasks) != 1 || got.EndedTasks[0].ID != taskID || got.EndedTasks[0].State != "cancelled" {
+		t.Fatalf("stored cancellation was lost through the client projection: %+v", got.EndedTasks)
+	}
+}
+
 func TestDirectionReadEndedTaskPagingAndTitleFilter(t *testing.T) {
 	e := directionFilingEnv(t, nil)
 	base := time.Now().Add(-2 * time.Hour).UTC()

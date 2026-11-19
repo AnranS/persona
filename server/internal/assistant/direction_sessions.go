@@ -108,7 +108,7 @@ func (s *Service) directionSessionRoutes() {
 			return
 		}
 		cfg := s.settings(ctx)
-		special, err := s.directionSpecialSessions(ctx, cfg)
+		special, knownDirections, err := s.directionSpecialSessions(ctx, cfg)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
 			return
@@ -157,6 +157,9 @@ func (s *Service) directionSessionRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, errDirectionUnavailable)
 			return
 		}
+		if !knownDirections[previousOrigin] {
+			previousOrigin = ""
+		}
 		out, err := s.fileDirectionSession(ctx, machine, sid, in.Direction, previousOrigin, row.Title)
 		if err != nil {
 			if errors.Is(err, errDirectionFull) {
@@ -174,10 +177,12 @@ func (s *Service) directionSessionRoutes() {
 	s.handle("GET /api/v1/assistant/directions/{id}", s.serveDirectionRead)
 }
 
-// directionSpecialSessions includes current and ended leader conversations, plus main and the background supervisor.
-// These conversations are never listed as filed sessions, including through an old origin record.
-func (s *Service) directionSpecialSessions(ctx context.Context, cfg Settings) (map[[2]string]bool, error) {
+// directionSpecialSessions includes current and ended leader conversations, plus main and the background supervisor,
+// and the ids that are or were directions. Special conversations are never listed as filed sessions, and only a known
+// direction's recorded opener counts as a previous or implicit placement.
+func (s *Service) directionSpecialSessions(ctx context.Context, cfg Settings) (map[[2]string]bool, map[string]bool, error) {
 	out := map[[2]string]bool{}
+	knownDirections := map[string]bool{}
 	if cfg.Main != "" {
 		out[[2]string{cfg.mainRouteMachine(), cfg.Main}] = true
 	}
@@ -187,21 +192,23 @@ func (s *Service) directionSpecialSessions(ctx context.Context, cfg Settings) (m
 	for _, id := range cfg.Leaders {
 		if id != "" && id != cfg.Main {
 			out[[2]string{cfg.MachineID, id}] = true
+			knownDirections[id] = true
 		}
 	}
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.directionsLocked(ctx) {
-		return nil, errors.New("directions could not be read")
+		return nil, nil, errors.New("directions could not be read")
 	}
 	for id, d := range b.m {
 		if d == nil {
 			continue
 		}
 		out[[2]string{cmp.Or(d.MachineID, cfg.MachineID), id}] = true
+		knownDirections[id] = true
 	}
-	return out, nil
+	return out, knownDirections, nil
 }
 
 // directionSnapshot returns a copy of one direction record. A current leader without its first sync has no record yet.

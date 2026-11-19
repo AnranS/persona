@@ -126,7 +126,7 @@ func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (
 	if err != nil {
 		return nil, err
 	}
-	special, err := s.directionSpecialSessions(ctx, cfg)
+	special, knownDirections, err := s.directionSpecialSessions(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (
 	}
 	for _, sid := range slices.Sorted(maps.Keys(origins)) {
 		origin := origins[sid]
-		if origin.Origin != OriginSpawned || origin.Ref == "" {
+		if origin.Origin != OriginSpawned || !knownDirections[origin.Ref] {
 			continue
 		}
 		machine := s.canonical(cmp.Or(origin.MachineID, cfg.MachineID))
@@ -173,6 +173,20 @@ func (tb *treeBuild) directionSessionGroups(ctx context.Context, cfg Settings) (
 		candidates = append(candidates, directionCandidate{direction: origin.Ref, machine: machine, session: sid,
 			source: "leader", at: origin.At})
 	}
+	visible := candidates[:0]
+	for _, candidate := range candidates {
+		if candidate.machine == cfg.MachineID {
+			_, deleted, err := s.deletedConversation(ctx, candidate.machine, candidate.session)
+			if err != nil {
+				return nil, err
+			}
+			if deleted {
+				continue
+			}
+		}
+		visible = append(visible, candidate)
+	}
+	candidates = visible
 	machines := map[string]bool{}
 	for _, candidate := range candidates {
 		machines[candidate.machine] = true
@@ -236,8 +250,11 @@ func (tb *treeBuild) directionEndedTasks(direction, title, before string, limit 
 		}
 		end := t.DoneAt
 		state := "done"
+		if t.Cancelled() {
+			state = "cancelled"
+		}
 		if t.CancelledAt != nil {
-			end, state = t.CancelledAt, "cancelled"
+			end = t.CancelledAt
 		}
 		row := directionEndedTask{ID: t.ID, Title: t.Title, State: state, DoneAt: t.DoneAt, CancelledAt: t.CancelledAt}
 		if end != nil {

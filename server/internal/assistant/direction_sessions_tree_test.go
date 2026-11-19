@@ -183,6 +183,19 @@ func TestDirectionFilingDeletedWithAssistantConversation(t *testing.T) {
 	}
 }
 
+func TestDirectionFilingDeletedLeaderOpenedConversationNotListed(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	// Origins are retained for history, but a deleted conversation must not reappear through that origin.
+	e.s.originSet(context.Background(), "server", "chat-opened", OriginSpawned, "conv_lead_a", "")
+	code, _ := doRoute(t, e.s, http.MethodDelete, "/api/v1/assistant/conversations/chat-opened", `{"machine_id":"server"}`, roleFull)
+	if code != http.StatusOK {
+		t.Fatalf("delete leader-opened conversation: %d", code)
+	}
+	if got := directionMustRead(t, e.s, "", "conv_lead_a"); slices.Contains(directionSessionIDs(got.Sessions), "chat-opened") {
+		t.Fatalf("deleted leader-opened conversation was resurrected by its origin: %+v", got.Sessions)
+	}
+}
+
 func TestDirectionFilingSurvivesEndingAndRemakingDirection(t *testing.T) {
 	e := directionFilingEnv(t, nil)
 	directionFilingMustPut(t, e.s, "server", "chat-a", "conv_lead_a")
