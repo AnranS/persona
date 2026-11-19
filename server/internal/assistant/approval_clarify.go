@@ -99,8 +99,15 @@ func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op
 		// A deleted or unreadable origin stays prepared so clarify returns that exact
 		// error rather than disguising it as a different fallback.
 		if err := s.conversationAvailable(ctx, ix.MachineID, ix.SessionID); err == nil {
-			if _, ok := s.session(ctx, ix.MachineID, ix.SessionID); !ok {
-				live = false
+			// The latest complete session list already answers the common case;
+			// ask the node only when that list does not contain the conversation.
+			s.fleet.mu.Lock()
+			_, listed := s.fleet.prev[ix.MachineID][ix.SessionID]
+			s.fleet.mu.Unlock()
+			if !listed {
+				if _, ok := s.session(ctx, ix.MachineID, ix.SessionID); !ok {
+					live = false
+				}
 			}
 		}
 	}
