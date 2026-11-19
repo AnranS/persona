@@ -490,7 +490,9 @@ The driver runs in its own goroutine (`kbHistoryLoop`, never inside the knowledg
 6. the connector archives into the knowledge base now and declares `history` (`connectors.archives`).
 
 Sources run one at a time, in the order `kb.history.sources` lists them. Everything is on disk, so a redeploy at any time loses nothing: a restart takes the lock again, backs up,
-and goes on from each chat's state and at the pace it had (a rest or pause under way is waited out first; "Pacing").
+and goes on from each chat's state and at the pace it had (a rest or pause under way is waited out first; "Pacing"). A shutdown is no stop either: a write or save of the
+import's own that fails once the run's context has ended (whatever the error says) ends the run without saving the page's state, and the next start reads that page again,
+which adds nothing twice; one that fails while the run goes on still stops (`write_failed`, `state_save_failed`, `anchors_save_failed`, `plan_save_failed`; #10975).
 
 #### Plans (`history/plan-<source>.json`)
 
@@ -803,7 +805,7 @@ chat's progress, each Agent's last words, to-do conclusions) and chat summaries,
   events (`kb.changed` with kind `topics`) like the other kinds, through the app API, the assistant's `kb_list` / `kb_get` / `kb_search` and the extension `kb.*` RPC. `kb.recent`
   does not include them by default (it is what came in, and topics are derived). The web shows them under Knowledge › Topics and in the knowledge map (`docs/web/web.md`); the iPhone
   and iPad too (#7251: Knowledge › Topics, a topic's points by subtopic, a point in a sheet, and the map as an outline, with a detail
-  column where there is room; `docs/design/DESIGN_SYSTEM.md` "Knowledge map outline"). The Android app does not show the kind yet and skips it.
+  column where there is room; `docs/design/DESIGN_SYSTEM.md` "Knowledge map outline"). The Android app shows them too (#7678: Knowledge › Topics, a topic's points by subtopic, a point in a sheet, and the map as an outline; `docs/android/android.md` "Inbox AI drafting and handoff; knowledge base categories, entries and tagging"), without the web's graph canvas.
 - **Deleting a source** removes the points that came only from it ("Deleting a connector's saved knowledge" above).
 
 ## Who uses it
