@@ -118,10 +118,12 @@ type Machine struct {
 	unsettled map[string]bool
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
-	// failed.
+	// failed. deployDone closes and deployOutcome records every result, including one the card does not retain.
 	deploying       bool
 	deployErr       string
 	deployPhase     string
+	deployDone      chan struct{}
+	deployOutcome   error
 	deployPreflight *nodeDeployPreflight
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string

@@ -116,7 +116,7 @@ func (m *Machine) startRPCDeployment(pkg nodePackage, saved *nodeDeployRecord) e
 		m.mu.Unlock()
 		return err
 	}
-	m.deploying, m.deployErr, m.deployPhase = true, "", "waiting_idle"
+	m.beginDeployLocked("waiting_idle")
 	m.mu.Unlock()
 	record := nodeDeployRecord{Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC(), Fallback: pkg.Fallback}
 	if saved != nil {
@@ -124,10 +124,11 @@ func (m *Machine) startRPCDeployment(pkg nodePackage, saved *nodeDeployRecord) e
 	}
 	ctx := m.d.deployContext()
 	if err := m.saveDeployRecord(ctx, record); err != nil {
+		err = explain(i18n.Err("devices-deploy.save_task_failed", i18n.Args{"err": err.Error()}), err)
 		m.mu.Lock()
-		m.deploying, m.deployPhase = false, ""
+		m.endDeployLocked(err)
 		m.mu.Unlock()
-		return explain(i18n.Err("devices-deploy.save_task_failed", i18n.Args{"err": err.Error()}), err)
+		return err
 	}
 	m.d.changed()
 	go m.runRPCDeployment(ctx, pkg, record)
@@ -164,7 +165,7 @@ func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record 
 		}
 	}
 	m.mu.Lock()
-	m.deploying, m.deployPhase = false, ""
+	m.endDeployLocked(err)
 	if err != nil && ctx.Err() == nil {
 		m.deployErr = err.Error()
 	}

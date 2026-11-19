@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -89,6 +90,61 @@ var errFallbackOnRedeploy = errors.New("a fallback build is sent only on Redeplo
 
 var errAutoNodeUpdatesDisabled = errors.New("automatic node upgrades are disabled")
 
+// Redeploy starts the same explicit deployment as the app's Redeploy route and waits for its outcome. Canceling the
+// caller stops only the wait: the deployment keeps its own manager context and machine-card state.
+func (d *Devices) Redeploy(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m := d.machineByID(id)
+	if m == nil {
+		return errUnknownMachine
+	}
+	if err := m.startDeploy(); err != nil {
+		return err
+	}
+	return m.waitDeploy(ctx)
+}
+
+func (m *Machine) waitDeploy(ctx context.Context) error {
+	m.mu.Lock()
+	if !m.deploying {
+		err := m.deployOutcome
+		m.mu.Unlock()
+		return err
+	}
+	done := m.deployDone
+	m.mu.Unlock()
+	if done == nil {
+		return errors.New("redeploy is running but its result cannot be awaited")
+	}
+	select {
+	case <-done:
+		m.mu.Lock()
+		err := m.deployOutcome
+		m.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("redeploy is still running; its result is not confirmed: %w", ctx.Err())
+	}
+}
+
+// beginDeployLocked starts one outcome wait for every caller that joins this deployment.
+func (m *Machine) beginDeployLocked(phase string) {
+	m.deploying, m.deployErr, m.deployPhase = true, "", phase
+	m.deployOutcome = nil
+	m.deployDone = make(chan struct{})
+}
+
+func (m *Machine) endDeployLocked(err error) {
+	m.deploying, m.deployPhase = false, ""
+	m.deployOutcome = err
+	if m.deployDone != nil {
+		close(m.deployDone)
+		m.deployDone = nil
+	}
+}
+
 // startDeploy checks a deploy can start and runs it in the background; the machine list shows its progress. It is the
 // explicit Redeploy: any build the node's platform resolves to goes, a fallback too.
 func (m *Machine) startDeploy() error { return m.startDeployOf(false) }
@@ -135,7 +191,7 @@ func (m *Machine) startDeployOf(auto bool) error {
 		m.mu.Unlock()
 		return nil
 	}
-	m.deploying, m.deployErr, m.deployPhase = true, "", "transferring"
+	m.beginDeployLocked("transferring")
 	m.mu.Unlock()
 	m.d.changed()
 	target := pkg.Version
@@ -146,7 +202,7 @@ func (m *Machine) startDeployOf(auto bool) error {
 			err = m.deploy(ctx, bin, target)
 		}
 		m.mu.Lock()
-		m.deploying, m.deployPhase = false, ""
+		m.endDeployLocked(err)
 		if err != nil {
 			m.deployErr = err.Error()
 		}
