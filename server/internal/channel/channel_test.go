@@ -61,6 +61,20 @@ func TestItemValidate(t *testing.T) {
 	}
 }
 
+// A mention channel is a host-supported contribution too: it answers in someone else's chat, and may opt into the
+// main conversation through its ordinary target setting. The other kinds remain invalid for an extension (#11130).
+func TestMentionItemValidate(t *testing.T) {
+	it := Item{ID: "examplechat", Name: "Example Chat", Kind: KindMention,
+		Capabilities: Capabilities{Format: FormatPlain, MaxText: 4000, Asks: AsksNone}}
+	if err := it.Validate(); err != nil {
+		t.Fatalf("a mention contribution: %v", err)
+	}
+	it.Kind = KindVoice
+	if err := it.Validate(); err == nil {
+		t.Fatal("a voice contribution was accepted as a channel plugin")
+	}
+}
+
 func TestTargetCheck(t *testing.T) {
 	for _, tc := range []struct {
 		t  Target
