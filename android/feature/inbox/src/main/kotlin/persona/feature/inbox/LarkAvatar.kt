@@ -9,7 +9,6 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import coil3.Image
 import coil3.SingletonImageLoader
 import coil3.compose.asPainter
@@ -25,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.ensureActive
 import persona.core.contracts.api.ConnectionState
+import persona.core.designsystem.ContentTokens
 import persona.core.designsystem.JAvatar
 
 /** The legacy thumbnail size used for a repository-bound image before Compose resolves its drawn size. */
@@ -124,6 +124,6 @@ internal fun rememberLarkAvatar(image: AuthenticatedLarkImage?, onlineSince: Lon
 
 /** A person or conversation: their picture once it has loaded, the initial of [name] until then and without one. */
 @Composable
-internal fun LarkAvatar(name: String, image: AuthenticatedLarkImage?, onlineSince: Long?, modifier: Modifier = Modifier, size: Dp = 40.dp) {
+internal fun LarkAvatar(name: String, image: AuthenticatedLarkImage?, onlineSince: Long?, modifier: Modifier = Modifier, size: Dp = ContentTokens.mediumAvatar) {
     JAvatar(name, modifier, size = size, image = rememberLarkAvatar(image, onlineSince, size))
 }
