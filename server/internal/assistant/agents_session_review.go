@@ -129,7 +129,8 @@ func (s *Service) sessionReviewRecords(ctx context.Context) ([]sessionReview, er
 		}
 		var doc sessionReviewDocument
 		if _, err := st.Setting(ctx, sessionReviewSetting, &doc); err != nil {
-			return nil, err
+			// The last acknowledged snapshot still backs cards already shown to the user; callers must honor the error.
+			return slices.Clone(b.doc.Reviews), err
 		}
 		doc.Reviews = slices.Clone(doc.Reviews)
 		b.doc, b.loaded = doc, true

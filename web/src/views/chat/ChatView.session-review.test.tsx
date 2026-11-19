@@ -27,9 +27,11 @@ import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { toast } from "../../ui/atoms";
 import { ChatView } from "./ChatView";
-import en from "../../i18n/locales/en/chat-chatview.json";
-import zhHans from "../../i18n/locales/zh-Hans/chat-chatview.json";
-import ja from "../../i18n/locales/ja/chat-chatview.json";
+import en from "../../i18n/locales/en/chat-session-review.json";
+import zhHans from "../../i18n/locales/zh-Hans/chat-session-review.json";
+import ja from "../../i18n/locales/ja/chat-session-review.json";
+
+const reviewText = (key: keyof typeof en) => t(`chat-session-review.${key}`);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -103,7 +105,7 @@ async function openMenu() {
 }
 
 function reviewItem(): HTMLButtonElement | undefined {
-  const label = t("chat-chatview.review_this_work");
+  const label = reviewText("this_work");
   return [...document.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')]
     .find((item) => item.textContent?.includes(label));
 }
@@ -132,19 +134,19 @@ describe("the explicit session-review menu entry", () => {
       name: "the source Agent is busy",
       session: row({ status: "working", state: "working" }),
       status: available,
-      reason: "chat-chatview.review_busy",
+      reason: "busy" as const,
     },
     {
       name: "a review is already running",
       session: row(),
       status: { running: true, has_changes: true },
-      reason: "chat-chatview.review_running",
+      reason: "running" as const,
     },
     {
       name: "the session has no change",
       session: row(),
       status: { running: false, has_changes: false },
-      reason: "chat-chatview.review_no_change",
+      reason: "no_change" as const,
     },
   ])("is disabled with a reason when $name", async ({ session, status, reason }) => {
     reviewStatus = status;
@@ -153,7 +155,7 @@ describe("the explicit session-review menu entry", () => {
     const item = reviewItem();
     expect(item).toBeDefined();
     expect(item!.disabled).toBe(true);
-    expect(item!.textContent).toContain(t(reason));
+    expect(item!.textContent).toContain(reviewText(reason));
     act(() => item!.click());
     await settle();
     expect(startCalls()).toHaveLength(0);
@@ -168,7 +170,7 @@ describe("the explicit session-review menu entry", () => {
     await act(async () => item!.click());
     await settle();
     expect(startCalls()).toHaveLength(1);
-    expect(vi.mocked(toast)).toHaveBeenCalledWith(t("chat-chatview.review_requested"), "ok");
+    expect(vi.mocked(toast)).toHaveBeenCalledWith(reviewText("requested"), "ok");
   });
 
   it("shows the hub's localized refusal instead of replacing it with a generic error", async () => {
@@ -182,7 +184,7 @@ describe("the explicit session-review menu entry", () => {
     await act(async () => item!.click());
     await settle();
     expect(startCalls()).toHaveLength(1);
-    expect(vi.mocked(toast)).toHaveBeenCalledWith(t("chat-chatview.review_failed", { error: refusal }), "error");
+    expect(vi.mocked(toast)).toHaveBeenCalledWith(reviewText("failed").replace("{error}", refusal), "error");
     expect(vi.mocked(toast)).not.toHaveBeenCalledWith(t("chat-chatview.review_requested"), "ok");
   });
 });
@@ -192,12 +194,14 @@ const catalogs: [string, Record<string, string>][] = [["en", en], ["zh-Hans", zh
 describe("session-review web strings", () => {
   it.each(catalogs)("ships every new menu string in %s", (_language, catalog) => {
     for (const key of [
-      "review_this_work",
-      "review_busy",
-      "review_running",
-      "review_no_change",
-      "review_requested",
-      "review_failed",
+      "this_work",
+      "busy",
+      "running",
+      "no_change",
+      "checking",
+      "starting",
+      "requested",
+      "failed",
     ]) {
       expect(catalog[key], key).toBeTypeOf("string");
       expect(catalog[key].trim(), key).not.toBe("");

@@ -7,29 +7,11 @@ import { loadSessionReview, startSessionReview, type SessionReviewStatus } from 
 import type { Interaction, Session } from "../../lib/types";
 import type { MenuItem } from "../../ui/menu-model";
 import { toast } from "../../ui/atoms";
-import { currentLanguage } from "../../i18n";
-import en from "../../i18n/locales/en/chat-session-review.json";
-import zhHans from "../../i18n/locales/zh-Hans/chat-session-review.json";
-import ja from "../../i18n/locales/ja/chat-session-review.json";
+import { t } from "../../i18n";
 
-const messages = { en, "zh-Hans": zhHans, ja } as const;
-function reviewT(key: keyof typeof en, vars?: { error: string }): string {
-  const selected = currentLanguage() === "zh-Hans" ? messages["zh-Hans"] : currentLanguage() === "ja" ? messages.ja : en;
-  const template = selected[key] ?? en[key];
-  return vars ? template.replace("{error}", vars.error) : template;
-}
-
-/** Starts a review from the synchronous fallback item, with all feedback strings in this lazy chunk. */
-export async function reviewThisWork(session: Session): Promise<void> {
-  const mid = session.machine_id;
-  const sid = session.session_id;
-  toast(reviewT("starting"), "info");
-  try {
-    await startSessionReview(mid, sid);
-    toast(reviewT("requested"), "ok");
-  } catch (e) {
-    toast(reviewT("failed", { error: errorText(e) }), "error");
-  }
+type ReviewKey = "this_work" | "busy" | "running" | "no_change" | "checking" | "starting" | "requested" | "failed";
+function reviewT(key: ReviewKey, vars?: { error: string }): string {
+  return t(`chat-session-review.${key}`, vars);
 }
 
 /** Loads the explicit session-review menu item only when ⋯ opens, keeping its API and words off the first screen. */

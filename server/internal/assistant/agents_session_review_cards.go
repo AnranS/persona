@@ -53,11 +53,24 @@ func (s *Service) sessionReviewInteractions(ctx context.Context) ([]proto.Intera
 		s.fleet.mu.Lock()
 		defer s.fleet.mu.Unlock()
 		var kept []proto.Interaction
+		seen := map[string]bool{}
 		for _, p := range s.fleet.interactions {
 			if p.ix.ToolName == sessionReviewTool {
 				kept = append(kept, p.ix)
+				seen[p.ix.ID] = true
 			}
 		}
+		now := time.Now()
+		for _, e := range reviews {
+			if seen[e.ID] || e.State != sessionReviewPending || e.Findings == "" {
+				continue
+			}
+			ix := sessionReviewInteraction(e)
+			if now.Before(ix.ExpiresAt) {
+				kept = append(kept, ix)
+			}
+		}
+		sort.Slice(kept, func(i, j int) bool { return kept[i].CreatedAt.Before(kept[j].CreatedAt) })
 		if errors.Is(err, errSessionReviewStore) {
 			return kept, true // a manager without a store has no session-review feature, not a partial snapshot
 		}
