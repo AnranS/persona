@@ -13,6 +13,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,6 +36,11 @@ import java.io.File
 @Config(sdk = [35], qualifiers = "en-w400dp-h1600dp-xhdpi")
 class NewAgentTiersTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
+
+    @After fun resetAppearance() {
+        style.value = AppStyle.Glass
+        dark.value = false
+    }
 
     private val computers = listOf(Machine("computer", "Studio", online = true))
     private val style = mutableStateOf(AppStyle.Glass)
