@@ -2,7 +2,8 @@
 // (GET /api/v1/launchers/presets: its built-in providers, then the extensions'), a compatible gateway typed by hand last.
 // A preset needs only ② the key: it is tested on its own (POST /launchers/test with the preset) and saved with
 // assign, and (3) says what now runs on it. The gateway goes (2) "Connect" (a display name in any language, address, auth, key, the
-// startup ID under "More options" where the hub makes one up, #5029; once address and key are in it fetches the models
+// startup ID under "More options" where the hub makes one up, #5029; optional request headers sit beside the checks,
+// and once address and key are in it fetches the models
 // and tests one by itself, and "Test connection" and "Fetch models" stay for doing it by hand; where the hub finds the
 // sign-in method, #5329, that check finds it, a line names it and the choice waits under "More options") (3) "Choose models"
 // (context window, thinking levels, the default; an ID typed by hand is looked up in the hub's catalog) and, for Claude Code, its tiers

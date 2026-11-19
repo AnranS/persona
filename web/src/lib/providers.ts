@@ -54,8 +54,8 @@ function metaOf(m: ReportedMeta): ReportedMeta {
   return out;
 }
 
-/** GET /api/v1/launchers' managed launcher (hub LauncherView): never the key, the headers or the environment, only
- *  has_key / has_headers / has_env; the device scope's fields (lib/provider-scope.ts) when the hub has them. */
+/** GET /api/v1/launchers' managed launcher (hub LauncherView): never key/header/env values, only
+ *  has_key / has_headers / has_env and header_names; the device scope's fields (lib/provider-scope.ts) when present. */
 export interface ProviderView extends ScopeView {
   name: string;
   /** The name it shows, in any language (one added from a preset gets the provider's). */

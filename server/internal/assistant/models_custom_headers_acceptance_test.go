@@ -164,6 +164,15 @@ func TestIssue11075DirectAPIHeadersSaveAndPrivacy(t *testing.T) {
 				if len(got.Launchers) != 1 || got.Launchers[0].HasHeaders != wantHeaders {
 					t.Fatalf("read header state: %+v", got.Launchers)
 				}
+				named := false
+				for _, name := range got.Launchers[0].HeaderNames {
+					if name == issue11075Header {
+						named = true
+					}
+				}
+				if named != wantHeaders {
+					t.Fatalf("read header names exposed the wrong state: %+v", got.Launchers[0])
+				}
 			}
 
 			original := issue11075Header + ": " + issue11075HeaderSecret + "\n" + issue11075RouteHeader + ": " + issue11075RouteValue

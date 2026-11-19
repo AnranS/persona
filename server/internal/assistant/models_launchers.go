@@ -105,7 +105,7 @@ type LauncherView struct {
 	Stale []string `json:"stale,omitempty"`
 	// Versions (builtin): Claude Code's version on each machine that said.
 	Versions map[string]string `json:"versions,omitempty"`
-	// Managed only (#2455, proto.ManagedLauncher's fields): never the headers themselves, only has_headers.
+	// Managed only (#2455, proto.ManagedLauncher's fields): never header values, only has_headers and header_names.
 	Models        []proto.ProviderModel `json:"models,omitempty"`
 	OpusModel     string                `json:"opus_model,omitempty"`
 	SonnetModel   string                `json:"sonnet_model,omitempty"`

@@ -4,7 +4,7 @@
 // replacement/removal, Chat Completions, and the runtime support or limitation said before a check.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((media: string) => ({ matches: false, media, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -48,7 +48,7 @@ let calls: Call[];
 let pending: Pending[];
 let host: HTMLDivElement;
 let root: Root;
-let saved: ReturnType<typeof vi.fn>;
+let saved: Mock<() => void>;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const text = () => document.body.textContent ?? "";
@@ -98,7 +98,7 @@ const probes = (kind: "test" | "discover") => pending.filter((r) => r.path.endsW
 const saves = () => calls.filter((c) => (c.method === "POST" && c.path === "/api/v1/launchers") || c.method === "PUT");
 
 function render(existing: Editor) {
-  root.render(<ProviderWizard existing={existing} onClose={() => {}} onSaved={saved} />);
+  root.render(<ProviderWizard existing={existing} onClose={() => {}} onSaved={() => saved()} />);
 }
 async function draw(existing: Editor) {
   act(() => render(existing));

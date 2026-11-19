@@ -224,7 +224,7 @@ type ManagedLauncher struct {
 	// SubagentForce: CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (the subagent model wins over an agent's own model:).
 	SubagentForce bool `json:"subagent_force,omitempty"`
 	// Headers: ANTHROPIC_CUSTOM_HEADERS, one "Name: value" a line. A secret like the key: sealed at rest, never sent
-	// back to clients (they see HasHeaders).
+	// back to clients (they see HasHeaders and, in the manager's LauncherView, only the configured names).
 	Headers    string `json:"headers,omitempty"`
 	HasHeaders bool   `json:"has_headers,omitempty"`
 	// Proxy / NoProxy: HTTP_PROXY and HTTPS_PROXY / NO_PROXY for the gateway.
