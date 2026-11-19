@@ -75,6 +75,55 @@ describe("a parked task in the Assistant's entries", () => {
   });
 });
 
+describe("a parked external event linked to an existing owner prompt (#10527)", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const interactionID = "ix_read_only_permission";
+  const prompt: Interaction = {
+    id: interactionID, machine_id: "box", session_id: "s1", kind: "question", created_at: at,
+    questions: [{ question: "Allow read-only access to the connector?", options: [{ label: "Allow read-only" }, { label: "Later", action: "defer" }] }],
+    delegate: { what: "Read-only connector preflight", deadline: "2026-11-10T14:00:00Z" },
+  } as Interaction;
+  const idle: Session = { machine_id: "box", session_id: "s1", title: "Connector worker", state: "idle", status: "idle", updated_at: at } as Session;
+  const todo = (id: string | undefined, released = true): Todo => ({
+    id: "todo_1", title: "Check the connector", origin: "main", created_at: at, updated_at: at,
+    agents: [{ machine_id: "box", session_id: "s1", linked_at: at, ...(released ? { released_at: "2026-11-10T08:30:00Z" } : {}) }],
+    supervision: {
+      supervisor: "main", state: "parked",
+      parked: {
+        reason: "The connector preflight needs the owner's read-only decision", until: "2026-11-14T09:00:00Z", waiting_on: "external_event", count: 1,
+        evidence: { kind: "external_event", target: "Read-only connector preflight", url: "https://example.test/connector/permissions/4", wake: "The owner answers the existing prompt", ...(id ? { interaction_id: id } : {}) },
+      },
+    },
+  } as unknown as Todo);
+  const entries = (td: Todo, interactions: Interaction[]) => assistantEntries({
+    conversation: "main", main: "main", todos: [td], sessions: [idle], interactions, plans: {}, feed: [], now: Date.parse("2026-11-10T09:00:00Z"),
+    cards: [{ id: "plan:plan_1:0", todo_id: td.id, plan_id: "plan_1", index: 0, at, updated_at: at, state: "working" }],
+  });
+
+  it("shows the exact pending prompt once after its worker is released, without duplicating an active worker's card", () => {
+    const got = entries(todo(interactionID), [prompt]);
+    expect(got.needsYou).toHaveLength(1);
+    expect(got.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_1", asks: [prompt] });
+    expect(got.parked).toEqual([]);
+    // The existing active-agent path and the explicit link must not put the same prompt on two rows or twice on one row.
+    const active = entries(todo(interactionID, false), [prompt]);
+    expect(active.needsYou).toHaveLength(1);
+    expect(active.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_1", asks: [prompt] });
+    expect(active.parked).toEqual([]);
+  });
+
+  it.each([
+    ["no interaction is linked", undefined, [prompt]],
+    ["the referenced interaction is unknown", "ix_not_pending", []],
+    ["the referenced interaction is resolved", interactionID, []],
+    ["the pending interaction belongs to another worker", interactionID, [{ ...prompt, session_id: "another-worker" }]],
+  ])("keeps the external wait Parked when %s", (_name, id, interactions) => {
+    const got = entries(todo(id), interactions);
+    expect(got.needsYou).toEqual([]);
+    expect(got.parked.map((item) => item.key)).toEqual(["task:todo_1"]);
+  });
+});
+
 describe("review dismissal with an interrupted Agent", () => {
   const at = "2026-11-10T08:00:00.123456789Z";
   const todo: Todo = {
