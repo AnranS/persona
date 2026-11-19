@@ -240,4 +240,24 @@ describe("Overview computer monitoring cards", () => {
     expect(host.querySelector("a[href='/machines/empty'] [data-testid='machine-metrics-summary']")).toBeNull();
     expect(host.querySelector("a[href='/machines/disk']")?.classList.contains("self-start")).toBe(true);
   });
+
+  it("uses the load-failure message after a no-data success and a failed refresh", async () => {
+    let failing = false;
+    vi.mocked(fetch).mockImplementation((input) => {
+      const path = String(input).split("?")[0];
+      if (path !== "/api/v1/metrics") return Promise.resolve(json({ error: "not found" }, 404));
+      if (failing) return Promise.resolve(json({ error: "monitoring unavailable" }, 503));
+      return Promise.resolve(json({ machines: [{ machine_id: "mac", online: true, latest: { t: now, disk_used: 1, disk_total: 2 }, points: [] }] }));
+    });
+    act(() => root.render(<OverviewMachineCards machines={machines.slice(0, 1)} offlineText={offlineText} />));
+    await flush();
+    expect(host.querySelector("[role=alert]")).toBeNull();
+    expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
+
+    failing = true;
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    await flush();
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("读取不到机器的监控");
+    expect(host.querySelector("[role=alert]")?.textContent).not.toContain("显示的是上次的数据");
+  });
 });

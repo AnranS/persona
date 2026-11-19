@@ -113,12 +113,13 @@ export function OverviewMachineCards({ machines, agentCounts, offlineText }: {
   // Section-level state keeps metric refreshes out of Home's Agent and task sections. No card starts work of its own.
   const { metrics, error, generation } = useMachineMetrics();
   const byMachine = useMemo(() => new Map((metrics ?? []).map((m) => [m.machine_id, m])), [metrics]);
+  const hasMonitorable = machines.some((m) => hasCurrentSample(m, byMachine.get(m.id)));
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
       {error && (
         <p role="alert" className="col-span-full flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12.5px] text-red">
           <Icon name="warning" size={14} className="mt-px shrink-0" />
-          <span className="min-w-0 break-words">{metrics ? t("machines.refresh_failed_stale", { error, seconds: 10 }) : t("machines.load_failed", { error })}</span>
+          <span className="min-w-0 break-words">{hasMonitorable ? t("machines.refresh_failed_stale", { error, seconds: 10 }) : t("machines.load_failed", { error })}</span>
         </p>
       )}
       {machines.map((m) => (
