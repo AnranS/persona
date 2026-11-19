@@ -373,8 +373,8 @@ const (
 
 // Empty says whether m has nothing to send on.
 func (m Message) Empty() bool {
-	return strings.TrimSpace(m.Text) == "" && strings.TrimSpace(m.Context) == "" && len(m.Images) == 0 && len(m.Files) == 0 && m.Quote == "" && m.Forward == "" &&
-		len(m.Unsupported) == 0
+	return strings.TrimSpace(m.Text) == "" && strings.TrimSpace(m.Context) == "" && strings.TrimSpace(m.Chat) == "" && strings.TrimSpace(m.Topic) == "" &&
+		len(m.Images) == 0 && len(m.Files) == 0 && m.Quote == "" && m.Forward == "" && len(m.Unsupported) == 0
 }
 
 // Out kinds: what a message the hub sends is.

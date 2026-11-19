@@ -508,6 +508,33 @@ func TestMentionChannelMainTurnCarriesOriginContextAndPublicCaution(t *testing.T
 	}
 }
 
+// Mention runs share the main conversation, not a reply destination. Two public topics must keep independent runs so
+// each answer returns to its own request; the existing same-channel IM folding control above is unchanged (#11130).
+func TestMentionChannelKeepsDistinctTopicsAsDistinctRuns(t *testing.T) {
+	s, _, _ := channelServiceForKind(t, channel.KindMention)
+	ctx := context.Background()
+	v := channel.View{ID: "examplechat", Name: "Example Chat", Kind: channel.KindMention, Source: channel.SourcePlugin}
+	if err := s.updateChannel(ctx, v, nil, &channel.Target{Kind: channel.TargetMain}, nil); err != nil {
+		t.Fatal(err)
+	}
+	owner := true
+	for _, m := range []channel.Message{
+		{ID: "om_a", Text: "first", Owner: &owner, Chat: "chat A", Topic: "topic A"},
+		{ID: "om_b", Text: "second", Owner: &owner, Chat: "chat B", Topic: "topic B"},
+	} {
+		if err := s.channelForward(ctx, "examplechat", m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs := s.channelRuns("examplechat")
+	if len(runs) != 2 {
+		t.Fatalf("distinct public topics folded into one reply destination: %+v", runs)
+	}
+	if runs[0].ReplyTo != "om_a" || runs[1].ReplyTo != "om_b" {
+		t.Fatalf("mention reply destinations: %+v", runs)
+	}
+}
+
 // channel.receive remains owner-only for the main-chat path. Someone else's request belongs to the extension's guest
 // conversation (whose existing main:true rejection is covered by TestGuestConversationRefusals), never to main (#11130).
 func TestMentionChannelReceiveRefusesNonOwnerForMain(t *testing.T) {

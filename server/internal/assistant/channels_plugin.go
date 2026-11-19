@@ -288,7 +288,11 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		return nil
 	}
 	text := prompts.RenderChannelMessage(in)
-	run := &channel.Run{ID: id + "_" + m.ID, Channel: id, ReplyTo: m.ID, TargetKind: channel.TargetConversation, Label: rt.label,
+	var ext map[string]string
+	if v.Kind == channel.KindMention {
+		ext = map[string]string{"chat": m.Chat, "thread": m.Topic}
+	}
+	run := &channel.Run{ID: id + "_" + m.ID, Channel: id, ReplyTo: m.ID, TargetKind: channel.TargetConversation, Label: rt.label, Ext: ext,
 		Started: time.Now().UTC(), Probe: channel.Probe(in.Text, append(slices.Clone(in.Files), in.Forward, in.Quote)...)}
 	if rt.isNew {
 		sess, err := s.Start(ctx, StartParams{Text: text, Images: images, Main: rt.main, Origin: OriginChannel, OriginRef: id, Public: v.Kind == channel.KindMention})
