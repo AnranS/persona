@@ -76,7 +76,10 @@ checks and remote digest verification succeed does stable hub publication mark
 the Release Latest; it never moves Latest to an older stable tag, and
 prereleases and other platforms never move that pointer. The uploaded checkpoint
 retains the exact verified receipt and digests, so a feed or promotion retry
-reuses it instead of rebuilding conflicting assets.
+reuses it instead of rebuilding conflicting assets or rerunning the optional
+per-tag Agent. When Darwin signing is enabled in CI, the coordinator waits for
+that job and uses its complete manifest and downloads rather than independently
+built private files; a failed job stops publication.
 
 For a Windows CLI ZIP, run `scripts/operations/windows_release.py` on Windows
 of the matching architecture before writing the artifact receipt. Include its

@@ -189,6 +189,17 @@ exec /usr/bin/curl -fsSL "http://127.0.0.1:{server.server_port}/$path" -o "$4"
             self.assertTrue(any(url.endswith('/SHA256SUMS') for url in calls))
             self.assertTrue(any('/personad-' in url for url in calls))
 
+    def test_github_latest_with_a_trailing_slash_is_also_pinned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            result = self.run_install(home, release='1.2.3', github_latest=True,
+                                      extra={'PERSONA_DL': 'https://github.com/example/project/releases/latest/download/'})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            for url in calls[1:]:
+                self.assertTrue(url.startswith('https://github.com/example/project/releases/download/v1.2.3/'), url)
+
     def test_installer_text_catalog_has_every_language(self):
         text = INSTALL.read_text(encoding='utf-8')
         match = re.search(r'^INSTALL_TEXT_KEYS="([^"]+)"$', text, re.MULTILINE)

@@ -126,14 +126,16 @@ ad-hoc signature. The job runs only when that environment supplies a Developer I
 Application identity and the notarization credentials already used by the desktop
 packages. `sign_darwin_cli.py` verifies each signature and rejects a remaining
 ad-hoc `cdhash`. The manifest is rebuilt from the signed downloads for
-verification, but this partial-platform job does not upload `latest.json`,
-`SHA256SUMS`, `VERSION` or move Latest. It uploads only signed Darwin downloads,
-without `--clobber`: an existing asset with the same digest is skipped, a missing
-one is uploaded and read back for digest verification, and different bytes are a
-conflict that stops the job. Failed-job reruns therefore resume without replacing
-verified assets. The complete hub receipt owns the indexes and promotion, and a
-digest disagreement stops publication instead of replacing a verified asset.
-This is a CI publication choice, not a local signing requirement for other builders.
+verification. When this job is enabled, it is the complete hub artifact
+producer: it uploads every archive, `install.sh`, `latest.json`, `SHA256SUMS`
+and `VERSION`, without `--clobber`. An existing asset with the same digest is
+skipped, a missing one is uploaded and read back for digest verification, and
+different bytes are a conflict that stops the job. Failed-job reruns therefore
+resume without replacing verified assets. The hub coordinator waits for this
+job, downloads and verifies that complete manifest and its files as one set,
+and promotes only after every other required platform is ready. A failed job
+stops publication; a skipped job keeps the unsigned private-build path. This is
+a CI publication choice, not a local signing requirement for other builders.
 
 The first certificate-signed build after the historical ad-hoc ones is a new
 program to macOS, so grant the privacy permissions once more. Subsequent updates

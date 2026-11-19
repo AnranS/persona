@@ -514,6 +514,10 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 # GitHub's Latest pointer can move between requests. Read its manifest once, then keep checksums and every archive on
 # that immutable tag. Other download sources retain their existing layout.
+# Normalize the supported moving-GitHub form before matching it or constructing the immutable tag URL.
+case "$DL" in
+https://github.com/*/releases/latest/download/) DL="${DL%/}" ;;
+esac
 case "$DL" in
 https://github.com/*/releases/latest/download)
 	fetch "$DL/latest.json" "$tmp/latest.json" || fail download_failed "$DL/latest.json"

@@ -221,7 +221,8 @@ def scan_gzip(path, token, out=None):
 def carries_update_url(data, update_url):
     """The exact URL, not a prefix of a longer feed path, query or fragment."""
     continuation = rb"[A-Za-z0-9._~:/?#@!$&()*+,;=%-]"
-    return re.search(re.escape(update_url.encode()) + rb"(?!" + continuation + rb")", data) is not None
+    return re.search(rb"(?<!" + continuation + rb")" + re.escape(update_url.encode()) +
+                     rb"(?!" + continuation + rb")", data) is not None
 
 
 def drop_missing_helpers(assets, state_dir):
@@ -537,6 +538,58 @@ def check_beta_manifest(assets, version):
         raise ConfigError("beta latest.json must carry this beta version/channel")
 
 
+def ci_signing_conclusion(repository, tag, gh="gh"):
+    """The signing job's conclusion, or None when this tag's workflow has no such job."""
+    runs = json.loads(subprocess.check_output(
+        [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId", "--limit", "1"],
+        text=True, timeout=60))
+    if not runs:
+        return None
+    run_id = runs[0]["databaseId"]
+    for _ in range(360):
+        data = json.loads(subprocess.check_output(
+            [gh, "api", "repos/%s/actions/runs/%s/jobs" % (repository, run_id), "--paginate"], text=True, timeout=60))
+        job = next((item for item in data.get("jobs", []) if item.get("name") == "Sign Darwin command-line programs"), None)
+        if job is None:
+            return None
+        conclusion = job.get("conclusion")
+        if conclusion in ("success", "skipped"):
+            return conclusion
+        if conclusion is not None:
+            raise ConfigError("Darwin signing job failed: " + str(conclusion))
+        time.sleep(10)
+    raise ConfigError("Darwin signing job did not complete")
+
+
+def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
+    """When signing is enabled, use its complete CI artifact set instead of an independently built private set."""
+    if config["platform"] != "hub" or ci_signing_conclusion(config["repository"], tag, gh) != "success":
+        return assets
+    directory = Path(tempfile.mkdtemp(prefix="ci-artifacts-", dir=config["state_dir"]))
+
+    def download(name):
+        subprocess.run([gh, "release", "download", tag, "--repo", config["repository"],
+                        "--pattern", name, "--dir", str(directory)], check=True, timeout=300)
+        return directory / name
+
+    manifest = json.loads(download("latest.json").read_text())
+    if manifest.get("commit") != commit:
+        raise ConfigError("CI latest.json is for another source commit")
+    names = {"latest.json", "SHA256SUMS", "VERSION", "install.sh"}
+    for group in ("files", "programs", "nodes", "links", "helpers"):
+        platforms = manifest.get(group) or {}
+        for descriptor in platforms.values():
+            items = [descriptor] if group in ("files", "links") else descriptor.values() if isinstance(descriptor, dict) else []
+            for item in items:
+                if isinstance(item, dict) and isinstance(item.get("name"), str):
+                    names.add(item["name"])
+    downloaded = {name: download(name) for name in sorted(names)}
+    result = [dict(item, path=str(downloaded[item["name"]])) if item["name"] in downloaded else item for item in assets]
+    present = {item["name"] for item in result}
+    result += [{"path": str(path), "name": name} for name, path in downloaded.items() if name not in present]
+    return result
+
+
 def finish_publication(config, tag, commit, platform, assets):
     upload(config["repository"], tag, assets)
     # Once remote digests verify, retain the exact receipt. A transient feed/promotion failure must not rebuild new
@@ -573,6 +626,7 @@ def publish_once(config, tag, commit):
     subprocess.run(command, cwd=config["worktree"], env=env, check=True)
     assets = read_receipt(Path(config["receipt"]).expanduser(), commit)
     assets = drop_missing_helpers(assets, config["state_dir"])
+    assets = use_ci_hub_artifacts(config, tag, commit, assets)
     try:
         check_windows_archives(assets, tag[1:])
     except ValueError as error:
@@ -589,6 +643,12 @@ def publish_once(config, tag, commit):
 def invoke_agent(config, tag, commit):
     if "agent" not in config:
         return publish_once(config, tag, commit)
+    state = config["state_dir"] / "state.json"
+    if state.exists():
+        previous = json.loads(state.read_text())
+        if previous.get("tag") == tag and previous.get("commit") == commit and previous.get("phase") == "uploaded":
+            assets = read_receipt(state, commit)
+            return finish_publication(config, tag, commit, config["platform"], assets)
     # Prepare the source before the Agent starts, and retain this process's lock
     # across both its decision and the deterministic publication command.
     prepare_worktree(config, commit)

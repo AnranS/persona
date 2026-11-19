@@ -172,7 +172,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          for f in build-publish/bin/*-darwin-amd64.gz build-publish/bin/*-darwin-arm64.gz; do
+          for f in build-publish/bin/*.gz build-publish/install.sh build-publish/bin/SHA256SUMS build-publish/bin/VERSION build-publish/bin/latest.json; do
             test -f "$f" || continue
             name="${f##*/}"
             local_digest="sha256:$(shasum -a 256 "$f" | awk '{print $1}')"

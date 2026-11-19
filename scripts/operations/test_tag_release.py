@@ -213,7 +213,7 @@ class TagReleaseTests(unittest.TestCase):
                 tag_release.upload("example/project", "v1.0.0", assets)
 
     def release_receipt(self, build=202611110749, binary_builds=None, update_url=None, version="0.2.1", channel=None,
-                        other_update_url=None):
+                        other_update_url=None, directory_name="receipt"):
         """A hub receipt as publish.sh leaves it: personad for this machine (a script answering version -v), one for
         another platform (bytes with its build number, as -X main.build leaves it) and latest.json over them.
         binary_builds gives a download another build (the earlier run's)."""
@@ -223,15 +223,15 @@ class TagReleaseTests(unittest.TestCase):
         other_update_url = other_update_url or update_url
         here = tag_release.host_platform()
         other = "linux-arm64" if here == "linux-amd64" else "linux-amd64"
-        directory = self.root / "receipt"
+        directory = self.root / directory_name
         directory.mkdir(exist_ok=True)
         files = {}
         for plat in (here, other):
             name = "personad-%s.gz" % plat
             n = binary_builds.get(name, build)
-            body = ((("#!/bin/sh\n# main.updateURL=%s\necho %s\necho 'channel release, build %d'\n"
+            body = ((("#!/bin/sh\n# main.updateURL %s\necho %s\necho 'channel release, build %d'\n"
                       % (update_url, version, n)) if plat == here else
-                     "\x7fELF\x00main.build\x00%d\x00main.updateURL=%s\x00the rest" % (n, other_update_url)).encode())
+                     "\x7fELF\x00main.build\x00%d\x00main.updateURL\x00%s\x00the rest" % (n, other_update_url)).encode())
             (directory / name).write_bytes(gzip.compress(body, mtime=0))
             data = (directory / name).read_bytes()
             files[plat] = {"name": name, "size": len(data), "sha256": tag_release.hashlib.sha256(data).hexdigest(),
@@ -257,8 +257,14 @@ class TagReleaseTests(unittest.TestCase):
         installer.write_text('#!/bin/sh\nDL="${PERSONA_DL:-%s}"\n' % update_url)
         return assets + [{"path": str(installer), "name": installer.name}]
 
+    def with_ci_indexes(self, assets):
+        directory = Path(assets[0]["path"]).parent
+        for name in ("VERSION", "SHA256SUMS"):
+            (directory / name).write_text(name + "\n")
+        return assets + [{"path": str(directory / name), "name": name} for name in ("VERSION", "SHA256SUMS")]
+
     def publish_receipt(self, assets, tag, platform, label, remote_manifest=None, prerelease=False, events=None,
-                        stable_tags=None, feed_error=None):
+                        stable_tags=None, feed_error=None, ci_assets=None, ci_conclusion="success"):
         """Run the real deterministic publisher with only its build command, GitHub CLI and tag-feed HTTP mocked."""
         data = json.loads(self.config_path.read_text())
         state = self.root / ("publication-" + label)
@@ -267,9 +273,10 @@ class TagReleaseTests(unittest.TestCase):
         config = self.config()
         state.mkdir(parents=True, exist_ok=True)
         Path(config["receipt"]).write_text(json.dumps({"commit": self.commit, "assets": assets}))
+        remote_source = assets if ci_assets is None else ci_assets
         remote = [{"name": item["name"],
                    "digest": "sha256:" + tag_release.hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()}
-                  for item in assets]
+                  for item in remote_source]
         events = [] if events is None else events
         stable_tags = [tag] if stable_tags is None else stable_tags
         real_run, real_output = subprocess.run, subprocess.check_output
@@ -280,12 +287,23 @@ class TagReleaseTests(unittest.TestCase):
                     events.append(("build", command))
                 return real_run(command, **kwargs)
             events.append(("github", command))
+            if command[:3] == ["gh", "release", "download"]:
+                name = command[command.index("--pattern") + 1]
+                source = next(Path(item["path"]) for item in remote_source if item["name"] == name)
+                destination = Path(command[command.index("--dir") + 1])
+                destination.mkdir(parents=True, exist_ok=True)
+                destination.joinpath(name).write_bytes(source.read_bytes())
             return subprocess.CompletedProcess(command, 0)
 
         def output(command, **kwargs):
             if not command or command[0] != "gh":
                 return real_output(command, **kwargs)
             events.append(("github", command))
+            if command[:2] == ["gh", "run"]:
+                return json.dumps([{"databaseId": 123}] if ci_assets is not None else [])
+            if command[:2] == ["gh", "api"]:
+                return json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "status": "completed",
+                                             "conclusion": ci_conclusion}]})
             if command[:3] == ["gh", "release", "list"]:
                 return json.dumps([{"tagName": name} for name in stable_tags])
             self.assertEqual(command[:3], ["gh", "release", "view"])
@@ -300,7 +318,7 @@ class TagReleaseTests(unittest.TestCase):
             if feed_error is not None:
                 raise feed_error
             if remote_manifest is None:
-                latest = next(item for item in assets if item["name"] == "latest.json")
+                latest = next(item for item in remote_source if item["name"] == "latest.json")
                 body = Path(latest["path"]).read_bytes()
             else:
                 body = json.dumps(remote_manifest).encode()
@@ -348,6 +366,12 @@ class TagReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
             self.publish_receipt(assets, "v0.2.1", "hub", "longer-update-url")
 
+    def test_hub_publication_refuses_an_update_url_nested_in_another_url(self):
+        expected = "https://github.com/example/project/releases/latest/download"
+        assets = self.release_receipt(update_url="https://stale.example.test/path/" + expected)
+        with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
+            self.publish_receipt(assets, "v0.2.1", "hub", "nested-update-url")
+
     def test_hub_publication_refuses_another_platforms_stale_update_url(self):
         assets = self.release_receipt(other_update_url="https://stale.example.test/dl")
         with self.assertRaisesRegex(tag_release.ConfigError, "(?i:update[ _]?url)"):
@@ -384,6 +408,33 @@ class TagReleaseTests(unittest.TestCase):
         self.assertEqual(len(self.release_actions(events, "edit")), 1)
         state = json.loads((self.root / "publication-retry-uploaded-receipt" / "state.json").read_text())
         self.assertEqual(state["phase"], "complete")
+
+    def test_complete_ci_hub_artifacts_replace_independent_private_builds(self):
+        local = self.with_installer(self.release_receipt(directory_name="local-receipt"),
+                                    "https://github.com/example/project/releases/latest/download")
+        ci = self.with_ci_indexes(self.with_installer(self.release_receipt(build=202611110800, directory_name="ci-receipt"),
+                                 "https://github.com/example/project/releases/latest/download"))
+        latest = next(item for item in ci if item["name"] == "latest.json")
+        manifest = json.loads(Path(latest["path"]).read_text())
+        manifest["commit"] = self.commit
+        Path(latest["path"]).write_text(json.dumps(manifest))
+        events = self.publish_receipt(local, "v0.2.1", "hub", "complete-ci-hub", ci_assets=ci)
+        downloads = [command for kind, command in events if kind == "github" and command[:3] == ["gh", "release", "download"]]
+        self.assertTrue(downloads)
+        state = json.loads((self.root / "publication-complete-ci-hub" / "state.json").read_text())
+        self.assertEqual(state["phase"], "complete")
+        self.assertTrue(any("ci-artifacts-" in item["path"] for item in state["assets"]))
+        self.assertEqual(len(self.release_actions(events, "edit")), 1)
+
+    def test_failed_ci_signing_stops_hub_publication(self):
+        local = self.release_receipt(directory_name="local-receipt")
+        ci = self.release_receipt(directory_name="ci-receipt")
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "(?i:darwin|signing)"):
+            self.publish_receipt(local, "v0.2.1", "hub", "failed-ci-hub", ci_assets=ci,
+                                 ci_conclusion="failure", events=events)
+        self.assertFalse(any(kind == "upload" for kind, _ in events))
+        self.assertEqual(self.release_actions(events, "edit"), [])
 
     def test_uploaded_tag_manifest_must_match_version_and_build_before_latest_promotion(self):
         assets = self.release_receipt()
@@ -609,7 +660,9 @@ class TagReleaseTests(unittest.TestCase):
         receipt = Path(config["receipt"])
         receipt.parent.mkdir(parents=True, exist_ok=True)
         receipt.write_text(json.dumps({"commit": self.commit, "assets": assets}))
-        with patch.object(tag_release, "prepare_worktree", side_effect=lambda config, commit: config["worktree"].mkdir()), patch.object(tag_release, "upload") as upload:
+        with patch.object(tag_release, "prepare_worktree", side_effect=lambda config, commit: config["worktree"].mkdir()), \
+                patch.object(tag_release, "ci_signing_conclusion", return_value=None), \
+                patch.object(tag_release, "upload") as upload:
             with self.assertRaisesRegex(tag_release.ConfigError, "another build"):
                 tag_release.publish_once(config, "v0.2.1", self.commit)
             upload.assert_not_called()
@@ -671,6 +724,23 @@ class TagReleaseTests(unittest.TestCase):
         with patch.object(tag_release, "prepare_worktree") as prepare:
             tag_release.publish_once(config, "v1.0.0", self.commit)
             prepare.assert_not_called()
+
+    def test_uploaded_checkpoint_skips_the_optional_agent(self):
+        data = json.loads(self.config_path.read_text())
+        data.update(platform="hub", agent=["/usr/bin/true", "{prompt_file}", "{log_file}"])
+        self.config_path.write_text(json.dumps(data))
+        config = self.config()
+        tag_release.write_state(config["state_dir"] / "state.json", {
+            "tag": "v0.2.1", "commit": self.commit, "platform": "hub", "phase": "uploaded",
+            "store_verified": True, "assets": [],
+        })
+        with patch.object(tag_release, "prepare_worktree") as prepare, \
+                patch.object(tag_release.subprocess, "run") as run, \
+                patch.object(tag_release, "finish_publication", return_value=0) as finish:
+            tag_release.invoke_agent(config, "v0.2.1", self.commit)
+        prepare.assert_not_called()
+        run.assert_not_called()
+        finish.assert_called_once()
 
     def test_agent_runs_under_lock_before_the_deterministic_publisher(self):
         data = json.loads(self.config_path.read_text())

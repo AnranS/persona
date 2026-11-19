@@ -568,7 +568,10 @@ A private configuration has only these fields, with no secrets:
   `personad` must contain the exact GitHub update base used by the Release's
   `install.sh`, and the installer's own `DL` default is checked too;
   `publish.sh` renders that installer from the same base it compiles into the
-  binaries. The downloads go up first; `VERSION`, `SHA256SUMS`, `android.json`
+  binaries. When Darwin signing is enabled in CI, the coordinator waits for
+  that job and downloads its complete manifest and artifacts instead of mixing
+  independently built files; a skipped job keeps the private build, and a
+  failed job stops publication. The downloads go up first; `VERSION`, `SHA256SUMS`, `android.json`
   and then `latest.json` go last, each on its own, so a hub reading
   `releases/latest/download` never sees a manifest whose files are not there
   yet. After remote digest verification, stable hub publication fetches the
