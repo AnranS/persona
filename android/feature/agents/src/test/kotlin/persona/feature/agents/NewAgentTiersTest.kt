@@ -163,6 +163,7 @@ class NewAgentTiersTest {
     @Test fun offeredPresetFillsFieldsAndManualEditsUnmarkItBeforeReselectionRestoresIt() {
         val service = service()
         val model = show(service)
+        assertEquals(2, model.state.value.tiers.size)
         try {
             scrollTo("review")
             rule.onNodeWithText("Performance").assertExists()
@@ -233,6 +234,10 @@ class NewAgentTiersTest {
                 model.state.value.selection.launcher == "fast" && model.state.value.model == "m-review" &&
                     model.state.value.models.loading
             }
+            rule.onNodeWithText(rule.activity.getString(R.string.agents_new_start)).assertIsNotEnabled()
+            assertTrue(service.requests.isEmpty())
+            gate.complete(Unit)
+            rule.waitUntil(10_000) { startable(model.state.value, computers) }
             val request = start(model, service)
             assertEquals("fast", request.launcher)
             assertEquals("m-review", request.model)

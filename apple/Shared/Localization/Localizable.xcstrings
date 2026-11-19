@@ -65657,6 +65657,29 @@
       },
       "extractionState" : "manual"
     },
+    "Effort %@ [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Effort %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考の強さ %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考强度 %@"
+          }
+        }
+      }
+    },
     "Every %@" : {
       "localizations" : {
         "en" : {
@@ -89264,6 +89287,29 @@
       },
       "extractionState" : "manual"
     },
+    "Loading the preset's model options…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading the preset's model options…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットのモデルオプションを読み込み中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在载入预设的模型选项…"
+          }
+        }
+      }
+    },
     "Loading timed out" : {
       "localizations" : {
         "en" : {
@@ -95398,6 +95444,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Model %@ [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデル %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型 %@"
+          }
+        }
+      }
     },
     "Model [Assistant View c98e11]" : {
       "localizations" : {
@@ -109496,6 +109565,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Not used here: %@. The launcher or model's own settings apply. [Agent Preset Compatibility]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not used here: %@. The launcher or model's own settings apply."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここでは使えません：%@。ランチャーまたはモデル自身の設定が適用されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里用不上：%@，会按启动器或模型自己的设置运行。"
+          }
+        }
+      }
     },
     "Not valid JSON, showing as text: %@" : {
       "localizations" : {
@@ -124731,6 +124823,29 @@
         }
       }
     },
+    "Picking a preset fills the launcher, model and thinking effort for this start." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picking a preset fills the launcher, model and thinking effort for this start."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセットを選ぶと、今回の開始に使うランチャー、モデル、思考の強さが入力されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择预设会填入本次启动的启动器、模型和思考强度。"
+          }
+        }
+      }
+    },
     "Picking one fills it in; it's sent only when you tap Send" : {
       "localizations" : {
         "en" : {
@@ -126221,6 +126336,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "準備中…"
+          }
+        }
+      }
+    },
+    "Preset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设"
+          }
+        }
+      }
+    },
+    "Preset %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preset %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プリセット %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设 %@"
           }
         }
       }
