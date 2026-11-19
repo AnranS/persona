@@ -68,8 +68,8 @@ class HubLinksTest {
     }
 
     @Test fun leavesPagesWithoutAScreenToTheWeb() {
-        listOf("/s/m1", "/s/m1/abc-1/more", "/kb/people/x", "/terminal", "/admin", "/api/v1/sessions", "/assets/app.js",
-            "/persona/abc/more", "/todos/a/b", "/extension/x/y").forEach { assertNull(it, page("$hub$it")) }
+        listOf("/s/m1", "/s/m1/abc-1/more", "/kb/spells/x", "/terminal", "/admin", "/api/v1/sessions", "/assets/app.js",
+            "/persona/abc/more", "/todos/a/b", "/extension/x").forEach { assertNull(it, page("$hub$it")) }
     }
 
     @Test fun onlyOnTheHubsOwnAddresses() {

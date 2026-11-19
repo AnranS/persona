@@ -132,6 +132,39 @@ class ChatLinksTest {
         assertNull(ChatLinks.appLink("https://example.com/session/m/s"))
     }
 
+    @Test fun routeTableAppLinksInMessagesNameTheirNativePage() {
+        val session = mapOf("page" to "session", "machine" to "m", "session" to "s 1", "at" to "item#2")
+        val todo = mapOf("page" to "todo", "id" to "t-19")
+        val knowledge = mapOf("page" to "knowledge-entry", "kind" to "docs", "id" to "notes/plan.md")
+        val extensionSettings = mapOf("page" to "settings", "tab" to "extensions", "item" to "github")
+        val extension = mapOf("page" to "extension", "extension" to "weather", "ui" to "today", "state" to "{\"d\":1}")
+        val cases = listOf(
+            "persona://open/s/m/s%201?at=item%232&token=abc" to session,
+            "persona://session/m/s%201?at=item%232" to session,
+            "persona://open/todos/t-19" to todo,
+            "persona://open?route=%2Ftodos%2Ft-19" to todo,
+            "persona://task/t-19" to todo,
+            "persona://open/kb/docs/notes%2Fplan.md" to knowledge,
+            "persona://kb/docs/notes/plan.md" to knowledge,
+            "persona://open/settings?tab=extensions&extension=github&add=1" to extensionSettings,
+            "persona://settings/extensions/github" to extensionSettings,
+            "persona://open/extension/weather/today?state=%7B%22d%22%3A1%7D" to extension,
+            "persona://extension/weather/today?state=%7B%22d%22%3A1%7D" to extension,
+        )
+        val failures = cases.mapNotNull { (link, expected) ->
+            val actual = messagePage(ChatLinks.appLink(link))
+            if (actual == expected) null else "$link: expected $expected, got $actual"
+        }
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    private fun messagePage(link: ChatAppLink?): Map<String, String>? = when (link) {
+        null -> null
+        is ChatAppLink.Session -> mapOf("page" to "session", "machine" to link.machineId, "session" to link.sessionId)
+        is ChatAppLink.Tab -> mapOf("page" to link.tab)
+        else -> error("No shared message-link fields for $link")
+    }
+
     @Test fun externalLinksAskFirstAndNeverComeBackIn() {
         assertEquals(ExternalPrompt("写邮件？", "打开邮件 App，写给 me@example.com。"), ChatLinks.externalPrompt("mailto:me@example.com?subject=hi", res))
         assertEquals(ExternalPrompt("拨打电话？", "打开拨号，号码 +86 10086。"), ChatLinks.externalPrompt("tel:+86%2010086", res))

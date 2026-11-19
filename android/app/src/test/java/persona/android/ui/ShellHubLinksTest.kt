@@ -6,7 +6,10 @@ import org.junit.Test
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantSnapshot
+import persona.core.contracts.api.KnowledgeKind
 import persona.core.navigation.*
+import persona.feature.knowledge.KnowledgeDetailRoute
+import persona.feature.knowledge.KnowledgeRoute
 
 class ShellHubLinksTest {
     private val hub = "https://hub.example.com"
@@ -78,15 +81,71 @@ class ShellHubLinksTest {
     }
 
     @Test fun tasksAndPages() {
+        assertTrue(open("$hub/todos/todo_1"))
         assertTrue(open("$hub/todos?id=todo_1"))
+        assertTrue(open("persona://open/todos/todo_1"))
+        assertTrue(open("persona://task/todo_1"))
         assertTrue(open("$hub/inbox/item-1"))
         assertTrue(open("$hub/agents"))
-        assertEquals(listOf(TodoDetailRoute("todo_1"), InboxItemRoute("item-1"), AgentsRoute), opened)
+        assertEquals(listOf(
+            TodoDetailRoute("todo_1"), TodoDetailRoute("todo_1"), TodoDetailRoute("todo_1"), TodoDetailRoute("todo_1"),
+            InboxItemRoute("item-1"), AgentsRoute,
+        ), opened)
+    }
+
+    @Test fun knowledgeEntriesOpenTheExistingReaderForEveryEquivalentLink() {
+        val cases = listOf(
+            KnowledgeDetailRoute(KnowledgeKind.Docs, "notes/plan.md") to listOf(
+                "$hub/kb/docs/notes%2Fplan.md", "persona://open/kb/docs/notes%2Fplan.md", "persona://kb/docs/notes/plan.md",
+            ),
+            KnowledgeDetailRoute(KnowledgeKind.Meetings, "m-31") to listOf(
+                "$hub/kb/meetings/m-31", "persona://open/kb/meetings/m-31",
+            ),
+            KnowledgeDetailRoute(KnowledgeKind.Recordings, "rec 5") to listOf(
+                "$hub/kb/recordings/rec%205", "persona://open/kb/recordings/rec%205",
+            ),
+        )
+        for ((route, links) in cases) for (link in links) assertOpens(link, route)
+        assertOpens("$hub/kb", KnowledgeRoute)
+        assertOpens("persona://open/kb", KnowledgeRoute)
+    }
+
+    @Test fun extensionPagesAndSettingsOpenTheExistingRoutesForEveryEquivalentLink() {
+        val page = ExtensionUiRoute("weather", "today", "", state = "{\"d\":1}")
+        for (link in listOf(
+            "$hub/extension/weather/today?state=%7B%22d%22%3A1%7D",
+            "$hub/plugin/weather/today?state=%7B%22d%22%3A1%7D",
+            "persona://open/extension/weather/today?state=%7B%22d%22%3A1%7D",
+            "persona://extension/weather/today?state=%7B%22d%22%3A1%7D",
+        )) assertOpens(link, page)
+        for (link in listOf(
+            "$hub/settings?tab=extensions&extension=github",
+            "persona://open/settings?tab=extensions&extension=github&add=1",
+            "persona://settings/extensions/github",
+        )) assertOpens(link, ExtensionRoute("github"))
+    }
+
+    @Test fun canonicalAndOlderAgentLinksKeepTheirMessageAnchor() {
+        MessageJumps.take("m1", "abc-1")
+        for (link in listOf(
+            "persona://open/s/m1/abc-1?at=item%231&token=abc",
+            "persona://session/m1/abc-1?at=item%231",
+        )) {
+            assertOpens(link, ChatRoute("m1", "abc-1"))
+            assertEquals(link, MessageJumps.Jump("m1", "abc-1", "item#1"), MessageJumps.pending)
+            assertEquals(link, "item#1", MessageJumps.take("m1", "abc-1"))
+        }
+    }
+
+    private fun assertOpens(link: String, route: NavKey) {
+        opened.clear()
+        assertTrue(link, open(link))
+        assertEquals(link, listOf(route), opened)
     }
 
     @Test fun otherLinksAreLeftToTheSheet() {
         assertFalse(open("https://other.example.com/s/m1/abc-1"))
-        assertFalse(open("$hub/kb/people/x"))
+        assertFalse(open("$hub/kb/spells/x"))
         assertFalse(open("https://hub.example.com:8443/s/m1/abc-1"))
         assertTrue(opened.isEmpty() && tabs.isEmpty())
     }
