@@ -71,9 +71,17 @@ data class QuietHours(
     }
 }
 
-/** Bound to one pairing; preferenceDeviceId is the ID used by notification registration. */
-data class BrowserLoginDetails(val name: String, val source: String, val ageSeconds: Int)
+/** A browser sign-in request as this device sees it. [number] is present only for the device that allowed it. */
+data class BrowserLoginDetails(
+    val name: String,
+    val source: String,
+    val ageSeconds: Int,
+    val state: String = "scanned",
+    val network: String? = null,
+    val number: String? = null,
+)
 
+/** Bound to one pairing; preferenceDeviceId is the ID used by notification registration. */
 interface DeviceSettings {
     suspend fun browserLogin(id: String, hub: String, allow: Boolean? = null): BrowserLoginDetails =
         throw UnsupportedOperationException("browser-login")
