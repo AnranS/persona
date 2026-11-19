@@ -191,6 +191,7 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         for step in (build, manifest):
             self.assertEqual(step["env"]["VERSION"], "${{ needs.desktop-gate.outputs.version }}")
             self.assertEqual(step["env"]["RELEASE_CHANNEL"], "${{ contains(github.ref_name, '-') && 'beta' || 'release' }}")
+        self.assertEqual(build["env"]["PERSONA_RELEASE_BUILD"], "${{ steps.resume.outputs.number }}")
         upload = next(step for step in steps if "gh release upload" in step.get("run", ""))
         self.assertEqual(upload["env"]["RELEASE_TAG"], "${{ github.ref_name }}")
         self.assertEqual(job["if"], "needs.desktop-gate.outputs.darwin_cli == 'true'")
@@ -219,7 +220,7 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
                 archive = f"build-publish/bin/{program}-darwin-{architecture}.gz"
                 with self.subTest(archive=archive):
                     self.assertTrue(any(fnmatch.fnmatchcase(archive, pattern) for pattern in patterns), archive)
-        for metadata in ("latest.json", "SHA256SUMS", "VERSION"):
+        for metadata in ("ci-latest.json", "VERSION"):
             self.assertIn(f"build-publish/bin/{metadata}", upload["run"])
         self.assertIn(".digest", upload["run"])
         # A missing certificate makes the whole build/sign/upload job skip; there is no ad-hoc upload fallback.
@@ -259,7 +260,7 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         create = next(step for step in self.jobs["publish"]["steps"] if step.get("name") == "Create GitHub Release")
         self.assertIn('if [[ "$RELEASE_TAG" == *-* ]]; then', create["run"])
         self.assertIn("args+=(--prerelease)", create["run"])
-        self.assertNotIn("--latest", create["run"])
+        self.assertIn("args=(--latest=false ", create["run"])
         self.assertEqual(self.jobs["darwin-cli-sign"]["if"], "needs.desktop-gate.outputs.darwin_cli == 'true'")
 
     def test_cli_gate_uses_presence_only_and_signing_stays_in_protected_environment(self):
