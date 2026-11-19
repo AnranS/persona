@@ -43,7 +43,7 @@ type Outcome struct {
 }
 
 // ClarifyingText explicitly prevents the model from issuing an equivalent card.
-const ClarifyingText = "The owner asked a question about this approval. This is not an approval decision, and nothing changed. The question is being delivered as a separate owner message; answer that message when it arrives, not this tool result. The original approval card remains valid and is still pending; do not retry the tool or create another approval. A later message will report the original card's final outcome."
+const ClarifyingText = "The owner asked a question about this approval. It is not an approval decision and nothing changed. The question arrives as a separate owner message; answer it then. The card remains valid; do not retry or recreate it. A later message reports its outcome."
 
 // WaitingText is the original tool call's non-final result when the owner has not answered within the card's decision
 // window: the card stays pending on the owner's apps (the Persona app and the web), where they can still approve it,

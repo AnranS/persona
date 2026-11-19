@@ -91,7 +91,7 @@ func providerRepositoryCard(binding RepositoryBinding) json.RawMessage {
 // repositoryAddNotApplied marks only failures proven to precede card creation and Apply.
 // saveRepository and other Apply errors deliberately keep their original uncertainty.
 func repositoryAddNotApplied(err error) error {
-	return fmt.Errorf("%w: %w; nothing was applied", approvalops.ErrNotApplied, err)
+	return fmt.Errorf("%w; nothing was applied (%w)", err, approvalops.ErrNotApplied)
 }
 
 func (s *Service) repositoryToolError(ctx context.Context, err error) error {

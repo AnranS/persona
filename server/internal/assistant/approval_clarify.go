@@ -96,10 +96,12 @@ func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op
 	if live {
 		// Clarification needs an exact live conversation for the owner's question
 		// and its answer. Unavailable origins retain the older one-shot card instead.
-		if err := s.conversationAvailable(ctx, ix.MachineID, ix.SessionID); err != nil {
-			live = false
-		} else if _, ok := s.session(ctx, ix.MachineID, ix.SessionID); !ok {
-			live = false
+		// A deleted or unreadable origin stays prepared so clarify returns that exact
+		// error rather than disguising it as a different fallback.
+		if err := s.conversationAvailable(ctx, ix.MachineID, ix.SessionID); err == nil {
+			if _, ok := s.session(ctx, ix.MachineID, ix.SessionID); !ok {
+				live = false
+			}
 		}
 	}
 	if !live {
