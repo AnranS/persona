@@ -54,7 +54,7 @@ const metrics: MachineMetrics[] = [
   { machine_id: "new", online: true, points: [] },
   { machine_id: "pending", online: true, latest: sample, points },
 ];
-const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
+const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const offlineText = (machine: Machine) => machine.error || "Offline";
 
 let host: HTMLDivElement;
@@ -170,5 +170,32 @@ describe("Overview computer monitoring cards", () => {
     expect(option("卡片").getAttribute("aria-checked")).toBe("true");
     expect(metricCalls()).toHaveLength(2);
     expect(host.querySelectorAll("[data-testid='machine-metrics-summary'] svg")).toHaveLength(3);
+  });
+
+  it("reports a failed load and marks last-good monitoring stale during a failed refresh", async () => {
+    let failing = true;
+    vi.mocked(fetch).mockImplementation((input) => {
+      const path = String(input).split("?")[0];
+      if (path === "/api/v1/metrics") return Promise.resolve(failing ? json({ error: "monitoring unavailable" }, 503) : json({ machines: metrics }));
+      return Promise.resolve(json({ error: "not found" }, 404));
+    });
+    act(() => root.render(<OverviewMachineCards machines={machines} agentCounts={new Map([["mac", 2]])} offlineText={offlineText} />));
+    await flush();
+
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("读取不到机器的监控");
+    expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
+
+    failing = false;
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    await flush();
+    expect(host.querySelector("[role=alert]")).toBeNull();
+    expect(host.querySelector("[data-testid='machine-metrics-summary']")).not.toBeNull();
+
+    failing = true;
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    await flush();
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("显示的是上次的数据");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("10");
+    expect(host.querySelector("[data-testid='machine-metrics-summary']")?.textContent).toContain("42%");
   });
 });
