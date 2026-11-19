@@ -180,6 +180,9 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
+	if err := s.checkRequestStart(ctx, *t); err != nil {
+		return "", "", err
+	}
 	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	if err := t.normalizeMachinePolicy(); err != nil {
 		return "", "", err
@@ -293,6 +296,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			})
 		}
 	}
+	if err := s.checkRequestStart(ctx, *t); err != nil {
+		return "", "", err
+	}
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
 	}
@@ -352,7 +358,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.Attachments)+len(t.Mentioned) > 0 {
 		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
 	}
+	// A to-do's stored pictures go with every start for it, as they go with the app's manual handoffs (#11084).
+	// The node decodes them on this machine; any pictures the owner attached to this turn stay in the prompt too.
+	if t.TodoID != "" {
+		if current, ok := s.todoNow(t.TodoID); ok && len(current.Images) > 0 {
+			rows, err := s.todoImageContents(ctx, current)
+			if err != nil {
+				return "", "", err
+			}
+			params["images"] = todoProtoImages(rows)
+		}
+	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	if t.WaitInputID != "" {
+		params["client_msg_id"] = t.WaitInputID
+	}
 	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
 		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
 	}
@@ -403,6 +423,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.checkContinuationScope(t); err != nil {
 		return "", "", err
 	}
+	if err := s.checkRequestStart(ctx, *t); err != nil {
+		return "", "", err
+	}
 	sentAt := time.Now()
 	err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 	// Extras the agent it landed on cannot have (ultracode #3596, a start goal: start_defaults.go) are each dropped
@@ -419,6 +442,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
 			}
+			if err := s.checkRequestStart(ctx, *t); err != nil {
+				return "", "", err
+			}
 			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 			continue
 		}
@@ -429,6 +455,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
 			}
+			if err := s.checkRequestStart(ctx, *t); err != nil {
+				return "", "", err
+			}
 			err = s.call(ctx, m.ID, DeviceSessionStart, params, &res)
 			continue
 		}
@@ -437,6 +466,17 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		if startResultUnknown(err) {
+			if t.RequestGate != "" {
+				if expectID != "" {
+					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
+					session, found := s.adoptStartedSession(lookup, m, s.startLauncher(ctx, picked), t.Cwd, expectID, nil)
+					cancel()
+					if found {
+						return m.ID, session.SessionID, nil
+					}
+				}
+				return "", "", err
+			}
 			// The node may still have built the tab and launched the agent. Ask the machine itself before this is
 			// called a failure: an adopted session returns through the normal success path, so the task is linked
 			// once, with no failure receipt, retry or reroute (and no duplicate agent on another computer, #6540).
