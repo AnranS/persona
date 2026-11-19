@@ -118,10 +118,11 @@ type Machine struct {
 	unsettled map[string]bool
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
-	// failed.
+	// failed. deployRun ties each waiter to one run's outcome, including one the card does not retain.
 	deploying       bool
 	deployErr       string
 	deployPhase     string
+	deployRun       *deployRun
 	deployPreflight *nodeDeployPreflight
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
@@ -691,6 +692,20 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	}
 	if nodeHas(info, nodeproto.OwnerControls) {
 		method = ownerControlMethod(ctx, method)
+	}
+	if method == "session.send" {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		rebuilt, source, err := sourcePermissionParams(ctx, raw, nodeHas(info, nodeproto.SourcePermissions))
+		if err != nil {
+			return err
+		}
+		params = json.RawMessage(rebuilt)
+		if source {
+			method = nodeproto.SourceSend
+		}
 	}
 	if dial, ok := params.(devicewire.PortDial); method == devicewire.MethodPortDial && ok && dial.ID != "" {
 		return m.callPortDial(ctx, p, dial, out)
