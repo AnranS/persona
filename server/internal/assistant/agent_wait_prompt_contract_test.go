@@ -49,7 +49,6 @@ func TestAgentWaitPromptContract(t *testing.T) {
 		tools[tool.Name] = i
 	}
 
-	sharedInstructions := waitPromptSharedInstructions(t)
 	for _, name := range []string{"agent_send", "agent_start", "task_plan"} {
 		i, ok := tools[name]
 		if !ok {
@@ -84,17 +83,21 @@ func TestAgentWaitPromptContract(t *testing.T) {
 				}
 			}
 
-			// The contract may live in shared instructions, the tool description, the schema description, or a
-			// combination of them. Checking their union allows shorter shared wording and moves between watched pieces.
-			allGuidance := tool.Description + "\n" + wait.Description + "\n" + sharedInstructions
+			guidance := waitSecondsPromptGuidance(tool.Description)
+			if guidance == "" {
+				t.Fatal("tool description has no wait_seconds guidance paragraph")
+			}
+			// Health conversations use these tools without the shared assistant instructions. Keep the whole
+			// contract in each tool rather than letting an unrelated shared variant satisfy these checks.
+			allGuidance := guidance + "\n" + wait.Description
 
 			requireWaitPromptClause(t, allGuidance, "omission and zero preserve the ordinary receipt",
 				`omit(?:ted|ting)?|omission|absent`, `zero|\b0\b`, `receipt`, `ordinary|current|normal|usual|immediate|unchanged|only|keep|retain|preserve|return`)
 			requireWaitPromptClause(t, allGuidance, "positive waits observe for at most 50 seconds after dispatch",
 				`wait_seconds`, `observ\w*`, `at most|up to|capp?ed|max(?:imum)?\b`, `50\s*(?:seconds|s\b)`, `dispatch`)
 			requireWaitPromptClause(t, allGuidance, "inline observation", `inline`, `observ\w*|result`)
-			requireWaitPromptClause(t, allGuidance, "a completed reply", `observ\w*|inline`, `completed`, `reply`)
-			requireWaitPromptClause(t, allGuidance, "an existing question reference", `observ\w*|inline`, `question`, `interaction_id|interaction(?: question)? reference`)
+			requireWaitPromptClause(t, allGuidance, "this input's completed reply", `completed`, `this\s+input(?:'s|s’)?`, `reply`)
+			requireWaitPromptClause(t, allGuidance, "an existing question reference", `question`, `pending|existing`, `interaction_id|question reference`)
 			for _, state := range []string{"timeout", "cancelled", "unavailable", "interrupted", "failed"} {
 				requireWaitPromptClause(t, allGuidance, "the "+state+" result", `observ\w*|inline`, `\b`+state+`\b`)
 			}
@@ -110,8 +113,7 @@ func TestAgentWaitPromptContract(t *testing.T) {
 				{"resending input", []string{`re-?send\w*|resend\w*`}},
 				{"cancelling work", []string{`cancel\w*`}},
 			} {
-				requireWaitPromptClause(t, allGuidance, "observation never performs "+forbidden.action,
-					append([]string{`never|\bno\b|\bnot\b|without|must\s+not`}, forbidden.patterns...)...)
+				requireWaitPromptForbiddenClause(t, allGuidance, forbidden.action, forbidden.patterns...)
 			}
 			requireWaitPromptClause(t, allGuidance, "normal supervision still applies",
 				`supervis\w*`, `task_review`, `normal|usual|still|continu\w*|remain\w*|appl\w*`)
@@ -125,30 +127,44 @@ func TestAgentWaitPromptContract(t *testing.T) {
 	}
 }
 
-// waitPromptSharedInstructions includes every generated shared-instructions variant, so a rule can move to the
-// common guidance without the contract test depending on which assistant prompt carries it.
-func waitPromptSharedInstructions(t *testing.T) string {
-	t.Helper()
-	paths, err := filepath.Glob(filepath.Join("testdata", "prompts", "assistant_claude_md.*.golden"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(paths) == 0 {
-		t.Fatal("no assistant shared instruction goldens found")
-	}
-	var instructions strings.Builder
-	for _, path := range paths {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
+// waitSecondsPromptGuidance starts at the wait_seconds paragraph so unrelated failures or replies earlier in a long
+// tool description cannot satisfy the observation contract.
+func waitSecondsPromptGuidance(description string) string {
+	paragraphs := strings.Split(description, "\n\n")
+	for i, paragraph := range paragraphs {
+		if strings.Contains(paragraph, "wait_seconds") {
+			return strings.Join(paragraphs[i:], "\n\n")
 		}
-		instructions.Write(raw)
-		instructions.WriteByte('\n')
 	}
-	return instructions.String()
+	return ""
 }
 
-var waitPromptClauseBoundary = regexp.MustCompile(`[.!?](?:\s|$)|\n+`)
+var waitPromptClauseBoundary = regexp.MustCompile(`(?i)[.!?;](?:\s|$)|\n+|\b(?:but|however|except|unless)\b`)
+var waitPromptNegation = regexp.MustCompile(`(?i)never|\bno\b|\bnot\b|without|must\s+not`)
+
+// requireWaitPromptForbiddenClause keeps the negation before each forbidden action. Contrasts and semicolons end the
+// clause, so one negated action cannot make a following contradictory action pass.
+func requireWaitPromptForbiddenClause(t *testing.T, text, action string, patterns ...string) {
+	t.Helper()
+	for _, clause := range waitPromptClauseBoundary.Split(text, -1) {
+		negation := waitPromptNegation.FindStringIndex(clause)
+		if negation == nil {
+			continue
+		}
+		matches := true
+		for _, pattern := range patterns {
+			location := regexp.MustCompile(`(?i)` + pattern).FindStringIndex(clause)
+			if location == nil || location[0] < negation[0] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return
+		}
+	}
+	t.Errorf("guidance does not clearly negate %s before the action", action)
+}
 
 // requireWaitPromptClause permits compaction and reordering while keeping related ideas in the same sentence or line.
 func requireWaitPromptClause(t *testing.T, text, contract string, patterns ...string) {

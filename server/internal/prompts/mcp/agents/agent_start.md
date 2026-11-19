@@ -8,7 +8,7 @@ When the agent needs credentials the user keeps in a secret provider (a token in
 
 Give `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier: off for small work. Do not write the word "ultracode" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, an older Claude Code or a node too old for it starts without it, and the answer says so. Once Claude Code confirms it, agents_list shows `ultracode=on`. An organization policy may keep some conversations read-only: a call from such a conversation is refused with the policy's reason. Do not retry; follow the refusal.
 
-`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(`reply`), `question`(`interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.
 
 ```json
 {
@@ -48,7 +48,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
       "type": "object",
       "maxProperties": 8,
       "additionalProperties": { "type": "string" },
-      "description": "environment variables for this run from the user's secret providers: NAME → reference (op://vault/item/field), never a value; asked on a card first"
+      "description": "NAME → secret-provider reference (op://vault/item/field), never a value; card approval first"
     },
     "ultracode": {
       "type": "boolean",
