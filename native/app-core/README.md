@@ -167,7 +167,8 @@ cd android && ./gradlew :core:rustcore:test
 Android's production packaging lives in `:core:rustcore-android`, leaving the JVM/JNI replay above intact. Its pinned
 NDK 29.0.14206865 / direct LLVM build, ABI sizes, uncompressed 16 KB packaging and real device fixture replay are
 described in `android/core/rustcore-android/README.md`. `scripts/build-android.sh` produces both ABIs without
-`cargo-ndk`; the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
+`cargo-ndk` (`PERSONA_ANDROID_ABIS` and `PERSONA_ANDROID_CARGO_PROFILE` narrow a debug build; debug packages use the
+`android-dev` profile); the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
 
 ## Android continuity adapter (#7448)
 
@@ -246,8 +247,10 @@ reasons, dedicated machine/harness/project/model/pin settings and Search as Code
 descendant admits its root without becoming a separate row or count. These 27 independently derived cases extend the shared
 corpus to 60 complete `agents_list` projections without changing any older expected object. Unsupported grouping and source
 quick filters are still explicitly reported, not silently treated as parity.
-The remaining unregistered-machine and filtered-inventory discrepancy stays tracked as #9221. This is a DEBUG shadow,
-not approval to replace Swift with the core.
+With `inventory`, the core returns `filtered` and `unpinned` root ids independently of renderable groups. A nested row
+that admits the query retains its prepared parent through `nested_match`; an unregistered-machine session stays in the
+inventory without inventing a machine section. The DEBUG comparison consumes these arrays directly, and legacy fixture
+outputs omit them unless requested (#9221). This is a DEBUG shadow, not approval to replace Swift with the core.
 
 ## Android Agents-list adapter and sort shadow (#8954)
 

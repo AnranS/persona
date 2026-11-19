@@ -97,6 +97,9 @@ pub struct Session {
     /// Prepared CodexTasks descendants. They participate in query admission but never become separate rows or counts.
     #[serde(default)]
     pub search_subtasks: Vec<Session>,
+    /// The client's prepared input found a nested row that admits the current query.
+    #[serde(default)]
+    pub nested_match: bool,
     #[serde(default)]
     pub children: Option<Children>,
     #[serde(default)]
