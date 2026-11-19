@@ -182,11 +182,16 @@ Optional `wait_seconds` observes this launch or input for at most 50 seconds aft
           },
           "tier": {
             "type": "string",
-            "description": "An Agent preset: one of the tiers the snapshot's 模型档位 line lists for the profile in use, each with what it is for; pick the one whose description fits the work. Resolved when the task actually starts, with the profile in use then. Explicit launcher/model/effort override its values."
+            "description": "Agent preset from the snapshot's 模型档位 line; its description says what it is for. Resolved at dispatch with the profile in use. Explicit launcher/model/effort/speed win."
+          },
+          "speed": {
+            "type": "string",
+            "enum": ["standard", "fast", "ultrafast"],
+            "description": "new-start speed; explicit choice overrides the tier. standard/omitted: launcher default. Codex: fast, ultrafast; Claude Code: fast only"
           },
           "effort": {
             "type": "string",
-            "description": "Explicit effort override; omit to use the tier or purpose default."
+            "description": "Explicit effort; omit for tier/purpose default."
           }
         }
       }

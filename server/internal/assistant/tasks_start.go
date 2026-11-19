@@ -59,6 +59,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
 			return nil, planInvalid{err}
 		}
+		if _, err := s.fitPlanTaskSpeed(ctx, &p.Tasks[i]); err != nil {
+			return nil, planInvalid{err}
+		}
 		p.Tasks[i].Permission = strings.TrimSpace(p.Tasks[i].Permission)
 		if m, ok := s.machineByName(ctx, p.Tasks[i].Machine); ok && p.Tasks[i].Role == roleLeader && s.isWorkMachine(m.ID) {
 			return nil, planInvalid{fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only "+
