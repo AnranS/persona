@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A to-do's pictures (#11084) use the existing image input ({id,mime,data}) and private media-read contract. The
@@ -159,6 +160,28 @@ func TestTodoImagesCreateReadAndReload(t *testing.T) {
 			t.Fatalf("no-image create changed the response with %s", images)
 		}
 	})
+}
+
+// A task_plan start on the to-do uses the same stored material as the app's manual new/existing-Agent handoffs.
+func TestTodoTaskPlanCarriesImages(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	data := pngData(t, 2, 3)
+	created := decodeTodoWithImages(t, postTodoImages(t, e, "", "", map[string]any{
+		"title": "Inspect the screenshot", "images": []map[string]any{todoImageInput("d0000000-0000-4000-8000-000000000001", "image/png", data)},
+	}).Body.Bytes())
+	if _, _, err := e.s.startTaskAgent(t.Context(), &PlanTask{TodoID: created.ID, Prompt: "Read the attached picture", Machine: "server", Cwd: "/code", Readonly: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	e.f.mu.Lock()
+	starts := append([]map[string]any(nil), e.f.starts...)
+	e.f.mu.Unlock()
+	if len(starts) != 1 {
+		t.Fatalf("starts = %d, want 1", len(starts))
+	}
+	images, ok := starts[0]["images"].([]proto.Image)
+	if !ok || len(images) != 1 || images[0].Mime != "image/png" || images[0].Data != data {
+		t.Fatalf("task_plan images = %#v, want the stored PNG", starts[0]["images"])
+	}
 }
 
 func TestTodoImageValidationCreatesNothing(t *testing.T) {
