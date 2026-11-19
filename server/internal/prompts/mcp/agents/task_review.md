@@ -119,6 +119,7 @@ A non-main conversation reviewing another supervisor's task may only accept/canc
         "target": {"type": "string", "maxLength": 200, "description": "the named person/reviewer or external object"},
         "wake": {"type": "string", "maxLength": 600, "description": "the observable change that ends this wait"},
         "url": {"type": "string", "maxLength": 2000, "description": "required for merge_review (ready PR/MR link) and external_event (observable object URL); omit for person_reply and date"},
+        "interaction_id": {"type": "string", "maxLength": 200, "description": "external_event only, optional: exact pending interaction ID of this task's worker, from agents_list. The hub verifies it and shows that existing request; it never creates another card"},
         "contact": {
           "type": "object",
           "required": ["channel", "url", "sender", "sent_at", "request", "status"],

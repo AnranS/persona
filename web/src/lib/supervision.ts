@@ -33,6 +33,8 @@ export interface ParkEvidence {
   wake: string;
   contact?: ParkContact;
   ready?: boolean;
+  /** external_event only: the exact pending worker interaction the hub verified for this park. */
+  interaction_id?: string;
   /** Recording conversation, not the person who sent the request. */
   recorded_by?: string;
 }

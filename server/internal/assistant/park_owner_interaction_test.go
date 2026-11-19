@@ -99,10 +99,8 @@ func parkOwnerPrompt() proto.Interaction {
 
 func releaseParkWorker(t *testing.T, s *Service, id string) {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/todos/"+id+"/agents/box/s1", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("release the worker: %d %s", rec.Code, rec.Body.String())
+	if err := s.releaseStoppedAgents(context.Background(), id, []TodoAgent{{MachineID: "box", SessionID: "s1"}}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -226,6 +224,7 @@ func TestParkedLinkedInteractionIsOneOwnerAskAndResolvesThroughTheExistingPath(t
 	s, f, todo, store := newParkOwnerService(t)
 	ix := parkOwnerPrompt()
 	putPending(s, &pending{ix: ix, done: make(chan proto.Resolution, 1), told: true})
+	s.record(ix)
 	releaseParkWorker(t, s, todo.ID)
 	if _, err := reviewErr(s, todo.ID, parkExternalInteractionArgs("external_event", ix.ID)); err != nil {
 		t.Fatal(err)
@@ -245,7 +244,7 @@ func TestParkedLinkedInteractionIsOneOwnerAskAndResolvesThroughTheExistingPath(t
 	sends := len(sentToAgent(f))
 	body, _ := json.Marshal(map[string]any{"answers": map[string]string{ix.Questions[0].Question: "Later"}})
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(string(body))))
+	s.fleetHandler(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answering the linked prompt through its existing route: %d %s", rec.Code, rec.Body.String())
 	}
