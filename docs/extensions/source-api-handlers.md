@@ -76,7 +76,7 @@ interface SourceRouteBase {
 }
 
 interface ReadRouteDeclaration extends SourceRouteBase {
-  method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
+  method: "GET" | "HEAD" | "POST";
   effect: "read";
 }
 
@@ -115,9 +115,10 @@ A declaration, its exact method/path/schema allowlists, nonempty closed `callers
 are part of the reviewed permissions digest. Adding or widening one requires owner approval. An unsupported version,
 duplicate ID, missing schema, omitted/empty/duplicate/unknown caller class, wildcard, implicit caller or unknown budget
 profile MUST fail closed. Admission intersects the declared `callers` with the verified caller class and independent
-grant. GET and HEAD MUST be `effect: "read"`; `effect: "write"` is valid only on POST, PUT, PATCH or DELETE and
-registration rejects a write without `reconciliation_schema`. GET does not implicitly declare HEAD, and no method
-creates an implicit OPTIONS or CORS route.
+grant. GET and HEAD MUST be `effect: "read"`; read declarations are limited to GET, HEAD and query-style POST.
+PUT, PATCH and DELETE MUST be `effect: "write"`, and `effect: "write"` is valid only on POST, PUT, PATCH or DELETE.
+Registration rejects a read declaration on PUT/PATCH/DELETE and a write without `reconciliation_schema`. GET does not
+implicitly declare HEAD, and no method creates an implicit OPTIONS or CORS route.
 
 ### 2.2 Route namespace and canonical matching
 
@@ -137,9 +138,12 @@ encoded-separator, double-encoding and dot-segment normalization bypasses:
 
 1. Reject invalid percent escapes or UTF-8, NUL/control characters, backslashes, empty segments, `.`/`..`, trailing
    slashes (except the declared root), and encoded `/` or `%2f` in either case. Decode exactly once per segment.
-2. Match the exact method and decoded segment sequence against the declaration. Do not call `path.Clean`, redirect to a
+2. Revalidate every decoded segment before matching: valid UTF-8, no path separators or backslashes, no NUL/control
+   characters, nonempty, and not `.` or `..`. Thus `%2e%2e`, `%5c`, `%00` and percent-encoded invalid UTF-8 return 400
+   with no dispatch; decoding a second time is forbidden.
+3. Match the exact method and decoded segment sequence against the declaration. Do not call `path.Clean`, redirect to a
    normalized spelling, decode twice or treat a path parameter as more than one segment.
-3. Validate path, query, headers and body against the request schema allowlist before dispatch. A route/parameters
+4. Validate path, query, headers and body against the request schema allowlist before dispatch. A route/parameters
    collision or ambiguous canonical form returns 400; an undeclared route returns 404 and an undeclared method 405.
 
 A source receives no listener, Unix socket, or generic proxy capability; all three are forbidden. It also receives no
@@ -355,8 +359,8 @@ Header names are lowercased and sorted, and their validated values are canonical
 representation-, precondition-, routing- or effect-affecting header (including `If-Match`, `If-None-Match` and
 `Content-Type`) changes the fingerprint. The confirmation displays the operation, exact target and material validated
 header/body changes. The manager recomputes the payload
-fingerprint and revalidates current target state immediately before admission. A changed target, body, caller, account,
-generation, schema or current state makes the ticket stale.
+fingerprint and revalidates current target state and any monotonic target/session revision immediately before admission.
+A changed target, body, caller, account, generation, schema, current state or revision makes the ticket stale.
 
 ### 7.2 Reservation and receipt state machine
 
@@ -485,23 +489,27 @@ review; it is not silently performed here.
 Rename is separate from mode changes and targets an exact `(manager, machine, session)` tuple. The rename operation's
 bounded schema accepts only `title`: valid UTF-8, NFC-normalized, trimmed, 1–200 characters, with no control characters
 or path syntax. The manager revalidates target ownership/existence and binds the section 7 operation confirmation to that exact rename
-target, current title and requested title. Target substitution is refused. The actual rename mutation MUST either
-serialize with every other title writer under the same lock or carry an atomic expected-current-title compare-and-swap
-through the manager/node/session write. A title change between admission and mutation makes the ticket stale; a mismatch
-is a definite no-effect refusal and an indeterminate result is `unknown`. A host/session API without that atomic fence
-MUST leave source rename blocked.
+target, its monotonically changing title/session revision, current title and requested title. Target substitution is
+refused. The actual rename mutation MUST either serialize admission and mutation with every other title writer under
+the same lock or carry an atomic expected-current-revision compare-and-swap through the manager/node/session write. A
+title revision change between admission and mutation makes the ticket stale, including an A→B→A title sequence; a value
+CAS on the title alone is not an ABA-safe fence. A revision mismatch is a definite no-effect refusal and an
+indeterminate result is `unknown`. A host/session API without that atomic fence MUST leave source rename blocked.
 
 ### 9.2 Execution mode
 
 Mode elevation REQUIRES genuine explicit authorization from the account owner/user and an operation-specific, expiring
-ticket. The ticket binds the full caller, exact session, current mode, requested mode, request ID, permitted use
+ticket. The ticket binds the full caller, exact session, monotonically changing session revision, current mode,
+requested mode, request ID, permitted use
 (`session.modes` once), target installation/generation and the approving owner/device. It expires at most 60 seconds
 after issue and is stored/consumed by hash with the durable reservation.
 
-The manager reads current mode again at admission, but that check alone is insufficient. The actual session mutation
-MUST either serialize with every other mode writer under the same lock or carry an atomic current-mode compare-and-swap
-precondition through the manager/node/session write. A mode change between admission and mutation makes the ticket
-stale; a precondition mismatch is a definite no-effect refusal, while an indeterminate mutation result is `unknown`.
+The manager reads current mode and session revision again at admission, but that check alone is insufficient. The
+actual session mutation MUST either serialize admission and mutation with every other mode writer under the same lock
+or carry an atomic expected-current-revision compare-and-swap precondition through the manager/node/session write. A
+revision change between admission and mutation makes the ticket stale, including an A→B→A mode sequence; a value CAS
+on current mode alone is not an ABA-safe fence. A revision mismatch is a definite no-effect refusal, while an
+indeterminate mutation result is `unknown`.
 A host/session API that cannot provide that atomic fence MUST leave source mode changes blocked.
 
 A stale ticket is refused, including after another mode change;
@@ -545,8 +553,9 @@ suite.
 | NEG-UNDECLARED-ROUTE | Call an undeclared route, method, HEAD or OPTIONS | 404/405 before source dispatch and no implicit method appears | 2 | Manager route/admission tests |
 | NEG-DECLARATION-CALLERS | Register omitted, empty, duplicate or unknown caller classes, then call outside the declared set | Registration/admission fails closed; only the nonempty declared `app`/`assistant`/`extension` intersection proceeds | 2, 3 | Declaration schema and caller-class admission tests |
 | NEG-SAFE-METHOD-WRITE | Declare GET or HEAD with `effect: "write"`, or a write without `reconciliation_schema` | Registration rejects both declarations; no safe-method mutation or schema-less recovery path exists | 2, 7 | Discriminated route-declaration tests |
+| NEG-UNSAFE-METHOD-READ | Declare PUT, PATCH or DELETE with `effect: "read"` | Registration rejects the declaration and admission cannot bypass write confirmation, idempotency or reconciliation | 2, 7 | Unsafe-method read declaration and admission tests |
 | AUTH-HEADER-ALLOWLIST | Send declared Range/conditional/precondition/idempotency headers beside forged credentials and identity headers | Every schema-allowlisted value survives typed dispatch while every credential, identity and hop-by-hop header is stripped | 3, 6, 7 | Relay/header capture and validation tests |
-| NEG-PATH-COLLISION | Register a path collision and try encoded separators, dot segments and double encoding | Registration is atomic/fail-closed; normalization bypasses never select another route | 2 | Declarative registry and escaped-path relay tests |
+| NEG-PATH-COLLISION | Register a path collision and try encoded separators, dot segments, `%2e%2e`, `%5c`, `%00`, percent-encoded invalid UTF-8 and double encoding | Registration is atomic/fail-closed; decoded-segment revalidation returns 400 with no dispatch, and normalization bypasses never select another route | 2 | Declarative registry and escaped-path relay tests |
 | NEG-WRONG-BINDING | Use the wrong installation and wrong account for a valid route/reference | Both bindings are rejected and no source or upstream effect occurs | 2, 3, 8 | Manager admission matrix |
 | NEG-STALE-GENERATION | Invoke or answer with a stale process generation | Invocation/result is rejected and cannot complete a replacement request | 2, 3, 5 | Runtime generation replacement tests |
 | NEG-CROSS-HANDLE | Present a cross-extension handle and a cross-account handle | Both are rejected; possession never becomes authorization | 3, 10 | RPC handle isolation tests |
@@ -567,8 +576,8 @@ suite.
 | NEG-LATE-CALLBACK | Deliver a late callback/result after cancellation or replacement | Late result is dropped, audited and cannot mutate a newer request/receipt | 5, 7 | Deterministic callback reordering tests |
 | CRED-REFRESH-REVOKE | Exercise provider selection, host-only field injection, credential refresh after expiry, identity change and revocation | Only the approved companion/profile works; no raw credential reaches source; identity change re-approves; revocation blocks every handle reuse | 8 | Independent provider integration and negative suite |
 | SESSION-RENAME-MODE | Attempt rename, mode elevation, stale tickets and ordinary-scope substitution | Exact rename schema/target holds; each mode change needs a fresh owner ticket and no default elevation occurs | 9 | Independent session subcontract suite |
-| SESSION-MODE-CAS | Change the session mode again after ticket admission but before the actual mutation | The atomic current-mode precondition refuses the stale write with no effect; an indeterminate result becomes unknown | 7, 9 | Mode-writer race and current-mode CAS tests |
-| SESSION-RENAME-CAS | Change the session title again after rename admission but before the actual mutation | The atomic current-title precondition refuses the stale rename with no effect; an indeterminate result becomes unknown | 7, 9 | Title-writer race and current-title CAS tests |
+| SESSION-MODE-CAS | Change the session mode again after ticket admission but before the actual mutation, including an A→B→A sequence | The atomic expected-session-revision precondition refuses the stale write with no effect even when the visible mode value returns to A; an indeterminate result becomes unknown | 7, 9 | Mode-writer revision and ABA race tests |
+| SESSION-RENAME-CAS | Change the session title again after rename admission but before the actual mutation, including an A→B→A sequence | The atomic expected-title/session-revision precondition refuses the stale rename with no effect even when the visible title returns to A; an indeterminate result becomes unknown | 7, 9 | Title-writer revision and ABA race tests |
 | STREAM-GET | Stream known- and unknown-length full media and vary client read speed | 200 metadata is exact, known lengths use `Content-Length`, unknown lengths terminate by bounded HTTP chunks with exact final accounting, and memory is independent of response size | 5, 6 | Real relay streaming tests |
 | STREAM-RANGE | Request a valid single Range and an unsatisfiable Range | Valid single range is exact 206 with validated Range/conditional headers surviving the relay; unsatisfiable is 416 with size | 3, 6 | `http.ServeContent`-style parity and source handler tests |
 | STREAM-RANGE-REJECT | Send malformed and multiple Range values | Each returns 400 before source dispatch with no full 200, partial 206 or multipart success body | 6 | Explicit malformed/multiple rejection tests |
