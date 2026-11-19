@@ -27,6 +27,8 @@ const existing = { id: "t1", title: "Existing", created_at: now, updated_at: now
 let host: HTMLDivElement;
 let root: Root;
 let failNextCreate: ApiError | undefined;
+let pendingCreates = 0;
+let dropImages = false;
 const before = { ...getState() };
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
@@ -63,6 +65,8 @@ beforeEach(async () => {
   imagePayload.mockImplementation(async (f) => ({ mime: "image/png", data: btoa(`bytes:${f.name}`) }));
   launched.mockReset();
   failNextCreate = undefined;
+  pendingCreates = 0;
+  dropImages = false;
   api.mockImplementation(async (path, init) => {
     const method = (init as { method?: string })?.method;
     if (path === "/todos" && method === "POST") {
@@ -71,8 +75,12 @@ beforeEach(async () => {
         failNextCreate = undefined;
         throw error;
       }
+      if (pendingCreates > 0) {
+        pendingCreates -= 1;
+        return { state: "pending" };
+      }
       const body = (init as { json: Record<string, unknown> }).json;
-      const images = (body.images as { mime: string }[] | undefined)?.map((img, i) => ({ id: `image-${i + 1}`, mime: img.mime, width: 2, height: 3, url: `/api/v1/todos/t2/images/${i + 1}` }));
+      const images = dropImages ? undefined : (body.images as { id: string; mime: string }[] | undefined)?.map((img) => ({ id: img.id, mime: img.mime, width: 2, height: 3, url: `/api/v1/todos/t2/images/${img.id}` }));
       return { todo: { ...existing, id: "t2", title: body.title, notes: body.notes, images } };
     }
     if (path === "/todos") return { todos: [existing] };
@@ -148,6 +156,52 @@ describe("New to-do images", () => {
     await flush();
     expect(document.querySelector("[role=dialog]")).toBeNull();
     expect(posts()).toHaveLength(1);
+    expect(launched).not.toHaveBeenCalled();
+  });
+
+  it("keeps the draft on a pending receipt and replays it instead of reporting success", async () => {
+    await openNew();
+    await pick([file("pending.png")]);
+    pendingCreates = 1;
+    await act(async () => button(t("todos.create"), dialog())!.click());
+    await flush();
+    expect(dialog()).toBeTruthy();
+    expect(dialog().textContent).toContain(t("lib-todos.create_unconfirmed"));
+    expect([...dialog().querySelectorAll("img")].map((img) => img.alt)).toEqual(["pending.png"]);
+    await act(async () => button(t("todos.create"), dialog())!.click());
+    await flush();
+    expect(posts()).toHaveLength(2);
+    expect(opOf(posts()[0])).toBe(opOf(posts()[1]));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it("uses a fresh operation ID after correcting a refused create", async () => {
+    await openNew();
+    await pick([file("wrong.png")]);
+    failNextCreate = new ApiError(400, "invalid image", { error: "invalid image" });
+    await act(async () => button(t("todos.create"), dialog())!.click());
+    await flush();
+    const firstOp = opOf(posts()[0]);
+    const removes = [...dialog().querySelectorAll("button")].filter((b) => (b.getAttribute("aria-label") ?? "").includes(t("todos.remove")));
+    await act(async () => removes[0].click());
+    await pick([file("valid.png")]);
+    await act(async () => button(t("todos.create"), dialog())!.click());
+    await flush();
+    expect(posts()).toHaveLength(2);
+    expect(opOf(posts()[1])).not.toBe(firstOp);
+    expect(bodies()[1]).toMatchObject({ images: [{ mime: "image/png", data: btoa("bytes:valid.png") }] });
+  });
+
+  it("refuses silent image loss and removes the incomplete create", async () => {
+    await openNew();
+    await pick([file("old-manager.png")]);
+    dropImages = true;
+    await act(async () => button(t("todos.create"), dialog())!.click());
+    await flush();
+    expect(dialog()).toBeTruthy();
+    expect(dialog().textContent).toContain(t("lib-todos.images_not_saved"));
+    expect([...dialog().querySelectorAll("img")].map((img) => img.alt)).toEqual(["old-manager.png"]);
+    expect(api.mock.calls.some(([path, init]) => path === "/todos/t2" && (init as { method?: string })?.method === "DELETE")).toBe(true);
     expect(launched).not.toHaveBeenCalled();
   });
 

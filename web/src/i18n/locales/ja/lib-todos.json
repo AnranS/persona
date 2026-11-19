@@ -24,5 +24,7 @@
   "orphaned": "誰も作業していません",
   "orphaned_error": "エラー後に終了",
   "orphaned_closed": "終了済み",
-  "orphaned_offline": "パソコンがオフライン"
+  "orphaned_offline": "パソコンがオフライン",
+  "create_unconfirmed": "ハブが作成を確認していません。もう一度作成する前に結果を確認してください。",
+  "images_not_saved": "ハブに画像が保存されませんでした。下書きは残っています。もう一度お試しください。"
 }

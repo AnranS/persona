@@ -3075,6 +3075,7 @@ function NewTodoDialog({
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const keptAttachments = useRef<LocalAttachment[]>([]);
   const operationId = useRef(uuid());
+  const operationKey = useRef("");
   const imageInput = useRef<HTMLInputElement>(null);
   const [dueDay, setDueDay] = useState("");
   const [dueTime, setDueTime] = useState("");
@@ -3088,6 +3089,7 @@ function NewTodoDialog({
   useEffect(() => {
     if (!open) return;
     operationId.current = uuid();
+    operationKey.current = "";
     setFailure("");
     releaseAttachments(keptAttachments.current);
     keptAttachments.current = [];
@@ -3168,6 +3170,14 @@ function NewTodoDialog({
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!title.trim() || creating.current || !bindingsValid || !repositoryContext.isCurrent()) return;
+    const nextOperationKey = JSON.stringify({
+      title: title.trim(), notes: notes.trim(), due: due(), repositoryBindings,
+      images: keptAttachments.current.map((image) => image.id),
+    });
+    if (nextOperationKey !== operationKey.current) {
+      operationKey.current = nextOperationKey;
+      operationId.current = uuid();
+    }
     creating.current = true;
     setBusy(true);
     setFailure("");

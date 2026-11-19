@@ -1,4 +1,5 @@
 import type { Todo, TodoCreateOptions } from "./todos";
+import { confirmTodoCreate } from "./todos";
 import { api, ApiError, credentialOwner, getToken, pastHub } from "./api";
 import { MANAGER_HEADER } from "./manager-choice";
 import { parseRepository, type RepositoryIdentity } from "./repository-identity";
@@ -398,11 +399,10 @@ export async function createTodoWithRepositories(context: RepositoryRequestConte
   if (!bindings || !revision(bindings.catalog_revision) || !hasIdentities || !validRepositoryDraft(repositories, identities)) throw new Error("Invalid repository association draft");
   const withImages = Boolean(creation?.images?.length);
   const request = repositoryRequestOptions(context);
-  const result = await api<{ todo: Todo }>("/todos", {
+  const result = await api<{ todo?: Todo; state?: string }>("/todos", {
     ...request, method: "POST",
     headers: withImages ? { ...request.headers, "X-Persona-Op-Id": creation!.operationId! } : request.headers,
     json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories }, ...(withImages ? { images: creation!.images } : {}) },
   });
-  if (!context.isCurrent() || !result.todo || typeof result.todo.id !== "string") throw new Error("Invalid Todo creation response");
-  return result.todo;
+  return confirmTodoCreate(result, creation?.images, request);
 }
