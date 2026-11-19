@@ -195,11 +195,12 @@ while IFS= read -r line; do
       count=$((count+1))
       echo "$count" > "$CLI_FAKE_DIR/attempts"
       if [ "$count" -eq 1 ]; then
-        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
+        echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"There is an issue with the selected model (primary-model). It may not exist or you may not have access to it."}'
       elif [ "$count" -eq 2 ]; then
         # The same-model retry fails a moment later: any control the node writes after it is in reaches this process.
         echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
-        (sleep 0.5; echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}') &
+        (sleep 0.5; echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"There is an issue with the selected model (primary-model). It may not exist or you may not have access to it."}') &
       else
         printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
         echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
