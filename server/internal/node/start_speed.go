@@ -116,17 +116,32 @@ func (n *Node) checkCodexStartSpeed(ctx context.Context, launcher, model, tier s
 func (n *Node) claudeFastModeSettings(ctx context.Context, launcher, settings, cwd string) (string, error) {
 	fastBytes, _ := json.MarshalIndent(map[string]any{"fastMode": true}, "", "  ")
 	if settings == "" {
-		ours, err := writeSettings(n.dir, "fast-mode-settings.json", fastBytes)
-		if err != nil {
-			return "", err
-		}
 		if managed, ok := n.managedLauncher(launcher); ok {
+			ours, err := writeSettings(n.dir, "fast-mode-settings.json", fastBytes)
+			if err != nil {
+				return "", err
+			}
 			return n.mergeManagedSettings(launcher, managed, ours)
 		}
 		if own := n.launcherOwnSettings(ctx, launcher); own != "" {
+			ours, err := writeSettings(n.dir, "fast-mode-settings.json", fastBytes)
+			if err != nil {
+				return "", err
+			}
 			return n.mergeLauncherSettings(launcher, own, ours, cwd)
 		}
-		return ours, nil
+		if launcher != "claude" {
+			// A function can append --settings after Persona's. Without seeing it, adding ours would discard the
+			// launcher's own settings because Claude Code keeps only the last one.
+			probe, err := n.launcherProbe(ctx, launcher)
+			if err != nil {
+				return "", fmt.Errorf("inspect launcher settings for fast mode: %w", err)
+			}
+			if settingsArg(probe.Args) != "" {
+				return "", fmt.Errorf("launcher %q has --settings that cannot be merged for fast mode", launcher)
+			}
+		}
+		return writeSettings(n.dir, "fast-mode-settings.json", fastBytes)
 	}
 	base, err := readLauncherSettings(settings, cwd, n.home)
 	if err != nil {

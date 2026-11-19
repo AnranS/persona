@@ -11,6 +11,13 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestModelTierSpeedSummaryKeepsStandardModel11141(t *testing.T) {
+	got := (ModelTier{Launcher: "codex", Model: "standard", Speed: "fast"}).runs()
+	if !strings.Contains(got, "standard") || !strings.Contains(got, "fast") {
+		t.Fatalf("tier summary dropped a model named standard: %q", got)
+	}
+}
+
 func TestModelTierSpeedSettingRoundTrip11141(t *testing.T) {
 	for _, speed := range []string{"", "standard", "fast", "ultrafast"} {
 		tiers := map[string]ModelTier{"standard": speedTier11141(t, ModelTier{Launcher: "codex", Model: "gpt-tier"}, speed)}

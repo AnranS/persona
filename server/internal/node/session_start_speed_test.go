@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -187,5 +188,64 @@ func TestClaudeFastSpeedIsEffectiveStartOnlySettings(t *testing.T) {
 	resumePath := startSpeedSettingsPath(t, resumeCommand)
 	if resume := readSettings(t, resumePath); resume["fastMode"] == true {
 		t.Errorf("fastMode leaked into herdr's automatic resume settings %s: %v", resumePath, resume)
+	}
+}
+
+func startSpeedFunction(t *testing.T, name, invocation string) {
+	t.Helper()
+	shellLaunchers(t, name)
+	launcherCache.Lock()
+	oldSettings, oldScripts := launcherCache.settings, launcherCache.scripts
+	launcherCache.settings, launcherCache.scripts = map[string]string{}, map[string]string{}
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.settings, launcherCache.scripts = oldSettings, oldScripts
+		launcherCache.Unlock()
+	})
+	home := os.Getenv("ZDOTDIR")
+	writeFile(t, filepath.Join(home, ".zshrc"), "function "+name+" { "+invocation+"; }\n")
+}
+
+// A shell function can append its own --settings after Persona's. With plugins
+// enabled there is no base settings path to merge, so fast mode must refuse
+// rather than discard the function's credentials and model.
+func TestClaudeFastSpeedRefusesHiddenFunctionSettings(t *testing.T) {
+	n, f, home := herdrNode(t)
+	n.claudeV.set("99.0.0")
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	startSpeedFunction(t, "speedwork", `claude --settings "$HOME/work-settings.json" "$@"`)
+	writeFile(t, filepath.Join(home, "work-settings.json"), `{"model":"must-not-lose"}`)
+	if err := n.writeClaudeConfig(); err != nil {
+		t.Fatal(err)
+	}
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	startHerdr(f, "w1:p2", proto.StatusIdle)
+	f.setScreen("w1:p2", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+	_, err := request(t, n, "session.start", map[string]any{
+		"session_id": startID, "cwd": cwd, "launcher": "speedwork", "speed": "fast",
+	})
+	if code, _ := refusalOf(t, err); code != "agent_speed_unsupported" {
+		t.Errorf("refusal = %q (%v), want agent_speed_unsupported", code, err)
+	}
+	if calls := f.trace("tab.create", "pane.send_input"); len(calls) != 0 {
+		t.Errorf("hidden settings reached startup: %v", calls)
+	}
+}
+
+func TestClaudeFastSpeedAllowsFunctionWithoutSettings(t *testing.T) {
+	n, _, home := herdrNode(t)
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	startSpeedFunction(t, "speedplain", `claude "$@"`)
+	path, err := n.claudeFastModeSettings(context.Background(), "speedplain", "", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readSettings(t, path)["fastMode"]; got != true {
+		t.Fatalf("fastMode = %v, want true", got)
 	}
 }

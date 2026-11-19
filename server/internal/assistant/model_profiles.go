@@ -107,10 +107,13 @@ type ModelTier struct {
 // runs is what the tier runs on, in a line: its launcher, then the model and effort it sets.
 func (t ModelTier) runs() string {
 	parts := []string{t.Launcher}
-	for _, v := range []string{t.Model, t.Effort, t.Speed} {
-		if v != "" && v != "standard" {
+	for _, v := range []string{t.Model, t.Effort} {
+		if v != "" {
 			parts = append(parts, v)
 		}
+	}
+	if proto.FasterSpeed(t.Speed) {
+		parts = append(parts, t.Speed)
 	}
 	return strings.Join(parts, " · ")
 }
