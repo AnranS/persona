@@ -355,7 +355,9 @@ func (h *Manager) waitPrepared(ctx context.Context, ix proto.Interaction, op app
 	// behavior. The production assistant supplies AskPrepared for clarification.
 	r, err := h.opts.Ask(ctx, ix)
 	if err != nil {
-		return approval.Outcome{}, err
+		// The legacy wait never entered Apply. Keep the original error while making
+		// that definite outcome distinguishable from an uncertain Apply failure.
+		return approval.Outcome{}, fmt.Errorf("%w: %w", approval.ErrNotApplied, err)
 	}
 	switch {
 	case r.UserAllowed():
