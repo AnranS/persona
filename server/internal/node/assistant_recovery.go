@@ -303,9 +303,11 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
-	if failed && (modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) && !assistantSafeguardsRefusal(result) {
+	if failed && (modelretry.Temporary(result) || modelretry.Permanent(result) || slices.Contains(kinds, assistantModelServiceFailure) || len(kinds) > 0 && kinds[0] == proto.TurnErrorTransient) &&
+		!assistantSafeguardsRefusal(result) && !assistantModelUnavailable(result) {
 		// Publish the stopped turn to the manager's durable due-wake scheduler.
-		// Do not hold an execution process or replay the original request here.
+		// Keep the existing unavailable-model and safeguards recovery paths out of
+		// this new scheduler; they have their own bounded recovery contracts.
 		return false
 	}
 	if proto.IsExternalLauncher(p.launcher) {

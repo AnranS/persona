@@ -49,8 +49,9 @@ done
 	}
 }
 
-// A previous answer cannot override an explicit missing-model or access error.
-func TestAssistantMissingModelStopsEvenAfterPreviousAnswer(t *testing.T) {
+// The user's model is not automatically a bad configuration: a gateway can call a model that answered moments ago
+// missing. The real process/stream-json seam retries it once, without repeating the owner's message (#5234).
+func TestAssistantTransientErrorRetriesAModelThatJustAnswered(t *testing.T) {
 	f := cliTest(t)
 	script := `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
@@ -93,8 +94,29 @@ done
 	if strings.Count(got, "next request") != 1 {
 		t.Fatalf("the owner's message was not sent exactly once: %s", got)
 	}
-	if strings.Count(got, `"type":"user"`) != 2 {
-		t.Fatalf("a permanent model error replayed a request: %s", got)
+	var retryText string
+	for _, raw := range strings.Split(strings.TrimSpace(got), "\n") {
+		var line struct {
+			Message struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range line.Message.Content {
+			if strings.Contains(block.Text, "因模型服务的一次临时错误中断") {
+				retryText = block.Text
+			}
+		}
+	}
+	if retryText != prompts.RenderModelRetry() {
+		t.Fatalf("a transient model route did not use the retry prompt: %s", got)
+	}
+	if p := f.proc(id); p == nil || p.replyModel != "primary-model" || p.repliedAt.IsZero() {
+		t.Fatalf("the recovered model did not answer: %+v", p)
 	}
 }
 
