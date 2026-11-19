@@ -12,8 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isSelected
@@ -396,7 +396,7 @@ class AssistantDrawerShotsTest {
             rule.onAllNodes(isSelected()).assertCountEquals(1)
         }
         fun assertNotSelected(vararg titles: String) {
-            titles.forEach { rule.onNodeWithText(it).assertIsNotSelected() }
+            titles.forEach { rule.onNodeWithText(it).assert(!isSelected()) }
         }
         val retainedRows = arrayOf("主对话", "增长")
 
