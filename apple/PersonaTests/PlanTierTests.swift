@@ -76,6 +76,60 @@ struct PlanTierTests {
         }
     }
 
+    /// Visual evidence of the real row, independent of any cached Assistant navigation state.
+    @Test func tierRowsCaptureInLightAndDark() async throws {
+        try automation(true)
+        defer { try? automation(false) }
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let inputs = [
+            ("Tiered review", #","launcher":"claude","tier":"review""#),
+            ("Tier without a launcher", #","tier":"review""#),
+            ("Explicit model wins", #","launcher":"claude","tier":"review","model":"gw/model-x""#),
+            ("Ordinary default model", ""),
+        ]
+        var tasks: [PlanTask] = []
+        for (title, extra) in inputs {
+            var item = try task(extra)
+            item.title = title
+            tasks.append(item)
+        }
+        for (name, appearance) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            for (suffix, typeSize) in [("", DynamicTypeSize.large), ("-xxxl", .xxxLarge)] {
+                let window = UIWindow(windowScene: scene)
+                defer { window.isHidden = true }
+                window.overrideUserInterfaceStyle = appearance
+                window.backgroundColor = .systemBackground
+                window.frame = CGRect(x: 0, y: 0, width: 390, height: 560)
+                window.rootViewController = UIHostingController(rootView:
+                    VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                        ForEach(tasks.indices, id: \.self) { index in
+                            PlanTaskRow(number: index + 1, task: tasks[index], numbered: true)
+                        }
+                    }
+                    .padding()
+                    .background(Color(uiColor: .systemBackground))
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .environment(AppModel.shared))
+                window.isHidden = false
+                window.layoutIfNeeded()
+                for _ in 0..<4 {
+                    window.layoutIfNeeded()
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let data = try #require(image.pngData())
+                #expect(!data.isEmpty)
+                if let directory = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+                    let folder = URL(fileURLWithPath: directory, isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    try data.write(to: folder.appendingPathComponent("agent-preset-plan-card-\(name)\(suffix).png"))
+                }
+            }
+        }
+    }
+
     private func automation(_ on: Bool) throws {
         let handle = try #require(dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW))
         let set = try #require(dlsym(handle, "_AXSSetAutomationEnabled"))

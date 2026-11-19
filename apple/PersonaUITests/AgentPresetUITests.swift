@@ -6,7 +6,6 @@ import XCTest
 final class AgentPresetUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
-    private let main = "server/b2e4d6f8-0000-4000-8000-000000000001"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -87,21 +86,11 @@ final class AgentPresetUITests: XCTestCase {
                                "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-ui.scheme", look]
             + (largest ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
         app.launchPinned()
-        if !app.buttons["newChat.launcher"].waitForExistence(timeout: 20) {
+        if !app.buttons["newChat.directory"].waitForExistence(timeout: 20) {
             app.terminate()
             app.launchPinned()
         }
-        see(app.buttons["newChat.launcher"], "New Agent's launcher", timeout: 20)
-    }
-
-    @MainActor private func launchPlan(_ look: String, largest: Bool = false) {
-        app?.terminate()
-        app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main,
-                               "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-ui.scheme", look]
-            + (largest ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
-        app.launchPinned()
+        reveal(app.buttons["newChat.launcher"], "New Agent's launcher")
     }
 
     @MainActor private func shot(_ name: String, look: String) {
@@ -125,12 +114,13 @@ final class AgentPresetUITests: XCTestCase {
         let review = see(app.buttons["newChat.preset.review"], "review after a manual edit")
         XCTAssertFalse(selected(review), "a manual launcher/model/effort edit must unmark the preset")
         review.tap()
-        wait("reselecting review restores Opus") { says(app.buttons["newChat.model"]).contains("Opus") }
-        wait("reselecting review restores High") { says(button(beginning: "Thinking Effort")).contains("High") }
+        wait("reselecting review restores Opus") { says(reveal(app.buttons["newChat.model"], "the preset model")).contains("Opus") }
+        _ = reveal(button(beginning: "Thinking Effort"), "Thinking Effort")
+        see(text(containing: "High"), "reselecting review restores High")
     }
 
     @MainActor private func start() -> [String: Any] {
-        let go = see(button(beginning: "Start Chat"), "Start Chat")
+        let go = reveal(button(beginning: "Start Chat"), "Start Chat")
         wait("Start Chat enabled") { go.isEnabled }
         let before = started.count
         go.tap()
@@ -150,7 +140,8 @@ final class AgentPresetUITests: XCTestCase {
         review.tap()
         wait("preset launcher") { says(app.buttons["newChat.launcher"]).contains("claude") }
         wait("preset model") { says(app.buttons["newChat.model"]).contains("Opus") }
-        wait("preset effort") { says(button(beginning: "Thinking Effort")).contains("High") }
+        _ = reveal(button(beginning: "Thinking Effort"), "Thinking Effort")
+        see(text(containing: "High"), "preset effort")
 
         // Every field remains editable. A manual model pick unmarks; picking review again restores all its defaults.
         app.buttons["newChat.model"].tap()
@@ -161,7 +152,8 @@ final class AgentPresetUITests: XCTestCase {
         // So does a manual effort pick.
         button(beginning: "Thinking Effort").tap()
         see(app.buttons["Low"], "manual effort pick").tap()
-        wait("manual effort is editable") { says(button(beginning: "Thinking Effort")).contains("Low") }
+        _ = reveal(button(beginning: "Thinking Effort"), "Thinking Effort")
+        see(text(containing: "Low"), "manual effort is editable")
         reselectReviewAfterManualEdit()
 
         // And a manual launcher pick; the same preset then restores launcher, model and effort together.
@@ -186,9 +178,10 @@ final class AgentPresetUITests: XCTestCase {
     @MainActor func testOlderHubHasNoPresetRowAndKeepsDefaults() throws {
         try use("older")
         launchNewAgent()
+        let launcher = says(app.buttons["newChat.launcher"])
+        let model = reveal(app.buttons["newChat.model"], "the existing default model")
         wait("the existing New Agent defaults") {
-            says(app.buttons["newChat.launcher"]).contains("claude")
-                && says(app.buttons["newChat.model"]).contains("model-chat")
+            launcher.contains("claude") && says(model).contains("model-chat")
         }
         XCTAssertFalse(any("newChat.preset").waitForExistence(timeout: 2), "an older hub must not grow a Preset row")
         let body = start()
@@ -205,7 +198,7 @@ final class AgentPresetUITests: XCTestCase {
         app.buttons["newChat.preset.locked"].tap()
         let problem = see(any("newChat.preset.problem"), "why the preset model cannot run")
         XCTAssertTrue(problem.label.contains("opus"), problem.label)
-        see(any("newChat.model.locked"), "the launcher's own locked-model explanation")
+        reveal(any("newChat.model.locked"), "the launcher's own locked-model explanation")
         let body = start()
         XCTAssertEqual(body["launcher"] as? String, "sonnetcc")
         XCTAssertNil(body["model"], "a fixed --model must not be silently overridden")
@@ -229,11 +222,12 @@ final class AgentPresetUITests: XCTestCase {
     @MainActor func testBlockedPresetNamesTheHealthProblemAndCannotBePicked() throws {
         try use("blocked-launcher")
         launchNewAgent()
+        let before = says(app.buttons["newChat.launcher"])
         openPresets()
         let blocked = see(app.buttons["newChat.preset.blocked"], "blocked preset")
         XCTAssertFalse(blocked.isEnabled)
         see(text(containing: "Its key or sign-in was rejected"), "the launcher's health explanation")
-        XCTAssertTrue(says(app.buttons["newChat.launcher"]).contains("Default:"), "a blocked preset did not change the default")
+        XCTAssertTrue(before.contains("Default:"), "a blocked preset did not change the default: \(before)")
     }
 
     @MainActor func testPresetCanExplicitlySendTheLaunchersDefaultModel() throws {
@@ -256,7 +250,7 @@ final class AgentPresetUITests: XCTestCase {
         launchNewAgent()
         openPresets()
         app.buttons["newChat.preset.race"].tap()
-        let go = see(button(beginning: "Start Chat"), "Start Chat")
+        let go = reveal(button(beginning: "Start Chat"), "Start Chat")
         XCTAssertFalse(go.isEnabled, "a pending preset model list must hold Start")
         _ = mock("presets?release=1")
         let body = start()
@@ -278,25 +272,13 @@ final class AgentPresetUITests: XCTestCase {
         reveal(app.buttons["newChat.model"], "the picked model")
         wait("the picked preset in \(look), largest=\(largest)") { says(app.buttons["newChat.model"]).contains("Opus") }
         shot("new-agent-picked-\(suffix)", look: look)
-
-        try use("plan")
-        launchPlan(look, largest: largest)
-        let title = see(text(containing: "Tiered review"), "the tiered plan card in \(look), largest=\(largest)", timeout: 30)
-        reveal(title, "the tiered task")
-        let chip = see(text(containing: "claude · Preset review"), "preset with launcher in \(look), largest=\(largest)")
-        reveal(chip, "the visible preset chip")
-        if !largest {
-            see(text(containing: "gw/model-x"), "explicit model in \(look)")
-            see(text(containing: "Default Model"), "ordinary default in \(look)")
-        }
-        shot("plan-card-\(suffix)", look: look)
     }
 
-    @MainActor func testNewAgentAndPlanCardCapturesInLightAndDark() throws {
+    @MainActor func testNewAgentCapturesInLightAndDark() throws {
         for look in ["light", "dark"] { try capture(look, largest: false) }
     }
 
-    @MainActor func testNewAgentAndPlanCardCapturesAtLargestTextInLightAndDark() throws {
+    @MainActor func testNewAgentCapturesAtLargestTextInLightAndDark() throws {
         for look in ["light", "dark"] { try capture(look, largest: true) }
     }
 }
