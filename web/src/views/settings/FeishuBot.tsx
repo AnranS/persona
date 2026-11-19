@@ -372,7 +372,7 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either,
               // and trims only the execution steps, which a current hub pushes only with "report_steps" on (#3218).
               // "report_steps" needs task progress too; a hub from before it leaves the key out and the switch is hidden,
-              // as is "answer_new_card" on a hub from before it.
+              // as are "answer_new_card" and "topic_cot" on hubs from before them.
               const off =
                 (f.key === "all_cards" && !features.cards) ||
                 (f.key === "only_conclusions" && (features.reports === false || (features.report_steps === false && !features.only_conclusions))) ||
