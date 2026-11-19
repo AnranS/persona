@@ -333,6 +333,7 @@ class TagReleaseTests(unittest.TestCase):
         with patch.object(tag_release, "prepare_worktree",
                           side_effect=lambda config, commit: config["worktree"].mkdir(exist_ok=True)), \
                 patch.object(tag_release, "upload", side_effect=upload), \
+                patch.object(tag_release, "check_windows_artifacts"), \
                 patch.object(tag_release.subprocess, "run", side_effect=run), \
                 patch.object(tag_release.subprocess, "check_output", side_effect=output), \
                 patch("urllib.request.urlopen", side_effect=fetch):
@@ -662,7 +663,8 @@ class TagReleaseTests(unittest.TestCase):
         receipt.write_text(json.dumps({"commit": self.commit, "assets": assets}))
         with patch.object(tag_release, "prepare_worktree", side_effect=lambda config, commit: config["worktree"].mkdir()), \
                 patch.object(tag_release, "ci_signing_conclusion", return_value=None), \
-                patch.object(tag_release, "upload") as upload:
+                patch.object(tag_release, "upload") as upload, \
+                patch.object(tag_release, "check_windows_artifacts"):
             with self.assertRaisesRegex(tag_release.ConfigError, "another build"):
                 tag_release.publish_once(config, "v0.2.1", self.commit)
             upload.assert_not_called()
@@ -710,7 +712,7 @@ class TagReleaseTests(unittest.TestCase):
         assets = self.windows_receipt(config)
         events = []
         with patch.object(tag_release, "prepare_worktree", side_effect=lambda config, commit: config["worktree"].mkdir()), \
-                patch.object(tag_release, "check_windows_archives", side_effect=lambda *args: events.append("verified")) as verify, \
+                patch.object(tag_release, "check_windows_artifacts", side_effect=lambda *args: events.append("verified")) as verify, \
                 patch.object(tag_release, "upload", side_effect=lambda *args: events.append("uploaded")):
             tag_release.publish_once(config, "v0.5.3", self.commit)
         verify.assert_called_once_with(assets, "0.5.3")
