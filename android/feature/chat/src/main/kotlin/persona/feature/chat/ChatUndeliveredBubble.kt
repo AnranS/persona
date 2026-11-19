@@ -61,7 +61,7 @@ internal fun UndeliveredBubble(
             leading = if (glass) ({ UndeliveredMarkButton(failed, spoken, busy, canSend, onAction) }) else null)
         Text(status, style = PersonaTheme.type.caption,
             color = if (failed) PersonaTheme.palette.danger.text else PersonaTheme.palette.cautionText)
-        message.images?.takeIf { it > 0 }?.let { count ->
+        message.images.takeIf { it > 0 }?.let { count ->
             Text(stringResource(R.string.chat_undelivered_images, count), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.ink2, maxLines = 1)
         }

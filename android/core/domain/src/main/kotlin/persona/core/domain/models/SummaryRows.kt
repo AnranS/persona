@@ -35,6 +35,6 @@ fun Session.keepingDetails(old: Session?): Session {
         asks = asks ?: old.asks,
         pendingSwitch = pendingSwitch ?: old.pendingSwitch,
         // A summary omits this detail; a complete row with an empty list clears it by returning above.
-        undelivered = undelivered.ifEmpty { old.undelivered },
+        undelivered = undelivered ?: old.undelivered,
     )
 }

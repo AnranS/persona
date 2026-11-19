@@ -72,6 +72,6 @@ class SummaryRowsTest {
         val summary = Session(machineId = "mac", sessionId = "c1", assistant = true, waiting = false)
         assertEquals(listOf(kept), summary.keepingDetails(detailed).undelivered)
         val complete = Session(machineId = "mac", sessionId = "c1", assistant = true)
-        assertTrue(complete.keepingDetails(detailed).undelivered.isEmpty())
+        assertTrue(complete.keepingDetails(detailed).undelivered.isNullOrEmpty())
     }
 }

@@ -26,6 +26,6 @@ internal fun sessionWithDetail(row: Session, previous: Session?, info: SessionIn
         model = row.model ?: info?.model ?: held?.model,
         efforts = held?.efforts.orEmpty(), ports = held?.ports, queued = held?.queued,
         background = held?.background, subagents = held?.subagents, workflows = held?.workflows,
-        undelivered = row.undelivered.ifEmpty { read?.undelivered ?: held?.undelivered.orEmpty() },
+        undelivered = row.undelivered ?: if (read != null) read.undelivered else held?.undelivered,
     )
 }

@@ -39,8 +39,8 @@ class ModelsTest {
                 """"attempts":2,"next_at":"2026-11-17T10:01:00Z","error":"The assistant could not start"},""" +
                 """{"id":"kept-failed","text":"later","at":"2026-11-17T10:02:00Z","state":"failed"}]}""",
         )
-        assertEquals(listOf("kept-waiting", "kept-failed"), session.undelivered.map { it.id })
-        val waiting = session.undelivered.first()
+        assertEquals(listOf("kept-waiting", "kept-failed"), session.undelivered.orEmpty().map { it.id })
+        val waiting = session.undelivered.orEmpty().first()
         assertEquals("hello", waiting.text)
         assertEquals(2, waiting.images)
         assertEquals("2026-11-17T10:00:00Z", waiting.at)
@@ -48,8 +48,8 @@ class ModelsTest {
         assertEquals(2, waiting.attempts)
         assertEquals("2026-11-17T10:01:00Z", waiting.nextAt)
         assertEquals("The assistant could not start", waiting.error)
-        assertEquals("failed", session.undelivered.last().state)
-        assertTrue(JsonCodec.decodeFromString<Session>("""{"session_id":"s"}""").undelivered.isEmpty())
+        assertEquals("failed", session.undelivered.orEmpty().last().state)
+        assertTrue(JsonCodec.decodeFromString<Session>("""{"session_id":"s"}""").undelivered.isNullOrEmpty())
     }
 
     @Test fun suggestionRiskDecodesAndAnAbsentFieldIsSafeByDefault() {

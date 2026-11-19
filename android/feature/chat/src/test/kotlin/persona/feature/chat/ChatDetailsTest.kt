@@ -116,6 +116,10 @@ class ChatDetailsTest {
     @Test fun theNewestRecapIsOpenUntilClosed() {
         val exchange = listOf(user(1, "修好导入重试"), reply(2, "修好了。"))
         assertEquals("r3", openRecapId(lines(exchange + recap(3, "这一轮：修了导入重试。")), closed = null))
+        // A newer permission-mode line does not hide the recap it follows.
+        val mode = persona.core.domain.lines.ChatLine.ModeChange("mode", persona.core.contracts.ModeChange(
+            kind = "set", to = "acceptEdits", at = at(4)))
+        assertEquals("r3", openRecapId(listOf(mode) + lines(exchange + recap(3, "这一轮：修了导入重试。")), closed = null))
         // Several in a row are one line: its newest is open.
         assertEquals("r4", openRecapId(lines(exchange + recap(3, "第一段") + recap(4, "第二段")), closed = null))
         // Closed, until a newer one comes.
@@ -356,6 +360,48 @@ class ChatDetailsTest {
         }
         waitFor("the authoritative failure") { "Not delivered: It may already have gone in" in it }
         failedMark.assertExists()
+    }
+
+    @Config(qualifiers = "en-w400dp-h700dp")
+    @Test fun retryAndDeleteReloadTheCompleteRowWithoutAReceiptOrRevChange() {
+        val failed = UndeliveredMessage("kept-failed", "Retry this one", at = "2026-11-17T10:02:00Z",
+            state = "failed", error = "The computer is away")
+        val summary = session().copy(assistant = true, waiting = false)
+        var complete = summary.copy(waiting = null, undelivered = listOf(failed))
+        var reads = 0
+        val actions = object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun completeRow(session: Session): Session {
+                reads++
+                return complete
+            }
+            override suspend fun retryUndelivered(session: Session, messageId: String) {
+                complete = complete.copy(undelivered = listOf(failed.copy(state = "waiting")))
+            }
+            override suspend fun deleteUndelivered(session: Session, messageId: String) {
+                complete = complete.copy(undelivered = null)
+            }
+        }
+        page(AppStyle.Glass, emptyList(), summary, actions = actions,
+            renderStyle = ChatRenderStyle.Assistant, features = setOf("sessions_lookup"))
+        waitFor("the initial failed row") { "Retry this one" in it }
+        val failedMark = rule.onNodeWithContentDescription("Not delivered. Retry or delete.")
+        failedMark.performClick()
+        waitFor("the failed message's actions") { "Retry" in it }
+        rule.onNodeWithText("Retry").performClick()
+        waitFor("Retry's authoritative waiting row") {
+            "Not delivered: The computer is away. It will be sent automatically." in it
+        }
+        assertEquals(2, reads)
+
+        val waitingMark = rule.onNodeWithContentDescription("Not delivered yet. It will be sent automatically.")
+        waitingMark.performClick()
+        waitFor("the waiting message's actions") { "Delete" in it }
+        rule.onNodeWithText("Delete").performClick()
+        waitFor("Delete's authoritative empty row") { "Retry this one" !in it }
+        assertEquals(3, reads)
     }
 
     private val recapped = listOf(user(1, "修好导入重试"), reply(2, "修好了。"), recap(3, "**这一轮**：修了导入重试，测试都过了。"))

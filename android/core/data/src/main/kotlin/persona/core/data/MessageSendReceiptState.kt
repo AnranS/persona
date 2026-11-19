@@ -80,7 +80,7 @@ internal class MessageSendReceiptState(private val now: () -> Long = System::cur
     /** Accepted delivery keeps Processing until runtime evidence; kept is terminal and asks the chat to reread its row. */
     @Synchronized fun result(request: MessageRequest, result: MessageTransportResult) {
         val record = records[request.session to request.opId] ?: return
-        if (result == MessageTransportResult.Kept) {
+        if (result == MessageTransportResult.Kept || result == MessageTransportResult.Held) {
             record.receipt = MessageSendReceipt(request.session, record.clientId, "kept", Instant.ofEpochMilli(now()), record.mainTarget)
             record.latestAt = Instant.ofEpochMilli(now())
             record.terminal = true
