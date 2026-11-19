@@ -22,6 +22,7 @@ import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { REVIEW_FEATURE } from "../../lib/session-review";
+import { isSessionReview, loadSessionReview, SESSION_REVIEW_FEATURE, startSessionReview, type SessionReviewStatus } from "../../lib/session-review-agent";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
@@ -1990,6 +1991,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     <div className="@container/session flex h-full min-w-0 flex-col">
       {!embedded && <Header
         session={session}
+        starting={starting}
+        interactions={interactions}
         overview={overview}
         title={title}
         direction={directionName !== undefined && !isMain && !notFound}
@@ -2476,6 +2479,8 @@ function AttentionNote({ session }: { session: Session }) {
 // the model is the composer's pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
 export const Header = memo(function Header({
   session,
+  starting = false,
+  interactions = [],
   overview,
   title,
   machineName,
@@ -2499,6 +2504,8 @@ export const Header = memo(function Header({
   direction = false,
 }: {
   session?: Session;
+  starting?: boolean;
+  interactions?: Interaction[];
   overview?: { id: string; open: boolean; toggle: () => void };
   title: string;
   machineName: string;
@@ -2599,6 +2606,60 @@ export const Header = memo(function Header({
   const openPreview = () => session && togglePanel({ kind: "preview", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
   const openReview = () => session && togglePanel({ kind: "review", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
   const reviews = useStore((s) => hubHas(s.features, REVIEW_FEATURE));
+  const sessionReviews = useStore((s) => hubHas(s.features, SESSION_REVIEW_FEATURE));
+  const [sessionReviewStatus, setSessionReviewStatus] = useState<SessionReviewStatus>();
+  const [sessionReviewChecking, setSessionReviewChecking] = useState(false);
+  const [sessionReviewError, setSessionReviewError] = useState<string>();
+  const [sessionReviewStarting, setSessionReviewStarting] = useState(false);
+  const sessionReviewInFlight = useRef(false);
+  const sessionReviewMid = session?.machine_id;
+  const sessionReviewSid = session?.session_id;
+  // Availability is a read, never a start, and belongs to an open menu rather than the chat at rest.
+  useEffect(() => {
+    if (!menu.anchor || !sessionReviews || assistant || !sessionReviewMid || !sessionReviewSid) return;
+    let live = true;
+    setSessionReviewStatus(undefined);
+    setSessionReviewError(undefined);
+    setSessionReviewChecking(true);
+    void loadSessionReview(sessionReviewMid, sessionReviewSid).then((status) => {
+      if (live) setSessionReviewStatus(status);
+    }).catch((e: unknown) => {
+      if (live) setSessionReviewError(errorText(e));
+    }).finally(() => {
+      if (live) setSessionReviewChecking(false);
+    });
+    return () => { live = false; };
+  }, [menu.anchor, sessionReviews, assistant, sessionReviewMid, sessionReviewSid]);
+  const pendingReviews = interactions.filter(isSessionReview).length;
+  const otherPending = interactions.length - pendingReviews;
+  // A row can know about a card before its interaction arrives. Count that too, but never the review result itself.
+  const unlistedOther = Math.max(0, (session?.pending_interactions ?? 0) - interactions.length);
+  const sourceState = session ? stateOf(session) : "unknown";
+  const sessionReviewSourceBusy = Boolean(session && (starting || session.starting || session.status === "starting" || sourceState === "working" || otherPending > 0 || unlistedOther > 0 || (sourceState === "needs_you" && pendingReviews === 0)));
+  const sessionReviewDetail = sessionReviewStarting ? t("chat-chatview.review_starting")
+    : sessionReviewSourceBusy ? t("chat-chatview.review_busy")
+    : sessionReviewChecking ? t("chat-chatview.review_checking")
+    : sessionReviewError ? t("chat-chatview.review_failed", { error: sessionReviewError })
+    : !sessionReviewStatus ? t("chat-chatview.review_checking")
+    : sessionReviewStatus.running ? t("chat-chatview.review_running")
+    : !sessionReviewStatus.has_changes ? t("chat-chatview.review_no_change") : undefined;
+  const sessionReviewDisabled = Boolean(sessionReviewDetail);
+  const reviewThisWork = async () => {
+    if (!session || !sessionReviews || assistant || sessionReviewInFlight.current || sessionReviewDisabled) return;
+    sessionReviewInFlight.current = true;
+    setSessionReviewStarting(true);
+    toast(t("chat-chatview.review_starting"), "info");
+    try {
+      await startSessionReview(session.machine_id, session.session_id);
+      setSessionReviewStatus((current) => ({ running: true, has_changes: current?.has_changes ?? true, started_at: current?.started_at }));
+      toast(t("chat-chatview.review_requested"), "ok");
+    } catch (e) {
+      toast(t("chat-chatview.review_failed", { error: errorText(e) }), "error");
+    } finally {
+      sessionReviewInFlight.current = false;
+      setSessionReviewStarting(false);
+    }
+  };
   // the comparison this Agent is a run of (#8916, kept in this browser): its module and words load after the first screen,
   // long before ⋯ opens; re-read with the header
   const [compareOf, setCompareOf] = useState<null | ((s: Session) => { id: string; label: string } | undefined)>(null);
@@ -2687,6 +2748,7 @@ export const Header = memo(function Header({
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
           : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...(sessionReviews && !assistant ? [{ key: "session-review", label: t("chat-chatview.review_this_work"), icon: "pullRequest" as const, disabled: sessionReviewDisabled, detail: sessionReviewDetail, onSelect: reviewThisWork }] : []),
         // a run of a comparison (#8916): back to its runs' page
         ...(compare ? [{ key: "compare", label: compare.label, icon: "branch" as const, onSelect: () => navigate({ name: "compare", id: compare.id }) }] : []),
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),

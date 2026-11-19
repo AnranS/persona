@@ -877,6 +877,10 @@ export interface Interaction {
   /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
   editable_text?: string;
   summary?: string;
+  /** A finished independent session review's finding count, full report, and hidden reviewer (#1808). */
+  review_count?: number;
+  review_report?: string;
+  reviewer_session_id?: string;
   screen?: string;
   secret?: boolean;
   dialog?: ScreenDialog;

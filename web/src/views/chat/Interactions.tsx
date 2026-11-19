@@ -9,6 +9,7 @@ import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
+import { isSessionReview } from "../../lib/session-review-agent";
 import type { Interaction } from "../../lib/types";
 import { defaults, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, urlHost, urlTarget, validate, type ElicitationAction, type Field, type Values } from "../../lib/elicitation";
 import { answerLines } from "../../lib/answered";
@@ -294,6 +295,57 @@ function ToolLoopCard({ ix }: { ix: Interaction }) {
       ))}
     >
       {null}
+    </Card>
+  );
+}
+
+function SessionReviewCard({ ix }: { ix: Interaction }) {
+  const [busy, setBusy] = useState<string>();
+  const sending = useRef(false);
+  const q = ix.questions?.[0];
+  const options = q?.options ?? [];
+  const sendOption = options.find((option) => option.action !== "defer") ?? options[0];
+  const dismissOption = options.find((option) => option.action === "defer") ?? options.find((option) => option !== sendOption);
+  const go = async (label: string) => {
+    if (!q || sending.current) return;
+    sending.current = true;
+    setBusy(label);
+    try {
+      await resolve(ix, { answers: { [q.question]: label } });
+    } finally {
+      sending.current = false;
+      setBusy(undefined);
+    }
+  };
+  const keys = useCardKeys({
+    enter: () => {
+      if (!sendOption || sending.current) return false;
+      void go(sendOption.label);
+    },
+  });
+  const tapGuard = useChatCardTapGuard(ix);
+  if (!q || options.length !== 2 || !sendOption || !dismissOption || sendOption === dismissOption) return null;
+  const kicker = typeof ix.review_count === "number" ? t("lib-turns.findings", { count: ix.review_count }) : ix.summary?.trim() || q.header || t("chat-interactions.question");
+  return (
+    <Card
+      kicker={kicker}
+      title={q.question}
+      cardKeys={keys}
+      tapGuard={tapGuard}
+      footer={
+        <>
+          <Button tone="quiet" busy={busy === dismissOption.label} disabled={busy !== undefined} title={dismissOption.label} className="min-w-0 shrink" onClick={() => void go(dismissOption.label)}>
+            <span className="truncate">{dismissOption.label}</span>
+          </Button>
+          <Button tone="primary" busy={busy === sendOption.label} disabled={busy !== undefined} title={sendOption.label} className="min-w-0 shrink" onClick={() => void go(sendOption.label)}>
+            <span className="truncate">{sendOption.label}</span>
+          </Button>
+        </>
+      }
+    >
+      <div className="overflow-y-auto rounded-[8px] bg-inset px-3 py-2.5 shadow-hairline" style={{ maxHeight: PLAN_MAX }} data-scroll-box>
+        <Markdown text={ix.review_report ?? ""} small />
+      </div>
     </Card>
   );
 }
@@ -1374,10 +1426,11 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   const child = useChildRow(ix.machine_id, ix.session_id);
   const block = useStore(() => answerBlock(ix, child ?? getSession(ix.machine_id, ix.session_id)));
   const canApprove = block === null;
-  const managerWork = ix.kind === "question" && ix.tool_name === "persona_triage";
+  const managerWork = ix.kind === "question" && (ix.tool_name === "persona_triage" || isSessionReview(ix));
   // an answer still on its way (the hub away, apiOp retrying) holds the card, also after leaving the chat and coming back
   const { pending, line } = usePendingLine(ix);
-  const card = ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
+  const card = isSessionReview(ix) ? <SessionReviewCard key={ix.id} ix={ix} />
+    : ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
     : ix.kind === "question" ? <QuestionCard ix={ix} canApprove={canApprove} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
