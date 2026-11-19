@@ -599,6 +599,27 @@ func TestIssue11075DirectAPIHeaderErrorsRedacted(t *testing.T) {
 	}
 }
 
+func TestIssue11075DirectAPIShortHeaderErrorsRedacted(t *testing.T) {
+	for _, api := range issue11075APIs {
+		for _, operation := range []string{"test", "discover", "inference"} {
+			t.Run(api+"/"+operation, func(t *testing.T) {
+				gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":{"message":"echo z9"}}`))
+				}))
+				defer gw.Close()
+				s, _ := launcherTestService(t)
+				issue11075StoreDirect(t, s, api, gw.URL, issue11075Header+": z9", "")
+				if ok, details := issue11075Call(t, s, operation); ok {
+					t.Fatalf("gateway rejection unexpectedly succeeded: %s", details)
+				} else if strings.Contains(details, "z9") {
+					t.Fatalf("error exposed a short header value: %s", details)
+				}
+			})
+		}
+	}
+}
+
 func TestIssue11075DirectAPIHeaderLogsRedacted(t *testing.T) {
 	var recorder issue11075Recorder
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

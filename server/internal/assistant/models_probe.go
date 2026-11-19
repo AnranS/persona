@@ -421,7 +421,7 @@ func (t probeTarget) redact(s string) string {
 		secrets = append(secrets, hd[1])
 	}
 	for _, v := range secrets {
-		if len(v) >= 4 {
+		if v != "" {
 			s = strings.ReplaceAll(s, v, "***")
 		}
 	}

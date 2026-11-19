@@ -85,11 +85,11 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 	}
 	origin := via[0].URL
 	clearPrivate := func() {
-		req.Header.Set("User-Agent", modelhttp.UserAgent())
-		modelhttp.ClearOpenCodeSession(req.Header)
 		for name := range headers {
 			req.Header.Del(name)
 		}
+		req.Header.Set("User-Agent", modelhttp.UserAgent())
+		modelhttp.ClearOpenCodeSession(req.Header)
 	}
 	if !sameOrigin(origin, req.URL) {
 		clearPrivate()
@@ -263,6 +263,7 @@ func (c *Client) chat(ctx context.Context, r Request) (Reply, error) {
 	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
+	err = c.redactError(err, key)
 	returned = true
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
