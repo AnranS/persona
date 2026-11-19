@@ -362,6 +362,25 @@ fun unknownAgentName(agent: String?, label: String?, launcher: String?): String 
     return said?.takeUnless { it.equals(PaseoAgent, ignoreCase = true) } ?: launcher?.trim()?.takeIf(String::isNotEmpty) ?: said ?: agent
 }
 
+/** One owner message the assistant keeps after it could not go in (docs/assistant/assistant.md "Messages that could not go in"). */
+@Serializable
+data class UndeliveredMessage(
+    /** The original client_msg_id. */
+    val id: String = "",
+    val text: String = "",
+    /** How many pictures the message carries; their bytes stay on the assistant's computer. */
+    val images: Int? = null,
+    @WireTime val at: String = "",
+    /** waiting: sent again automatically; failed: it gave up and offers Retry / Delete. */
+    val state: String = "waiting",
+    val attempts: Int? = null,
+    @WireTime @SerialName("next_at") val nextAt: String? = null,
+    /** The manager's localized reason, shown as it is. */
+    val error: String? = null,
+) {
+    val gaveUp: Boolean get() = state == "failed"
+}
+
 @KeepGeneratedSerializer
 @Serializable(with = SessionSerializer::class)
 data class Session(
@@ -436,6 +455,8 @@ data class Session(
      */
     @SerialName("bypass_available") val bypassAvailable: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
+    /** Owner messages this assistant conversation keeps to send later, oldest first; absent or empty on older hubs. */
+    @SerialName("undelivered") val undelivered: List<UndeliveredMessage> = emptyList(),
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
     @SerialName("archived") val archived: Boolean = false,
     /** User-defined labels; null on an older hub and where the hub omits an empty set. */

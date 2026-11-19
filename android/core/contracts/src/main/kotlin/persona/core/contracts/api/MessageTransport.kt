@@ -30,6 +30,8 @@ data class MessageRequest(
 
 sealed interface MessageTransportResult {
     data object Accepted : MessageTransportResult
+    /** The assistant kept the message to send later; its session row, not the local outbox, draws it now. */
+    data object Kept : MessageTransportResult
     /** Only use this when no request bytes could have reached the hub. */
     data object NotSent : MessageTransportResult
     data object NoReceipt : MessageTransportResult

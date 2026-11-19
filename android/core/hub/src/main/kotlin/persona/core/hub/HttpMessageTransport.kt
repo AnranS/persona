@@ -93,6 +93,8 @@ class HttpMessageTransport(
         if (reply?.get("state")?.jsonPrimitive?.contentOrNull in setOf("pending", "unknown"))
             return MessageTransportResult.NoReceipt
         if (status in 200..299) {
+            if (reply?.get("delivered")?.jsonPrimitive?.contentOrNull == "later")
+                return MessageTransportResult.Kept
             onAccepted(target, reply)
             return MessageTransportResult.Accepted
         }

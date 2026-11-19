@@ -560,7 +560,8 @@ internal class ChatPageAwait(
 @Composable
 internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings, renderStyle: ChatRenderStyle,
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?, historySession: Session?,
-    res: android.content.res.Resources, sessionList: List<Session>, adoptedSessions: List<Session>): ChatPageSession {
+    res: android.content.res.Resources, sessionList: List<Session>, adoptedSessions: List<Session>,
+    keptReceipts: List<persona.core.contracts.api.MessageSendReceipt>): ChatPageSession {
     val parent = sessionList.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
     val child = parent?.subagents?.firstOrNull { it.sessionId == key.sessionId }
     // A workflow's agent reads like a subagent (`<session>@<agent id>`, #2935).
@@ -589,12 +590,12 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Keep held detail; the info sheet still offers an explicit retry. */ }
     }
-    // What an Agent's summary row leaves out and `info` doesn't say: the launcher switch waiting for the next message
-    // (#5055), read from the session's complete row where the hub looks one up (`sessions_lookup`); Glass's pill shows it.
+    // Summary rows leave out kept messages and an Agent's launcher switch; a kept receipt refreshes those details even
+    // when the transcript's rev does not change.
     var completeRow by remember(key) { mutableStateOf<Session?>(null) }
-    val lookup = "sessions_lookup" in LocalHubFeatures.current && renderStyle != ChatRenderStyle.Assistant &&
-        PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
-    LaunchedEffect(key, row?.waiting != null, row?.rev, chrome.actions, lookup) {
+    val lookup = "sessions_lookup" in LocalHubFeatures.current && (renderStyle == ChatRenderStyle.Assistant ||
+        (PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current))
+    LaunchedEffect(key, row?.waiting != null, row?.rev, chrome.actions, lookup, keptReceipts) {
         if (row?.waiting == null || !lookup) return@LaunchedEffect
         try { completeRow = chrome.actions?.completeRow(row) }
         catch (cancelled: CancellationException) { throw cancelled }

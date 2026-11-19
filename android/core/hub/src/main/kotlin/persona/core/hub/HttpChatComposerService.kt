@@ -90,6 +90,10 @@ class HttpChatComposerService internal constructor(
                         record(message, ComposerDelivery(DeliveryState.Unknown))
                         return@use MessageTransportResult.NoReceipt
                     }
+                    if (fields?.get("delivered")?.jsonPrimitive?.contentOrNull == "later") {
+                        refused.remove(message.clientMessageId)
+                        return@use MessageTransportResult.Kept
+                    }
                     try { transport.onAccepted(message.session, fields) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { /* Confirmed delivery survives a metadata presentation failure. */ }
