@@ -739,11 +739,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             action = if (clearChoices.isEmpty() || clear == null) null else ({
                                 var menu by remember(group.id, sub.key) { mutableStateOf(false) }
                                 JTextButton(clear.first, { menu = true }, icon = PersonaIcons.expand)
-                                // An anchored menu caps its width and would ellipsize these choices at larger text;
-                                // the existing action sheet keeps the count, destination and verb whole.
-                                if (res.configuration.fontScale > 1f) {
-                                    if (menu) JActionSheet(clearChoices, { menu = false }, multilineActions = true)
-                                } else JMenu(menu, { menu = false }, clearChoices)
+                                // Keep the pull-down at every text size; multiline choices prevent its capped width
+                                // from ellipsizing the count, destination, verb or filter scope at larger text.
+                                JMenu(menu, { menu = false }, clearChoices,
+                                    multilineActions = res.configuration.fontScale > 1f)
                             }))
                     }
                     if (open) rows("$prefix${group.id}/${sub.key}:", sub.rows)

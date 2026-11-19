@@ -993,8 +993,8 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
 - **Undo**: the rows leave at once and the toast's Undo reopens what moved; a failure puts them back ("Mark All as Done").
 - **Look**: the section's own words and a small chevron (iOS `Theme.Icon.pullDown`, the web's `chevron`) at the right of the
   group's title, its target 44 pt tall on iOS; the words stay whole and a long group title gives way.
-- **Android (#10425)**: ordinary text uses `JTextButton` and an anchored `JMenu` with `PersonaIcons.expand`. Above 1×,
-  `JActionSheet(multilineActions = true)` keeps the full choice and its scope subtitle readable instead of ellipsizing them.
+- **Android (#10425)**: every text size uses `JTextButton` and an anchored `JMenu` with `PersonaIcons.expand`. Above 1×,
+  `JMenu(multilineActions = true)` keeps the full choice and its scope subtitle readable instead of ellipsizing them.
   Both choices use the existing versioned `markAll` bulk-Done path and `bulkScope`; the FYI section header's separate
   Mark all as read receipt is unchanged. Tests: `InboxGroupClearTest` (targets, filters, Undo, failure, en / zh-Hans / ja)
   and `InboxGroupClearShotsTest` (every style, light / dark, 200% text, visible characters).

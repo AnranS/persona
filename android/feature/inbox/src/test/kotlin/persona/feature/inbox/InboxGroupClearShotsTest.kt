@@ -219,11 +219,9 @@ class InboxGroupClearShotsTest {
             rule.onNodeWithText(sectionChoice).assertExists()
             assertWholeChoice(groupChoice)
             assertWholeChoice(sectionChoice)
-            val window = listOf(isDialog(), isPopup()).firstOrNull {
-                rule.onAllNodes(it).fetchSemanticsNodes().isNotEmpty()
-            }
-            assertTrue("The group action must open a menu or sheet", window != null)
-            val menu = rule.onAllNodes(window!!).onLast().captureToImage().asAndroidBitmap()
+            rule.onNode(isPopup()).assertExists()
+            assertTrue("The choices must stay in an anchored pull-down, not a sheet", rule.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty())
+            val menu = rule.onAllNodes(isPopup()).onLast().captureToImage().asAndroidBitmap()
             save("$prefix-menu-$suffix", menu)
             if (compareTextGrowth) checkLargeTextEvidence("$prefix-menu-${appearance.key}-$mode", menu, groupChoice)
 

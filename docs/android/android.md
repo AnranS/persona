@@ -1617,8 +1617,8 @@ The design of #2059 (web and iOS / iPad), with the user's choices there: the hub
 - **Group actions (#10425)**: with two or more groups, FYI's and Collapsed's group titles offer the group or the whole
   section, with the title's count and Clean up all's filter/search scope. They use `bulkTargets` and `markAll` with each
   listed id and version, per manager, immediate removal, changed-only Undo and failure restoration. Needs you, In progress,
-  Done, selection and one-group sections are unchanged, including FYI's separate Mark-all-as-read section receipt. Ordinary
-  text uses `JMenu`; above 1×, `JActionSheet(multilineActions = true)` retains the full labels and scope. Tests:
+  Done, selection and one-group sections are unchanged, including FYI's separate Mark-all-as-read section receipt. Every
+  text size uses the anchored `JMenu`; above 1×, `JMenu(multilineActions = true)` retains the full labels and scope. Tests:
   `InboxGroupClearTest` (targets, filters, Undo, failure, en / zh-Hans / ja) and `InboxGroupClearShotsTest` (every style,
   light / dark, 200% text, Japanese, visible characters).
 - **Not yet**: reopening an item of a non-default manager's history that the list no longer has goes to the default manager (the repository finds an item's manager in the list; #2974).
