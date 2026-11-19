@@ -16,6 +16,21 @@ TARGETS = PROJECT.split('targets:\n', 1)[1].split('schemes:\n', 1)[0]
 SCHEMES = PROJECT.split('schemes:\n', 1)[1]
 FORMER_NAME = ('jar' + 'vis').capitalize()
 
+TEST_ONLY_TARGET_EXCEPTIONS = {
+    'AboutVersionAccessibilityHost':
+        'Standalone test process for the shared About row accessibility tree; never embedded in Persona (#11150).',
+    'AboutVersionAccessibilityUITests':
+        'UI tests for the standalone About row accessibility host, not the production app (#11150).',
+}
+TEST_ONLY_SCHEME_EXCEPTIONS = {
+    'AboutVersionAccessibilityHost': 'Runs only the standalone About row accessibility UI tests (#11150).',
+    'AboutVersionVisualTests': 'Builds PersonaTests without PersonaUITests for About row visual comparisons (#11150).',
+}
+
+
+def is_allowed_product_name(name, exceptions):
+    return name.startswith('Persona') or name in exceptions
+
 
 def blocks(text):
     matches = list(re.finditer(r'^  (\w+):\n', text, re.MULTILINE))
@@ -58,7 +73,7 @@ class AppleRenameTests(unittest.TestCase):
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
             'PersonaWatchWidgets': 'PersonaWatchWidgets', 'PersonaVisionWidgets': 'PersonaWidgets',
         }
-        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaUITests'})
+        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaUITests', *TEST_ONLY_TARGET_EXCEPTIONS})
         for target, module in expected.items():
             with self.subTest(target=target):
                 self.assertIn('PRODUCT_MODULE_NAME: ' + module + '\n', targets[target])
@@ -76,9 +91,10 @@ class AppleRenameTests(unittest.TestCase):
 
     def test_only_canonical_schemes_build_existing_targets(self):
         schemes = blocks(SCHEMES)
-        self.assertEqual(set(schemes), {'Persona', 'PersonaWatch', 'PersonaVision'})
-        for name, scheme in schemes.items():
-            self.assertIn(name + ': all\n', scheme)
+        canonical = {'Persona', 'PersonaWatch', 'PersonaVision'}
+        self.assertEqual(set(schemes), {*canonical, *TEST_ONLY_SCHEME_EXCEPTIONS})
+        for name in canonical:
+            self.assertIn(name + ': all\n', schemes[name])
         self.assertNotIn('PersonaMac', schemes)
         self.assertFalse((APPLE / (FORMER_NAME + '.xcodeproj')).is_symlink())
 

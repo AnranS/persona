@@ -20,6 +20,21 @@ import yaml
 APPLE = Path(__file__).resolve().parents[1]
 _APPLE_FILES = None
 
+TEST_ONLY_TARGET_EXCEPTIONS = {
+    "AboutVersionAccessibilityHost":
+        "Standalone test process for the shared About row accessibility tree; never embedded in Persona (#11150).",
+    "AboutVersionAccessibilityUITests":
+        "UI tests for the standalone About row accessibility host, not the production app (#11150).",
+}
+TEST_ONLY_SCHEME_EXCEPTIONS = {
+    "AboutVersionAccessibilityHost": "Runs only the standalone About row accessibility UI tests (#11150).",
+    "AboutVersionVisualTests": "Builds PersonaTests without PersonaUITests for About row visual comparisons (#11150).",
+}
+
+
+def is_allowed_product_name(name, exceptions):
+    return name.startswith("Persona") or name in exceptions
+
 
 def apple_files():
     """The repository's files under apple/: tracked, or new and not ignored (#7026).
@@ -209,18 +224,21 @@ class PersonaOnlyTests(unittest.TestCase):
     def test_project_uses_only_persona_targets_and_schemes(self):
         project = yaml.safe_load(source("project.yml"))
         self.assertEqual(project["name"], "Persona")
-        self.assertEqual(set(project["schemes"]), {"Persona", "PersonaWatch", "PersonaVision"})
+        canonical_schemes = {"Persona", "PersonaWatch", "PersonaVision"}
+        self.assertEqual(set(project["schemes"]), {*canonical_schemes, *TEST_ONLY_SCHEME_EXCEPTIONS})
         targets = project["targets"]
         for name, target in targets.items():
             with self.subTest(target=name):
-                self.assertTrue(name.startswith("Persona"))
+                self.assertTrue(is_allowed_product_name(name, TEST_ONLY_TARGET_EXCEPTIONS))
                 for dependency in target.get("dependencies", []):
                     if "target" in dependency:
                         self.assertIn(dependency["target"], targets)
                 for item in target["sources"]:
                     self.assertTrue((APPLE / item["path"]).exists(), item["path"])
-        for scheme in project["schemes"].values():
-            self.assertTrue(set(scheme["build"]["targets"]).issubset(targets))
+        for name, scheme in project["schemes"].items():
+            with self.subTest(scheme=name):
+                self.assertTrue(is_allowed_product_name(name, TEST_ONLY_SCHEME_EXCEPTIONS))
+                self.assertTrue(set(scheme["build"]["targets"]).issubset(targets))
         modules = {
             "Persona": "Persona", "PersonaVision": "Persona", "PersonaWatch": "Persona",
             "PersonaWidgets": "PersonaWidgets", "PersonaNotify": "PersonaNotify", "PersonaVisionNotify": "PersonaNotify",
