@@ -30,6 +30,8 @@ class ResolvedRoute(
     val card: RequestRef? = null,
     /** An explicit secondary parent when a management entry has no stack to infer it from. */
     val parent: NavKey? = null,
+    /** The hub group this page belongs to; the shell selects it before opening when needed. */
+    val hubGroupId: String? = null,
 )
 
 /** The launcher's "Ask Persona": the Persona tab with the cursor in its composer, cold start or not. */

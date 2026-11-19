@@ -231,7 +231,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun hubRouter(kind: (String, String) -> ConversationKind?) = Router(
         hubLink = { link ->
             resolveHubRoute(link, session.hubAddresses(), session.groups.groups.value.firstOrNull { it.selected }?.namespace,
-                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.selectedHubIds())
+                session.sessions.sessions.value.map { it.key }, session.assistant.assistant.value, session.groups.groups.value)
         },
         conversationKind = kind,
     )
@@ -244,7 +244,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             else session.sessions.sessions.value.firstOrNull { it.key == key }?.let {
                 if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent
             }
-        })
+        })?.takeIf { route ->
+            route.hubGroupId == null || route.hubGroupId == session.groups.groups.value.firstOrNull { it.selected }?.id
+        }
     }
     var selected by rememberSaveable { mutableStateOf(initialRoute?.tab ?: if (session.demo != null) AppTab.Persona else saved.tab) }
     var machine by rememberSaveable { mutableStateOf(saved.machine) }
@@ -433,7 +435,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         assistantRequest = conversation
         assistantPending = null
     }
-    val router = remember { hubRouter { m, s -> currentKind(SessionKey(m, s)) } }
+    val router = remember(session) { hubRouter { m, s -> currentKind(SessionKey(m, s)) } }
+    var hubSelectionFrom by remember { mutableStateOf<String?>(null) }
     val agentsWiring by session.agentsWiring.state.collectAsStateWithLifecycle()
     val navigationWiring = remember { MutableStateFlow(agentsWiring) }
     SideEffect {
@@ -460,15 +463,28 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
         }
     }
-    LaunchedEffect(sessions, assistant, openNavigation.value) {
+    val pendingHubLink = MainActivity.pendingHubLink.value
+    LaunchedEffect(sessions, assistant, openNavigation.value, pendingHubLink, session.identity) {
         navigator.restoreChatTabs()
-        openNavigation.value?.invoke(router)?.let {
-            settingsOpened = false
-            sidebar.opened.value = false
-            selected = openResolved(it)
-            it.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
-            openNavigation.value = null
+        val fromActivity = openNavigation.value != null
+        val route = if (fromActivity) openNavigation.value?.invoke(router)
+            else pendingHubLink?.let { router.parse(RouteInput.DeepLink(it)) }
+        if (route == null) return@LaunchedEffect
+        val selectedGroup = session.groups.groups.value.firstOrNull { it.selected }?.id
+        val targetGroup = route.hubGroupId
+        if (targetGroup != null && targetGroup != selectedGroup) {
+            hubSelectionFrom = session.identity
+            session.groups.select(targetGroup)
+            return@LaunchedEffect
         }
+        // Selection publishes a replacement session. Do not open another hub's page with the old one's assistant state.
+        if (hubSelectionFrom != null && hubSelectionFrom == session.identity) return@LaunchedEffect
+        settingsOpened = false
+        sidebar.opened.value = false
+        selected = openResolved(route)
+        route.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
+        hubSelectionFrom = null
+        if (fromActivity) openNavigation.value = null else MainActivity.pendingHubLink.value = null
     }
     LaunchedEffect(store) {
         snapshotFlow {

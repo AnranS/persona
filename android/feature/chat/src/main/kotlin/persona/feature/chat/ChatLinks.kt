@@ -35,8 +35,8 @@ enum class ChatLinkKind { Web, App, External, Refused }
  */
 sealed interface ChatAppLink {
     data class Session(val machineId: String, val sessionId: String, val itemId: String? = null) : ChatAppLink
-    /** A route-table page. [hub] is carried for the shell to authorize, never assumed to be the current hub. */
-    data class Page(val page: HubPage, val hub: String? = null) : ChatAppLink
+    /** A route-table page. [hub] is authorized by the shell; [source] survives deferred hub selection. */
+    data class Page(val page: HubPage, val hub: String? = null, val source: String = "") : ChatAppLink
     /** `persona` (also `assistant`), `agents` or `inbox`. */
     data class Tab(val tab: String) : ChatAppLink
 }
@@ -134,7 +134,7 @@ internal object ChatLinks {
         val page = result.page
         return if (page is HubPage.Agent && result.hub == null && page.view != "term") {
             ChatAppLink.Session(page.machineId, page.sessionId, page.itemId)
-        } else ChatAppLink.Page(page, result.hub)
+        } else ChatAppLink.Page(page, result.hub, trimmed)
     }
 
     /** The same first, form-decoded query value HubLinks reads; this names a profile for parsing, not an authorized hub. */

@@ -5,8 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
-import persona.core.contracts.api.AssistantSnapshot
-import persona.core.contracts.api.KnowledgeKind
+import persona.core.contracts.api.*
 import persona.core.navigation.*
 import persona.feature.knowledge.KnowledgeDetailRoute
 import persona.feature.knowledge.KnowledgeKindRoute
@@ -119,6 +118,19 @@ class ShellHubLinksTest {
         val cold = router.parse(RouteInput.DeepLink("persona://open/kb/docs/notes%2Fplan.md"))
         assertEquals(AppTab.Persona, cold?.tab)
         assertEquals(KnowledgeDetailRoute(KnowledgeKind.Docs, "notes/plan.md"), cold?.key)
+    }
+
+    @Test fun explicitHubSelectsItsPairedGroup() {
+        val groups = listOf(
+            HubGroupInfo("group-a", "A", null, true, ConnectionState.Online,
+                listOf(HubMemberInfo("hub-a", "A", paired = true))),
+            HubGroupInfo("group-b", "B", "gb000001", false, ConnectionState.Online,
+                listOf(HubMemberInfo("hub-b", "B", paired = true))),
+        )
+        val route = resolveHubRoute("persona://open/s/m1/abc-1?hub=hub-b", listOf(hub), null,
+            emptyList(), assistant, groups = groups)
+        assertEquals("group-b", route?.hubGroupId)
+        assertEquals(ChatRoute("m1~gb000001", "abc-1"), route?.key)
     }
 
     @Test fun extensionPagesAndSettingsOpenTheExistingRoutesForEveryEquivalentLink() {

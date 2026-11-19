@@ -208,6 +208,13 @@ class ChatLinksTest {
         is ChatAppLink.Tab -> mapOf("page" to link.tab)
     }
 
+    @Test fun aPageKeepsItsOriginalLinkForDeferredHubSelection() {
+        val url = "persona://open/todos/t-19?hub=hub-b"
+        val link = ChatLinks.appLink(url)
+        assertTrue(link is ChatAppLink.Page)
+        assertEquals(url, (link as ChatAppLink.Page).source)
+    }
+
     @Test fun externalLinksAskFirstAndNeverComeBackIn() {
         assertEquals(ExternalPrompt("写邮件？", "打开邮件 App，写给 me@example.com。"), ChatLinks.externalPrompt("mailto:me@example.com?subject=hi", res))
         assertEquals(ExternalPrompt("拨打电话？", "打开拨号，号码 +86 10086。"), ChatLinks.externalPrompt("tel:+86%2010086", res))
