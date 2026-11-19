@@ -411,6 +411,14 @@ def verify_remote_assets(repository, tag, assets, listed, gh="gh", missing=False
             raise ConfigError("uploaded asset digest verification failed: " + item["name"])
 
 
+def release_build(repo, commit):
+    """One UTC-minute build identity shared by every publisher of this exact tag commit."""
+    value = git(repo, "show", "-s", "--format=%cd", "--date=format:%Y%m%d%H%M", commit)
+    if not re.fullmatch(r"[0-9]{12}", value):
+        raise ConfigError("cannot derive a release build number from the tag commit")
+    return int(value)
+
+
 def is_beta_tag(tag):
     return bool(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*", tag))
 
@@ -561,6 +569,48 @@ def ci_signing_conclusion(repository, tag, gh="gh"):
     raise ConfigError("Darwin signing job did not complete")
 
 
+def manifest_descriptors(node):
+    if isinstance(node, dict):
+        if isinstance(node.get("name"), str) and isinstance(node.get("sha256"), str):
+            yield node
+        else:
+            for value in node.values():
+                yield from manifest_descriptors(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from manifest_descriptors(value)
+
+
+def merge_ci_windows(manifest, assets, directory):
+    """Keep the locally verified Windows bytes/reports beside CI's other files, with one coherent manifest."""
+    local_path = next((Path(item["path"]) for item in assets if item["name"] == "latest.json"), None)
+    if local_path is None:
+        raise ConfigError("the local hub receipt has no latest.json for Windows verification")
+    local_manifest = json.loads(local_path.read_text())
+    if any(item["name"].endswith(".exe.gz") for item in manifest_descriptors(manifest)) \
+            and local_manifest.get("build") != manifest.get("build"):
+        raise ConfigError("Windows verification requires the same CI and local build number")
+    local_windows = {item["name"]: item for item in manifest_descriptors(local_manifest)
+                     if item["name"].endswith(".exe.gz")}
+
+    def replace(node):
+        if isinstance(node, dict):
+            name = node.get("name")
+            if isinstance(name, str) and name.endswith(".exe.gz"):
+                if name not in local_windows:
+                    raise ConfigError("local receipt has no verified Windows artifact for " + name)
+                return local_windows[name]
+            return {key: replace(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [replace(value) for value in node]
+        return node
+
+    merged = replace(manifest)
+    (directory / "latest.json").write_text(json.dumps(merged, indent=2) + "\n")
+    lines = ["%s  %s\n" % (item["sha256"], item["name"]) for item in manifest_descriptors(merged)]
+    (directory / "SHA256SUMS").write_text("".join(sorted(lines, key=lambda line: line.split(" ", 1)[1])))
+
+
 def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
     """When signing is enabled, use its complete CI artifact set instead of an independently built private set."""
     if config["platform"] != "hub" or ci_signing_conclusion(config["repository"], tag, gh) != "success":
@@ -572,21 +622,21 @@ def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
                         "--pattern", name, "--dir", str(directory)], check=True, timeout=300)
         return directory / name
 
-    manifest = json.loads(download("latest.json").read_text())
+    manifest = json.loads(download("ci-latest.json").read_text())
     if manifest.get("commit") != commit:
         raise ConfigError("CI latest.json is for another source commit")
-    names = {"latest.json", "SHA256SUMS", "VERSION", "install.sh"}
-    for group in ("files", "programs", "nodes", "links", "helpers"):
-        platforms = manifest.get(group) or {}
-        for descriptor in platforms.values():
-            items = [descriptor] if group in ("files", "links") else descriptor.values() if isinstance(descriptor, dict) else []
-            for item in items:
-                if isinstance(item, dict) and isinstance(item.get("name"), str):
-                    names.add(item["name"])
+    names = {"VERSION", "install.sh", "ci-latest.json"}
+    for item in manifest_descriptors(manifest):
+        if not item["name"].endswith(".exe.gz"):
+            names.add(item["name"])
     downloaded = {name: download(name) for name in sorted(names)}
+    merge_ci_windows(manifest, assets, directory)
+    downloaded["latest.json"] = directory / "latest.json"
+    downloaded["SHA256SUMS"] = directory / "SHA256SUMS"
     result = [dict(item, path=str(downloaded[item["name"]])) if item["name"] in downloaded else item for item in assets]
     present = {item["name"] for item in result}
-    result += [{"path": str(path), "name": name} for name, path in downloaded.items() if name not in present]
+    result += [{"path": str(path), "name": name} for name, path in downloaded.items()
+               if name not in present and name != "ci-latest.json"]
     return result
 
 
@@ -621,7 +671,8 @@ def publish_once(config, tag, commit):
     write_state(state, {"tag": tag, "commit": commit, "platform": platform, "phase": "publishing"})
     command = [item.format(**fields) for item in config["command"]]
     env = dict(os.environ, PERSONA_RELEASE_TAG=tag, PERSONA_RELEASE_COMMIT=commit,
-               PERSONA_RELEASE_VERSION=tag[1:], PERSONA_RELEASE_REPOSITORY=config["repository"],
+               PERSONA_RELEASE_VERSION=tag[1:], PERSONA_RELEASE_BUILD=str(release_build(config["repo"], commit)),
+               PERSONA_RELEASE_REPOSITORY=config["repository"],
                PERSONA_RELEASE_PLATFORM=platform, PERSONA_RELEASE_WORKTREE=str(config["worktree"]))
     subprocess.run(command, cwd=config["worktree"], env=env, check=True)
     assets = read_receipt(Path(config["receipt"]).expanduser(), commit)

@@ -163,7 +163,7 @@ if [ -n "${SITE_ONLY:-}" ]; then
 fi
 
 # The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one.
-BUILD="$(date -u +%Y%m%d%H%M)"
+BUILD="${PERSONA_RELEASE_BUILD:-$(date -u +%Y%m%d%H%M)}"
 # The nearest vX.Y.Z tag, a lightweight one too, as deploy.sh names its builds (#7201).
 VERSION="${PERSONA_RELEASE_VERSION:-${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}}"
 COMMIT="$(git rev-parse HEAD)"

@@ -1,5 +1,6 @@
 """The private tag consumer never broadens signing credentials or public refs."""
 import io
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -259,12 +260,43 @@ class TagReleaseTests(unittest.TestCase):
 
     def with_ci_indexes(self, assets):
         directory = Path(assets[0]["path"]).parent
-        for name in ("VERSION", "SHA256SUMS"):
-            (directory / name).write_text(name + "\n")
-        return assets + [{"path": str(directory / name), "name": name} for name in ("VERSION", "SHA256SUMS")]
+        (directory / "ci-latest.json").write_text((directory / "latest.json").read_text())
+        (directory / "latest.json").unlink()
+        (directory / "VERSION").write_text("0.2.1\n")
+        kept = [item for item in assets if item["name"] != "latest.json"]
+        return kept + [{"path": str(directory / "ci-latest.json"), "name": "ci-latest.json"},
+                       {"path": str(directory / "VERSION"), "name": "VERSION"}]
+
+    def with_windows_verification(self, assets):
+        import gzip
+        directory = Path(assets[0]["path"]).parent
+        name = "persona-link-windows-amd64.exe.gz"
+        binary = bytearray(128)
+        binary[:2], binary[60:64], binary[64:68] = b"MZ", (64).to_bytes(4, "little"), b"PE\0\0"
+        binary[68:70] = (0x8664).to_bytes(2, "little")
+        latest = next(item for item in assets if item["name"] == "latest.json")
+        manifest = json.loads(Path(latest["path"]).read_text())
+        binary += b"verified Windows connector\x00main.build\x00%d\x00" % manifest["build"]
+        archive = gzip.compress(bytes(binary), mtime=0)
+        (directory / name).write_bytes(archive)
+        descriptor = manifest["links"]["windows-amd64"]
+        descriptor.update(size=len(archive), sha256=tag_release.hashlib.sha256(archive).hexdigest(),
+                          binary_sha256=tag_release.hashlib.sha256(binary).hexdigest())
+        Path(latest["path"]).write_text(json.dumps(manifest))
+        report = {
+            "schema": 2, "version": manifest["version"], "build": manifest["build"], "platform": "windows-amd64",
+            "channel": "release", "program": "persona-link",
+            "archive": {"name": name, "size": len(archive), "sha256": descriptor["sha256"]},
+            "binaries": {"persona-link.exe": {"size": len(binary), "sha256": descriptor["binary_sha256"]}},
+            "outputs": {"version": manifest["version"],
+                        "verbose": "%s\nchannel release, build %d" % (manifest["version"], manifest["build"])},
+        }
+        report_path = directory / "persona-link-windows-amd64.verification.json"
+        report_path.write_text(json.dumps(report))
+        return assets + [{"path": str(report_path), "name": report_path.name}]
 
     def publish_receipt(self, assets, tag, platform, label, remote_manifest=None, prerelease=False, events=None,
-                        stable_tags=None, feed_error=None, ci_assets=None, ci_conclusion="success"):
+                        stable_tags=None, feed_error=None, ci_assets=None, ci_conclusion="success", verify_windows=False):
         """Run the real deterministic publisher with only its build command, GitHub CLI and tag-feed HTTP mocked."""
         data = json.loads(self.config_path.read_text())
         state = self.root / ("publication-" + label)
@@ -277,6 +309,7 @@ class TagReleaseTests(unittest.TestCase):
         remote = [{"name": item["name"],
                    "digest": "sha256:" + tag_release.hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest()}
                   for item in remote_source]
+        remote_bytes = {item["name"]: Path(item["path"]).read_bytes() for item in remote_source}
         events = [] if events is None else events
         stable_tags = [tag] if stable_tags is None else stable_tags
         real_run, real_output = subprocess.run, subprocess.check_output
@@ -293,6 +326,12 @@ class TagReleaseTests(unittest.TestCase):
                 destination = Path(command[command.index("--dir") + 1])
                 destination.mkdir(parents=True, exist_ok=True)
                 destination.joinpath(name).write_bytes(source.read_bytes())
+            if command[:3] == ["gh", "release", "upload"]:
+                for filename in command[6:]:
+                    path = Path(filename)
+                    remote_bytes[path.name] = path.read_bytes()
+                    remote.append({"name": path.name,
+                                   "digest": "sha256:" + tag_release.hashlib.sha256(path.read_bytes()).hexdigest()})
             return subprocess.CompletedProcess(command, 0)
 
         def output(command, **kwargs):
@@ -302,8 +341,10 @@ class TagReleaseTests(unittest.TestCase):
             if command[:2] == ["gh", "run"]:
                 return json.dumps([{"databaseId": 123}] if ci_assets is not None else [])
             if command[:2] == ["gh", "api"]:
-                return json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "status": "completed",
-                                             "conclusion": ci_conclusion}]})
+                if "/actions/runs/" in command[2]:
+                    return json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "status": "completed",
+                                                 "conclusion": ci_conclusion}]})
+                return json.dumps({"assets": remote})
             if command[:3] == ["gh", "release", "list"]:
                 return json.dumps([{"tagName": name} for name in stable_tags])
             self.assertEqual(command[:3], ["gh", "release", "view"])
@@ -318,8 +359,7 @@ class TagReleaseTests(unittest.TestCase):
             if feed_error is not None:
                 raise feed_error
             if remote_manifest is None:
-                latest = next(item for item in remote_source if item["name"] == "latest.json")
-                body = Path(latest["path"]).read_bytes()
+                body = remote_bytes["latest.json"]
             else:
                 body = json.dumps(remote_manifest).encode()
             return io.BytesIO(body)
@@ -330,10 +370,11 @@ class TagReleaseTests(unittest.TestCase):
             events.append(("upload", release_tag))
             return real_upload(repository, release_tag, release_assets, gh)
 
+        windows_check = nullcontext() if verify_windows else patch.object(tag_release, "check_windows_artifacts")
         with patch.object(tag_release, "prepare_worktree",
                           side_effect=lambda config, commit: config["worktree"].mkdir(exist_ok=True)), \
                 patch.object(tag_release, "upload", side_effect=upload), \
-                patch.object(tag_release, "check_windows_artifacts"), \
+                windows_check, \
                 patch.object(tag_release.subprocess, "run", side_effect=run), \
                 patch.object(tag_release.subprocess, "check_output", side_effect=output), \
                 patch("urllib.request.urlopen", side_effect=fetch):
@@ -411,21 +452,37 @@ class TagReleaseTests(unittest.TestCase):
         self.assertEqual(state["phase"], "complete")
 
     def test_complete_ci_hub_artifacts_replace_independent_private_builds(self):
-        local = self.with_installer(self.release_receipt(directory_name="local-receipt"),
-                                    "https://github.com/example/project/releases/latest/download")
-        ci = self.with_ci_indexes(self.with_installer(self.release_receipt(build=202611110800, directory_name="ci-receipt"),
+        local = self.with_windows_verification(self.with_installer(self.release_receipt(directory_name="local-receipt"),
+                                                                  "https://github.com/example/project/releases/latest/download"))
+        ci = self.with_ci_indexes(self.with_installer(self.release_receipt(directory_name="ci-receipt"),
                                  "https://github.com/example/project/releases/latest/download"))
-        latest = next(item for item in ci if item["name"] == "latest.json")
+        latest = next(item for item in ci if item["name"] == "ci-latest.json")
         manifest = json.loads(Path(latest["path"]).read_text())
         manifest["commit"] = self.commit
         Path(latest["path"]).write_text(json.dumps(manifest))
-        events = self.publish_receipt(local, "v0.2.1", "hub", "complete-ci-hub", ci_assets=ci)
+        events = self.publish_receipt(local, "v0.2.1", "hub", "complete-ci-hub", ci_assets=ci, verify_windows=True)
         downloads = [command for kind, command in events if kind == "github" and command[:3] == ["gh", "release", "download"]]
         self.assertTrue(downloads)
+        self.assertFalse(any(command[command.index("--pattern") + 1].endswith(".exe.gz") for command in downloads))
         state = json.loads((self.root / "publication-complete-ci-hub" / "state.json").read_text())
         self.assertEqual(state["phase"], "complete")
         self.assertTrue(any("ci-artifacts-" in item["path"] for item in state["assets"]))
+        self.assertTrue(any(item["name"] == "persona-link-windows-amd64.verification.json" for item in state["assets"]))
         self.assertEqual(len(self.release_actions(events, "edit")), 1)
+
+    def test_ci_windows_build_mismatch_is_rejected(self):
+        local = self.with_windows_verification(self.release_receipt(directory_name="local-receipt"))
+        ci = self.with_ci_indexes(self.with_installer(self.release_receipt(build=202611110800, directory_name="ci-receipt"),
+                                                     "https://github.com/example/project/releases/latest/download"))
+        latest = next(item for item in ci if item["name"] == "ci-latest.json")
+        manifest = json.loads(Path(latest["path"]).read_text())
+        manifest["commit"] = self.commit
+        Path(latest["path"]).write_text(json.dumps(manifest))
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "same CI and local build"):
+            self.publish_receipt(local, "v0.2.1", "hub", "mismatched-ci-windows-build",
+                                 ci_assets=ci, verify_windows=True, events=events)
+        self.assertFalse(any(kind == "upload" for kind, _ in events))
 
     def test_failed_ci_signing_stops_hub_publication(self):
         local = self.release_receipt(directory_name="local-receipt")

@@ -78,8 +78,9 @@ prereleases and other platforms never move that pointer. The uploaded checkpoint
 retains the exact verified receipt and digests, so a feed or promotion retry
 reuses it instead of rebuilding conflicting assets or rerunning the optional
 per-tag Agent. When Darwin signing is enabled in CI, the coordinator waits for
-that job and uses its complete manifest and downloads rather than independently
-built private files; a failed job stops publication.
+that job and uses its staging `ci-latest.json` and non-Windows downloads, merged
+with the locally verified Windows archives and reports into one final manifest;
+a failed job stops publication.
 
 For a Windows CLI ZIP or a current `persona-link` / `personad` / `persona-node-windows-<arch>.exe.gz`,
 run `scripts/operations/windows_release.py` on Windows of the matching architecture before writing the artifact receipt. Include each `<artifact-stem>.verification.json` report with the exact artifact and release metadata. Node programs also require their exact `latest.json` entry. The coordinator verifies native command results, the selected beta/stable receipt identity, PE architecture and the binding to exact archive and executable hashes. A Link report never verifies personad or persona-node. Without native verification, report the Windows artifact as blocked; do not infer its version from a filename, a build number, or a string found in its bytes. These command-line programs are not Authenticode-signed; native execution and publisher signing are separate requirements.

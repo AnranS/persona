@@ -313,10 +313,17 @@ class ManualWorkflowTests(unittest.TestCase):
             self.assertNotIn('--latest', text)
         upload = next(step for step in release['jobs']['darwin-cli-sign']['steps']
                       if step.get('name') == 'Upload signed Darwin downloads')
-        for required in ('build-publish/bin/*.gz', 'build-publish/install.sh', 'build-publish/bin/SHA256SUMS',
-                         'build-publish/bin/VERSION', 'build-publish/bin/latest.json'):
+        for required in ('build-publish/bin/*.gz', 'build-publish/install.sh',
+                         'build-publish/bin/VERSION', 'build-publish/bin/ci-latest.json'):
             self.assertIn(required, upload['run'])
+        self.assertNotIn('build-publish/bin/latest.json', upload['run'])
+        self.assertNotIn('build-publish/bin/SHA256SUMS', upload['run'])
         self.assertNotIn('--clobber', upload['run'])
+        self.assertIn('*.exe.gz)', upload['run'])
+        darwin = yaml.dump(release['jobs']['darwin-cli-sign'])
+        self.assertIn('resume_github_release.py prepare', darwin)
+        self.assertIn('resume_github_release.py restore', darwin)
+        self.assertIn('PERSONA_RELEASE_BUILD', darwin)
         create = release['jobs']['publish']['steps'][-1]
         self.assertEqual(create['name'], 'Create GitHub Release')
         self.assertIn('args=(--latest=false ', create['run'])

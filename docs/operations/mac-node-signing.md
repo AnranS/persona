@@ -129,18 +129,20 @@ missing, the gate reports `Darwin CLI signing blocked` and the job does not buil
 or upload. `sign_darwin_cli.py` verifies each signature and rejects a remaining
 ad-hoc `cdhash`; the downloads are then recompressed from the signed binaries and
 the manifest is rebuilt before upload, so a release feed never carries stale
-ad-hoc bytes or a mismatched binary digest. When this job is enabled, it is the
-complete hub artifact producer: it uploads every archive, `install.sh`,
-`latest.json`, `SHA256SUMS` and `VERSION`, without `--clobber`. An existing asset
-with the same digest is skipped, a missing one is uploaded and read back for
-digest verification, and different bytes are a conflict that stops the job.
-Failed-job reruns therefore resume without replacing verified assets. The hub
-coordinator waits for this job, downloads and verifies that complete manifest and
-its files as one set, and promotes only after every other required platform is
-ready. A failed job stops publication; a skipped job keeps the unsigned
-private-build path. A prerelease manifest belongs to that prerelease and does not
-move `releases/latest`. This is a CI publication choice, not a local signing
-requirement for other builders.
+ad-hoc bytes or a mismatched binary digest. When this job is enabled, it produces
+CI's artifact set: every non-Windows archive, `install.sh`, `VERSION` and the
+staging `ci-latest.json`, without `--clobber`. An existing asset with the same
+digest is skipped, a missing one is uploaded and read back for digest
+verification, and different bytes are a conflict that stops the job. Before
+building, `resume_github_release.py` selects the existing manifest's build number
+or the tag commit's UTC timestamp; after signing it restores existing assets with
+digest verification, so failed-job reruns reuse bytes instead of rejecting a new
+timestamp. The hub coordinator waits for this job, downloads the staging manifest
+and CI files, merges them with the locally verified Windows archives and reports,
+and publishes the only final `latest.json` and `SHA256SUMS`. A failed job stops
+publication; a skipped job keeps the unsigned private-build path. A prerelease
+manifest belongs to that prerelease and does not move `releases/latest`. This is
+a CI publication choice, not a local signing requirement for other builders.
 
 The first certificate-signed build after the historical ad-hoc ones is a new
 program to macOS, so grant the privacy permissions once more. Subsequent updates
