@@ -52,14 +52,16 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowToast
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
+import persona.core.contracts.api.PairingProgress
 import persona.core.contracts.api.PairingRequest
 import persona.core.contracts.api.PairingService
+import persona.core.contracts.api.PairingStage
 import persona.core.contracts.api.SessionsRepository
 import persona.core.designsystem.PersonaTheme
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -79,6 +81,10 @@ class PairingScanActivityTest {
         override val isPaired = MutableStateFlow(false)
         val requests = mutableListOf<PairingRequest>()
         override suspend fun pair(request: PairingRequest) { requests += request }
+        override suspend fun pair(request: PairingRequest, progress: (PairingProgress) -> Unit) {
+            requests += request
+            progress(PairingProgress(PairingStage.ExchangeCredentials))
+        }
         override suspend fun unpair() = Unit
     }
 
@@ -99,14 +105,12 @@ class PairingScanActivityTest {
 
     @Before fun setUpPhotos() {
         Robolectric.setupContentProvider(PhotoProvider::class.java, PhotoProvider.AUTHORITY)
-        ShadowToast.reset()
     }
 
     @After fun destroyScanners() {
         controllers.asReversed().forEach { it.destroy() }
         controllers.clear()
         PhotoProvider.clear()
-        ShadowToast.reset()
     }
 
     private fun text(id: Int) = rule.activity.getString(id)
@@ -194,20 +198,15 @@ class PairingScanActivityTest {
     private fun visibleTexts(scanner: OpenScanner) = views(scanner).filterIsInstance<TextView>()
         .filter { it.isShown }.map { it.text.toString() }.toSet()
 
-    private fun newErrors(scanner: OpenScanner, before: Set<String>): List<String> {
-        val inline = visibleTexts(scanner).filter { it !in before && it.isNotBlank() }
-        val toast = ShadowToast.getTextOfLatestToast()?.takeIf { it.isNotBlank() }
-        return inline + listOfNotNull(toast)
-    }
-
-    private fun assertRejectedPhoto(scanner: OpenScanner, pairing: FakePairing, image: Uri) {
-        val before = visibleTexts(scanner)
-        ShadowToast.reset()
+    private fun assertRejectedPhoto(scanner: OpenScanner, pairing: FakePairing, image: Uri, errorCopy: Int) {
         pick(scanner, choosePhoto(scanner), image)
-        rule.waitUntil(5_000) { newErrors(scanner, before).isNotEmpty() }
-        val errors = newErrors(scanner, before)
-        assertTrue("The photo error must explain the QR problem, not merely fail silently: $errors",
-            errors.any { it.contains("QR", ignoreCase = true) })
+        val expected = text(errorCopy)
+        rule.waitUntil(5_000) {
+            shadowOf(Looper.getMainLooper()).idle()
+            expected in visibleTexts(scanner) && chooseButton(scanner).isEnabled
+        }
+        assertTrue("The specific photo error must replace the progress copy: ${visibleTexts(scanner)}",
+            expected in visibleTexts(scanner))
 
         // No ScanContract result means PairingScreen.accept cannot create confirmation, failure or pairing state.
         assertFalse("An unusable photo must leave the user on the scan screen", scanner.activity.isFinishing)
@@ -229,7 +228,10 @@ class PairingScanActivityTest {
         val scanner = openScanner(pairing)
         pick(scanner, choosePhoto(scanner), PhotoProvider.put(qrPhoto(payload)))
 
-        rule.waitUntil(5_000) { scanner.activity.isFinishing }
+        rule.waitUntil(5_000) {
+            shadowOf(Looper.getMainLooper()).idle()
+            scanner.activity.isFinishing
+        }
         val shadow = shadowOf(scanner.activity)
         val result = ScanContract().parseResult(shadow.resultCode, shadow.resultIntent)
         assertEquals("The picked QR payload must reach ScanContract unchanged", payload, result.contents)
@@ -246,7 +248,10 @@ class PairingScanActivityTest {
         assertTrue("Decoding is not consent: confirmation must still be required", pairing.requests.isEmpty())
 
         rule.onNode(hasText(text(R.string.settings_pairing_confirm)) and hasClickAction()).performClick()
-        rule.waitUntil(5_000) { pairing.requests.isNotEmpty() }
+        rule.waitUntil(5_000) {
+            shadowOf(Looper.getMainLooper()).idle()
+            pairing.requests.isNotEmpty()
+        }
         rule.waitForIdle()
         assertEquals("Exactly one photo result may produce exactly one pairing request", 1, pairing.requests.size)
         assertEquals(PairingInput.parse(payload), pairing.requests.single())
@@ -256,7 +261,7 @@ class PairingScanActivityTest {
         val pairing = FakePairing()
         val scanner = openScanner(pairing)
         val blank = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.LTGRAY) }
-        assertRejectedPhoto(scanner, pairing, PhotoProvider.put(blank.png()))
+        assertRejectedPhoto(scanner, pairing, PhotoProvider.put(blank.png()), R.string.settings_pairing_scan_photo_none)
     }
 
     @Test fun photoWithMultipleQrsIsNotAnAmbiguousPairingAndKeepsScanningAvailable() {
@@ -270,14 +275,14 @@ class PairingScanActivityTest {
             drawBitmap(first, 0f, 0f, null)
             drawBitmap(second, 560f, 0f, null)
         }
-        assertRejectedPhoto(scanner, pairing, PhotoProvider.put(multiple.png()))
+        assertRejectedPhoto(scanner, pairing, PhotoProvider.put(multiple.png()), R.string.settings_pairing_scan_photo_multiple)
     }
 
     @Test fun unreadablePhotoShowsAnErrorWithoutPairingOrClosingTheScanner() {
         val pairing = FakePairing()
         val scanner = openScanner(pairing)
         val unreadable = PhotoProvider.put("this is not an encoded image".encodeToByteArray())
-        assertRejectedPhoto(scanner, pairing, unreadable)
+        assertRejectedPhoto(scanner, pairing, unreadable, R.string.settings_pairing_scan_photo_unreadable)
     }
 
     @Test fun photoPickerNeedsNeitherPhotoLibraryNorCameraPermission() {
@@ -362,15 +367,17 @@ class PairingScanActivityTest {
 
         override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
             val bytes = photos[uri.lastPathSegment] ?: throw FileNotFoundException(uri.toString())
-            return openPipeHelper(uri, getType(uri), null, bytes) { output, _, _, _, data ->
-                ParcelFileDescriptor.AutoCloseOutputStream(output).use { it.write(data) }
-            }
+            val file = File.createTempFile("pairing-photo-", ".png", context!!.cacheDir)
+            file.writeBytes(bytes)
+            files += file
+            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
 
         companion object {
             const val AUTHORITY = "persona.feature.settings.test.photos"
             private val next = AtomicInteger()
             private val photos = ConcurrentHashMap<String, ByteArray>()
+            private val files = mutableListOf<File>()
 
             fun put(bytes: ByteArray): Uri {
                 val id = next.incrementAndGet().toString()
@@ -378,7 +385,11 @@ class PairingScanActivityTest {
                 return Uri.parse("content://$AUTHORITY/$id")
             }
 
-            fun clear() { photos.clear() }
+            fun clear() {
+                photos.clear()
+                files.forEach(File::delete)
+                files.clear()
+            }
         }
     }
 
