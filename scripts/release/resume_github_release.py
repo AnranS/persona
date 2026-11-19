@@ -83,7 +83,7 @@ def restore(repository, tag, directory, gh, resume=None):
             continue
         if name.endswith(".exe.gz"):
             continue  # Native Windows verification stays with the hub publisher's exact verified bytes.
-        if not (name.endswith(".gz") or name in {"install.sh", "SHA256SUMS", "VERSION", "latest.json", "ci-latest.json"}):
+        if not (name.endswith(".gz") or name in {"install.sh", "SHA256SUMS", "VERSION", "latest.json", "ci-latest.json", "ci-SHA256SUMS"}):
             continue
         data = download(repository, tag, item, gh)
         target = directory / name if name == "install.sh" else directory / "bin" / name

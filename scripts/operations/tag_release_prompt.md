@@ -79,7 +79,8 @@ retains the exact verified receipt and digests, so a feed or promotion retry
 reuses it instead of rebuilding conflicting assets or rerunning the optional
 per-tag Agent. When Darwin signing is enabled in CI, the coordinator waits for
 the current run, even while it is queued before the signing job is registered,
-and uses its staging `ci-latest.json` and non-Windows downloads, merged
+and uses its staging `ci-latest.json` and `ci-SHA256SUMS` with digest checks and
+the exact requested commit's non-Windows downloads, merged
 with the locally verified Windows archives and reports into one final manifest;
 a failed job stops publication. An existing final `latest.json` or `SHA256SUMS`
 means the Release is already coordinated and is never used as CI staging input.

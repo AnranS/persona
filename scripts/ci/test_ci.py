@@ -314,7 +314,7 @@ class ManualWorkflowTests(unittest.TestCase):
         upload = next(step for step in release['jobs']['darwin-cli-sign']['steps']
                       if step.get('name') == 'Upload signed Darwin downloads')
         for required in ('build-publish/bin/*.gz', 'build-publish/install.sh',
-                         'build-publish/bin/VERSION', 'build-publish/bin/ci-latest.json'):
+                         'build-publish/bin/VERSION', 'build-publish/bin/ci-latest.json', 'build-publish/bin/ci-SHA256SUMS'):
             self.assertIn(required, upload['run'])
         self.assertNotIn('build-publish/bin/latest.json', upload['run'])
         self.assertNotIn('build-publish/bin/SHA256SUMS', upload['run'])

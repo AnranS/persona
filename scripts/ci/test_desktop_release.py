@@ -211,7 +211,7 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Developer ID Application", install["run"])
         self.assertIn("Darwin CLI signing blocked", install["run"])
         self.assertIn("sign_darwin_cli.py build-publish/bin --identity", sign["run"])
-        self.assertIn("shasum -a 256 -- *.gz > SHA256SUMS", manifest["run"])
+        self.assertIn("shasum -a 256 -- *.gz > ci-SHA256SUMS", manifest["run"])
         self.assertIn("release manifest", manifest["run"])
         self.assertIn("release verify", manifest["run"])
         patterns = re.findall(r'build-publish/bin/[^\s";]+', upload["run"])
@@ -220,7 +220,7 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
                 archive = f"build-publish/bin/{program}-darwin-{architecture}.gz"
                 with self.subTest(archive=archive):
                     self.assertTrue(any(fnmatch.fnmatchcase(archive, pattern) for pattern in patterns), archive)
-        for metadata in ("ci-latest.json", "VERSION"):
+        for metadata in ("ci-latest.json", "ci-SHA256SUMS", "VERSION"):
             self.assertIn(f"build-publish/bin/{metadata}", upload["run"])
         self.assertIn(".digest", upload["run"])
         # A missing certificate makes the whole build/sign/upload job skip; there is no ad-hoc upload fallback.

@@ -551,21 +551,26 @@ def check_beta_manifest(assets, version):
         raise ConfigError("beta latest.json must carry this beta version/channel")
 
 
-def ci_signing_conclusion(repository, tag, gh="gh"):
+def ci_signing_conclusion(repository, tag, gh="gh", commit=None):
     """The signing job's conclusion, or None when this tag's workflow has no such job."""
     runs = json.loads(subprocess.check_output(
-        [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId,status", "--limit", "1"],
+        [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId,status,headSha", "--limit", "1"],
         text=True, timeout=60))
     if not runs:
         return None
-    run_id = runs[0]["databaseId"]
+    run = runs[0]
+    if commit is not None and run.get("headSha") != commit:
+        raise ConfigError("Darwin signing workflow is for another source commit")
+    run_id = run["databaseId"]
     for _ in range(360):
         data = json.loads(subprocess.check_output(
             [gh, "api", "repos/%s/actions/runs/%s/jobs" % (repository, run_id), "--paginate"], text=True, timeout=60))
         job = next((item for item in data.get("jobs", []) if item.get("name") == "Sign Darwin command-line programs"), None)
         if job is None:
             status = json.loads(subprocess.check_output(
-                [gh, "run", "view", str(run_id), "--repo", repository, "--json", "status"], text=True, timeout=60))
+                [gh, "run", "view", str(run_id), "--repo", repository, "--json", "status,headSha"], text=True, timeout=60))
+            if commit is not None and status.get("headSha") != commit:
+                raise ConfigError("Darwin signing workflow is for another source commit")
             if status.get("status") != "completed":
                 time.sleep(10)
                 continue
@@ -634,23 +639,32 @@ def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
     """When signing is enabled, use its complete CI artifact set instead of an independently built private set."""
     if config["platform"] != "hub":
         return assets
-    conclusion = ci_signing_conclusion(config["repository"], tag, gh)
+    conclusion = ci_signing_conclusion(config["repository"], tag, gh, commit=commit)
     if conclusion != "success":
         return assets
     if final_hub_manifest_exists(config["repository"], tag, gh):
         return assets
     directory = Path(tempfile.mkdtemp(prefix="ci-artifacts-", dir=config["state_dir"]))
+    remote = json.loads(subprocess.check_output(
+        [gh, "release", "view", tag, "--repo", config["repository"], "--json", "assets"], text=True, timeout=60))
+    digests = {item.get("name"): item.get("digest") for item in remote.get("assets", []) if isinstance(item, dict)}
+    if "ci-SHA256SUMS" not in digests:
+        raise ConfigError("CI SHA256SUMS is missing")
 
     def download(name):
+        path = directory / name
         subprocess.run([gh, "release", "download", tag, "--repo", config["repository"],
                         "--pattern", name, "--dir", str(directory)], check=True, timeout=300)
-        return directory / name
+        expected = digests.get(name)
+        if not isinstance(expected, str) or hashlib.sha256(path.read_bytes()).hexdigest() != expected.removeprefix("sha256:"):
+            raise ConfigError("downloaded CI asset digest differs: " + name)
+        return path
 
     manifest_path = download("ci-latest.json")
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("commit") != commit:
         raise ConfigError("CI latest.json is for another source commit")
-    names = {"VERSION", "install.sh"}
+    names = {"VERSION", "install.sh", "ci-SHA256SUMS"}
     for item in manifest_descriptors(manifest):
         if not item["name"].endswith(".exe.gz"):
             names.add(item["name"])

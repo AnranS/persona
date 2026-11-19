@@ -201,7 +201,7 @@ jobs:
               gzip -n -9 -c "$bin" > "$bin.gz"
             done
           done
-          (cd build-publish/bin && shasum -a 256 -- *.gz > SHA256SUMS && printf '%s\n' "$VERSION" > VERSION)
+          (cd build-publish/bin && shasum -a 256 -- *.gz > ci-SHA256SUMS && printf '%s\n' "$VERSION" > VERSION)
           python3 scripts/release/resume_github_release.py restore --repository "$GH_REPO" --tag "$RELEASE_TAG" --commit "$COMMIT" --directory build-publish --resume "$RUNNER_TEMP/release-resume.json"
           if [ "$has_manifest" != True ]; then
             "$host" release manifest --dir build-publish/bin --version "$VERSION" --build "$build" --commit "$COMMIT" --channel "$RELEASE_CHANNEL" --out build-publish/bin/ci-latest.json
@@ -217,7 +217,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          for f in build-publish/bin/*.gz build-publish/install.sh build-publish/bin/VERSION build-publish/bin/ci-latest.json; do
+          for f in build-publish/bin/*.gz build-publish/install.sh build-publish/bin/VERSION build-publish/bin/ci-latest.json build-publish/bin/ci-SHA256SUMS; do
             test -f "$f" || continue
             name="${f##*/}"
             case "$name" in

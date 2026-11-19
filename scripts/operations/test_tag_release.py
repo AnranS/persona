@@ -266,8 +266,10 @@ class TagReleaseTests(unittest.TestCase):
         (directory / "ci-latest.json").write_text((directory / "latest.json").read_text())
         (directory / "latest.json").unlink()
         (directory / "VERSION").write_text("0.2.1\n")
+        (directory / "ci-SHA256SUMS").write_text("staging checksums\n")
         kept = [item for item in assets if item["name"] != "latest.json"]
         return kept + [{"path": str(directory / "ci-latest.json"), "name": "ci-latest.json"},
+                       {"path": str(directory / "ci-SHA256SUMS"), "name": "ci-SHA256SUMS"},
                        {"path": str(directory / "VERSION"), "name": "VERSION"}]
 
     def with_windows_verification(self, assets):
@@ -343,7 +345,7 @@ class TagReleaseTests(unittest.TestCase):
                 return real_output(command, **kwargs)
             events.append(("github", command))
             if command[:2] == ["gh", "run"]:
-                return json.dumps([{"databaseId": 123, "status": "completed"}] if ci_assets is not None else [])
+                return json.dumps([{"databaseId": 123, "status": "completed", "headSha": self.commit}] if ci_assets is not None else [])
             if command[:2] == ["gh", "api"]:
                 if "/actions/runs/" in command[2]:
                     return json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "status": "completed",
@@ -497,6 +499,21 @@ class TagReleaseTests(unittest.TestCase):
                                  ci_assets=ci, verify_windows=True, events=events)
         self.assertFalse(any(kind == "upload" for kind, _ in events))
 
+    def test_missing_ci_sha256sums_stops_publication(self):
+        local = self.with_windows_verification(self.release_receipt(directory_name="local-receipt"))
+        ci = self.with_ci_indexes(self.with_installer(self.release_receipt(directory_name="ci-receipt"),
+                                                     "https://github.com/example/project/releases/latest/download"))
+        latest = next(item for item in ci if item["name"] == "ci-latest.json")
+        manifest = json.loads(Path(latest["path"]).read_text())
+        manifest["commit"] = self.commit
+        Path(latest["path"]).write_text(json.dumps(manifest))
+        ci = [item for item in ci if item["name"] != "ci-SHA256SUMS"]
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "CI SHA256SUMS is missing"):
+            self.publish_receipt(local, "v0.2.1", "hub", "missing-ci-sha", ci_assets=ci,
+                                 verify_windows=True, events=events)
+        self.assertFalse(any(kind == "upload" for kind, _ in events))
+
     def test_failed_ci_signing_stops_hub_publication(self):
         local = self.release_receipt(directory_name="local-receipt")
         ci = self.release_receipt(directory_name="ci-receipt")
@@ -522,6 +539,12 @@ class TagReleaseTests(unittest.TestCase):
                 patch.object(tag_release.time, "sleep") as sleep:
             self.assertIsNone(tag_release.ci_signing_conclusion("example/project", "v0.2.1"))
         sleep.assert_not_called()
+
+    def test_ci_signing_rejects_run_for_another_commit(self):
+        with patch.object(tag_release.subprocess, "check_output", return_value=json.dumps(
+                [{"databaseId": 123, "status": "completed", "headSha": "different"}])):
+            with self.assertRaisesRegex(tag_release.ConfigError, "another source commit"):
+                tag_release.ci_signing_conclusion("example/project", "v0.2.1", commit="a" * 40)
 
     def test_ci_signing_waits_for_pending_run_before_jobs_exist(self):
         responses = iter([

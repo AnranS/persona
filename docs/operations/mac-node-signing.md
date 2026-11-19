@@ -131,7 +131,7 @@ ad-hoc `cdhash`; the downloads are then recompressed from the signed binaries an
 the manifest is rebuilt before upload, so a release feed never carries stale
 ad-hoc bytes or a mismatched binary digest. When this job is enabled, it produces
 CI's artifact set: every non-Windows archive, `install.sh`, `VERSION` and the
-staging `ci-latest.json`, without `--clobber`. An existing asset with the same
+staging `ci-latest.json` and `ci-SHA256SUMS`, without `--clobber`. An existing asset with the same
 digest is skipped, a missing one is uploaded and read back for digest
 verification, and different bytes are a conflict that stops the job. Before
 building, `resume_github_release.py` selects the existing staging manifest's

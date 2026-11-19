@@ -604,6 +604,15 @@ def public_download_url(cfg):
     return url, "/dl"
 
 
+def public_download_urls(cfg):
+    """Both legitimate public feeds: the update base and the site's own /dl publication feed."""
+    urls = [public_download_url(cfg)]
+    site = persona_config.get(cfg, "publish.site_url", "")
+    if isinstance(site, str) and site.strip():
+        urls.append((site.rstrip("/") + "/dl", "/dl"))
+    return urls
+
+
 def public_archive_dependencies(path, whole_short):
     """Only a named public CLI member gets its own verified Go dependency context, never a whole archive."""
     if not whole_short:
@@ -714,7 +723,8 @@ def main():
                         if not whole_short:
                             t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
                         else:
-                            t = remove_public_relay_url(t, *public_download_url(cfg))
+                            for public_url, public_path in public_download_urls(cfg):
+                                t = remove_public_relay_url(t, public_url, public_path)
                         for v in inherent:
                             t = t.replace(v, "")
                         if modules:

@@ -599,7 +599,7 @@ A private configuration has only these fields, with no secrets:
   binaries. Tagged builds use the Release's UTC `createdAt` minute through
   `PERSONA_RELEASE_BUILD`, so CI and local verification share one build identity
   even for backfills and retries. When Darwin signing is enabled in CI, the coordinator waits for that job, downloads its staging
-  `ci-latest.json` and non-Windows artifacts, and merges them with the locally
+  `ci-latest.json` and `ci-SHA256SUMS` with digest checks, and non-Windows artifacts, and merges them with the locally
   verified Windows archives and reports into the final manifest and checksums;
   a skipped job keeps the private build, and a failed job stops publication. The downloads go up first; `VERSION`, `SHA256SUMS`, `android.json`
   and then `latest.json` go last, each on its own, so a hub reading
