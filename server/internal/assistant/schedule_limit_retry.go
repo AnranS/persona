@@ -15,24 +15,31 @@ type scheduledLimitRetry struct {
 	RunOf       time.Time   `json:"run_of"`
 	MachineName string      `json:"machine_name"`
 	LimitTurn   time.Time   `json:"limit_turn"`
+	Briefing    bool        `json:"briefing,omitempty"`
 }
 
 // runScheduledLimitRetry waits at the persisted absolute deadline, validates the live schedule, then claims once.
 // A crash after the claim cannot become another send: the next manager recovers it as an unknown outcome.
 func (s *Service) runScheduledLimitRetry(ctx context.Context, w delayedWait, persisted bool) {
-	if w.Retry == nil || !waitForDelayedWait(ctx, w.At) {
+	if w.Retry == nil {
 		return
 	}
 	durable := persisted || s.store != nil && s.store() != nil
-	if durable && !persisted {
+	for durable && !persisted {
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := s.persistScheduledRetry(pctx, w)
 		cancel()
-		if err != nil {
-			s.rearmScheduledLimitRetry(ctx, w, false, err)
+		if err == nil {
+			persisted = true
+			break
+		}
+		s.logf("persist scheduled retry %s: %v", w.ID, err)
+		if !waitForDelayedWait(ctx, time.Now().Add(delayedWaitRecoveryDelay)) {
 			return
 		}
-		persisted = true
+	}
+	if !waitForDelayedWait(ctx, w.At) {
+		return
 	}
 	cur, due, err := s.scheduledLimitRetryDue(ctx, w)
 	if err != nil {
@@ -51,7 +58,7 @@ func (s *Service) runScheduledLimitRetry(ctx context.Context, w delayedWait, per
 	token := randomHex(16)
 	claimed, ok, err := s.claimDelayedWait(ctx, w.ID, token, time.Now())
 	if err != nil {
-		s.rearmScheduledLimitRetry(ctx, w, true, err)
+		s.rearmScheduledLimitRetry(ctx, w, true, err, token)
 		return
 	}
 	if !ok {
@@ -102,7 +109,11 @@ func (s *Service) scheduledLimitRetryDue(ctx context.Context, w delayedWait) (Ta
 
 func (s *Service) dispatchScheduledLimitRetry(cur Task, w delayedWait) {
 	failed := w.Retry.Run
-	if _, err := s.runTask(cur, time.Now(), time.Now(), false, true); err != nil {
+	due := time.Now()
+	if w.Retry.Briefing || cur.Facts || cur.Report {
+		due = failed.Due // one scheduled briefing occurrence keeps its identity across the retry
+	}
+	if _, err := s.runTask(cur, due, time.Now(), false, true); err != nil {
 		s.logf("task %s retry: %v", failed.RefID, err)
 	}
 }
@@ -119,16 +130,29 @@ func (s *Service) releaseScheduledLimitRetry(ctx context.Context, w delayedWait,
 		return
 	}
 	if released {
-		w.Claim, w.At = "", nextAt
-		go s.runScheduledLimitRetry(ctx, w, true)
+		current, found, err := s.delayedWaitByID(ctx, w.ID)
+		if err != nil {
+			s.logf("read released scheduled retry %s: %v", w.ID, err)
+			time.AfterFunc(delayedWaitRecoveryDelay, func() { s.releaseScheduledLimitRetry(s.runCtx(), w, token) })
+			return
+		}
+		if found && current.Claim == "" {
+			go s.runScheduledLimitRetry(ctx, current, true)
+		}
 	}
 }
 
-func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, persisted bool, why error) {
+func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, persisted bool, why error, claimToken ...string) {
 	if ctx.Err() != nil {
 		return
 	}
 	s.logf("scheduled retry %s: %v", w.ID, why)
+	if len(claimToken) > 0 && claimToken[0] != "" {
+		// A claim can commit before its acknowledgement is lost. Release only this worker's token;
+		// releaseDelayedWait also recognizes an already-pending row and preserves its persisted deadline.
+		s.releaseScheduledLimitRetry(ctx, w, claimToken[0])
+		return
+	}
 	nextAt := delayedWaitRetryAt()
 	if persisted || s.store != nil && s.store() != nil {
 		rescheduled, err := s.rescheduleDelayedWait(ctx, w, nextAt, !persisted)
@@ -140,9 +164,21 @@ func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, p
 		if !rescheduled {
 			return
 		}
+		current, found, err := s.delayedWaitByID(ctx, w.ID)
+		if err != nil {
+			s.logf("read rearmed scheduled retry %s: %v", w.ID, err)
+			time.AfterFunc(delayedWaitRecoveryDelay, func() { s.rearmScheduledLimitRetry(s.runCtx(), w, persisted, why) })
+			return
+		}
+		if found && current.Claim == "" {
+			w = current
+		} else {
+			w.At = nextAt
+		}
 		persisted = true
+	} else {
+		w.At = nextAt
 	}
-	w.At = nextAt
 	go s.runScheduledLimitRetry(ctx, w, persisted)
 }
 

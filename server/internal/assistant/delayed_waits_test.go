@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,46 +85,38 @@ func TestRestoredScheduledRetryKeepsDeadline(t *testing.T) {
 
 type ambiguousSaveStore struct {
 	Store
-	fail bool
+	fail atomic.Bool
 }
 
 func (st *ambiguousSaveStore) CompareSetting(ctx context.Context, key string, revision int64, value any) (bool, error) {
 	ok, err := st.Store.(delayedWaitCAS).CompareSetting(ctx, key, revision, value)
-	if err == nil && ok && st.fail {
-		st.fail = false
+	if err == nil && ok && st.fail.CompareAndSwap(true, false) {
 		return false, errors.New("save acknowledgment lost")
 	}
 	return ok, err
 }
 
-func TestScheduledRetryDoesNotDispatchUnclaimedAfterAmbiguousSave(t *testing.T) {
+func TestScheduledRetryDoesNotDuplicateAfterAmbiguousSave(t *testing.T) {
 	st := withDelayedWaitCAS(&memStore{})
-	first, n, w := newDelayedRetryFixture(t, st)
+	ambiguous := &ambiguousSaveStore{Store: st}
+	first, n, w := newDelayedRetryFixture(t, ambiguous)
 	if err := st.PutSetting(context.Background(), delayedWaitsKey, delayedWaitDoc{}); err != nil {
 		t.Fatal(err)
 	}
-	ambiguous := &ambiguousSaveStore{Store: st, fail: true}
-	first.store = func() Store { return ambiguous }
+	ambiguous.fail.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	first.runScheduledLimitRetry(ctx, w, false)
-	if got := n.sent(); got != 0 {
-		t.Fatalf("an unclaimed retry dispatched %d times after an ambiguous save", got)
+	if got := n.sent(); got != 1 {
+		t.Fatalf("ambiguous save produced %d dispatches, want one claimed dispatch", got)
 	}
 	second := newServiceOn(t, n, st)
 	second.restoreDelayedWaits(context.Background())
-	if got := n.sent(); got != 0 {
-		t.Fatalf("restored retry ran before its persisted backoff: %d sends", got)
-	}
-	if err := second.updateDelayedWaits(context.Background(), func(doc *delayedWaitDoc) (bool, error) {
-		doc.Waits[0].At = time.Now().Add(-time.Second)
-		return true, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 	third := newServiceOn(t, n, st)
 	third.restoreDelayedWaits(context.Background())
-	waitFor(t, "the persistently saved retry to dispatch once", func() bool { return n.sent() == 1 })
+	if got := n.sent(); got != 1 {
+		t.Fatalf("repeated recovery duplicated the retry: %d sends", got)
+	}
 }
 
 func TestClaimedScheduledRetryRecoversUnknownWithoutResend(t *testing.T) {
@@ -259,14 +252,25 @@ func TestRestoredScheduledRetryCancellation(t *testing.T) {
 
 type compareGateStore struct {
 	Store
+	mu     sync.RWMutex
 	calls  int
 	before func(int) error
 }
 
+func (st *compareGateStore) setBefore(before func(int) error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.calls = 0
+	st.before = before
+}
+
 func (st *compareGateStore) CompareSetting(ctx context.Context, key string, revision int64, value any) (bool, error) {
+	st.mu.Lock()
 	st.calls++
-	if st.before != nil {
-		if err := st.before(st.calls); err != nil {
+	before, call := st.before, st.calls
+	st.mu.Unlock()
+	if before != nil {
+		if err := before(call); err != nil {
 			return false, err
 		}
 	}
@@ -275,24 +279,27 @@ func (st *compareGateStore) CompareSetting(ctx context.Context, key string, revi
 
 func TestScheduledRetryRechecksCancellationAfterClaim(t *testing.T) {
 	st := withDelayedWaitCAS(&memStore{})
-	first, n, w := newDelayedRetryFixture(t, st)
+	gate := &compareGateStore{Store: st}
+	first, n, w := newDelayedRetryFixture(t, gate)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	gate := &compareGateStore{Store: st}
-	gate.before = func(call int) error {
+	gate.setBefore(func(call int) error {
 		if call == 1 {
 			close(started)
 			<-release
 		}
 		return nil
-	}
-	first.store = func() Store { return gate }
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		first.runScheduledLimitRetry(context.Background(), w, true)
 	}()
-	<-started
+	select {
+	case <-started:
+	case <-done:
+		t.Fatalf("retry returned before its claim: wait=%+v sent=%d", w, n.sent())
+	}
 	setTasks(first, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
 	close(release)
 	<-done
@@ -584,12 +591,12 @@ func TestDelayedWaitsRecoveryLoopRetriesStoreFailure(t *testing.T) {
 func TestReceiptRecheckRetriesReleaseFailure(t *testing.T) {
 	first, f, st, w := newReceiptWaitFixture(t, time.Now().Add(-time.Second))
 	gate := &compareGateStore{Store: st}
-	gate.before = func(call int) error {
+	gate.setBefore(func(call int) error {
 		if call == 2 {
 			return errors.New("release failed")
 		}
 		return nil
-	}
+	})
 	second := newServiceOn(t, f, gate)
 	copyReceiptFixtureTasks(first, second)
 	attempts, backoff, maximum := agentReachAttempts, agentReachBackoff, agentReachMax
@@ -643,15 +650,14 @@ func TestScheduledRetryRearmPersistsBackoffDeadline(t *testing.T) {
 
 func TestScheduledRetryCancellationIsSerializedWithClaim(t *testing.T) {
 	st := withDelayedWaitCAS(&memStore{})
-	first, n, w := newDelayedRetryFixture(t, st)
-	setTasks(first, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
 	gate := &compareGateStore{Store: st}
-	gate.before = func(int) error {
+	first, n, w := newDelayedRetryFixture(t, gate)
+	setTasks(first, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
+	gate.setBefore(func(int) error {
 		setTasks(first, Task{ID: "p", Title: "Example", Prompt: "go", Repeat: repeatInterval, EveryMinutes: 30,
 			At: time.Now().Add(time.Hour), Enabled: true, MachineID: "server"})
 		return nil
-	}
-	first.store = func() Store { return gate }
+	})
 	first.runScheduledLimitRetry(context.Background(), w, true)
 	second := newServiceOn(t, n, st)
 	second.runScheduledLimitRetry(context.Background(), w, true)
@@ -663,12 +669,12 @@ func TestScheduledRetryCancellationIsSerializedWithClaim(t *testing.T) {
 func TestReceiptRecheckClaimErrorReplacesOlderTimer(t *testing.T) {
 	first, f, st, w := newReceiptWaitFixture(t, time.Now().Add(-time.Second))
 	gate := &compareGateStore{Store: st}
-	gate.before = func(call int) error {
+	gate.setBefore(func(call int) error {
 		if call == 1 {
 			return errors.New("claim store unavailable")
 		}
 		return nil
-	}
+	})
 	second := newServiceOn(t, f, gate)
 	copyReceiptFixtureTasks(first, second)
 	ref := SessionRef{MachineID: "box", SessionID: "s1"}
@@ -701,6 +707,220 @@ func TestReceiptRecheckClaimErrorReplacesOlderTimer(t *testing.T) {
 	}
 	second.armReceiptRecheck(doc.Waits[0], true)
 	waitFor(t, "the receipt after the claim store recovers", func() bool {
+		return strings.Count(feedKinds(second, "conv1"), "receipt") == 1
+	})
+}
+
+func TestRescheduleRecognizesCommittedBackoff(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	ambiguous := &ambiguousSaveStore{Store: st}
+	first, _, w := newDelayedRetryFixture(t, ambiguous)
+	ambiguous.fail.Store(true)
+	nextAt := time.Now().Add(time.Hour)
+	if _, err := first.rescheduleDelayedWait(context.Background(), w, nextAt, false); err == nil {
+		t.Fatal("the fixture did not lose the committed write's acknowledgment")
+	}
+	rescheduled, err := first.rescheduleDelayedWait(context.Background(), w, nextAt, false)
+	if err != nil || !rescheduled {
+		t.Fatalf("already-committed backoff was not recognized: %v, %v", rescheduled, err)
+	}
+	doc, err := first.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 || !doc.Waits[0].At.Equal(nextAt) {
+		t.Fatalf("backoff deadline changed during reconciliation: %+v, %v", doc.Waits, err)
+	}
+}
+
+func TestScheduledReleaseRecognizesCommittedBackoff(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	ambiguous := &ambiguousSaveStore{Store: st}
+	first, _, w := newDelayedRetryFixture(t, ambiguous)
+	if _, ok, err := first.claimDelayedWait(context.Background(), w.ID, "worker", time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	ambiguous.fail.Store(true)
+	nextAt := time.Now().Add(time.Hour)
+	if _, err := first.releaseDelayedWait(context.Background(), w.ID, "worker", nextAt); err == nil {
+		t.Fatal("the fixture did not lose the committed release's acknowledgment")
+	}
+	released, err := first.releaseDelayedWait(context.Background(), w.ID, "worker", nextAt)
+	if err != nil || !released {
+		t.Fatalf("already-committed release was not recognized: %v, %v", released, err)
+	}
+	doc, err := first.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 || doc.Waits[0].Claim != "" || !doc.Waits[0].At.Equal(nextAt) {
+		t.Fatalf("released wait = %+v, %v", doc.Waits, err)
+	}
+}
+
+func TestScheduledClaimErrorReleasesOwnClaim(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	ambiguous := &ambiguousSaveStore{Store: st}
+	first, _, w := newDelayedRetryFixture(t, ambiguous)
+	ambiguous.fail.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	first.runScheduledLimitRetry(ctx, w, true)
+	doc, err := first.readDelayedWaits(context.Background())
+	if err != nil || len(doc.Waits) != 1 || doc.Waits[0].Claim != "" {
+		t.Fatalf("ambiguous claim was not reconciled to a pending retry: %+v, %v", doc.Waits, err)
+	}
+	if !doc.Waits[0].At.After(w.At) {
+		t.Fatalf("claim reconciliation did not retain a backoff: %+v", doc.Waits[0])
+	}
+}
+
+func TestReceiptReleaseRecognizesCommittedBackoff(t *testing.T) {
+	st := withDelayedWaitCAS(planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}})
+	ambiguous := &ambiguousSaveStore{Store: st}
+	first, _, _, w := newReceiptWaitFixtureOn(t, ambiguous, time.Now().Add(-time.Second))
+	if _, ok, err := first.claimDelayedWait(context.Background(), w.ID, "worker", time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	ambiguous.fail.Store(true)
+	nextAt := time.Now().Add(time.Hour)
+	if _, err := first.releaseReceiptRecheck(context.Background(), w, "worker", nextAt); err == nil {
+		t.Fatal("the fixture did not lose the committed release's acknowledgment")
+	}
+	released, err := first.releaseReceiptRecheck(context.Background(), w, "worker", nextAt)
+	if err != nil || !released {
+		t.Fatalf("already-committed receipt release was not recognized: %v, %v", released, err)
+	}
+}
+
+func TestReceiptReleaseDeletesSupersededClaim(t *testing.T) {
+	first, _, _, w := newReceiptWaitFixture(t, time.Now().Add(-time.Second))
+	if _, ok, err := first.claimDelayedWait(context.Background(), w.ID, "worker", time.Now()); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	successor := first.newReceiptRecheck(context.Background(), "box", "s1", time.Now().Add(time.Hour))
+	if _, _, err := first.persistReceiptRecheck(context.Background(), successor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.releaseReceiptRecheck(context.Background(), w, "worker", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := first.readDelayedWaits(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, existing := range doc.Waits {
+		if existing.ID == w.ID {
+			t.Fatalf("superseded claimed row was left stranded: %+v", existing)
+		}
+	}
+}
+
+func TestReceiptRecheckRevalidatesAfterSettleDelay(t *testing.T) {
+	first, f, st, w := newReceiptWaitFixture(t, time.Now().Add(-time.Second))
+	second := newServiceOn(t, f, st)
+	copyReceiptFixtureTasks(first, second)
+	hub := &receiptSettleHub{fakeHub: f, read: make(chan struct{})}
+	f.mu.Lock()
+	f.hello.DoneDelayMS = 200
+	f.mu.Unlock()
+	second.hub = hub
+	hub.armed.Store(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		second.runReceiptRecheck(context.Background(), w, true)
+	}()
+	select {
+	case <-hub.read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("settle delay did not start")
+	}
+	second.todos.mu.Lock()
+	reopened := time.Now()
+	second.todos.todos[w.Receipt.TodoID].ReopenedAt = &reopened
+	second.todos.mu.Unlock()
+	<-done
+	if got := strings.Count(feedKinds(second, "conv1"), "receipt"); got != 0 {
+		t.Fatalf("settle-delay reopening produced %d stale receipts", got)
+	}
+}
+
+func TestScheduledBriefingRetryKeepsOriginalDue(t *testing.T) {
+	first, _, w := newDelayedRetryFixture(t, withDelayedWaitCAS(&memStore{}))
+	originalDue := time.Now().Add(-24 * time.Hour)
+	w.Retry.Run.Due = originalDue
+	cur := Task{ID: "p", Title: "Briefing", Prompt: "go", Repeat: repeatInterval, EveryMinutes: 30,
+		Enabled: true, MachineID: "server", Facts: true}
+	first.dispatchScheduledLimitRetry(cur, w)
+	sc := first.loadSchedule(context.Background())
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	for _, run := range sc.runs {
+		if run.Retried {
+			if !run.Due.Equal(originalDue) {
+				t.Fatalf("briefing retry due = %v, want original %v", run.Due, originalDue)
+			}
+			return
+		}
+	}
+	t.Fatal("briefing retry was not recorded")
+}
+
+func TestScheduledInitialPersistRetriesBeforeDeadline(t *testing.T) {
+	st := withDelayedWaitCAS(&memStore{})
+	gate := &compareGateStore{Store: st}
+	first, n, w := newDelayedRetryFixture(t, gate)
+	if err := st.PutSetting(context.Background(), delayedWaitsKey, delayedWaitDoc{}); err != nil {
+		t.Fatal(err)
+	}
+	gate.setBefore(func(call int) error {
+		if call == 1 {
+			return errors.New("initial write unavailable")
+		}
+		return nil
+	})
+	w.At = time.Now().Add(1500 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go first.runScheduledLimitRetry(ctx, w, false)
+	waitFor(t, "the initial durable retry before its deadline", func() bool {
+		doc, err := first.readDelayedWaits(context.Background())
+		return err == nil && len(doc.Waits) == 1
+	})
+	if !time.Now().Before(w.At) {
+		t.Fatal("the initial write was not retried until after the original deadline")
+	}
+	second := newServiceOn(t, n, st)
+	second.restoreDelayedWaits(context.Background())
+	if got := n.sent(); got != 0 {
+		t.Fatalf("retry dispatched before its original deadline: %d", got)
+	}
+	waitFor(t, "one retry at the original deadline", func() bool { return n.sent() == 1 })
+}
+
+func TestReceiptInitialPersistRetriesBeforeDeadline(t *testing.T) {
+	st := withDelayedWaitCAS(planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}})
+	gate := &compareGateStore{Store: st}
+	first, f, _, w := newReceiptWaitFixtureOn(t, gate, time.Now().Add(1500*time.Millisecond))
+	if err := st.PutSetting(context.Background(), delayedWaitsKey, delayedWaitDoc{}); err != nil {
+		t.Fatal(err)
+	}
+	gate.setBefore(func(call int) error {
+		if call == 1 {
+			return errors.New("initial write unavailable")
+		}
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	first.running.Store(&ctx)
+	first.taskTurnEndedAfter(ctx, "box", "s1", w.At)
+	waitFor(t, "the initial durable receipt before its deadline", func() bool {
+		doc, err := first.readDelayedWaits(context.Background())
+		return err == nil && len(doc.Waits) == 1
+	})
+	if !time.Now().Before(w.At) {
+		t.Fatal("the initial receipt write was not retried before its deadline")
+	}
+	second := newServiceOn(t, f, st)
+	copyReceiptFixtureTasks(first, second)
+	second.restoreDelayedWaits(context.Background())
+	waitFor(t, "one receipt at the original deadline", func() bool {
 		return strings.Count(feedKinds(second, "conv1"), "receipt") == 1
 	})
 }

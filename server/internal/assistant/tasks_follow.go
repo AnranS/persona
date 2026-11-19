@@ -797,6 +797,8 @@ func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, a
 		cancel()
 		if err != nil {
 			s.logf("persist receipt recheck %s/%s: %v", machine, sid, err)
+			go s.persistReceiptRecheckRetry(s.runCtx(), w)
+			return
 		} else {
 			if !arm {
 				return

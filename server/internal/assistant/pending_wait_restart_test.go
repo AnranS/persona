@@ -208,7 +208,9 @@ func testTaskReceiptRecheckRestoredAfterRestart(t *testing.T, st Store) {
 	f.hello.DoneDelayMS = 0
 	f.mu.Unlock()
 	second := newServiceOn(t, f, st)
-	copyReceiptFixtureTasks(first, second)
+	if _, postgres := st.(*db.DB); !postgres {
+		copyReceiptFixtureTasks(first, second)
+	}
 	runCtx, stop := context.WithCancel(context.Background())
 	t.Cleanup(stop)
 	go second.Run(runCtx)

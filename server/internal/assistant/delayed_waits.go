@@ -109,6 +109,19 @@ func (s *Service) persistScheduledRetry(ctx context.Context, w delayedWait) erro
 	})
 }
 
+func (s *Service) delayedWaitByID(ctx context.Context, id string) (delayedWait, bool, error) {
+	doc, err := s.readDelayedWaits(ctx)
+	if err != nil {
+		return delayedWait{}, false, err
+	}
+	for _, w := range doc.Waits {
+		if w.ID == id {
+			return w, true, nil
+		}
+	}
+	return delayedWait{}, false, nil
+}
+
 // rescheduleDelayedWait persists a backoff before its local timer is armed. The expected deadline and pending state
 // fence newer claims; a missing row is recreated only while the initial persist is still unacknowledged.
 func (s *Service) rescheduleDelayedWait(ctx context.Context, w delayedWait, nextAt time.Time, allowInsert bool) (rescheduled bool, err error) {
@@ -119,7 +132,13 @@ func (s *Service) rescheduleDelayedWait(ctx context.Context, w delayedWait, next
 			if existing.ID != w.ID {
 				continue
 			}
-			if existing.Claim != "" || existing.Unknown || !existing.At.Equal(w.At) {
+			if existing.Claim != "" || existing.Unknown {
+				return false, nil
+			}
+			if !existing.At.Equal(w.At) && existing.At.After(time.Now()) {
+				// A prior CAS may have committed before its acknowledgement was lost. Arm the persisted
+				// deadline rather than rejecting the wait or replacing it with another backoff.
+				rescheduled = true
 				return false, nil
 			}
 			existing.At = nextAt
@@ -183,7 +202,7 @@ func sameReceiptAgent(a, b delayedWait) bool {
 
 func sameReceiptBinding(a, b delayedWait) bool {
 	return sameReceiptAgent(a, b) && a.Receipt.TodoID == b.Receipt.TodoID &&
-		a.Receipt.LinkedAt.Equal(b.Receipt.LinkedAt) && sameOptionalTime(a.Receipt.ReopenedAt, b.Receipt.ReopenedAt)
+		bindingTime(a.Receipt.LinkedAt).Equal(bindingTime(b.Receipt.LinkedAt)) && sameOptionalTime(a.Receipt.ReopenedAt, b.Receipt.ReopenedAt)
 }
 
 func (s *Service) claimDelayedWait(ctx context.Context, id, token string, now time.Time) (claimed delayedWait, ok bool, err error) {
@@ -227,10 +246,23 @@ func (s *Service) releaseDelayedWait(ctx context.Context, id, token string, next
 		released = false
 		for i := range doc.Waits {
 			w := &doc.Waits[i]
-			if w.ID == id && w.Claim == token && !w.Unknown {
+			if w.ID != id || w.Unknown {
+				continue
+			}
+			if w.Claim == token {
 				w.Claim, w.At = "", nextAt
 				released = true
 				return true, nil
+			}
+			if w.Claim == "" {
+				if !w.At.After(time.Now()) {
+					w.At = nextAt
+					released = true
+					return true, nil
+				}
+				// The release already committed even though its acknowledgement was lost.
+				released = true
+				return false, nil
 			}
 		}
 		return false, nil
@@ -288,22 +320,41 @@ func (s *Service) releaseReceiptRecheck(ctx context.Context, w delayedWait, toke
 	released := false
 	err := s.updateDelayedWaits(ctx, func(doc *delayedWaitDoc) (bool, error) {
 		released = false
-		index := -1
+		index, successor := -1, false
 		for i, other := range doc.Waits {
-			if other.ID != w.ID && other.Kind == delayedReceiptRecheck && sameReceiptAgent(other, w) {
-				return false, nil
-			}
-			if other.ID == w.ID && other.Claim == token && !other.Unknown {
+			if other.ID == w.ID {
 				index = i
+			} else if other.Kind == delayedReceiptRecheck && sameReceiptAgent(other, w) {
+				successor = true
 			}
 		}
 		if index < 0 {
 			return false, nil
 		}
-		doc.Waits[index].Claim = ""
-		doc.Waits[index].At = nextAt
-		released = true
-		return true, nil
+		current := &doc.Waits[index]
+		if current.Unknown || current.Claim != "" && current.Claim != token {
+			return false, nil
+		}
+		if successor {
+			// The old callback is done, but its claimed row is not a successor. Remove only this worker's
+			// row; another manager's newer claim must never be deleted.
+			doc.Waits = append(doc.Waits[:index], doc.Waits[index+1:]...)
+			return true, nil
+		}
+		if current.Claim == token {
+			current.Claim, current.At = "", nextAt
+			released = true
+			return true, nil
+		}
+		if current.Claim == "" {
+			if !current.At.After(time.Now()) {
+				current.At = nextAt
+				released = true
+				return true, nil
+			}
+			released = true
+		}
+		return false, nil
 	})
 	return released, err
 }
