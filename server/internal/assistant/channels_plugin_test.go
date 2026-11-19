@@ -535,6 +535,34 @@ func TestMentionChannelKeepsDistinctTopicsAsDistinctRuns(t *testing.T) {
 	}
 }
 
+// Asking a public turn for its missing answer is still the same public turn, never a private owner turn (#11130).
+func TestMentionChannelAskAgainStaysPublic(t *testing.T) {
+	s, f, _ := channelServiceForKind(t, channel.KindMention)
+	ctx := context.Background()
+	v := channel.View{ID: "examplechat", Name: "Example Chat", Kind: channel.KindMention, Source: channel.SourcePlugin}
+	if err := s.updateChannel(ctx, v, nil, &channel.Target{Kind: channel.TargetMain}, nil); err != nil {
+		t.Fatal(err)
+	}
+	owner := true
+	if err := s.channelForward(ctx, "examplechat", channel.Message{ID: "om_public", Text: "question", Owner: &owner, Chat: "chat"}); err != nil {
+		t.Fatal(err)
+	}
+	var r *channel.Run
+	var live *chanLive
+	waitUntil(t, func() bool {
+		r, live = s.channelRunByID("examplechat_om_public")
+		return live != nil
+	})
+	if !s.askAgain(ctx, r, live, 0) {
+		t.Fatal("the public turn was not asked again")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sentOnce) != 2 || f.sentOnce[1]["public"] != true {
+		t.Fatalf("ask-again lost the public marker: %+v", f.sentOnce)
+	}
+}
+
 // channel.receive remains owner-only for the main-chat path. Someone else's request belongs to the extension's guest
 // conversation (whose existing main:true rejection is covered by TestGuestConversationRefusals), never to main (#11130).
 func TestMentionChannelReceiveRefusesNonOwnerForMain(t *testing.T) {
