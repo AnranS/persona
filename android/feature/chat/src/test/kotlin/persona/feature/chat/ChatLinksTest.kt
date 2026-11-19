@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.Item
+import persona.core.navigation.*
 import java.time.Instant
 import org.junit.Assert.*
 import org.junit.Test
@@ -158,11 +159,53 @@ class ChatLinksTest {
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
     }
 
+    private fun messageFields(vararg fields: Pair<String, String>?): Map<String, String> = fields.filterNotNull().toMap()
+
     private fun messagePage(link: ChatAppLink?): Map<String, String>? = when (link) {
         null -> null
-        is ChatAppLink.Session -> mapOf("page" to "session", "machine" to link.machineId, "session" to link.sessionId)
+        is ChatAppLink.Session -> messageFields("page" to "session", "machine" to link.machineId, "session" to link.sessionId,
+            link.itemId?.let { "at" to it })
+        is ChatAppLink.Page -> when (val page = link.page) {
+            is HubPage.Agent -> messageFields("page" to "session", "machine" to page.machineId, "session" to page.sessionId,
+                page.itemId?.let { "at" to it }, page.view?.let { "view" to it })
+            is HubPage.Conversation -> {
+                val id = page.sessionId
+                if (id == null) mapOf("page" to "persona") else messageFields(
+                    "page" to "conversation", "id" to id, page.machineId?.let { "machine" to it },
+                    page.managerId?.let { "manager" to it }, page.itemId?.let { "at" to it })
+            }
+            HubPage.NewConversation -> mapOf("page" to "persona-new")
+            is HubPage.Knowledge -> messageFields("page" to "knowledge", page.kind?.let { "kind" to it })
+            is HubPage.KnowledgeEntry -> mapOf("page" to "knowledge-entry", "kind" to page.kind, "id" to page.id)
+            is HubPage.Screen -> when (val key = page.key) {
+                AssistantRoute -> mapOf("page" to "persona")
+                AgentsRoute -> mapOf("page" to "agents")
+                InboxRoute -> mapOf("page" to "inbox")
+                is InboxItemRoute -> messageFields("page" to "inbox-item", "id" to key.itemId,
+                    key.manager?.let { "manager" to it })
+                TodosRoute -> mapOf("page" to "todos")
+                is TodoDetailRoute -> mapOf("page" to "todo", "id" to key.todoId)
+                MachinesRoute -> mapOf("page" to "machines")
+                is MachineDetailRoute -> messageFields("page" to "machine", "id" to key.machineId,
+                    key.range?.let { "range" to it })
+                SettingsRoute -> mapOf("page" to "settings")
+                is ModelPurposeRoute -> messageFields("page" to "settings", "tab" to "models", "item" to key.purposeId,
+                    key.manager?.let { "manager" to it })
+                is ExtensionRoute -> messageFields("page" to "settings", "tab" to "extensions", "item" to key.extensionId,
+                    key.manager?.let { "manager" to it })
+                is ExtensionUiRoute -> messageFields("page" to "extension", "extension" to key.extensionId, "ui" to key.uiId,
+                    key.state?.let { "state" to it })
+                is SettingsPageRoute -> when (key.page) {
+                    SettingsPage.Sent -> mapOf("page" to "settings", "tab" to "connectors", "item" to "-sent")
+                    SettingsPage.Connectors -> mapOf("page" to "settings", "tab" to "connectors")
+                    SettingsPage.Hubs -> mapOf("page" to "settings", "tab" to "hub")
+                    SettingsPage.ModelConfig -> mapOf("page" to "settings", "tab" to "models")
+                    else -> error("No shared message-link fields for $key")
+                }
+                else -> error("No shared message-link fields for $key")
+            }
+        }
         is ChatAppLink.Tab -> mapOf("page" to link.tab)
-        else -> error("No shared message-link fields for $link")
     }
 
     @Test fun externalLinksAskFirstAndNeverComeBackIn() {
