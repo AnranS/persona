@@ -50,6 +50,9 @@ type modelExecution struct {
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
+	// NewModelChoice classifies this request against the previous recovery chain. It is per-turn provenance, never
+	// persisted or included in the execution fingerprint, and is committed only when the input is delivered.
+	NewModelChoice bool `json:"-"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`
