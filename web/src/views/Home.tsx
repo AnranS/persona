@@ -256,8 +256,8 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               title={t("home.computers")}
               count={machines.length}
               right={
-                <div className="flex items-center gap-2 self-center">
-                  <a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="whitespace-nowrap text-[12px] text-ink-3 hover:text-ink-2 @max-[21.75rem]:hidden">{t("home.monitor")}</a>
+                <div className="flex flex-wrap items-center justify-end gap-2 self-center">
+                  <a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="whitespace-nowrap text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>
                   <OverviewMachineViewSwitch value={machineView} onChange={chooseMachineView} />
                 </div>
               }
