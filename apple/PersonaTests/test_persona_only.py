@@ -236,6 +236,42 @@ class PersonaOnlyTests(unittest.TestCase):
             self.assertEqual(path.name, "Persona.xcodeproj")
             self.assertFalse(path.is_symlink(), "project aliases must not return")
 
+    def test_about_version_test_only_exceptions_are_narrow_and_reasoned(self):
+        expected_targets = {"AboutVersionAccessibilityHost", "AboutVersionAccessibilityUITests"}
+        expected_schemes = {"AboutVersionAccessibilityHost", "AboutVersionVisualTests"}
+        for exceptions, expected in ((TEST_ONLY_TARGET_EXCEPTIONS, expected_targets),
+                                     (TEST_ONLY_SCHEME_EXCEPTIONS, expected_schemes)):
+            self.assertEqual(set(exceptions), expected)
+            for name, reason in exceptions.items():
+                with self.subTest(name=name):
+                    self.assertIsInstance(reason, str)
+                    self.assertTrue(reason.strip(), "a test-only exception needs a deliberate reason")
+        for exceptions, expected in ((TEST_ONLY_TARGET_EXCEPTIONS, expected_targets),
+                                     (TEST_ONLY_SCHEME_EXCEPTIONS, expected_schemes)):
+            for name in expected:
+                with self.subTest(registered=name):
+                    self.assertTrue(is_allowed_product_name(name, exceptions))
+            with self.subTest(unregistered="AboutVersionUnregisteredTests"):
+                self.assertFalse(is_allowed_product_name("AboutVersionUnregisteredTests", exceptions))
+        self.assertTrue(is_allowed_product_name("Persona", {}))
+
+    def test_about_version_test_targets_and_schemes_keep_their_wiring(self):
+        project = yaml.safe_load(source("project.yml"))
+        targets = project["targets"]
+        schemes = project["schemes"]
+        ui_tests = targets["AboutVersionAccessibilityUITests"]
+        self.assertIn({"target": "AboutVersionAccessibilityHost"}, ui_tests["dependencies"])
+        self.assertEqual(ui_tests["settings"]["base"]["TEST_TARGET_NAME"], "AboutVersionAccessibilityHost")
+        accessibility = schemes["AboutVersionAccessibilityHost"]
+        self.assertEqual(accessibility["build"]["targets"], {
+            "AboutVersionAccessibilityHost": "all",
+            "AboutVersionAccessibilityUITests": ["test"],
+        })
+        self.assertEqual(accessibility["test"]["targets"], ["AboutVersionAccessibilityUITests"])
+        visual = schemes["AboutVersionVisualTests"]
+        self.assertEqual(visual["build"]["targets"], {"Persona": "all", "PersonaTests": ["test"]})
+        self.assertEqual(visual["test"]["targets"], ["PersonaTests"])
+
     def test_plists_have_unique_keys_and_exact_compatible_url_schemes(self):
         registered = set()
         expected = {"Persona/Resources/Info.plist", "Vision/Resources/Info.plist", "PersonaWatch/Info.plist"}
