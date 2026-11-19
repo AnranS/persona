@@ -50,6 +50,10 @@ type modelExecution struct {
 	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
 	// background (assistant_interject.go). Per message, never part of the fingerprint.
 	Interject bool `json:"-"`
+	// Interactive: run a Claude conversation as interactive Claude Code instead of claude -p (assistant_tui.go), the
+	// assistant's claude_interactive setting. Part of the fingerprint, so a change resumes an idle conversation in a
+	// new process; omitted when off, so fingerprints from before it stay the same.
+	Interactive bool `json:",omitempty"`
 	// NewModelChoice classifies this request against the previous recovery chain. It is per-turn provenance, never
 	// persisted or included in the execution fingerprint, and is committed only when the input is delivered.
 	NewModelChoice bool `json:"-"`
@@ -127,9 +131,10 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 		MainCompact             int                      `json:"main_compact_window"`
 		External                *proto.ExternalExecution `json:"external"`
 		SupervisionInstructions *string                  `json:"supervision_instructions"`
+		ClaudeInteractive       bool                     `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External}).withSupervision(res.SupervisionInstructions)
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions)
 }
