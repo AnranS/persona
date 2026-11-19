@@ -175,6 +175,52 @@ func TestTodoImageCreateOperationReceipt(t *testing.T) {
 	}
 }
 
+// Offline proves no create ran, so the operation may be tried again. In doubt keeps the original HTTP outcome instead of
+// risking a second create: the two failures are deliberately not the same retry.
+func TestTodoImageCreateOperationRetryOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		secondCode int
+		calls      int32
+	}{
+		{"offline releases the operation", http.StatusServiceUnavailable, `{"code":"assistant_offline","error":"offline"}`, http.StatusOK, 2},
+		{"in doubt replays the outcome", http.StatusBadGateway, `{"code":"assistant_in_doubt","delivered":"unknown","error":"lost"}`, http.StatusBadGateway, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			h.store = &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
+			manager, _ := connectInboxManager(t, h)
+			var calls atomic.Int32
+			manager.mu.Lock()
+			manager.http = func(_ context.Context, r assistantwire.HTTPRequest) (any, error) {
+				if calls.Add(1) == 1 {
+					return assistantwire.HTTPResponse{Status: tc.status, Header: map[string][]string{"Content-Type": {"application/json"}}, Body: []byte(tc.body)}, nil
+				}
+				return assistantwire.HTTPResponse{Status: http.StatusOK, Header: map[string][]string{"Content-Type": {"application/json"}}, Body: r.Body}, nil
+			}
+			manager.mu.Unlock()
+			const op = "d0000000-0000-4000-8000-000000000011"
+			const body = `{"title":"Create once","images":[{"id":"d0000000-0000-4000-8000-000000000001","mime":"image/png","data":"aW1hZ2U="}]}`
+			firstCode, firstBody := postTodo(t, context.Background(), h, h.routes(), "/api/v1/todos", op, body)
+			if firstCode != tc.status {
+				t.Fatalf("first attempt = %d %s, want %d", firstCode, firstBody, tc.status)
+			}
+			secondCode, secondBody := postTodo(t, context.Background(), h, h.routes(), "/api/v1/todos", op, body)
+			if secondCode != tc.secondCode {
+				t.Fatalf("retry = %d %s, want %d", secondCode, secondBody, tc.secondCode)
+			}
+			if tc.status == http.StatusBadGateway && secondBody != firstBody {
+				t.Fatalf("in-doubt retry changed the response:\n%s\n%s", firstBody, secondBody)
+			}
+			if got := calls.Load(); got != tc.calls {
+				t.Fatalf("manager calls = %d, want %d", got, tc.calls)
+			}
+		})
+	}
+}
+
 // todoImageRefusalNode lets a remote Agent enforce its model's image-input limit. It refuses only a call carrying an
 // image, so a handoff that drops the bytes looks deceptively successful here and fails the acceptance assertion.
 func todoImageRefusalNode(t *testing.T, h *Hub, id string) *Machine {

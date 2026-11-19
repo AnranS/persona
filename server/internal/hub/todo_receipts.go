@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A to-do's relayed writes that keep an operation receipt (#10465, docs/protocol/protocol.md "Operation receipts"):
+// A to-do's relayed writes that keep an operation receipt (#10465, #11084): creating one, including its images;
 // the answer to one of its asks, which a notification action or a phone that lost the reply asks again with the same
 // X-Persona-Op-Id, gets the first reply back instead of a second effect or a 409 for the round it already ended; a
 // message to the to-do on its conversation's route is not typed to its Agent twice. The id is the header
@@ -34,10 +34,13 @@ const (
 	todoAnswerOp = "todo_answer"
 	// todoRouteOp is the receipt kind of a message to a to-do on its conversation's route.
 	todoRouteOp = "todo_route"
+	// todoCreateOp is the receipt kind of creating a to-do, including its uploaded images.
+	todoCreateOp = "todo_create"
 )
 
 // todoReceiptRoutes are the relayed to-do routes with a receipt, and the receipt's kind.
 var todoReceiptRoutes = map[string]string{
+	"POST /api/v1/todos":                              todoCreateOp,
 	"POST /api/v1/todos/{id}/asks/{ask}/answer":       todoAnswerOp,
 	"POST /api/v1/assistant/conversations/{id}/route": todoRouteOp,
 }
@@ -56,7 +59,7 @@ func (h *Hub) todoRelay(kind string, by ownerOf) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if kind == todoRouteOp && r.Header.Get("X-Persona-Op-Id") == "" {
+		if (kind == todoRouteOp || kind == todoCreateOp) && r.Header.Get("X-Persona-Op-Id") == "" {
 			h.forwardHTTP(w, r, id)
 			return
 		}

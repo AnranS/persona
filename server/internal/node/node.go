@@ -1335,6 +1335,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if method == "session.start" && strings.TrimSpace(p.Prompt) != "" && len(p.Images) > 0 {
+			paths, err := n.saveImages(p.Images)
+			if err != nil {
+				return nil, err
+			}
+			// The first prompt uses the same attachment block as session.send; firstPrompt adds keepImagePaths for Claude.
+			p.Prompt = strings.TrimSpace(p.Prompt) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
+		}
 		if p.ResumeSessionID != "" {
 			unlock := n.recovery.lock(p.ResumeSessionID)
 			defer unlock()
