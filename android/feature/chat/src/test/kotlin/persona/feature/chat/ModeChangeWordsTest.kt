@@ -77,6 +77,7 @@ class ModeChangeWordsTest {
         failed = "Couldn't restart in “Allow everything”",
         dropped = "Called off, won't restart in “Allow everything”",
         reasons = linkedMapOf(
+            "cancelled" to "Called off, won't restart in “Allow everything”: the session stays in its current mode",
             "replaced" to "Called off, won't restart in “Allow everything”: another switch took its place",
             "process_exited" to "Called off, won't restart in “Allow everything”: the process it was picked for has exited",
             "process_replaced" to "Called off, won't restart in “Allow everything”: the session runs in another process now",
@@ -100,6 +101,7 @@ class ModeChangeWordsTest {
         failed = "没能重启到「全部放行」",
         dropped = "已取消，不会重启到「全部放行」",
         reasons = linkedMapOf(
+            "cancelled" to "已取消，不会重启到「全部放行」：会话保持当前模式",
             "replaced" to "已取消，不会重启到「全部放行」：被另一次切换取代",
             "process_exited" to "已取消，不会重启到「全部放行」：原进程已经退出",
             "process_replaced" to "已取消，不会重启到「全部放行」：会话换了进程",
@@ -123,6 +125,7 @@ class ModeChangeWordsTest {
         failed = "「すべて許可」で再起動できませんでした",
         dropped = "取り消しました。「すべて許可」では再起動しません",
         reasons = linkedMapOf(
+            "cancelled" to "取り消しました。「すべて許可」では再起動しません：セッションは現在のモードのままです",
             "replaced" to "取り消しました。「すべて許可」では再起動しません：別の切り替えに置き換えられました",
             "process_exited" to "取り消しました。「すべて許可」では再起動しません：元のプロセスが終了しました",
             "process_replaced" to "取り消しました。「すべて許可」では再起動しません：セッションが別のプロセスに変わりました",
