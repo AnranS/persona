@@ -24,6 +24,29 @@ code = 0
 if args[:1] == ["api"]:
     entry["input"] = sys.stdin.read() if "--input" in args else ""
     entry["review"] = json.loads(entry["input"]) if entry["input"] and len(args) > 1 and args[1].endswith("/reviews") else None
+if args[:2] == ["api", "graphql"]:
+    payload = json.loads(entry["input"])
+    query, variables = payload["query"], payload["variables"]
+    def connection(nodes):
+        return {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+    if "baseRef { target { oid } }" in query:
+        snapshot = {key: state["pr"][key] for key in (
+            "number", "title", "body", "state", "isDraft", "headRefOid", "headRefName", "baseRefName",
+            "isCrossRepository", "mergeable", "mergeStateStatus", "reviewDecision", "url", "createdAt", "updatedAt")}
+        snapshot["baseRef"] = {"target": {"oid": state["pr"]["baseRefOid"]}}
+        out = json.dumps({"data": {"repository": {"pullRequest": snapshot}}})
+    elif "reviewThreads(first: $pageSize" in query:
+        activity = {}
+        if variables["needComments"]:
+            activity["comments"] = connection(state.get("comments", []))
+        if variables["needReviews"]:
+            activity["reviews"] = connection(state.get("reviews", []))
+        if variables["needThreads"]:
+            activity["reviewThreads"] = connection([
+                {"comments": connection([comment])} for comment in state.get("review_comments", [])])
+        out = json.dumps({"data": {"repository": {"pullRequest": activity}}})
+    else:
+        raise AssertionError("unexpected GraphQL query")
 if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
     records = {"issues/7/comments": state.get("comments", []), "pulls/7/comments": state.get("review_comments", []),
                "pulls/7/reviews": state.get("reviews", []), "pulls/7/commits": state.get("commits", [])}[args[1].split("repos/example/one/", 1)[1]]
