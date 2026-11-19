@@ -445,6 +445,10 @@ on-demand model panel, not the everyday Assistant home (#6887).
   chevron; Full access tints the words `red`, Auto-review `mode-acts`; under a 300 px composer (a 320 px phone) only
   the symbol. A mode not reported yet is named by no value: the raised hand and "Permission mode", no tooltip (#5756). Its menu is the shared `Menu` (300 px) with each mode's symbol, name and check; descriptions are tooltips
   (`MenuItem.tip`), except a disabled row's reason and a row asking again, which stay under the name.
+- Permission mode names on every client (#10363) come from `spec/fixtures/permission-modes/names.json`: Default
+  permissions, Auto accept edits, Plan mode, Auto-review and Full access in en, zh-Hans and ja. Pickers, settings,
+  planned tasks, answered-plan labels and confirmations use those names; approval-action phrases, launcher-default
+  choices and unset/default-behavior labels stay distinct. The fixture README names each client's drift check.
 - Web under the box (#5324): the source and folder line at the left (12 px `ink-3`, a folder mark, truncating, full
   values on hover; an ⓘ menu at phone width), the context meter at the right.
 - Web `/` palette (#5325, `web/src/views/chat/SlashPalette.tsx`; cindy's slash command palette, followed at the owner's
@@ -1653,20 +1657,9 @@ A computer's dev server opened from a chat (a forwarded port, `docs/web/preview.
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
-**The opened summary** (web, #5155; the owner asked on 2026-11-12 that it follow cindy's `WorkGroupBlock` and
-`createCompletedWorkGroup`). A summary that holds intermediate narration opens to cindy's timeline: the narration in
-order, and each run of work between two pieces of it an inner summary of its own, "Worked for 12s" from the words
-before it to the words after it, the live one "Working…" with its clock. Without intermediate narration it holds its
-rows directly. If tools follow the latest progress message, the expanded Web timeline also shows that message at its
-original position; the collapsed view still shows it in the latest-text slot. The work headers explain their clocks:
-the outer clock covers the whole exchange; inner clocks start at the preceding message or start of work and end at
-the next message, the last activity in a finished run, or now in a live run. Inner summaries open together with the outer one and then keep their own open / closed state, so
-opening a summary shows every tool call. On the web a long finished summary fills in as it opens: the first 60 steps
-(its inner summaries' included) come with the tap and the rest follow in batches of 60 while the page is idle, so the
-tap is answered at once and every call is still drawn a moment later, none left out or behind a "Show more"; rows
-already drawn stay put. A live summary, a search hit inside one and a jump to a call in one ("Jump to the step that
-started it", a subagent's or a child session's link) draw all of it at once, so the row asked for is there to land on
-(`docs/web/web.md`, "A long summary opens a screenful at a time"). A thought with words is one row in the tool rows' chrome (16 px status slot
+**The opened summary** (web, #10247) is a flat sequence of narration and action groups, sharing one rail and indentation. The outer summary keeps the whole-exchange clock and collapsed default. Action headers name at most three kinds in first-seen order, with the first kind's icon; read/edit/search/command kinds have localized counts, and other kinds retain their existing labels. Earlier live groups start collapsed, the current one opens within the trace the reader manually opened, and a superseded run closes; all groups can be opened and closed by hand. Newly loaded completed groups start open; remembered disclosure choices remain available. Latest narration stays only in its text slot until superseded, and the final reply appears once. Rows lead with the file, query and target, or command; command descriptions remain in tooltips and expanded detail. Reliable per-call durations appear only from 30 seconds; the total exchange clock stays on the outer summary and run bar. The current run previews edit diffs using the existing diff renderer. The flatter layout replaces repeated time headings and nested rails so the inspected work is scannable, while preserving the top-level progressive disclosure required by super rule 2.
+
+A long finished summary draws its first 60 steps with the tap and adds idle batches of 60. Live summaries, search hits and jumps draw all requested steps immediately. Search, jump-to-step and folded history continue to open the groups holding their target (`docs/web/web.md`, "A long summary opens a screenful at a time"). A thought with words is one row in the tool rows' chrome (16 px status slot
 with the sparkle, italic `thinking-ink` words on one line, the 18 px chevron slot), opening in place only when it does
 not fit or has a line break, its opened words selectable; a thought without words is no step, so it neither makes a
 summary of its own nor splits a run of rows. The live "Thinking" line with dots and a clock ends
@@ -2909,8 +2902,9 @@ to press; impromptu talks are meetings too (principles 1 and 4).
 - **One row for one meeting** (#8872): a meeting both imported from a connected app and recorded in Persona is the
   recording's row (its minutes, transcript and map are Persona's), once the hub has matched them (after the minutes
   step; until then both rows show). Its avatar carries the app it came from in the corner, drawn as the Inbox marks a
-  connector's item (the app's own mark on white, a gray link without one: `KBImportedBadge`, the web's `RowTile`), and
-  VoiceOver reads the notes' name as the row's value. The recording's page, on Knowledge's page and on the meeting's own
+  connector's item (the app's own mark on white, a gray link without one: `KBImportedBadge`, the web's `RowTile`, Android's
+  `KnowledgeImportedAvatar`), and VoiceOver / TalkBack reads the notes' name as the row's value. The recording's page, on
+  Knowledge's page and on the meeting's own
   after the meeting, has one row more under the facts: **Lark Meeting Notes** (another app's, **Original Meeting Notes**),
   which opens them in this app (`KBImportedNotesButton`, `kb-imported-notes`). Two recordings of one meeting both stay,
   the imported row goes; a recording naming a meeting the list doesn't have stays as it is (principle 4: one meeting,
