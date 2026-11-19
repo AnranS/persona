@@ -441,7 +441,7 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 		questionParams[assistantwire.ClarificationProofParam] = token
 		questionParams[assistantwire.ClarificationInteractionParam] = id
 	}
-	params, err := s.SendParams(ctx, SendParams{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID, Params: questionParams})
+	params, err := s.SendParams(ctx, SendParams{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID, Params: questionParams, VerbatimText: true})
 	if err != nil {
 		s.finishClarifyAttempt(p, attempt, nil, err)
 		return err

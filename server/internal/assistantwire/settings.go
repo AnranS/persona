@@ -158,6 +158,9 @@ type SendParams struct {
 	// the manager's own sends (channels, the inbox, meetings) never set it, and an older hub never sends it. A hand-off's
 	// Always rule spares the card only for a turn of such messages (assistant secret_handoff.go).
 	Human bool `json:"human,omitempty"`
+	// VerbatimText is internal-only: an approval clarification keeps the owner's
+	// exact question instead of expanding workspace mentions or main-chat handoff.
+	VerbatimText bool `json:"-"`
 }
 
 // KeepUndeliveredParams is assistant.keep_undelivered's params. Params are the app's message as it came (text, images,

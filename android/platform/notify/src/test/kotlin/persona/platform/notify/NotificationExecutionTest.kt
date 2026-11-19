@@ -433,6 +433,24 @@ class NotificationExecutionTest {
         assertEquals(listOf(original.id), retracted)
     }
 
+    @Test fun interactionSnapshotsNeverRepostDismissedOrOrdinaryCards() = runBlocking {
+        val delivered = prepared(now.plusSeconds(3_600).toString())
+        for (current in listOf(request, delivered)) {
+            val center = Center(current)
+            val sessions = object : SessionsRepository {
+                override val machines = MutableStateFlow<List<Machine>>(emptyList())
+                override val sessions = MutableStateFlow(listOf(Session(machineId = "machine", sessionId = "session")))
+                override suspend fun refresh() = Unit
+            }
+            val posted = mutableListOf<Interaction>()
+            val delivery = NotificationDelivery(center, sessions, { false },
+                { ix, _, _ -> posted += ix }, { fail("Not an alert") }, {},
+                notified = { setOf(current.id) }, showing = { emptySet() })
+            delivery.accept(InteractionEvent(current))
+            assertEquals(emptyList<Interaction>(), posted)
+        }
+    }
+
     private class Center(request: Interaction) : InteractionCenter {
         override val pending = MutableStateFlow(listOf(request))
         var remote: Interaction? = request

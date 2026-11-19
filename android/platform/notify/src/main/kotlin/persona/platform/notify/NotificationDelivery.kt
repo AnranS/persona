@@ -42,6 +42,8 @@ internal class NotificationDelivery(
     private val catchUpPreferences: suspend () -> Map<String?, DeviceNotificationPreferences> = {
         preferences()?.let { mapOf<String?, DeviceNotificationPreferences>(null to it) }.orEmpty()
     },
+    /** Only notifications showing now, not the delivered/dismissed history used to suppress a second arrival. */
+    private val showing: () -> Set<String> = notified,
 ) {
     suspend fun accept(event: ServerEvent) {
         when (event) {
@@ -49,7 +51,7 @@ internal class NotificationDelivery(
             is InteractionEvent -> {
                 // A current snapshot is not a new arrival. Only redraw a notification this device already delivered,
                 // with the server's latest deadline and without notifying again for an unseen card.
-                if (event.interaction.id !in notified()) return
+                if (!event.interaction.canClarify || event.interaction.id !in showing()) return
                 interactions.refresh()
                 val current = interactions.pending.value.firstOrNull { it.id == event.interaction.id } ?: return
                 if (NotificationPolicy.expired(current)) { retract(current.id); return }

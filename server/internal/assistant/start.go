@@ -1126,11 +1126,16 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	}
 	// Keep the raw value until external admission checks it; ordinary conversations ignore it, even on an early return.
 	defer delete(params, "runtime")
-	delete(params, "origin") // only the manager's origin book may attest an Inbox conversation
-	if s.isInboxModelCall(ctx, p.MachineID, p.SessionID, "") {
+	delete(params, "origin") // only the manager's origin book may attest an existing conversation
+	delete(params, "origin_known")
+	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
+	if originKnown {
+		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
 		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
-		params["origin"] = OriginInbox
+		params["origin"] = origin
 	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
@@ -1166,7 +1171,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 		}
 		return nil, false, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
-	if text, ok := params["text"].(string); ok {
+	if text, ok := params["text"].(string); ok && !p.VerbatimText {
 		text, own = s.fillWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
 		if main {
 			left := s.handoffFor(ctx, p.SessionID, text)

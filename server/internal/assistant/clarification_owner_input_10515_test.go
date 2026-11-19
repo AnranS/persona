@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -82,6 +83,21 @@ func TestClarificationIsOwnerInputNotApprovalAndFreshAllowRunsOnce10515(t *testi
 	result := waitApprovalResult(t, ft, "ix_owner_input_question_10515")
 	if !strings.Contains(result, "applied") || !strings.Contains(result, "setting applied") {
 		t.Fatalf("fresh owner terminal result = %q", result)
+	}
+}
+
+func TestClarificationKeepsWorkspaceContextVerbatim10515(t *testing.T) {
+	ft := newFleetTest(t)
+	preparedTestConversation(ft)
+	done := startPreparedTest(t, ft, "ix_workspace_question_10515", "", nil)
+	question := `<persona-context kind="workspace" title="Project" machine="mac" cwd="/work/project">Project files</persona-context>Why is this change needed?`
+	if err := ft.s.clarify(context.Background(), "ix_workspace_question_10515", question, "workspace-question-10515", nil); err != nil {
+		t.Fatal(err)
+	}
+	awaitPreparedTest(t, done)
+	sent := ownerQuestionSends(ft)
+	if len(sent) != 1 || sent[0]["text"] != prompts.ProtectUserMessage(question) {
+		t.Fatalf("clarification rewrote the owner's verbatim question: %+v", sent)
 	}
 }
 

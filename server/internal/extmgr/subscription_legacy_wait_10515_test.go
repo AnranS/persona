@@ -77,6 +77,21 @@ func TestSubscriptionSaveLegacyStaleApplyIsDefinitelyNotApplied10515(t *testing.
 	}
 }
 
+func TestSubscriptionSaveWithoutApprovalServiceIsDefinitelyNotApplied10515(t *testing.T) {
+	e := newToolEnv(t)
+	before := e.made()
+	store := &legacyUpdateStore10515{MemStore: e.store}
+	e.h.subs = toolRunService(e, store, nil)
+	e.h.opts.AskPrepared = nil
+	e.h.opts.Ask = nil
+	res := legacySaveResult10515(e, before.ID, before.Revision, "Must not be saved")
+	requireDefiniteLegacyNonApply10515(t, res)
+	current, _, err := e.h.subs.Get(context.Background(), before.ID)
+	if err != nil || current.Label != before.Label || current.Revision != before.Revision || store.calls.Load() != 0 {
+		t.Fatalf("offline wait mutated state or entered Apply: current=%+v err=%v update calls=%d", current, err, store.calls.Load())
+	}
+}
+
 func TestSubscriptionSaveLegacyWriteFailureRemainsUncertain10515(t *testing.T) {
 	e := newToolEnv(t)
 	before := e.made()

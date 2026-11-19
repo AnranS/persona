@@ -352,7 +352,7 @@ func (h *Manager) waitPrepared(ctx context.Context, ix proto.Interaction, op app
 		return h.opts.AskPrepared(ctx, ix, op)
 	}
 	if h.opts.Ask == nil {
-		return approval.Outcome{}, errAssistantOffline
+		return approval.Outcome{}, fmt.Errorf("%w: %w", approval.ErrNotApplied, errAssistantOffline)
 	}
 	// Embedders that predate AskPrepared keep their original one-shot approval
 	// behavior. The production assistant supplies AskPrepared for clarification.
