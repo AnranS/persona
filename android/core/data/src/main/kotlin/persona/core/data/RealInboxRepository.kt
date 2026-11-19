@@ -1504,6 +1504,7 @@ class RealInboxRepository(
                     c.optional("avatar_url"))
             }
         }
+        val connectorManager = data.optional("manager") ?: previous?.takeIf { it.hubItemId == data.string("id") }?.manager
         val event = persona.core.contracts.inboxEventFields(data)
         val fresh = InboxRecord(
             InboxItem(data.string("id"), data.string("account"), data.string("kind"), data.string("title"),
@@ -1527,7 +1528,8 @@ class RealInboxRepository(
                     direct = it.flag("direct"))
             },
             // Feishu keeps its top-level picture; a connector's thread picture is its hub avatar path.
-            avatar = if (data.string("source") == "lark") avatar(data.optional("avatar"), transport) else avatar(connector?.avatarUrl, transport),
+            avatar = if (data.string("source") == "lark") avatar(data.optional("avatar"), transport)
+                else avatar(connector?.avatarUrl, LarkContentSource(transport, connectorManager)),
             moment = moment?.let {
                 InboxMomentRef(
                     postId = it.string("post_id"),

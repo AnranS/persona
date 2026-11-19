@@ -741,6 +741,58 @@ class InboxRepositoryTest {
         }
     }
 
+    @Test fun connectorPicturesStayWithTheirManagerAndPreviousOwner() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-connector-avatar-manager-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val picture = "/api/v1/avatars/telegram/shared"
+        val sized = "$picture?size=144"
+        fun item(manager: String?, done: Boolean = false) = buildJsonObject {
+            put("id", "telegram:shared"); put("source", "telegram"); put("kind", "dm"); put("title", "Shared"); put("version", "v1")
+            putJsonObject("connector") { put("thread", "u1"); put("avatar_url", picture) }
+            if (manager != null) put("manager", manager)
+            if (done) { put("done_at", "2026-11-04T08:00:00Z"); put("done_by", "user") }
+        }
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(item("assistant"), item("m-3")))
+                onMedia = { _ ->
+                    when (currentCoroutineContext()[RequestManager]?.id) {
+                        "" -> byteArrayOf(1)
+                        "m-3" -> byteArrayOf(3)
+                        else -> error("connector picture read by the wrong manager")
+                    }
+                }
+                // A single-item answer is unstamped and must inherit the previous record's owner.
+                onSetDone = { _, done -> buildJsonObject { put("item", item(null, done)) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val records = repository.snapshot.value.records.associate { it.manager to it }
+            val default = records.getValue("assistant").avatar!!
+            val other = records.getValue("m-3").avatar!!
+            assertEquals("hub/generation:$sized", default.cacheKey)
+            assertEquals("hub/generation#m-3:$sized", other.cacheKey)
+            assertArrayEquals(byteArrayOf(1), default.read())
+            assertArrayEquals(byteArrayOf(3), other.read())
+            assertArrayEquals(byteArrayOf(1), default.read())
+            assertArrayEquals(byteArrayOf(3), other.read())
+            assertEquals(listOf(sized to "", sized to "m-3"), transport.mediaReads)
+
+            transport.onInbox = { throw IOException("offline") }
+            repository.setDone(records.getValue("m-3").item.id, true)
+            val updated = repository.snapshot.value.records.single { it.manager == "m-3" }.avatar!!
+            assertEquals("hub/generation#m-3:$sized", updated.cacheKey)
+            assertArrayEquals(byteArrayOf(3), updated.read())
+            assertEquals("the rebuilt row must use the other manager's kept bytes", 2, transport.mediaReads.size)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun bulkDoneKeepsWhatWasAlreadyDoneElsewhereAndDropsWhatIsGone() = runBlocking {
         val directory = Files.createTempDirectory("inbox-bulk-unchanged-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1779,6 +1831,7 @@ class InboxRepositoryTest {
         var onReply: suspend (String) -> JsonObject = { JsonObject(emptyMap()) }
         var items = JsonArray(emptyList())
         val mediaRefs = mutableListOf<String>()
+        var onMedia: suspend (String) -> ByteArray = { byteArrayOf(1) }
         var onMessages: suspend (Long?, String?, String?) -> JsonObject = { _, _, _ -> buildJsonObject {
             put("messages", JsonArray(emptyList())); put("sync_state", "complete")
         } }
@@ -1832,7 +1885,7 @@ class InboxRepositoryTest {
         val mediaReads = mutableListOf<Pair<String, String?>>()
         override suspend fun media(ref: String): ByteArray {
             mediaReads += ref to currentCoroutineContext()[RequestManager]?.id
-            return byteArrayOf(1).also { mediaRefs += ref }
+            return onMedia(ref).also { mediaRefs += ref }
         }
         /** Each Moments read with the manager its request names (RequestManager). */
         val momentsReads = mutableListOf<Pair<String, String?>>()
