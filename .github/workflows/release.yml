@@ -147,7 +147,7 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: python3 scripts/release/resume_github_release.py prepare --repository "$GH_REPO" --tag "$RELEASE_TAG" --commit "$COMMIT" --resume "$RUNNER_TEMP/release-resume.json" --output "$GITHUB_OUTPUT"
       - name: Build release command-line programs
-        if: steps.owner.outputs.release_pr == 'false'
+        if: steps.owner.outputs.release_pr == 'false' && steps.resume.outputs.coordinated == 'false'
         env:
           VERSION: ${{ needs.desktop-gate.outputs.version }}
           PERSONA_RELEASE_BUILD: ${{ steps.resume.outputs.number }}
@@ -155,7 +155,7 @@ jobs:
           RELEASE_CHANNEL: ${{ contains(github.ref_name, '-') && 'beta' || 'release' }}
         run: scripts/release/publish.sh
       - name: Install the existing signing certificate
-        if: steps.owner.outputs.release_pr == 'false'
+        if: steps.owner.outputs.release_pr == 'false' && steps.resume.outputs.coordinated == 'false'
         env:
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
@@ -175,13 +175,13 @@ jobs:
           test -n "$identity" || { echo 'Darwin CLI signing blocked: No Developer ID Application signing identity is available.' >&2; exit 1; }
           printf '%s\n' "$identity" > "${RUNNER_TEMP}/persona-cli-signing-identity"
       - name: Sign and verify fixed-identifier binaries
-        if: steps.owner.outputs.release_pr == 'false'
+        if: steps.owner.outputs.release_pr == 'false' && steps.resume.outputs.coordinated == 'false'
         run: |
           identity="$(cat "${RUNNER_TEMP}/persona-cli-signing-identity")"
           test -n "$identity" || { echo 'Darwin CLI signing blocked: No Developer ID Application signing identity is available.' >&2; exit 1; }
           python3 scripts/release/sign_darwin_cli.py build-publish/bin --identity "$identity"
       - name: Rebuild the manifest from the signed downloads
-        if: steps.owner.outputs.release_pr == 'false'
+        if: steps.owner.outputs.release_pr == 'false' && steps.resume.outputs.coordinated == 'false'
         env:
           VERSION: ${{ needs.desktop-gate.outputs.version }}
           COMMIT: ${{ github.sha }}
@@ -210,7 +210,7 @@ jobs:
           fi
           "$host" release verify --dir build-publish/bin --manifest build-publish/bin/ci-latest.json
       - name: Upload signed Darwin downloads
-        if: steps.owner.outputs.release_pr == 'false'
+        if: steps.owner.outputs.release_pr == 'false' && steps.resume.outputs.coordinated == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

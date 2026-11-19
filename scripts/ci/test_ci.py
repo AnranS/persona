@@ -327,6 +327,11 @@ class ManualWorkflowTests(unittest.TestCase):
         resume = next(step for step in release['jobs']['darwin-cli-sign']['steps']
                       if step.get('name') == 'Select reusable Release build')
         self.assertEqual(resume['if'], "steps.owner.outputs.release_pr == 'false'")
+        for name in ('Build release command-line programs', 'Install the existing signing certificate',
+                     'Sign and verify fixed-identifier binaries', 'Rebuild the manifest from the signed downloads',
+                     'Upload signed Darwin downloads'):
+            step = next(step for step in release['jobs']['darwin-cli-sign']['steps'] if step.get('name') == name)
+            self.assertIn('steps.resume.outputs.coordinated', step['if'], name)
         create = release['jobs']['publish']['steps'][-1]
         self.assertEqual(create['name'], 'Create GitHub Release')
         self.assertIn('args=(--latest=false ', create['run'])

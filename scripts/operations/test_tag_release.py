@@ -43,6 +43,9 @@ class TagReleaseTests(unittest.TestCase):
             "receipt": str(self.root / "state" / "artifacts.json"),
         }))
         self.config_path.chmod(0o600)
+        self.build_patcher = patch.object(tag_release, "release_build", return_value=202611110749)
+        self.build_patcher.start()
+        self.addCleanup(self.build_patcher.stop)
 
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True).strip()
@@ -351,7 +354,7 @@ class TagReleaseTests(unittest.TestCase):
             self.assertEqual(command[:3], ["gh", "release", "view"])
             fields = command[-1].split(",")
             details = {"tagName": tag, "isDraft": False, "isPrerelease": prerelease, "isLatest": False,
-                       "assets": remote if fields == ["assets"] else []}
+                       "createdAt": "2026-11-11T07:49:00Z", "assets": remote if fields == ["assets"] else []}
             return json.dumps({field: details[field] for field in fields})
 
         def fetch(request, **kwargs):
@@ -440,13 +443,22 @@ class TagReleaseTests(unittest.TestCase):
         self.assertFalse(any(kind == "upload" for kind, _ in events))
         self.assertEqual(self.release_actions(events, "edit"), [])
 
+    def test_nonsemver_stable_hub_is_rejected_before_upload_checkpoint(self):
+        events = []
+        with self.assertRaisesRegex(tag_release.ConfigError, "vX.Y.Z"):
+            self.publish_receipt(self.release_receipt(), "v1.0", "hub", "nonsemver-stable", events=events)
+        self.assertFalse(any(kind == "upload" for kind, _ in events))
+        self.assertEqual(self.release_actions(events, "edit"), [])
+
     def test_promotion_retry_reuses_the_verified_uploaded_receipt(self):
         events = []
         assets = self.release_receipt()
         with self.assertRaisesRegex(tag_release.ConfigError, "latest.json"):
             self.publish_receipt(assets, "v0.2.1", "hub", "retry-uploaded-receipt",
                                  feed_error=urllib.error.URLError("offline"), events=events)
-        self.publish_receipt(assets, "v0.2.1", "hub", "retry-uploaded-receipt", events=events)
+        with patch.object(tag_release, "check_release_manifest", wraps=tag_release.check_release_manifest) as check:
+            self.publish_receipt(assets, "v0.2.1", "hub", "retry-uploaded-receipt", events=events)
+        self.assertEqual(check.call_count, 1)
         self.assertEqual(len([command for kind, command in events if kind == "build"]), 1)
         self.assertEqual(len(self.release_actions(events, "edit")), 1)
         state = json.loads((self.root / "publication-retry-uploaded-receipt" / "state.json").read_text())
@@ -495,10 +507,27 @@ class TagReleaseTests(unittest.TestCase):
         self.assertFalse(any(kind == "upload" for kind, _ in events))
         self.assertEqual(self.release_actions(events, "edit"), [])
 
+    def test_release_build_uses_release_creation_time_not_commit_time(self):
+        self.build_patcher.stop()
+        with patch.object(tag_release.subprocess, "check_output", return_value='{"createdAt":"2026-11-19T01:02:03Z"}'):
+            self.assertEqual(tag_release.release_build("example/project", "v0.2.1"), 202611190102)
+
+    def test_ci_signing_returns_none_when_pending_run_completes_without_job(self):
+        responses = iter([
+            json.dumps([{"databaseId": 123, "status": "queued"}]),
+            json.dumps({"jobs": []}),
+            json.dumps({"status": "completed"}),
+        ])
+        with patch.object(tag_release.subprocess, "check_output", side_effect=responses), \
+                patch.object(tag_release.time, "sleep") as sleep:
+            self.assertIsNone(tag_release.ci_signing_conclusion("example/project", "v0.2.1"))
+        sleep.assert_not_called()
+
     def test_ci_signing_waits_for_pending_run_before_jobs_exist(self):
         responses = iter([
             json.dumps([{"databaseId": 123, "status": "queued"}]),
             json.dumps({"jobs": []}),
+            json.dumps({"status": "queued"}),
             json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "conclusion": "success"}]}),
         ])
         with patch.object(tag_release.subprocess, "check_output", side_effect=responses), \

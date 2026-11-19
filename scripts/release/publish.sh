@@ -295,7 +295,16 @@ done
 
 # Releases only move forward: a larger build number than the one served, and the served commit an ancestor of this one.
 curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"
-"$host_bin" release check-next "$OUT/served.json" --build "$BUILD" --commit "$COMMIT" || exit 1
+if ! "$host_bin" release check-next "$OUT/served.json" --build "$BUILD" --commit "$COMMIT"; then
+  # A retry of the exact same commit/build is allowed only after the served manifest verifies against these bytes.
+  if [ -s "$OUT/served.json" ] \
+    && [ "$(python3 -c 'import json; print(json.load(open("'"$OUT"'/served.json"))["build"])' 2>/dev/null)" = "$BUILD" ] \
+    && [ "$(python3 -c 'import json; print(json.load(open("'"$OUT"'/served.json"))["commit"])' 2>/dev/null)" = "$COMMIT" ]; then
+    "$host_bin" release verify --dir "$OUT/bin" --manifest "$OUT/served.json"
+  else
+    exit 1
+  fi
+fi
 
 # The privacy scan checked the raw binaries; only the gzipped ones are published (to the bucket, see above).
 for bin in "$OUT/bin"/personad-* "$OUT/bin"/persona-link-* "$OUT/bin"/persona-node-* "$OUT/bin"/persona-hub-* "$OUT/bin"/persona-manager-* \

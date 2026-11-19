@@ -596,9 +596,9 @@ A private configuration has only these fields, with no secrets:
   `personad` must contain the exact GitHub update base used by the Release's
   `install.sh`, and the installer's own `DL` default is checked too;
   `publish.sh` renders that installer from the same base it compiles into the
-  binaries. Tagged builds use the commit's UTC-minute `PERSONA_RELEASE_BUILD`
-  so CI and local verification share one build identity. When Darwin signing is
-  enabled in CI, the coordinator waits for that job, downloads its staging
+  binaries. Tagged builds use the Release's UTC `createdAt` minute through
+  `PERSONA_RELEASE_BUILD`, so CI and local verification share one build identity
+  even for backfills and retries. When Darwin signing is enabled in CI, the coordinator waits for that job, downloads its staging
   `ci-latest.json` and non-Windows artifacts, and merges them with the locally
   verified Windows archives and reports into the final manifest and checksums;
   a skipped job keeps the private build, and a failed job stops publication. The downloads go up first; `VERSION`, `SHA256SUMS`, `android.json`
@@ -610,7 +610,12 @@ A private configuration has only these fields, with no secrets:
   move Latest backward. Prereleases and non-hub receipts do not move the
   Latest pointer. The uploaded checkpoint retains the exact receipt and asset
   digests, so a feed or promotion retry reuses it and reruns only remote
-  verification and promotion instead of rebuilding conflicting assets.
+  verification and promotion instead of rebuilding conflicting assets. Every
+  resume repeats the same deterministic receipt validation before upload. The
+  primary release-PR pipeline calls `scripts/operations/stable_release.py` after
+  independently downloading every uploaded artifact: it verifies the immutable
+  tag manifest, refuses to move Latest to an older stable tag, and requires the
+  final `isLatest` readback before declaring publication complete.
 - A receipt that carries `android.json` (the Android platform's) must ship the
   APK it names, at its size and sha256, for the tag's version.
 - Windows CLI bundles (`Persona-<version>-windows-<arch>.zip`) and each current

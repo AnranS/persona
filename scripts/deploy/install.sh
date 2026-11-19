@@ -522,11 +522,12 @@ case "$DL" in
 https://github.com/*/releases/latest/download)
 	fetch "$DL/latest.json" "$tmp/latest.json" || fail download_failed "$DL/latest.json"
 	release_version="$(awk '
-	  match($0, /"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"/) {
+	  match($0, /"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9]{12})?"/) {
 	    value = substr($0, RSTART, RLENGTH)
 	    sub(/^.*:[[:space:]]*/, "", value)
 	    gsub(/"/, "", value)
 	    sub(/^v/, "", value)
+	    sub(/-[0-9]{12}$/, "", value)
 	    print value
 	    found = 1
 	    exit

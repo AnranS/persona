@@ -39,9 +39,12 @@ def download(repository, tag, item, gh):
 
 def prepare(repository, tag, commit, resume, gh):
     assets = release_assets(repository, tag, gh)
-    descriptor = next((item for item in assets if item["name"] == "latest.json"), None)
-    if descriptor is None:
-        descriptor = next((item for item in assets if item["name"] == "ci-latest.json"), None)
+    if any(item["name"] in {"latest.json", "SHA256SUMS"} for item in assets):
+        resume.parent.mkdir(parents=True, exist_ok=True)
+        resume.write_text(json.dumps({"build": 0, "has_manifest": True, "coordinated": True}) + "\n")
+        resume.chmod(0o600)
+        return 0, True, True
+    descriptor = next((item for item in assets if item["name"] == "ci-latest.json"), None)
     if descriptor is not None:
         manifest = json.loads(download(repository, tag, descriptor, gh))
         if manifest.get("commit") != commit:
@@ -51,22 +54,33 @@ def prepare(repository, tag, commit, resume, gh):
             raise ResumeError("existing Release manifest has no valid build number")
         has_manifest = True
     else:
-        build = subprocess.check_output(
-            ["git", "show", "-s", "--format=%cd", "--date=format:%Y%m%d%H%M", commit], text=True).strip()
-        if not re.fullmatch(r"[0-9]{12}", build):
-            raise ResumeError("cannot derive a release build number from the tag commit")
-        build = int(build)
+        data = json.loads(subprocess.check_output(
+            [gh, "release", "view", tag, "--repo", repository, "--json", "createdAt"], text=True, timeout=60))
+        build = release_build_timestamp(data.get("createdAt"))
         has_manifest = False
     resume.parent.mkdir(parents=True, exist_ok=True)
-    resume.write_text(json.dumps({"build": build, "has_manifest": has_manifest}) + "\n")
+    resume.write_text(json.dumps({"build": build, "has_manifest": has_manifest, "coordinated": False}) + "\n")
     resume.chmod(0o600)
-    return build, has_manifest
+    return build, has_manifest, False
 
 
-def restore(repository, tag, directory, gh):
+def release_build_timestamp(value):
+    if not isinstance(value, str):
+        raise ResumeError("GitHub Release has no creation timestamp")
+    match = re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):[0-9]{2}Z", value)
+    if match is None:
+        raise ResumeError("GitHub Release creation timestamp is not UTC")
+    return int("".join(match.groups()))
+
+
+def restore(repository, tag, directory, gh, resume=None):
+    if resume is not None and json.loads(resume.read_text()).get("coordinated") is True:
+        return
     directory = Path(directory)
     for item in release_assets(repository, tag, gh):
         name = item["name"]
+        if name in {"latest.json", "SHA256SUMS"}:
+            continue
         if name.endswith(".exe.gz"):
             continue  # Native Windows verification stays with the hub publisher's exact verified bytes.
         if not (name.endswith(".gz") or name in {"install.sh", "SHA256SUMS", "VERSION", "latest.json", "ci-latest.json"}):
@@ -89,13 +103,14 @@ def main():
     parser.add_argument("--gh", default="gh")
     args = parser.parse_args()
     if args.action == "prepare":
-        build, has_manifest = prepare(args.repository, args.tag, args.commit, args.resume, args.gh)
+        build, has_manifest, coordinated = prepare(args.repository, args.tag, args.commit, args.resume, args.gh)
         if args.output:
-            args.output.write_text("number=%d\nmanifest=%s\n" % (build, "true" if has_manifest else "false"))
+            args.output.write_text("number=%d\nmanifest=%s\ncoordinated=%s\n" %
+                                   (build, "true" if has_manifest else "false", "true" if coordinated else "false"))
     else:
         if args.directory is None:
             parser.error("restore requires --directory")
-        restore(args.repository, args.tag, args.directory, args.gh)
+        restore(args.repository, args.tag, args.directory, args.gh, args.resume)
 
 
 if __name__ == "__main__":

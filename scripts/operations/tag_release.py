@@ -14,6 +14,7 @@ publication command. Use --once for one scheduler tick; --watch polls forever.
 """
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import fcntl
 import gzip
 import hashlib
@@ -411,12 +412,16 @@ def verify_remote_assets(repository, tag, assets, listed, gh="gh", missing=False
             raise ConfigError("uploaded asset digest verification failed: " + item["name"])
 
 
-def release_build(repo, commit):
-    """One UTC-minute build identity shared by every publisher of this exact tag commit."""
-    value = git(repo, "show", "-s", "--format=%cd", "--date=format:%Y%m%d%H%M", commit)
-    if not re.fullmatch(r"[0-9]{12}", value):
-        raise ConfigError("cannot derive a release build number from the tag commit")
-    return int(value)
+def release_build(repository, tag, gh="gh"):
+    """One UTC-minute build identity shared by every publisher of this exact Release."""
+    data = json.loads(subprocess.check_output(
+        [gh, "release", "view", tag, "--repo", repository, "--json", "createdAt"], text=True, timeout=60))
+    value = data.get("createdAt") if isinstance(data, dict) else None
+    try:
+        created = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as error:
+        raise ConfigError("GitHub Release has no valid UTC creation timestamp") from error
+    return int(created.astimezone(timezone.utc).strftime("%Y%m%d%H%M"))
 
 
 def is_beta_tag(tag):
@@ -559,7 +564,9 @@ def ci_signing_conclusion(repository, tag, gh="gh"):
             [gh, "api", "repos/%s/actions/runs/%s/jobs" % (repository, run_id), "--paginate"], text=True, timeout=60))
         job = next((item for item in data.get("jobs", []) if item.get("name") == "Sign Darwin command-line programs"), None)
         if job is None:
-            if runs[0].get("status") != "completed":
+            status = json.loads(subprocess.check_output(
+                [gh, "run", "view", str(run_id), "--repo", repository, "--json", "status"], text=True, timeout=60))
+            if status.get("status") != "completed":
                 time.sleep(10)
                 continue
             return None
@@ -614,9 +621,23 @@ def merge_ci_windows(manifest, assets, directory):
     (directory / "SHA256SUMS").write_text("".join(sorted(lines, key=lambda line: line.split(" ", 1)[1])))
 
 
+def final_hub_manifest_exists(repository, tag, gh):
+    data = json.loads(subprocess.check_output(
+        [gh, "release", "view", tag, "--repo", repository, "--json", "assets"], text=True, timeout=60))
+    assets = data.get("assets") if isinstance(data, dict) else None
+    if not isinstance(assets, list):
+        raise ConfigError("GitHub returned no Release asset list")
+    return any(isinstance(item, dict) and item.get("name") in {"latest.json", "SHA256SUMS"} for item in assets)
+
+
 def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
     """When signing is enabled, use its complete CI artifact set instead of an independently built private set."""
-    if config["platform"] != "hub" or ci_signing_conclusion(config["repository"], tag, gh) != "success":
+    if config["platform"] != "hub":
+        return assets
+    conclusion = ci_signing_conclusion(config["repository"], tag, gh)
+    if conclusion != "success":
+        return assets
+    if final_hub_manifest_exists(config["repository"], tag, gh):
         return assets
     directory = Path(tempfile.mkdtemp(prefix="ci-artifacts-", dir=config["state_dir"]))
 
@@ -645,7 +666,25 @@ def use_ci_hub_artifacts(config, tag, commit, assets, gh="gh"):
     return result
 
 
+def validate_assets(config, tag, assets):
+    """Repeat the deterministic receipt checks on initial publication and on every uploaded-state resume."""
+    if config["platform"] == "hub" and any(item["name"] == "latest.json" for item in assets) \
+            and "-" not in tag and stable_version(tag) is None:
+        raise ConfigError("stable Latest promotion requires a vX.Y.Z tag")
+    try:
+        check_windows_artifacts(assets, tag[1:])
+    except ValueError as error:
+        raise ConfigError(str(error)) from error
+    if is_beta_tag(tag):
+        # A platform receipt is independent: Android has its signed APK and index, iOS only its store receipt.
+        # Only the hub worker has latest.json; if present it can never point beta at a stable or another version.
+        check_beta_manifest(assets, tag[1:])
+    check_release_manifest(assets, config["repository"], tag[1:])
+    check_android_index(assets, tag[1:])
+
+
 def finish_publication(config, tag, commit, platform, assets):
+    validate_assets(config, tag, assets)
     upload(config["repository"], tag, assets)
     # Once remote digests verify, retain the exact receipt. A transient feed/promotion failure must not rebuild new
     # binaries under the same Release asset names on the next tick.
@@ -676,23 +715,13 @@ def publish_once(config, tag, commit):
     write_state(state, {"tag": tag, "commit": commit, "platform": platform, "phase": "publishing"})
     command = [item.format(**fields) for item in config["command"]]
     env = dict(os.environ, PERSONA_RELEASE_TAG=tag, PERSONA_RELEASE_COMMIT=commit,
-               PERSONA_RELEASE_VERSION=tag[1:], PERSONA_RELEASE_BUILD=str(release_build(config["repo"], commit)),
+               PERSONA_RELEASE_VERSION=tag[1:], PERSONA_RELEASE_BUILD=str(release_build(config["repository"], tag)),
                PERSONA_RELEASE_REPOSITORY=config["repository"],
                PERSONA_RELEASE_PLATFORM=platform, PERSONA_RELEASE_WORKTREE=str(config["worktree"]))
     subprocess.run(command, cwd=config["worktree"], env=env, check=True)
     assets = read_receipt(Path(config["receipt"]).expanduser(), commit)
     assets = drop_missing_helpers(assets, config["state_dir"])
     assets = use_ci_hub_artifacts(config, tag, commit, assets)
-    try:
-        check_windows_artifacts(assets, tag[1:])
-    except ValueError as error:
-        raise ConfigError(str(error)) from error
-    if is_beta_tag(tag):
-        # A platform receipt is independent: Android has its signed APK and index, iOS only its store receipt.
-        # Only the hub worker has latest.json; if present it can never point beta at a stable or another version.
-        check_beta_manifest(assets, tag[1:])
-    check_release_manifest(assets, config["repository"], tag[1:])
-    check_android_index(assets, tag[1:])
     return finish_publication(config, tag, commit, platform, assets)
 
 

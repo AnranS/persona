@@ -75,7 +75,7 @@ HUB_PROGRAMS = ('persona-hub', 'persona-manager')
 class PersonaInstallTests(unittest.TestCase):
     def run_install(self, home, initial='fresh', extra=None, corrupt=False, link=None,
                     node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1', args=(),
-                    github_latest=False, no_python=False):
+                    github_latest=False, no_python=False, release_tag=None):
         target = {'Darwin': 'darwin', 'Linux': 'linux'}[system or platform.system()] + '-' + {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
@@ -129,7 +129,7 @@ class PersonaInstallTests(unittest.TestCase):
                 if github_latest:
                     commands = downloads / 'github-commands'
                     commands.mkdir()
-                    pinned = 'https://github.com/example/project/releases/download/v' + release
+                    pinned = 'https://github.com/example/project/releases/download/' + (release_tag or 'v' + release)
                     curl = commands / 'curl'
                     curl.write_text(f'''#!/bin/sh
 printf '%s\n' "$2" >> "$HOME/curl-calls"
@@ -217,6 +217,16 @@ exec /usr/bin/curl -fsSL "http://127.0.0.1:{server.server_port}/$path" -o "$4"
             calls = (home / 'curl-calls').read_text().splitlines()
             self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
             self.assertTrue(all('/releases/download/v1.2.3/' in url for url in calls[1:]))
+
+    def test_legacy_suffixed_manifest_is_pinned_to_its_immutable_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            result = self.run_install(home, release='0.7.0-202611110749', github_latest=True, release_tag='v0.7.0')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            for url in calls[1:]:
+                self.assertTrue(url.startswith('https://github.com/example/project/releases/download/v0.7.0/'), url)
 
     def test_installer_text_catalog_has_every_language(self):
         text = INSTALL.read_text(encoding='utf-8')
@@ -420,6 +430,30 @@ printf 'catalog placeholders preserved in all languages\n'
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '1.2.3')
+
+    def test_identical_release_retry_verifies_served_manifest(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        start = publisher.index('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json"')
+        end = publisher.index('# The privacy scan checked the raw binaries', start)
+        block = publisher[start:end].replace('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"', ':')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            host = root / 'host-bin'
+            host.write_text('#!/bin/sh\ncase "$1 $2" in "release check-next") exit 1 ;; "release verify") echo "$*" >> "$CALLS"; exit 0 ;; esac\n')
+            host.chmod(0o755)
+            served = root / 'out/served.json'
+            served.parent.mkdir()
+            served.write_text(json.dumps({'build': 202611110749, 'commit': 'fixture-commit'}))
+            env = {'PATH': '/usr/bin:/bin', 'OUT': str(root / 'out'), 'BUILD': '202611110749',
+                   'COMMIT': 'fixture-commit', 'host_bin': str(host), 'CALLS': str(root / 'calls')}
+            result = subprocess.run(['bash', '-c', block], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('release verify', (root / 'calls').read_text())
+            (root / 'calls').unlink()
+            env['COMMIT'] = 'different-commit'
+            result = subprocess.run(['bash', '-c', block], env=env, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((root / 'calls').exists())
 
     def test_publish_fixture_indexes_only_current_product_artifacts(self):
         import shutil

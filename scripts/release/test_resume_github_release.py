@@ -23,8 +23,8 @@ class ResumeGitHubReleaseTests(unittest.TestCase):
 
     def run_with(self, assets):
         def output(command, **kwargs):
-            if command[:3] == ["git", "show", "-s"]:
-                return "202611110749\n"
+            if command[-1] == "createdAt":
+                return json.dumps({"createdAt": "2026-11-11T07:49:00Z"})
             return json.dumps({"assets": [{key: value for key, value in item.items() if key != "body"}
                                          for item in assets]})
 
@@ -45,10 +45,11 @@ class ResumeGitHubReleaseTests(unittest.TestCase):
         resume_path = self.root / "resume.json"
         with patch.object(resume.subprocess, "check_output", side_effect=output), \
                 patch.object(resume.subprocess, "run", side_effect=run):
-            build, has_manifest = resume.prepare(self.repository, self.tag, self.commit, resume_path, "gh")
+            build, has_manifest, coordinated = resume.prepare(self.repository, self.tag, self.commit, resume_path, "gh")
             resume.restore(self.repository, self.tag, self.root, "gh")
         self.assertEqual(build, 202611110800)
         self.assertTrue(has_manifest)
+        self.assertFalse(coordinated)
         self.assertEqual((self.root / "bin/personad-darwin-arm64.gz").read_bytes(), archive)
         self.assertEqual((self.root / "bin/ci-latest.json").read_bytes(), manifest)
 
@@ -58,14 +59,30 @@ class ResumeGitHubReleaseTests(unittest.TestCase):
         resume_path = self.root / "resume.json"
         with patch.object(resume.subprocess, "check_output", side_effect=output), \
                 patch.object(resume.subprocess, "run", side_effect=run):
-            build, has_manifest = resume.prepare(self.repository, self.tag, self.commit, resume_path, "gh")
+            build, has_manifest, coordinated = resume.prepare(self.repository, self.tag, self.commit, resume_path, "gh")
         self.assertEqual(build, 202611110749)
         self.assertFalse(has_manifest)
+        self.assertFalse(coordinated)
         assets[0]["digest"] = "sha256:" + "0" * 64
         with patch.object(resume.subprocess, "check_output", side_effect=output), \
                 patch.object(resume.subprocess, "run", side_effect=run), \
                 self.assertRaisesRegex(resume.ResumeError, "digest"):
             resume.restore(self.repository, self.tag, self.root, "gh")
+
+    def test_final_manifest_marks_release_as_already_coordinated(self):
+        manifest = json.dumps({"commit": self.commit, "build": 202611110800}).encode()
+        assets = [self.asset("latest.json", manifest)]
+        output, run = self.run_with(assets)
+        resume_path = self.root / "resume.json"
+        with patch.object(resume.subprocess, "check_output", side_effect=output), \
+                patch.object(resume.subprocess, "run", side_effect=run) as download:
+            build, has_manifest, coordinated = resume.prepare(self.repository, self.tag, self.commit, resume_path, "gh")
+            resume.restore(self.repository, self.tag, self.root, "gh", resume_path)
+        self.assertEqual(build, 0)
+        self.assertTrue(has_manifest)
+        self.assertTrue(coordinated)
+        download.assert_not_called()
+        self.assertFalse((self.root / "bin/latest.json").exists())
 
     def test_windows_archives_are_not_downloaded_into_ci(self):
         archive = b"verified elsewhere"
