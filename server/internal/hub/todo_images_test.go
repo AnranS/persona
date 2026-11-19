@@ -196,6 +196,39 @@ func TestTodoImageCreateOperationReceipt(t *testing.T) {
 	}
 }
 
+// An image-less create keeps its pre-image relay behavior even when a caller supplies an operation ID: no receipt is
+// claimed, no 202 is invented and a repeated request reaches the manager again (#11084 review).
+func TestTodoCreateWithoutImagesKeepsLegacyRelay(t *testing.T) {
+	h := newTestHub(t)
+	ops := &clientOpsStore{ops: map[string]db.ClientOp{}}
+	h.store = &receiptStore{memStore: newMemStore(), ops: ops}
+	manager, _ := connectInboxManager(t, h)
+	var calls atomic.Int32
+	manager.mu.Lock()
+	manager.http = func(_ context.Context, r assistantwire.HTTPRequest) (any, error) {
+		if r.Method != http.MethodPost || r.Path != "/api/v1/todos" {
+			return assistantwire.HTTPResponse{Status: http.StatusNotFound, Body: []byte(`{"error":"not found"}`)}, nil
+		}
+		calls.Add(1)
+		return assistantwire.HTTPResponse{Status: http.StatusOK, Header: map[string][]string{"Content-Type": {"application/json"}}, Body: r.Body}, nil
+	}
+	manager.mu.Unlock()
+	const op = "d0000000-0000-4000-8000-000000000012"
+	for _, body := range []string{`{"title":"Plain create"}`, `{"title":"Empty images","images":[]}`, `{"title":"Null images","images":null}`} {
+		for range 2 {
+			if code, out := postTodo(t, context.Background(), h, h.routes(), "/api/v1/todos", op, body); code != http.StatusOK {
+				t.Fatalf("legacy create %s = %d %s", body, code, out)
+			}
+		}
+	}
+	if got := calls.Load(); got != 6 {
+		t.Fatalf("image-less creates were deduplicated: %d manager calls, want 6", got)
+	}
+	if len(ops.ops) != 0 {
+		t.Fatalf("image-less creates claimed receipts: %+v", ops.ops)
+	}
+}
+
 // Offline proves no create ran, so the operation may be tried again. In doubt keeps the original HTTP outcome instead of
 // risking a second create: the two failures are deliberately not the same retry.
 func TestTodoImageCreateOperationRetryOutcomes(t *testing.T) {

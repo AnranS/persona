@@ -34,9 +34,12 @@ const (
 	todoAnswerOp = "todo_answer"
 	// todoRouteOp is the receipt kind of a message to a to-do on its conversation's route.
 	todoRouteOp = "todo_route"
-	// todoCreateOp is the receipt kind of creating a to-do, including its uploaded images.
+	// todoCreateOp is the receipt kind of creating a to-do with uploaded images.
 	todoCreateOp = "todo_create"
 )
+
+// todoCreateImagesKey marks a create that really carries images, as decided by todoCreateHasImages.
+type todoCreateImagesKey struct{}
 
 // todoReceiptRoutes are the relayed to-do routes with a receipt, and the receipt's kind.
 var todoReceiptRoutes = map[string]string{
@@ -51,15 +54,31 @@ var todoReceiptRoutes = map[string]string{
 // minutes stay.
 const todoRelayWait = 10 * time.Minute
 
+// todoCreateHasImages distinguishes an image create from the legacy create path. An empty or missing array is an
+// image-less create even when the caller supplied an operation ID; malformed JSON takes the ordinary validation route.
+func todoCreateHasImages(r *http.Request) bool {
+	raw, err := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	var in struct {
+		Images []json.RawMessage `json:"images"`
+	}
+	return json.Unmarshal(raw, &in) == nil && len(in.Images) > 0
+}
+
 // todoRelay relays a to-do write with a receipt, as a send, to the manager by names. A message on the conversation
-// route without an op id, which is all an older app sends, goes as it always went.
+// route without an op id, which is all an older app sends, goes as it always went. An image-less create goes through
+// the plain relay too, even with an op id: the new receipt exists only for creates that actually carry images.
 func (h *Hub) todoRelay(kind string, by ownerOf) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := h.owner(w, r, by)
 		if !ok {
 			return
 		}
-		if (kind == todoRouteOp || kind == todoCreateOp) && r.Header.Get("X-Persona-Op-Id") == "" {
+		_, withImages := r.Context().Value(todoCreateImagesKey{}).(bool)
+		if (kind == todoRouteOp || kind == todoCreateOp) && (r.Header.Get("X-Persona-Op-Id") == "" || kind == todoCreateOp && !withImages) {
 			h.forwardHTTP(w, r, id)
 			return
 		}
@@ -100,6 +119,13 @@ func (h *Hub) withTodoReceipt(kind string, next http.HandlerFunc) http.HandlerFu
 		f.state = todoSendOutcome(seen.status, seen.body)
 	})
 	return func(w http.ResponseWriter, r *http.Request) {
+		if kind == todoCreateOp && !todoCreateHasImages(r) {
+			next(w, r)
+			return
+		}
+		if kind == todoCreateOp {
+			r = r.WithContext(context.WithValue(r.Context(), todoCreateImagesKey{}, true))
+		}
 		if r.Header.Get("X-Persona-Op-Id") == "" {
 			next(w, r)
 			return
