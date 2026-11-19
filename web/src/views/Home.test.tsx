@@ -40,6 +40,7 @@ vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<type
 const { Home, offlineLine, rowTags } = await import("./Home");
 const { answerCard } = await import("../lib/card-answer");
 const { allowBody } = await import("../lib/quick-answers");
+const { loadPages } = await import("../lib/lazy-page");
 const { t } = await import("../i18n");
 
 const mac: Machine = { id: "mac", name: "Mac", online: true };
@@ -211,7 +212,8 @@ describe("the overview", () => {
     });
   });
 
-  it("offers the Cards and Rows display switch on the Computers heading, with Cards selected by default", () => {
+  it("offers the Cards and Rows display switch on the Computers heading, with Cards selected by default", async () => {
+    await loadPages();
     const html = render([], [], { machines: [mac] });
     expect(html).toContain('role="radiogroup" aria-label="显示方式"');
     expect(html).toMatch(/role="radio" aria-checked="true" data-selected="true"[^>]*>卡片<\/button>/);
