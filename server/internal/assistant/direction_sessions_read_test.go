@@ -128,9 +128,8 @@ func TestDirectionReadSupervisedTaskPrecedesManualFiling(t *testing.T) {
 
 func TestDirectionReadPresenceAndFilingTimeTitle(t *testing.T) {
 	e := directionFilingEnv(t, nil)
-	directionFilingSetSessions(e,
-		proto.Session{MachineID: "gone", SessionID: "agent-offline", Agent: "claude", Status: proto.StatusIdle, Title: "Offline title"},
-		proto.Session{MachineID: "box", SessionID: "agent-not-listed", Agent: "claude", Status: proto.StatusIdle, Title: "Archived title"})
+	e.f.setSessions("gone", proto.Session{MachineID: "gone", SessionID: "agent-offline", Agent: "claude", Status: proto.StatusIdle, Title: "Offline title"})
+	e.f.setSessions("box", proto.Session{MachineID: "box", SessionID: "agent-not-listed", Agent: "claude", Status: proto.StatusIdle, Title: "Archived title"})
 	e.f.mu.Lock()
 	for i := range e.f.sessions["server"] {
 		if e.f.sessions["server"][i].SessionID == "chat-a" {
