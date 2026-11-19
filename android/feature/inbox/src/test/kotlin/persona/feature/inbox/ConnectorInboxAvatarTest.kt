@@ -6,18 +6,24 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.core.app.ApplicationProvider
@@ -29,18 +35,21 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.designsystem.AppStyle
 import persona.core.designsystem.GroupPosition
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.lang.reflect.Proxy
 import java.util.concurrent.atomic.AtomicInteger
@@ -93,8 +102,8 @@ class ConnectorInboxAvatarTest {
     }
 
     private fun record(avatar: AuthenticatedLarkImage?, id: String = "telegram:1", title: String = "Connector conversation",
-        sender: String = "Zoe Example") = InboxRecord(
-        InboxItem(id, kind = "dm", title = title, sender = sender, preview = "Latest message"),
+        sender: String = "Zoe Example", kind: String = "dm") = InboxRecord(
+        InboxItem(id, kind = kind, title = title, sender = sender, preview = "Latest message"),
         source = "telegram", connector = InboxConnectorRef("u1"), avatar = avatar,
     )
 
@@ -179,5 +188,50 @@ class ConnectorInboxAvatarTest {
         assertEquals(absentBefore, bounds("Absent conversation"))
         assertEquals(failedBefore, bounds("Failed conversation"))
         assertEquals(1, reads.get())
+    }
+
+    @Test fun picturedPrivateAndGroupRowsInEveryStyleThemeAndTextSize() {
+        val reads = AtomicInteger()
+        fun avatar(name: String) = AuthenticatedLarkImage("hub/a:/api/v1/avatars/telegram/$name?size=144") {
+            reads.incrementAndGet()
+            picture
+        }
+        val rows = listOf(
+            record(avatar("private"), id = "telegram:private", title = "Private chat", sender = "Private Example"),
+            record(avatar("group"), id = "telegram:group", title = "Group chat", sender = "Group Example", kind = "group"),
+            record(null, id = "telegram:fallback", title = "No picture", sender = "Fallback Example"),
+        )
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var scale by mutableStateOf(1f)
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
+                PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                    Column(Modifier.testTag("connector-avatar-shot").width(400.dp).background(PersonaTheme.palette.background)) {
+                        rows.forEach { shown ->
+                            InboxItemRow(shown, repository, navigator, ReplyComposers(repository, rememberCoroutineScope()),
+                                GroupPosition.Single, done = false, busy = false, onlineSince = 1, onDone = {}, onHandOff = {})
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("P", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() &&
+                rule.onAllNodesWithText("G", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
+        val out = File(System.getenv("PERSONA_INBOX_CONNECTOR_AVATAR_SHOTS") ?: "build/inbox-connector-avatar-shots").apply { mkdirs() }
+        for (appearance in AppStyle.entries) for (night in listOf(false, true)) for (fontScale in listOf(1f, 2f)) {
+            rule.runOnIdle { style = appearance; dark = night; scale = fontScale }
+            rule.waitForIdle()
+            rule.onAllNodesWithText("P", useUnmergedTree = true).assertCountEquals(0)
+            rule.onAllNodesWithText("G", useUnmergedTree = true).assertCountEquals(0)
+            rule.onAllNodesWithText("F", useUnmergedTree = true).assertCountEquals(1)
+            File(out, "${appearance.name.lowercase()}-${if (night) "dark" else "light"}-${fontScale}x.png").outputStream().use {
+                assertTrue(rule.onNodeWithTag("connector-avatar-shot").captureToImage().asAndroidBitmap()
+                    .compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        }
+        assertEquals("the appearance matrix must reuse the loaded pictures", 2, reads.get())
     }
 }
