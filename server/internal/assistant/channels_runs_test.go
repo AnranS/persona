@@ -83,14 +83,18 @@ func TestCheckChannelRunQueuedWhileWorkingKeepsWaiting(t *testing.T) {
 // heldRunHub builds a run that already answered its channel message and was held with background work still running.
 // Its base is the original answer; continuation is the next turn after that answer. The session's WokeByTask and
 // Background fields reflect what the hub reports for that next turn.
-func heldRunHub(t *testing.T, continuation []proto.Item, background int) (*Service, *[]map[string]any, *channel.Run) {
+func heldRunHub(t *testing.T, continuation []proto.Item, background int, pageSize ...int) (*Service, *[]map[string]any, *channel.Run) {
 	t.Helper()
+	page := 4
+	if len(pageSize) > 0 {
+		page = pageSize[0]
+	}
 	f := newFakeHub().withMachine()
 	items := append([]proto.Item{
 		{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "original channel question", ClientMsgID: "examplechat-m9"},
 		{ID: "a2", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "original channel answer"},
 	}, continuation...)
-	h := &pagedHub{fakeHub: f, page: 4, full: map[string]string{}, items: items}
+	h := &pagedHub{fakeHub: f, page: page, full: map[string]string{}, items: items}
 	var sent []map[string]any
 	f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
 		return map[string]any{"channels": []channel.View{{ID: "examplechat", Name: "Example Chat", Kind: channel.KindIM, Source: channel.SourcePlugin,
@@ -217,5 +221,52 @@ func TestCheckChannelRunHeldAnswersBackgroundContinuation(t *testing.T) {
 				t.Fatalf("continuation with background work was not held from the new answer: %+v", runs)
 			}
 		})
+	}
+}
+
+// A genuine continuation followed by another user turn before one check must not supply the later private answer.
+func TestCheckChannelRunHeldIgnoresUserTurnAfterWake(t *testing.T) {
+	s, sent, r := heldRunHub(t, []proto.Item{
+		{ID: "n3", Seq: 3, Role: "user", Kind: proto.KindNotice, Text: "Background command finished", Wake: true,
+			Task: &proto.TaskNote{Kind: "shell", TaskID: "background-work", Status: "completed"}},
+		{ID: "a4", Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "the background continuation answer"},
+		{ID: "u5", Seq: 5, Role: "user", Kind: proto.KindText, Text: "an unrelated private question"},
+		{ID: "a6", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "the unrelated private answer"},
+	}, 1)
+	s.checkChannelRun(r.ID)
+	assertHeldRunFinishedQuietly(t, s, sent)
+}
+
+// The unrelated user item remains decisive even when a long turn pushes it out of ReadTurn's retained item buffer.
+func TestCheckChannelRunHeldIgnoresUserTurnBeyondReadBuffer(t *testing.T) {
+	items := []proto.Item{{ID: "u3", Seq: 3, Role: "user", Kind: proto.KindText, Text: "an unrelated private question"}}
+	for seq := 4; seq <= 1005; seq++ {
+		items = append(items, proto.Item{Seq: seq, Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash"})
+	}
+	items = append(items, proto.Item{ID: "a1006", Seq: 1006, Role: "assistant", Kind: proto.KindText, Text: "the unrelated private answer"})
+	s, sent, r := heldRunHub(t, items, 1, 2000)
+	s.checkChannelRun(r.ID)
+	assertHeldRunFinishedQuietly(t, s, sent)
+}
+
+// Preparing an owner's own send ends the held run before any live progress can belong to that new turn. The manager's
+// own answer-again message takes the other path and leaves the run waiting.
+func TestSendParamsEndsHeldRunBeforeOwnerSend(t *testing.T) {
+	s, sent, r := heldRunHub(t, nil, 1)
+	_, err := s.SendParams(context.Background(), SendParams{MachineID: r.MachineID, SessionID: r.SessionID,
+		Params: map[string]any{"text": "an unrelated owner question"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHeldRunFinishedQuietly(t, s, sent)
+
+	s, _, r = heldRunHub(t, nil, 1)
+	_, err = s.messageParams(context.Background(), SendParams{MachineID: r.MachineID, SessionID: r.SessionID,
+		Params: map[string]any{"text": "write out this turn's answer"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs := s.channelRuns("examplechat"); len(runs) != 1 || !runs[0].Held {
+		t.Fatalf("the manager's own message ended its held run: %+v", runs)
 	}
 }

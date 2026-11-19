@@ -147,6 +147,23 @@ func TestRunHeldMostStartsAtOriginalMessage(t *testing.T) {
 	}
 }
 
+// Each hold still gets its own read and quiet-end grace, even though the absolute held deadline stays at the original
+// message. A delayed wake or late words are not cut off merely because the original turn was old.
+func TestRunHoldRenewsPerHoldGrace(t *testing.T) {
+	r := &Run{Started: t0}
+	r.Hold(10, t0.Add(time.Hour))
+	r.Hold(20, t0.Add(90*time.Minute))
+	if step := r.Check(Look{Now: t0.Add(90*time.Minute + 5*time.Second), Exists: true}); step.Do != Wait {
+		t.Fatalf("new hold did not get its read grace: %+v", step)
+	}
+	if res := r.Decide(Reading{Found: true}, Look{Now: t0.Add(90*time.Minute + 5*time.Minute)}); res != nil {
+		t.Fatalf("new hold did not get its quiet-end grace: %+v", res)
+	}
+	if res := r.Decide(Reading{Found: true}, Look{Now: t0.Add(90*time.Minute + HeldIdleMost + time.Second)}); res == nil || !res.Quiet {
+		t.Fatalf("per-hold quiet grace did not expire: %+v", res)
+	}
+}
+
 // Decide: background work answers now and holds; a held run whose work ended quietly says nothing; no words yet waits.
 func TestRunDecide(t *testing.T) {
 	r := &Run{Started: t0, Seen: true}
