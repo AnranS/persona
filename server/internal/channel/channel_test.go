@@ -126,6 +126,27 @@ func TestRunCheck(t *testing.T) {
 	}
 }
 
+// Holding for a continuation does not move the run's original start, including when another continuation is held later.
+func TestRunHoldPreservesStarted(t *testing.T) {
+	r := &Run{Started: t0, Base: 5, MsgIDs: []string{"wechat-1"}, Probe: "original"}
+	r.Hold(10, t0.Add(time.Hour))
+	r.Hold(20, t0.Add(90*time.Minute))
+	if !r.Started.Equal(t0) {
+		t.Fatalf("Started = %v after repeated holds, want the original %v", r.Started, t0)
+	}
+}
+
+// HeldMost bounds the whole run from its original message; holding again must not renew the two-hour window.
+func TestRunHeldMostStartsAtOriginalMessage(t *testing.T) {
+	r := &Run{Started: t0}
+	r.Hold(10, t0.Add(time.Hour))
+	r.Hold(20, t0.Add(90*time.Minute))
+	step := r.Check(Look{Now: t0.Add(HeldMost + time.Second), Exists: true})
+	if step.Do != Finish || step.End != EndGaveUp {
+		t.Fatalf("past HeldMost from the original start: %+v, want Finish/EndGaveUp", step)
+	}
+}
+
 // Decide: background work answers now and holds; a held run whose work ended quietly says nothing; no words yet waits.
 func TestRunDecide(t *testing.T) {
 	r := &Run{Started: t0, Seen: true}
