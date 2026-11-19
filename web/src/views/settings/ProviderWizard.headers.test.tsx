@@ -197,7 +197,7 @@ describe("request headers on Connect (#11075)", () => {
     expect(probes("discover")[0]!.body).toMatchObject({ headers: HEADER, api: runtime.api });
     await resolve(probes("discover")[0]!);
     expect(probes("test")).toHaveLength(1);
-    expect(probes("test")[0]!.body).toMatchObject({ headers: HEADER, model: "m1" });
+    expect(probes("test")[0]!.body).toMatchObject({ headers: HEADER, model: runtime.id === "codex" ? "gpt-5.4" : "m1" });
     await resolve(probes("test")[0]!);
 
     // The same draft, not a stale pre-header connection, is used by both manual operations too.

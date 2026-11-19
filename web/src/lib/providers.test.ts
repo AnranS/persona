@@ -110,12 +110,12 @@ describe("formProblems", () => {
     // Codex runs without an address or key, so nothing keeps it from being tested
     expect(formProblems(ready({ agent: "codex", base_url: "", api_key: "" }), true).reach).toBe("");
   });
-  it("ignores unsupported chat draft values without weakening other protocols' validation", () => {
+  it("keeps supported chat headers while ignoring other unsupported draft values", () => {
     const draft = ready({ kind: "api", api: "chat", headers: "invalid", headers_touched: true, proxy: "invalid", no_proxy: "example.com", env: "invalid", env_touched: true, timeout_ms: "bad", compact_window: "bad", max_context: "bad", effort: "high", opus_model: "tier-a", sonnet_model: "tier-b", haiku_model: "tier-c", fable_model: "tier-d", subagent_force: true });
     expect(formProblems(draft, true).advanced).toBe("");
     expect(formProblems({ ...draft, api: "responses" }, true).advanced).not.toBe("");
     for (const body of [providerBody(draft, null), providerBody(draft, { name: "gw", kind: "api", api: "chat", model: "m1" }), probeBody(draft, null)]) {
-      expect(body).not.toHaveProperty("headers");
+      expect(body).toHaveProperty("headers", "invalid");
       expect(body).not.toHaveProperty("proxy");
       for (const key of ["no_proxy", "env", "timeout_ms", "compact_window", "max_context", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"]) expect(body).not.toHaveProperty(key);
     }
@@ -152,8 +152,8 @@ describe("formProblems", () => {
     expect(formProblems(ready({ models: [formModel({ id: "m1" }), formModel({ id: "m1" }, false)] }), true).models).toBe("");
   });
   it("checks the advanced fields", () => {
-    expect(formProblems(ready({ headers: "no colon", headers_touched: true }), true).advanced).toMatch(/请求头第 1 行/);
-    expect(formProblems(ready({ headers: "X-A: 1\n\nX-B: 2", headers_touched: true }), true).advanced).toBe("");
+    expect(formProblems(ready({ headers: "no colon", headers_touched: true }), true).connect).toMatch(/请求头第 1 行/);
+    expect(formProblems(ready({ headers: "X-A: 1\n\nX-B: 2", headers_touched: true }), true).connect).toBe("");
     expect(formProblems(ready({ env: "A=1\nbad name=2", env_touched: true }), true).advanced).toMatch(/环境变量第 2 行/);
     expect(formProblems(ready({ env: Array(51).fill("A=1").join("\n"), env_touched: true }), true).advanced).toMatch(/最多 50/);
     expect(formProblems(ready({ env: "# off for this one\nexport HTTP_PROXY=\nno_proxy=*.example.com\nexport\tB=1\n\uFEFFC=2 # c", env_touched: true }), true).advanced).toBe("");
