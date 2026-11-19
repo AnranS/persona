@@ -1,6 +1,7 @@
-import { memo, Suspense, useMemo, useState } from "react";
+import { Component, memo, Suspense, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { t } from "../i18n";
 import { isPending } from "../lib/add-computer";
+import { reportBoundary } from "../lib/error-reports";
 import { storedValue, storeValue } from "../lib/compatibility";
 import { lazyPage } from "../lib/lazy-page";
 import { useMachineMetrics } from "../lib/machine-metrics";
@@ -10,9 +11,30 @@ import type { Machine, MachineMetrics } from "../lib/types";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Segmented } from "./assistant/parts";
-import { OverlayBoundary } from "./LazyOverlay";
+import { isChunkError } from "./PageBoundary";
 
 const MachineMetricsSummary = lazyPage(() => import("./machines/MachineMetricsSummary").then((m) => m.MachineMetricsSummary));
+
+/** Only a failed summary remounts: each successful metrics read offers the chunk another try, even identical data. */
+class OverviewSummaryBoundary extends Component<{ generation: number; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    reportBoundary(error, "overlay_boundary", isChunkError(error), info.componentStack);
+  }
+
+  componentDidUpdate(previous: { generation: number }) {
+    if (this.state.failed && previous.generation !== this.props.generation) this.setState({ failed: false });
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 export type OverviewMachineView = "cards" | "rows";
 export const OVERVIEW_MACHINE_VIEW_KEY = "persona.overview.machines.view";
@@ -89,7 +111,7 @@ export function OverviewMachineCards({ machines, agentCounts, offlineText }: {
   offlineText: (machine: Machine) => string;
 }) {
   // Section-level state keeps metric refreshes out of Home's Agent and task sections. No card starts work of its own.
-  const { metrics, error } = useMachineMetrics();
+  const { metrics, error, generation } = useMachineMetrics();
   const byMachine = useMemo(() => new Map((metrics ?? []).map((m) => [m.machine_id, m])), [metrics]);
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
@@ -106,6 +128,7 @@ export function OverviewMachineCards({ machines, agentCounts, offlineText }: {
           count={agentCounts ? (agentCounts.get(m.id) ?? 0) : undefined}
           hub={hubLabel(m, machines)}
           metrics={byMachine.get(m.id)}
+          generation={generation}
           offlineText={offlineText}
         />
       ))}
@@ -113,17 +136,17 @@ export function OverviewMachineCards({ machines, agentCounts, offlineText }: {
   );
 }
 
-const OverviewMachineCard = memo(function OverviewMachineCard({ m, count, hub, metrics, offlineText }: {
+const OverviewMachineCard = memo(function OverviewMachineCard({ m, count, hub, metrics, generation, offlineText }: {
   m: Machine;
   count?: number;
   hub: string;
   metrics?: MachineMetrics;
+  generation: number;
   offlineText: (machine: Machine) => string;
 }) {
   const detail = { name: "machine" as const, mid: m.id };
   const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineText(m);
   const monitored = hasCurrentSample(m, metrics);
-  const summaryRetryKey = metrics?.latest?.t ?? JSON.stringify(metrics?.usage?.today ?? 0);
   return (
     <a href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className={cx("block rounded-card bg-surface shadow-card transition-colors hover:bg-hover", monitored ? "h-full" : "self-start")}>
       <span className={cx("flex items-center gap-3 px-3", monitored ? "pt-2.5" : "py-2.5")}>
@@ -140,9 +163,9 @@ const OverviewMachineCard = memo(function OverviewMachineCard({ m, count, hub, m
         <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
       </span>
       {monitored && (
-        <OverlayBoundary key={summaryRetryKey} open onClose={() => {}} fallback={null}>
+        <OverviewSummaryBoundary generation={generation}>
           <Suspense fallback={null}><MachineMetricsSummary machine={m} metrics={metrics} /></Suspense>
-        </OverlayBoundary>
+        </OverviewSummaryBoundary>
       )}
     </a>
   );

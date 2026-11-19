@@ -30,10 +30,13 @@ vi.mock("../lib/lazy-page", async (importOriginal) => {
 
 const now = Math.floor(Date.now() / 1000);
 let sampleTime = now;
+let tokenOnly = false;
 let host: HTMLDivElement;
 let root: Root;
 const machine = { id: "mac", name: "Mac", online: true } as Machine;
-const response = (): { machines: MachineMetrics[] } => ({ machines: [{ machine_id: "mac", online: true, latest: { t: sampleTime, cpu: 42 }, points: [] }] });
+const response = (): { machines: MachineMetrics[] } => tokenOnly
+  ? { machines: [{ machine_id: "mac", online: true, points: [], usage: { today: { in: 123 }, per_minute: 0, recent: [] } }] }
+  : { machines: [{ machine_id: "mac", online: true, latest: { t: sampleTime, cpu: 42 }, points: [] }] };
 const flush = async () => {
   for (let i = 0; i < 20; i++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 };
@@ -42,6 +45,7 @@ beforeEach(() => {
   state.attempts = 0;
   state.fail = true;
   sampleTime = now;
+  tokenOnly = false;
   resetRoster();
   resetManagerChoice();
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
@@ -71,6 +75,23 @@ it("keeps Overview available after a summary chunk failure and retries on the ne
 
   state.fail = false;
   sampleTime += 10;
+  await act(async () => { vi.advanceTimersByTime(10_000); });
+  await flush();
+  expect(state.attempts).toBeGreaterThan(firstAttempts);
+  expect(host.querySelector("[data-testid='recovered-summary']")?.textContent).toBe("Recovered monitoring");
+});
+
+it("retries a token-only failure when an identical later poll arrives", async () => {
+  tokenOnly = true;
+  act(() => root.render(<><div data-testid="other-overview-section">Agents</div><OverviewMachineCards machines={[machine]} offlineText={() => "Offline"} /></>));
+  await flush();
+  const firstAttempts = state.attempts;
+  expect(firstAttempts).toBeGreaterThan(0);
+  expect(host.querySelector("[data-testid='other-overview-section']")?.textContent).toBe("Agents");
+  expect(host.querySelector("[data-testid='recovered-summary']")).toBeNull();
+
+  // No latest.t and no usage.today change: only another successful load can signal a retry.
+  state.fail = false;
   await act(async () => { vi.advanceTimersByTime(10_000); });
   await flush();
   expect(state.attempts).toBeGreaterThan(firstAttempts);
