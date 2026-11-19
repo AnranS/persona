@@ -80,7 +80,7 @@ func (n *Node) heldFallbackWithExpiry(id, launcher string, asked modelExecution)
 			return asked, expired
 		}
 		out := f.to
-		out.IsMain, out.Interject, out.Ultracode = asked.IsMain, asked.Interject, asked.Ultracode // the message's own
+		out.IsMain, out.Public, out.Interject, out.Ultracode = asked.IsMain, asked.Public, asked.Interject, asked.Ultracode // the message's own
 		out.SupervisionInstructions = asked.SupervisionInstructions
 		out.NewModelChoice = false // the old hold selected this execution, not a new pick
 		return out, false

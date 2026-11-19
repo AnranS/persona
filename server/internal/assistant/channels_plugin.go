@@ -290,7 +290,7 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 	text := prompts.RenderChannelMessage(in)
 	var ext map[string]string
 	if v.Kind == channel.KindMention {
-		ext = map[string]string{"chat": m.Chat, "thread": m.Topic}
+		ext = map[string]string{"chat": m.Chat, "thread": m.Topic, "public": "1"}
 	}
 	run := &channel.Run{ID: id + "_" + m.ID, Channel: id, ReplyTo: m.ID, TargetKind: channel.TargetConversation, Label: rt.label, Ext: ext,
 		Started: time.Now().UTC(), Probe: channel.Probe(in.Text, append(slices.Clone(in.Files), in.Forward, in.Quote)...)}

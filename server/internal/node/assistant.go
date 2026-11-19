@@ -360,6 +360,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	st, _ := n.state.get(id)
 	// External authority and the raw runtime must be checked before guest/resume normalization can replace options.
 	requested := executionOption(options)
+	public := requested.Public // audience belongs to this input, even when launcher normalization replaces execution
 	requestedLauncher := launcherOr(launcher, st.Launcher)
 	if proto.IsExternalLauncher(requestedLauncher) || requested.External != nil {
 		bindingID := id
@@ -441,6 +442,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		launcher, options = own, nil // the model picked for the other launcher is not this one's
 	}
 	execution := executionOption(options)
+	execution.Public = public
 	execution.Origin = origin
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
@@ -485,7 +487,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Model, eff)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Model, eff)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
@@ -499,6 +501,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		execution.UseEffort = true
 		execution.Fingerprint = "launcher-default"
 	}
+	execution.Public = public
 	if effort != "" {
 		execution.Effort = effort
 	}
