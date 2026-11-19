@@ -130,13 +130,13 @@ func TestTodoImageHandoffCarriesStoredBytes(t *testing.T) {
 // must never receive a create whose additive images field it would drop (#11084).
 func TestTodoImagesFeatureWhileEveryManagerNamesIt(t *testing.T) {
 	h, _, a, b, _, _ := todoViewHub(t)
-	listed := func() bool { return slices.Contains(h.features(), featureTodoImages) }
-	todoViewCapabilities(t, a, assistantwire.CapabilityTodoImages)
+	listed := func() bool { return slices.Contains(h.features(), "todo_images") }
+	todoViewCapabilities(t, a, "todo_images")
 	todoViewCapabilities(t, b, assistantwire.CapabilityTodoView)
 	if listed() {
 		t.Fatal("listed while an older manager cannot store images")
 	}
-	todoViewCapabilities(t, b, assistantwire.CapabilityTodoImages)
+	todoViewCapabilities(t, b, "todo_images")
 	if !listed() {
 		t.Fatal("not listed with every manager capable of storing images")
 	}
