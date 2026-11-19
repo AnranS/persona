@@ -38,7 +38,8 @@ const RUNTIMES: Runtime[] = [
   { id: "responses", label: "OpenAI Responses", kind: "api", api: "responses", hint: "headers_runtime_direct" },
   { id: "chat", label: "Chat Completions", kind: "api", api: "chat", hint: "headers_runtime_direct" },
 ];
-const CONNECT_CASES = RUNTIMES.filter((r) => r.id === "claude" || r.kind === "api");
+// Codex is supported through env_http_headers; Antigravity has no arbitrary-header launch channel.
+const CONNECT_CASES = RUNTIMES.filter((r) => r.id === "claude" || r.id === "codex" || r.kind === "api");
 const HEADER = "X-Custom-Header: example-value";
 const REPLACEMENT = "X-Custom-Header: replacement-value\nX-Team: blue";
 const AUTO = 700;
@@ -318,7 +319,7 @@ describe("runtime header support is explained before checks (#11075)", () => {
     expect(pending).toHaveLength(0);
   });
 
-  it.each(RUNTIMES.filter((r) => r.id === "codex" || r.id === "agy"))("$label cannot report a misleading successful header-dependent model check", async (runtime) => {
+  it.each(RUNTIMES.filter((r) => r.id === "agy"))("$label cannot report a misleading successful header-dependent model check", async (runtime) => {
     await startNew(runtime);
     typeHeaders(HEADER);
     expect(headersText()).toContain(t(`settings-providerwizard.${runtime.hint}`));
