@@ -172,7 +172,7 @@ assistant command carries the equivalent bounded `request_key` argument. On firs
 `not_after` to be between 120 seconds and seven minutes in the future. The seven-minute replay horizon is the five-minute
 confirmation expiry plus the 120-second request deadline. The request ID is
 `shr_<not_after>_<SHA-256(canonical caller scope, key, not_after)>`, where caller scope is the verified caller kind and
-stable ID, target installation, contribution, account and route. Target process generation is deliberately excluded from
+stable ID, target installation, contribution, account, route/command and exact HTTP method. Target process generation is deliberately excluded from
 that stable derivation, but remains fenced at dispatch.
 
 A retry presents the original key and fingerprint with a current grant; the host derives the same request ID even when
@@ -264,8 +264,9 @@ next byte rather than truncating it successfully. No error may be hidden by sile
 Disconnect, timeout and caller cancellation MUST propagate a cancellation frame with the request ID and generation.
 Disable, uninstall and generation replacement revoke admission, cancel queued and active work, and reject their late
 results. A late result or late callback is dropped and audited; it MUST NOT complete a newer request or resurrect an old
-generation. Once section 7 admission has allowed an external effect, cancellation changes the caller wait, not the
-truth of that effect: the durable outcome becomes `unknown` until reconciled.
+generation. Once the atomic `dispatched` transition in section 7 has allowed an external effect, cancellation changes
+the caller wait, not the truth of that effect: the durable outcome becomes `unknown` until reconciled. Cancellation that
+instead wins while the operation is still `reserved` is `cancelled`, never `unknown`.
 
 If a media budget fails after headers, the manager aborts the connection instead of returning a clean, truncated 200/206.
 The client can detect missing bytes from `Content-Length`/`Content-Range` or the missing terminal chunk of an
@@ -345,7 +346,7 @@ maintainer decision. If the current caller cannot produce that evidence, the wri
 | Operation and permitted use | Exact route/command and schema revision; one ticket permits one operation only |
 | Caller and grant | Full verified caller context, target installation/contribution/account and process generation |
 | Target | Exact canonical resource/target, not a class or prefix |
-| Payload fingerprint | SHA-256 of canonical validated path/query/body, every admitted validated request header, target and schema revision; the payload itself is not stored in the receipt |
+| Payload fingerprint | SHA-256 of the canonical exact route/command and HTTP method, validated path/query/body, every admitted validated request header, target and schema revision; the payload itself is not stored in the receipt |
 | Request ID | The section 3 caller-replayable, host-derived idempotency identity and its embedded `not_after`; cannot be replaced by a retry |
 | Ticket ID and owner | Single-use random ticket, stored by hash, and the trusted owner/device that approved it |
 | Expiry | At most five minutes from issue and always checked again at reservation/admission |
@@ -382,7 +383,8 @@ a replay license.
 | `unknown` | Trusted reconciliation proves no effect occurred | `failed` | Recovery may finish without a duplicate external effect |
 
 A reservation save failure means no external effect and no handler invocation. A timeout, lost response or cancelled
-call after admission is `unknown`, never assumed failure. A new ID is never safe for an automatic retry or replay. An
+call after the atomic `dispatched` transition is `unknown`, never assumed failure; cancellation that instead wins while
+the operation is still `reserved` is `cancelled`. A new ID is never safe for an automatic retry or replay. An
 automatic retry under a new ID and a retry with a changed fingerprint are forbidden; either could cause duplicate
 writes. Before `not_after`, repeating the original caller idempotency key and fingerprint with a current grant derives
 the same request ID and returns its durable state or performs manager-led reconciliation; it does not blindly dispatch
@@ -552,6 +554,7 @@ suite.
 | NEG-TARGET-SUBSTITUTION | Approve one session/target then substitute another session or target | Target substitution is refused with no external effect | 7, 9 | Exact-target admission tests |
 | NEG-FORGED-CONFIRMATION | Forge a confirmation, approver or payload fingerprint | Confirmation is rejected; reservation and receipt are unchanged | 7, 10 | Owner-binding and tamper tests |
 | NEG-HEADER-SUBSTITUTION | Approve a write with one `If-Match`/`Content-Type`, then substitute another validated header | Header changes alter the fingerprint; the stale confirmation is refused with no external effect | 3, 7 | Canonical-header confirmation and admission tests |
+| NEG-CROSS-METHOD-REPLAY | Reuse the same caller idempotency key, canonical path, schemas, headers, body and target with a different HTTP method or command | Exact route/command and method identity changes both the derived request ID and fingerprint; cross-method replay cannot return the original receipt or dispatch a different operation | 3, 7 | Cross-method idempotency and replay-isolation tests |
 | NEG-MEDIA-TARGET | Request a denied media target, protected address or checked-DNS failure | Denied media target has no dial, credential injection or media bytes | 6 | Egress broker adversarial fixtures |
 | NEG-REDIRECT | Follow unapproved public HTTPS, approved cross-origin, downgrade, loop and excessive redirects | No unapproved target is dialed; every approved hop is reauthorized; credentials never cross origin and the chain stays bounded | 6 | Redirect-chain integration tests |
 | COMMAND-CREDENTIALS | Call `assistant.credentials` through the typed `namespaces.api` route with valid and invalid arguments and grants | Typed dispatch and argument/result schemas hold, caller attribution survives, only opaque references return, command and credential-reference grants stay separate, and the existing 10-second RPC bound holds | 4, 8 | Positive assistant RPC/handler integration plus timeout evidence |
@@ -576,7 +579,7 @@ suite.
 | STREAM-DISCONNECT-CANCEL | Disconnect during full/partial responses and cancel explicitly | Cancellation reaches source, credit is released and no late end succeeds | 5, 6 | Disconnect/cancellation race suite |
 | DURABLE-SAVE-FAILURE | Fail reservation save immediately before dispatch | Reservation save failure has no external effect; upstream invocation count is zero | 7 | Postgres failure injection plus synthetic upstream counter |
 | DURABLE-UNKNOWN-REPLAY | Lose the response after admission, then retry the original caller idempotency key when no internal request ID was received | The authenticated original key derives the same ID; ambiguous outcome stays unknown and reconciles; a new key/ID replay is refused and no duplicate write occurs | 3, 7 | Lost-acknowledgement and caller-visible idempotency fault injection |
-| DURABLE-CANCEL | Race cancellation against dispatch before admission and cancel after external admission | One atomic compare-and-swap winner is durable; cancelled means no invocation, while post-admission cancellation becomes unknown and reconciles honestly | 5, 7 | Concurrent dispatch/cancel and crash-point matrix |
+| DURABLE-CANCEL | Race cancellation against the atomic `reserved` → `dispatched` transition and cancel after that transition | One atomic compare-and-swap winner is durable; `reserved` cancellation is `cancelled` with no invocation, while post-`dispatched` cancellation becomes `unknown` and reconciles honestly | 5, 7 | Concurrent dispatch/cancel and crash-point matrix |
 | DURABLE-RETENTION | Fill unresolved, terminal-receipt and live-tombstone capacities, then age entries past their horizons | Only unresolved rows hold the durable write cap; terminal audit rows compact; live tombstones expire within seven minutes and no replay occurs | 3, 7, 10 | Retention, capacity, expiry and log-redaction tests |
 | DURABLE-EXPIRED-REPLAY | Retry an old ID/key after its replay tombstone has expired and been deleted | Embedded `not_after` returns `request_expired` before lookup and no second reservation or dispatch occurs | 3, 7 | Post-expiry replay test with an empty tombstone store |
 | RESTART-POSTGRES | Restart real Postgres around reservation, dispatch and receipt commits | Durable receipt/state recovers without replay; failures are unknown rather than falsely failed | 7 | Real Postgres crash/restart suite |
