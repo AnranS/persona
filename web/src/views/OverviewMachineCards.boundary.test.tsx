@@ -38,7 +38,7 @@ const response = (): { machines: MachineMetrics[] } => tokenOnly
   ? { machines: [{ machine_id: "mac", online: true, points: [], usage: { today: { in: 123 }, per_minute: 0, recent: [] } }] }
   : { machines: [{ machine_id: "mac", online: true, latest: { t: sampleTime, cpu: 42 }, points: [] }] };
 const flush = async () => {
-  for (let i = 0; i < 20; i++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  for (let i = 0; i < 20; i++) await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 };
 
 beforeEach(() => {
@@ -48,7 +48,7 @@ beforeEach(() => {
   tokenOnly = false;
   resetRoster();
   resetManagerChoice();
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify(response()), { status: 200, headers: { "Content-Type": "application/json" } }))));
   host = document.createElement("div");
   document.body.append(host);

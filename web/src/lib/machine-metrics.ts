@@ -6,10 +6,9 @@ import type { MachineMetrics } from "./types";
 import { documentPage, visiblePoll } from "./visible-poll";
 
 /** The Machines page's shared monitoring read: one request per online assistant, every 10 seconds while visible. */
-export function useMachineMetrics(): { metrics: MachineMetrics[] | null; error: string; generation: number } {
+export function useMachineMetrics(): { metrics: MachineMetrics[] | null; error: string } {
   const [metrics, setMetrics] = useState<MachineMetrics[] | null>(null);
   const [error, setError] = useState("");
-  const [generation, setGeneration] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -32,7 +31,6 @@ export function useMachineMetrics(): { metrics: MachineMetrics[] | null; error: 
         }
       });
       setMetrics([...merged.values()]);
-      setGeneration((n) => n + 1);
       setError("");
     };
     const stop = visiblePoll(() => void load(), 10_000, documentPage);
@@ -42,5 +40,5 @@ export function useMachineMetrics(): { metrics: MachineMetrics[] | null; error: 
     };
   }, []);
 
-  return { metrics, error, generation };
+  return { metrics, error };
 }
