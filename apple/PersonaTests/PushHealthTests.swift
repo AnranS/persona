@@ -129,6 +129,16 @@ struct PushHealthTests {
         let missing = h.status(group: "g", allowed: true)
         #expect(missing.level == .unavailable)
         #expect(missing.action == String(localized: "Open Persona again to register once more."))
+
+        h.readRegistration(APIClient.PushRoute(route: "direct"), group: "g")
+        #expect(h.missingRoutes == nil && h.status(group: "g", allowed: true).level == .available)
+    }
+
+    @Test func anOlderRegistrationDoesNotConfirmAMissingRoute() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        h.readRegistration(nil, group: "g")
+        #expect(h.missingRoutes == nil)
+        #expect(h.status(group: "g", allowed: true).level == .unknown)
     }
 
     @Test func theStoreKeepsWhatChanged() {

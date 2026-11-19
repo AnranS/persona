@@ -82,8 +82,10 @@ final class PushHealthNoticeUITests: XCTestCase {
         let repair = app.descendants(matching: .any)["notifications.backgroundPush"].firstMatch
         XCTAssertTrue(repair.waitForExistence(timeout: 10),
                       "the notice's action did not open Settings › Notifications:\n\(app.debugDescription)")
-        XCTAssertTrue(repair.label.contains("检查网络") && repair.label.contains("下次打开 Persona"),
-                      "the existing status-specific repair was not kept: \(repair.label)")
+        let guidance = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@",
+                                                            "检查网络", "下次打开 Persona")).firstMatch
+        XCTAssertTrue(guidance.waitForExistence(timeout: 5),
+                      "the existing status-specific repair was not kept:\n\(app.debugDescription)")
     }
 
     @MainActor func testNoticeCapturesInLightAndDarkAtDefaultAndLargestText() {
@@ -99,6 +101,13 @@ final class PushHealthNoticeUITests: XCTestCase {
     }
 
     @MainActor private func shot(look: String, largest: Bool) {
+        // Light & Dark changes can make SpringBoard report the app-icon change over the screen under test.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        for label in ["好", "OK"] where alert.buttons[label].waitForExistence(timeout: 1) {
+            alert.buttons[label].tap()
+            break
+        }
         let image = app.screenshot()
         let name = "push-health-notice-\(look)-\(largest ? "largest" : "default")-\(UITestStyle.name)"
         let attachment = XCTAttachment(screenshot: image)
