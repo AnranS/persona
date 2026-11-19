@@ -320,6 +320,7 @@ fun AssistantScreen(
     }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         if (readinessOn) scope.launch { mainReadiness.refresh() }
+        if (!settingsOpen) scope.launch { assistantAttempt { repository.refresh() } }
     }
     val refusedMain = mainMessages.filter { it.setupRefusal() != null }.map { it.clientMessageId }
     LaunchedEffect(mainReadiness, readinessOn, refusedMain) { if (readinessOn && refusedMain.isNotEmpty()) mainReadiness.refresh() }
@@ -348,7 +349,7 @@ fun AssistantScreen(
                 Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
         }
     }
-    val shownCompaction = mainSession?.compaction.takeIf { onMain }
+    val shownCompaction = active?.let { key -> snapshot.conversations.firstOrNull { it.key == key }?.compaction }
     val mainConversation = rememberMainConversationController(pageManagement, repository, mainConversationSender, resources,
         feedback, toast, managerChoice.shown, shownCompaction, rememberUpdatedState(active), rememberUpdatedState(snapshot.mainSession))
     var compaction by mainConversation::compaction
@@ -431,7 +432,7 @@ fun AssistantScreen(
     }
     fun refusal(error: Exception): String =
         if (error is AssistantRefused) error.message.orEmpty() else persona.core.designsystem.operationFeedback(error).text.resolve(resources)
-    fun compactMain() = mainConversation.compact(active, snapshot, shownCompaction)
+    fun compactConversation() = mainConversation.compact(active, snapshot, shownCompaction)
     fun newMain() = mainConversation.replace(snapshot.mainSession, ::newConversation)
     fun clearMain(onFailed: () -> Unit = {}) = mainConversation.clear(snapshot.mainSession, active, onFailed, ::newConversation, ::openConversation)
     // Hidden at once; after the hub's list is refreshed (it leaves archived ones out) the hub's word is the one kept,
@@ -998,8 +999,8 @@ fun AssistantScreen(
                                 else chatContent?.invoke(active)
                             }
                         }
-                        // A compaction of the main conversation: under the bar, over the conversation.
-                        if (onMain) compaction.line?.let { line ->
+                        // The selected conversation's compaction: under the bar, over the conversation.
+                        compaction.line?.let { line ->
                             CompactionStatusLine(line, onDismiss = { compaction = compaction.dismissed() },
                                 modifier = Modifier.align(Alignment.TopCenter)
                                     .then(if (demo) Modifier else Modifier.padding(top = padding.calculateTopPadding())))
@@ -1061,7 +1062,8 @@ fun AssistantScreen(
             // The old main conversation is an ordinary one on the old machine now: back here, start the new one.
             newConversation()
         }, onOpenConversation = openFromSchedule, onModelConfiguration = openModelConfiguration,
-            onStandingAuthorizations = { navigator.navigate(SettingsPageRoute(SettingsPage.StandingAuthorizations)) })
+            onStandingAuthorizations = { navigator.navigate(SettingsPageRoute(SettingsPage.StandingAuthorizations)) },
+            conversations = repository)
         return@PersonaTheme
     }
     if (proactiveOpen && pageManagement != null) {
@@ -1102,7 +1104,7 @@ fun AssistantScreen(
         val copyText = AssistantCopyText(shown, active, onMain, menuConfig, assistantMachine, machines)
         val interrupt = composerService.takeIf { !demo }
         val sections = assistantMenu(offline = connection != null && connection != persona.core.contracts.api.ConnectionState.Online,
-            voice = onVoice != null, main = snapshot.mainSession, active = active, compact = onMain && mainActions.compact,
+            voice = onVoice != null, main = snapshot.mainSession, active = active, compact = active != null && mainActions.compact,
             newMain = onMain && mainActions.newMain, working = interrupt != null && persona.core.domain.lines.isLiveStatus(shown?.status),
             clear = onMain && mainActions.clear)
         fun rawAction(item: AssistantMenuItem, separator: Boolean): JAction = when (item) {
@@ -1129,7 +1131,7 @@ fun AssistantScreen(
             AssistantMenuItem.CopyDiagnostics -> JAction(resources.getString(item.label), separatorBefore = separator,
                 onClick = { active?.let { key -> copyDiagnostics(shown ?: Session(machineId = key.machineId, sessionId = key.sessionId)) } })
             AssistantMenuItem.Compact -> JAction(resources.getString(item.label), separatorBefore = separator,
-                enabled = !compacting && compaction.line != CompactionLine.Running, onClick = ::compactMain)
+                enabled = !compacting && compaction.line != CompactionLine.Running, onClick = ::compactConversation)
             AssistantMenuItem.ClearContext -> JAction(resources.getString(item.label), separatorBefore = separator,
                 enabled = !clearBusy, onClick = { clearMain() })
             AssistantMenuItem.NewMain -> JAction(resources.getString(item.label), separatorBefore = separator,
@@ -1610,14 +1612,17 @@ internal fun AssistantDrawer(
                         size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) })
             }
             if (recentOpen) itemsIndexed(groups.recent, key = { _, session -> "recent-" + session.key.path }) { index, session ->
+                val builtIn = session.sessionId == groups.background
                 ConversationRow(session, selected = shadeConversations && session.key == active,
                     position = GroupPosition.of(index, groups.recent.size),
-                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
-                    onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
-                    onRename = onRename?.let { action -> { action(session) } },
-                    onEditTags = onEditTags?.let { action -> { action(session) } },
+                    onOpen = { onOpen(session.key) }, onEnd = onEnd?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onCopy = { onCopy(session) }, onArchive = onArchive?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onRename = onRename?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    onEditTags = onEditTags?.takeUnless { builtIn }?.let { action -> { action(session) } },
                     onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
-                    onLeader = onLeader?.let { action -> { action(session) } })
+                    onLeader = onLeader?.takeUnless { builtIn }?.let { action -> { action(session) } },
+                    named = if (builtIn) stringResource(R.string.assistant_background_supervisor) else null,
+                    origin = if (builtIn) AssistantConversationOrigin.Task.id else session.origin)
             }
             // Every other chat is under one "All chats" row, which opens the list in place (a search lists what it finds
             // at once instead; the drawer's search finds every conversation either way).
