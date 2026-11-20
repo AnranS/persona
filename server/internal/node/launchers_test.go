@@ -156,11 +156,19 @@ func TestCodexOnTheMachineIsALauncher(t *testing.T) {
 	}
 	list, codex, _, _ := mergeLaunchers(asNodeIn(t, home, `alias ll="ls -l"`, launcherScript))
 	list = withoutInstalledWorkAgents(list)
-	if len(list) != 2 || list[0].Name != "claude" || list[1].Name != "codex" || list[1].Agent != "codex" {
+	if len(list) != 2 || list[0].Name != "claude" || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Fatalf("got %v, codex %v", list, codex)
 	}
-	if _, configured := codex["codex"]; configured {
-		t.Fatalf("plain Codex has configured launcher words %q; stock starts must use the built-in fallback", codex["codex"])
+}
+
+func TestCodexLauncherAliasProvenance(t *testing.T) {
+	plain := launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd
+	if names := codexAliasNames(plain); len(names) != 0 {
+		t.Fatalf("plain Codex aliases = %v, want none", names)
+	}
+	noOpAlias := launcherBegin + "\x1dcodex\x1fcodex\x1f\x1e\x1d/usr/local/bin/codex\n" + launcherEnd
+	if names := codexAliasNames(noOpAlias); !names["codex"] {
+		t.Fatalf("configured no-op Codex alias lost its provenance: %v", names)
 	}
 }
 

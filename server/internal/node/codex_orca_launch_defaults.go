@@ -11,13 +11,17 @@ import (
 )
 
 // stockOrcaCodexArgv distinguishes the built-in stock launcher from a configured no-op alias
-// with the same words. Plain PATH Codex deliberately has no configured launcher-cache entry.
+// with the same words. Discovery records alias provenance beside the shared launcher argv map.
 func stockOrcaCodexArgv(launcher string, argv []string) bool {
 	if launcher != "codex" || len(argv) != 1 || argv[0] != "codex" {
 		return false
 	}
 	launcherCache.Lock()
-	_, configured := launcherCache.codex["codex"]
+	configured := launcherCache.codexAliases["codex"]
+	if launcherCache.codexAliases == nil {
+		// Test fixtures and a start before the first discovery carry no provenance map.
+		_, configured = launcherCache.codex["codex"]
+	}
 	launcherCache.Unlock()
 	return !configured
 }
