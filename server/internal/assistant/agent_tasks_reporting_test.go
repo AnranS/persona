@@ -149,6 +149,42 @@ func TestReportFromAReportingTodoHonoursReporterStop(t *testing.T) {
 	}
 }
 
+func TestReportFromAReportingTodoSurvivesLaterQuietNotice(t *testing.T) {
+	s, f := reportingWithTask(t) // the reporting conversation is working, so both messages queue
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	report := json.RawMessage(`{"kind":"done","text":"queued report"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError ||
+		!strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
+		t.Fatalf("report: %+v", res)
+	}
+	queued := func() []relayMsg {
+		b := &s.relays
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return append([]relayMsg(nil), b.st.Queue["lark1"]...)
+	}
+	waitFor(t, "the queued reporting report", func() bool { return len(queued()) == 1 })
+	agentTurn(s, f, proto.StatusDone, "MR 提好了", 0)
+	waitFor(t, "the queued quiet completion notice", func() bool {
+		for _, msg := range queued() {
+			if strings.Contains(msg.Text, "🔔") {
+				return true
+			}
+		}
+		return false
+	})
+	messages := queued()
+	var reportKept, quietKept bool
+	for _, msg := range messages {
+		reportKept = reportKept || strings.Contains(msg.Text, "queued report")
+		quietKept = quietKept || strings.Contains(msg.Text, "🔔") && strings.Contains(msg.Text, "MR 提好了")
+	}
+	if len(messages) != 2 || !reportKept || !quietKept {
+		t.Fatalf("queued report and quiet notice = %+v", messages)
+	}
+}
+
 func TestReportFromAReportingTodoLeavesQuietNoticesAlone(t *testing.T) {
 	s, f := reportingWithTask(t)
 	ctx := context.Background()
