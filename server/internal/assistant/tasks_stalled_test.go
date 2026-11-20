@@ -195,7 +195,7 @@ func TestTaskStalledContinuationResumesOriginalSession(t *testing.T) {
 		got.Agents[0].ReleasedAt != nil || got.Agents[0].DismissedAt != nil {
 		t.Fatalf("continuation replaced the task or its Agent: count=%d task=%+v", todoCount(s), got)
 	}
-	read, err := s.toolAgentRead(ctx, "box", agent.SessionID, 1)
+	read, err := s.toolAgentRead(ctx, "box", agent.SessionID, 1, s.agentCallerSpace(ctx, "box", "conv1"))
 	if err != nil || !strings.Contains(read, "the original transcript and diagnosis") {
 		t.Fatalf("the original transcript was not retained: %q, %v", read, err)
 	}
