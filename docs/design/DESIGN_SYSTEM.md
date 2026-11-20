@@ -677,6 +677,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   `role="separator"` with "Model changed from … to …"; not a control. Only the transcript's record of the replying model
   counts, never the picker (`docs/web/web.md`, "Model change divider"). Follows cindy's model-only switch chip at the
   user's request (2026-11-12), with model names instead of raw ids.
+  iOS (#5055, `ModelChanges.mark` and `ModelChangeDivider`) applies the same latest-assistant, unknown/synthetic,
+  folded-round, canonical-name and loaded-page rules after its folded rounds are resolved. It draws `switchAgents`,
+  `Theme.Font.label`, `Theme.cardStroke` and a capsule at 50% of the page background's opacity in every style, with the stable
+  `chat.modelChange` accessibility element and the same spoken sentence; the raw ids stay in its pointer tooltip.
+  It changes no model picking or engine switching.
 - Engine switch divider (web, #5054, `EngineSwitchDivider`): above the first message a conversation's other engine got
   (Claude Code ↔ Codex), the model change divider's row with a chip "⇄ Switched from Claude Code to Codex · <model> ·
   <badge> ›": the badge "session resumed" when the engine's earlier session was resumed, else "Continued from summary".
