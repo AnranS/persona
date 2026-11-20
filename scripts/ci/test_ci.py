@@ -322,7 +322,9 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('*.exe.gz)', upload['run'])
         darwin = yaml.dump(release['jobs']['darwin-cli-sign'])
         self.assertIn('resume_github_release.py prepare', darwin)
-        self.assertIn('resume_github_release.py restore', darwin)
+        manifest_step = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                             if 'release manifest' in step.get('run', ''))
+        self.assertIn('resume_github_release.py restore', manifest_step['run'])
         self.assertIn('PERSONA_RELEASE_BUILD', darwin)
         resume = next(step for step in release['jobs']['darwin-cli-sign']['steps']
                       if step.get('name') == 'Select reusable Release build')

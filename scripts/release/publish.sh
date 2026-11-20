@@ -162,13 +162,32 @@ if [ -n "${SITE_ONLY:-}" ]; then
   exit 0
 fi
 
+OUT=build-publish
+rm -rf "$OUT"
+mkdir -p "$OUT/bin"
+COMMIT="$(git rev-parse HEAD)"
 # The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one. A release-PR workflow pins it
 # in its immutable plan so a retry verifies exactly the same downloads; ordinary builds keep the current UTC minute.
 BUILD="${PERSONA_RELEASE_BUILD:-$(date -u +%Y%m%d%H%M)}"
 [[ "$BUILD" =~ ^[0-9]{12}$ ]] || { echo "PERSONA_RELEASE_BUILD must be UTC YYYYMMDDHHMM" >&2; exit 2; }
+# Read the served identity before compiling. An older Release's creation minute can predate the current feed; tag
+# publishers share the same deterministic allocation, and a same-commit retry resumes the identity already served.
+curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"
+if [ -n "${PERSONA_RELEASE_TAG:-}" ] && [ -s "$OUT/served.json" ]; then
+  served_build="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1])).get("build"); print(value if type(value) is int and re.fullmatch(r"[0-9]{12}",str(value)) else "")' "$OUT/served.json" 2>/dev/null || true)"
+  served_commit="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])).get("commit"); print(value if isinstance(value,str) else "")' "$OUT/served.json" 2>/dev/null || true)"
+  if [[ "$served_build" =~ ^[0-9]{12}$ ]] && ((BUILD <= served_build)); then
+    if [ "$served_commit" = "$COMMIT" ]; then
+      BUILD="$served_build"
+    else
+      BUILD="$((served_build + 1))"
+      echo "note: allocated tag build $BUILD above the currently served build $served_build" >&2
+    fi
+  fi
+fi
+[[ "$BUILD" =~ ^[0-9]{12}$ ]] || { echo "allocated release build is not UTC YYYYMMDDHHMM" >&2; exit 2; }
 # The nearest vX.Y.Z tag, a lightweight one too, as deploy.sh names its builds (#7201).
 VERSION="${PERSONA_RELEASE_VERSION:-${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}}"
-COMMIT="$(git rev-parse HEAD)"
 # A release is the committed code: latest.json says which commit and lists every one it contains, and a hub
 # installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No regression"). Published with
 # changes not committed, every hub running it would wait for a person from then on. The binaries say which commit
@@ -178,9 +197,6 @@ if [ -n "$(git status --porcelain -- server web)" ]; then
   [ -n "${NO_DEPLOY:-}" ] || { echo "server/ or web/ has changes not committed: commit them first" >&2; exit 1; }
   STAMP="$COMMIT-dirty"
 fi
-OUT=build-publish
-rm -rf "$OUT"
-mkdir -p "$OUT/bin"
 
 # The web client goes into the binary (server/internal/hub/webdist, embedded); the placeholder stays.
 WEBDIST=server/internal/hub/webdist
@@ -294,7 +310,6 @@ for p in persona-hub persona-manager; do
 done
 
 # Releases only move forward: a larger build number than the one served, and the served commit an ancestor of this one.
-curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"
 RETRY_SAME_BUILD=0
 if ! "$host_bin" release check-next "$OUT/served.json" --build "$BUILD" --commit "$COMMIT"; then
   # A retry of the exact same commit/build is allowed only after the served manifest verifies against these bytes.

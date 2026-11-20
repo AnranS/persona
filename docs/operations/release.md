@@ -596,9 +596,12 @@ A private configuration has only these fields, with no secrets:
   `personad` must contain the exact GitHub update base used by the Release's
   `install.sh`, and the installer's own `DL` default is checked too;
   `publish.sh` renders that installer from the same base it compiles into the
-  binaries. Tagged builds use the Release's UTC `createdAt` minute through
-  `PERSONA_RELEASE_BUILD`, so CI and local verification share one build identity
-  even for backfills and retries. When Darwin signing is enabled in CI, the coordinator waits for that job, downloads its staging
+  binaries. Tagged builds start from the Release's UTC `createdAt` minute through
+  `PERSONA_RELEASE_BUILD`. Before compiling, `publish.sh` reads the served feed; if that
+  identity is not newer, tag publication deterministically allocates the next build above
+  it, while a same-commit retry reuses the served build. CI and local verification run the
+  same allocation and CI persists it in its staging manifest, so older stable backfills and
+  retries keep one coherent identity. Release-PR builds retain their immutable plan. When Darwin signing is enabled in CI, the coordinator waits for that job, downloads its staging
   `ci-latest.json` and `ci-SHA256SUMS` with digest checks, and non-Windows artifacts, and merges them with the locally
   verified Windows archives and reports into the final manifest and checksums;
   a skipped job keeps the private build, and a failed job stops publication. The downloads go up first; `VERSION`, `SHA256SUMS`, `android.json`

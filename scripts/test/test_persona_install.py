@@ -431,11 +431,44 @@ printf 'catalog placeholders preserved in all languages\n'
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '1.2.3')
 
+    def test_tag_backfill_allocates_a_build_above_the_served_feed_before_compilation(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        start = publisher.index('BUILD="${PERSONA_RELEASE_BUILD:')
+        end = publisher.index('# The nearest vX.Y.Z tag', start)
+        block = publisher[start:end].replace(
+            'curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"', ':')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = root / 'out'
+            out.mkdir()
+            served_build = 202611190102
+            (out / 'served.json').write_text(json.dumps({'build': served_build, 'commit': 'served-commit'}))
+            env = {'PATH': '/usr/bin:/bin', 'OUT': str(out), 'COMMIT': 'backfill-commit',
+                   'PERSONA_RELEASE_BUILD': '202611110749', 'PERSONA_RELEASE_TAG': 'v0.2.1'}
+            command = block + '\nprintf "%s" "$BUILD"\n'
+            result = subprocess.run(['bash', '-c', command], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, str(served_build + 1))
+            self.assertLess(publisher.index('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json"'),
+                            publisher.index('LDFLAGS='))
+
+            # A retry after the site moved to this same tag keeps the allocated identity instead of bouncing backward.
+            (out / 'served.json').write_text(json.dumps({'build': served_build + 1, 'commit': 'backfill-commit'}))
+            result = subprocess.run(['bash', '-c', command], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, str(served_build + 1))
+
+            # Release-PR builds retain their immutable plan and fail its normal verification rather than changing identity.
+            del env['PERSONA_RELEASE_TAG']
+            result = subprocess.run(['bash', '-c', command], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, '202611110749')
+
     def test_identical_release_retry_verifies_served_manifest(self):
         publisher = (ROOT / 'scripts/release/publish.sh').read_text()
-        start = publisher.index('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json"')
+        start = publisher.index('RETRY_SAME_BUILD=0')
         end = publisher.index('# Only current product names', start)
-        block = publisher[start:end].replace('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"', ':')
+        block = publisher[start:end]
         self.assertLess(publisher.index('for bin in "$OUT/bin"/personad-*'), publisher.index('if [ "$RETRY_SAME_BUILD" = 1 ]'))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

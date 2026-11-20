@@ -552,12 +552,20 @@ def check_beta_manifest(assets, version):
 
 
 def ci_signing_conclusion(repository, tag, gh="gh", commit=None):
-    """The signing job's conclusion, or None when this tag's workflow has no such job."""
-    runs = json.loads(subprocess.check_output(
-        [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId,status,headSha", "--limit", "1"],
-        text=True, timeout=60))
-    if not runs:
-        return None
+    """The signing job's conclusion, or None when this tag's completed workflow has no such job."""
+    for attempt in range(31):
+        runs = json.loads(subprocess.check_output(
+            [gh, "run", "list", "--workflow", "release.yml", "--branch", tag, "--json", "databaseId,status,headSha", "--limit", "1"],
+            text=True, timeout=60))
+        if runs:
+            break
+        if commit is None:
+            return None
+        # A tag push and its Actions run are not atomic. Never turn that registration window into unsigned publication.
+        if attempt < 30:
+            time.sleep(10)
+    else:
+        raise ConfigError("Darwin signing workflow did not register for this source commit")
     run = runs[0]
     if commit is not None and run.get("headSha") != commit:
         raise ConfigError("Darwin signing workflow is for another source commit")

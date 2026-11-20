@@ -344,12 +344,15 @@ class TagReleaseTests(unittest.TestCase):
             if not command or command[0] != "gh":
                 return real_output(command, **kwargs)
             events.append(("github", command))
-            if command[:2] == ["gh", "run"]:
-                return json.dumps([{"databaseId": 123, "status": "completed", "headSha": self.commit}] if ci_assets is not None else [])
+            if command[:3] == ["gh", "run", "list"]:
+                return json.dumps([{"databaseId": 123, "status": "completed", "headSha": self.commit}])
+            if command[:3] == ["gh", "run", "view"]:
+                return json.dumps({"status": "completed", "headSha": self.commit})
             if command[:2] == ["gh", "api"]:
                 if "/actions/runs/" in command[2]:
-                    return json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "status": "completed",
-                                                 "conclusion": ci_conclusion}]})
+                    jobs = [] if ci_assets is None else [{"name": "Sign Darwin command-line programs", "status": "completed",
+                                                         "conclusion": ci_conclusion}]
+                    return json.dumps({"jobs": jobs})
                 return json.dumps({"assets": remote})
             if command[:3] == ["gh", "release", "list"]:
                 return json.dumps([{"tagName": name} for name in stable_tags])
@@ -528,6 +531,25 @@ class TagReleaseTests(unittest.TestCase):
         self.build_patcher.stop()
         with patch.object(tag_release.subprocess, "check_output", return_value='{"createdAt":"2026-11-19T01:02:03Z"}'):
             self.assertEqual(tag_release.release_build("example/project", "v0.2.1"), 202611190102)
+
+    def test_ci_signing_waits_for_workflow_registration_before_unsigned_fallback(self):
+        responses = iter([
+            json.dumps([]),
+            json.dumps([{"databaseId": 123, "status": "queued", "headSha": self.commit}]),
+            json.dumps({"jobs": [{"name": "Sign Darwin command-line programs", "conclusion": "success"}]}),
+        ])
+        with patch.object(tag_release.subprocess, "check_output", side_effect=responses), \
+                patch.object(tag_release.time, "sleep") as sleep:
+            self.assertEqual(tag_release.ci_signing_conclusion("example/project", "v0.2.1", commit=self.commit), "success")
+        sleep.assert_called_once_with(10)
+
+    def test_ci_signing_rejects_a_workflow_that_never_registers(self):
+        with patch.object(tag_release.subprocess, "check_output", return_value=json.dumps([])) as runs, \
+                patch.object(tag_release.time, "sleep") as sleep:
+            with self.assertRaisesRegex(tag_release.ConfigError, "did not register"):
+                tag_release.ci_signing_conclusion("example/project", "v0.2.1", commit=self.commit)
+        self.assertGreater(runs.call_count, 1)
+        self.assertEqual(sleep.call_count, runs.call_count - 1)
 
     def test_ci_signing_returns_none_when_pending_run_completes_without_job(self):
         responses = iter([

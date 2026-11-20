@@ -151,6 +151,7 @@ jobs:
         env:
           VERSION: ${{ needs.desktop-gate.outputs.version }}
           PERSONA_RELEASE_BUILD: ${{ steps.resume.outputs.number }}
+          PERSONA_RELEASE_TAG: ${{ github.ref_name }}
           NO_DEPLOY: '1'
           RELEASE_CHANNEL: ${{ contains(github.ref_name, '-') && 'beta' || 'release' }}
         run: scripts/release/publish.sh
@@ -192,7 +193,6 @@ jobs:
         run: |
           set -euo pipefail
           host="build-publish/bin/personad-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-          build="$(python3 -c 'import json; print(json.load(open("'"$RUNNER_TEMP"'/release-resume.json"))["build"])')"
           has_manifest="$(python3 -c 'import json; print(json.load(open("'"$RUNNER_TEMP"'/release-resume.json"))["has_manifest"])')"
           # publish.sh compressed the unsigned build. Replace every darwin archive with the signed bytes before hashing.
           for program in personad persona-node persona-link persona-hub persona-manager; do
@@ -201,9 +201,10 @@ jobs:
               gzip -n -9 -c "$bin" > "$bin.gz"
             done
           done
-          (cd build-publish/bin && shasum -a 256 -- *.gz > ci-SHA256SUMS && printf '%s\n' "$VERSION" > VERSION)
           python3 scripts/release/resume_github_release.py restore --repository "$GH_REPO" --tag "$RELEASE_TAG" --commit "$COMMIT" --directory build-publish --resume "$RUNNER_TEMP/release-resume.json"
+          (cd build-publish/bin && shasum -a 256 -- *.gz > ci-SHA256SUMS && printf '%s\n' "$VERSION" > VERSION)
           if [ "$has_manifest" != True ]; then
+            build="$(python3 -c 'import json; print(json.load(open("build-publish/bin/latest.json"))["build"])')"
             "$host" release manifest --dir build-publish/bin --version "$VERSION" --build "$build" --commit "$COMMIT" --channel "$RELEASE_CHANNEL" --out build-publish/bin/ci-latest.json
           elif [ ! -f build-publish/bin/ci-latest.json ]; then
             cp build-publish/bin/latest.json build-publish/bin/ci-latest.json

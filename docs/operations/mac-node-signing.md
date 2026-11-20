@@ -135,12 +135,16 @@ staging `ci-latest.json` and `ci-SHA256SUMS`, without `--clobber`. An existing a
 digest is skipped, a missing one is uploaded and read back for digest
 verification, and different bytes are a conflict that stops the job. Before
 building, `resume_github_release.py` selects the existing staging manifest's
-build number or the Release creation timestamp; after signing it restores existing assets with
-digest verification, so failed-job reruns reuse bytes instead of rejecting a new
+build number or the Release creation timestamp. `publish.sh` then allocates a
+backfill above the currently served build before compiling; the signing step
+reads that allocated value from the generated manifest. After signing it restores existing assets with
+digest verification and only then generates `ci-SHA256SUMS`, so failed-job reruns reuse bytes and matching checksums instead of rejecting a new
 timestamp. A final coordinator-owned `latest.json` or `SHA256SUMS` instead marks
 the Release as already coordinated: no build, signing or restore runs, and final
 feed files are never imported into CI staging. The resume step runs only when release-publish owns the tag, not for a
-release PR's already-owned artifacts. The hub coordinator waits for the current
+release PR's already-owned artifacts. The hub coordinator allows a bounded
+registration grace period for the tag's workflow rather than treating an empty
+run list as permission to publish unsigned assets. It then waits for the current
 run, including while it is queued before the signing job has been registered,
 then downloads the staging manifest and CI files, merges them with the locally verified Windows archives and reports,
 and publishes the only final `latest.json` and `SHA256SUMS`. A failed job stops

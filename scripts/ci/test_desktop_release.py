@@ -226,11 +226,25 @@ class DesktopReleaseWorkflowTests(unittest.TestCase):
         # A missing certificate makes the whole build/sign/upload job skip; there is no ad-hoc upload fallback.
         self.assertEqual(job["if"], "needs.desktop-gate.outputs.darwin_cli == 'true'")
 
+    def test_signed_manifest_uses_the_build_allocated_by_publish(self):
+        manifest = next(step for step in self.jobs["darwin-cli-sign"]["steps"] if "release manifest" in step.get("run", ""))
+        script = manifest["run"]
+        self.assertIn('json.load(open("build-publish/bin/latest.json"))["build"]', script)
+        self.assertNotIn('release-resume.json"))["build"]', script)
+
+    def test_staging_checksums_are_generated_after_resume_restores_existing_bytes(self):
+        manifest = next(step for step in self.jobs["darwin-cli-sign"]["steps"] if "release manifest" in step.get("run", ""))
+        script = manifest["run"]
+        restore = script.index("resume_github_release.py restore")
+        checksums = script.index("shasum -a 256 -- *.gz > ci-SHA256SUMS")
+        self.assertLess(restore, checksums)
+
     def test_signed_darwin_binaries_are_recompressed_before_hashing(self):
         manifest = next(step for step in self.jobs["darwin-cli-sign"]["steps"] if "release manifest" in step.get("run", ""))
         script = manifest["run"]
         self.assertIn("for program in personad persona-node persona-link persona-hub persona-manager; do", script)
-        compress = "for program in " + script.split("for program in ", 1)[1].split("(cd build-publish/bin", 1)[0]
+        compress = "for program in " + script.split("for program in ", 1)[1].split(
+            "python3 scripts/release/resume_github_release.py restore", 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binaries = root / "build-publish/bin"
