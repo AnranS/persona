@@ -196,30 +196,6 @@ func dictationTestFinal(t *testing.T, a *app, item, wantText string) map[string]
 	}
 }
 
-// dictationTestAdvance reads through current's interim frames until next begins. wantText must occur in one of
-// current's frames, proving that its text came from the scripted user's speech rather than merely having the right id.
-func dictationTestAdvance(t *testing.T, a *app, current, next, wantText string) map[string]any {
-	t.Helper()
-	sawText := false
-	for {
-		f := dictationTestNextUserTranscript(t, a)
-		if f["final"] != false {
-			t.Fatalf("interim transcript did not preserve final=false: %v", f)
-		}
-		switch f["id"] {
-		case current:
-			sawText = sawText || strings.Contains(f["text"].(string), wantText)
-		case next:
-			if !sawText {
-				t.Fatalf("no interim frame of %s contained %q", current, wantText)
-			}
-			return f
-		default:
-			t.Fatalf("transcript id = %v, want %s or %s", f["id"], current, next)
-		}
-	}
-}
-
 func dictationTestFatal(t *testing.T, a *app, code string) map[string]any {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
@@ -367,7 +343,7 @@ func TestDictationOneSessionPerStart(t *testing.T) {
 }
 
 func TestDictationTextOnlyRefusal(t *testing.T) {
-	script := voicetest.Script{TextOnlyRefused: true, Sentences: []voicetest.Line{
+	script := voicetest.Script{FinalCaptions: true, TextOnlyRefused: true, Sentences: []voicetest.Line{
 		{Start: 0.2, End: 1.4, Text: "Fallback first dictated sentence."},
 		{Start: 2.0, End: 3.2, Text: "Fallback second dictated sentence."},
 	}}
@@ -386,11 +362,8 @@ func TestDictationTextOnlyRefusal(t *testing.T) {
 	}
 
 	dictationTestWriteAudio(t, a, voicetest.PCM(script, 4.0))
-	first := dictationTestNextUserTranscript(t, a)
-	if first["id"] != "item-2-1" {
-		t.Fatalf("fallback transcript id = %v, want upstream item-2-1", first["id"])
-	}
-	dictationTestAdvance(t, a, "item-2-1", "item-2-2", "Fallback first")
+	dictationTestFinal(t, a, "item-2-1", "Fallback first dictated sentence.")
+	dictationTestFinal(t, a, "item-2-2", "Fallback second dictated sentence.")
 }
 
 func TestDictationUpstreamFailure(t *testing.T) {

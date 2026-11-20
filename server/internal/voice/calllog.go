@@ -229,6 +229,9 @@ func (c *conversation) logStart(s *startFrame, p *Provider) {
 	if c.version >= 2 && s.Target != nil {
 		target = s.Target.MachineID + "/" + s.Target.SessionID
 	}
+	if c.dictation {
+		protocol, target = "protocol 2 (dictation)", "unbound"
+	}
 	var more []string
 	if c.lang != "" {
 		more = append(more, "language "+string(c.lang))
