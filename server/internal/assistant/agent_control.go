@@ -598,7 +598,7 @@ type reportBody struct {
 	Evidence []string `json:"evidence,omitempty"`
 	Step     int      `json:"step,omitempty"`
 	Steps    int      `json:"steps,omitempty"`
-	// Later: a question that waits in the queue for the next briefing (later.go), not one the supervisor is woken for.
+	// Later: a question deferred without waking the supervisor (the main briefing queue or a reporting conversation's feed).
 	Later bool `json:"later,omitempty"`
 }
 
@@ -803,11 +803,26 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	return res, err
 }
 
-// reportLater keeps a question the agent said can wait in the queue (later.go) and shows it in the supervisor's
-// conversation, marked as one that can wait: no signal, so no turn of the main conversation. queued false: it could not
-// be kept (no morning or evening briefing would list it, or the queue is full), and the answer says why; the report then
-// goes as an urgent one.
+// reportLater keeps a question the agent said can wait without waking its supervisor. An active reporting conversation
+// gets the deferred report in its own feed, never the main briefing queue. Otherwise the question waits in the queue of
+// questions for the next briefing (later.go). queued false: it could not be kept (no morning or evening briefing would
+// list it, or the queue is full), and the answer says why; the report then goes as an urgent one.
 func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, text string, evidence []string, now time.Time) (answer string, queued bool) {
+	if t.Supervision != nil && t.Supervision.Supervisor == t.Origin {
+		if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
+			if s.reporterStopped(ctx, t.Origin) {
+				return "Nobody receives this: your reporting conversation was stopped. Ask the user what you need the usual way.", true
+			}
+			body := reportBody{Kind: upReportQuestion, Text: text, Evidence: evidence, Later: true}
+			if _, err := s.appendFeed(ctx, t.Origin, feedReport, t.ID, body); err != nil {
+				s.logf("task %s: reporting question feed: %v", t.ID, err)
+				return "urgent:false was ignored: the reporting conversation could not keep the question, so it is sent as an urgent question. ", false
+			}
+			s.logf("task %s: %s reports a question deferred in its reporting conversation", t.ID, short(session))
+			return "Queued without waking your reporting conversation; it can answer there when it next runs. Go on with other work. " +
+				"If you cannot go on without an answer, ask it again without urgent:false.", true
+		}
+	}
 	if !s.laterBriefed(ctx) {
 		return "urgent:false was ignored: no morning or evening briefing is switched on to list it, so it is sent as an urgent question. ", false
 	}
