@@ -34,12 +34,39 @@ enum ReplyPictureSource {
 
     private nonisolated static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
+    /// View and task identity: the same relative path in another chat or working directory is another image.
+    struct Identity: Hashable {
+        var url: String
+        var scope: FileScope?
+    }
+    struct TaskIdentity: Hashable {
+        var image: Identity
+        var attempt: Int
+    }
+
+    /// The machine file behind a local Markdown destination. A local path without a scope never becomes a hub-relative
+    /// LarkMedia request: scope-less surfaces keep their unsupported-image fallback instead.
+    static func file(_ image: ReplyImage, scope: FileScope?) -> FileRef? {
+        guard let path = image.localPath, let scope else { return nil }
+        return FileRef(group: scope.machine.group, machineID: scope.machine.id, path: path, cwd: scope.cwd)
+    }
+
     /// The site a picture comes from, for its menu and the viewer.
     nonisolated static func host(_ url: String) -> String { URL(string: url)?.host() ?? "" }
 
     /// The viewer's pages for a reply's pictures: each at the viewer's size, its words as the title, its site below.
-    static func viewerItems(_ images: [ReplyImage]) -> [ViewerImage] {
-        images.map { ViewerImage(url: path($0.url, size: viewerSize), title: $0.alt.isEmpty ? nil : $0.alt, detail: host($0.url)) }
+    static func viewerItems(_ images: [ReplyImage], scope: FileScope?) -> [ViewerImage] {
+        images.map { image in
+            if image.isLocal {
+                if let ref = file(image, scope: scope) {
+                    // `file` keeps Copy Path / Open in Files; `download` selects the complete machine-file image loader.
+                    return ViewerImage(file: ref, download: ref, title: image.alt.isEmpty ? nil : image.alt, detail: image.url)
+                }
+                // Never turn a scope-less local path into a hub-relative URL request.
+                return ViewerImage(title: image.alt.isEmpty ? nil : image.alt, detail: image.url)
+            }
+            return ViewerImage(url: path(image.url, size: viewerSize), title: image.alt.isEmpty ? nil : image.alt, detail: host(image.url))
+        }
     }
 }
 
@@ -47,6 +74,7 @@ enum ReplyPictureSource {
 struct ReplyPictureRun: View {
     var block: ReplyImageBlock
     @Environment(\.asksBeforePictures) private var asks
+    @Environment(\.fileScope) private var scope
     @State private var asked = false
     @State private var opened: Opened?
     @Namespace private var zoom
@@ -61,14 +89,17 @@ struct ReplyPictureRun: View {
             if asks, !asked {
                 AskedPictures(block: block) { asked = true }
             } else if block.shown.count == 1 {
-                ReplySinglePicture(image: block.all[block.shown.lowerBound]) { opened = Opened(index: block.shown.lowerBound) }
+                let image = block.all[block.shown.lowerBound]
+                let identity = ReplyPictureSource.Identity(url: image.url, scope: scope)
+                ReplySinglePicture(image: image, scope: scope) { opened = Opened(index: block.shown.lowerBound) }
+                    .id(identity)
                     .matchedTransitionSource(id: block.shown.lowerBound, in: zoom)
             } else {
-                ReplyPictureGrid(block: block, zoom: zoom) { opened = Opened(index: $0) }
+                ReplyPictureGrid(block: block, scope: scope, zoom: zoom) { opened = Opened(index: $0) }
             }
         }
         .fullScreenCover(item: $opened) { o in
-            ImageViewer(items: ReplyPictureSource.viewerItems(block.all), index: o.index)
+            ImageViewer(items: ReplyPictureSource.viewerItems(block.all, scope: scope), index: o.index)
                 .navigationTransition(.zoom(sourceID: o.index, in: zoom))
         }
     }
@@ -78,20 +109,26 @@ struct ReplyPictureRun: View {
 /// their size; one that did not load is a small tile that retries.
 private struct ReplySinglePicture: View {
     var image: ReplyImage
+    var scope: FileScope?
     var open: () -> Void
     @Environment(\.displayScale) private var scale
     @State private var arrived: CGSize?
     @State private var failed = false
+    @State private var failure: String?
 
     /// The hub's size: the 4:3 box at the screen's scale (a wider picture is cut to the column, a narrower one is shorter).
     private var size: Int { ReplyImageLayout.size(points: Theme.Size.replyPicture * ReplyImageLayout.placeholder, scale: scale) }
 
     var body: some View {
         let path = ReplyPictureSource.path(image.url, size: size)
-        ReplySingleLayout(pixels: arrived ?? LarkMedia.shared.cached(path).map(\.pixelSize), failed: failed) {
-            ReplyPictureTile(image: image, path: path, size: size, open: open) { pixels in
+        let file = ReplyPictureSource.file(image, scope: scope)
+        let cached = file.flatMap { ChatImageLoader.cached($0, side: CGFloat(size))?.pixelSize }
+            ?? (image.isLocal ? nil : LarkMedia.shared.cached(path).map(\.pixelSize))
+        ReplySingleLayout(pixels: arrived ?? cached, failed: failed, detailedFailure: failure != nil) {
+            ReplyPictureTile(image: image, path: path, file: file, identity: ReplyPictureSource.Identity(url: image.url, scope: scope), size: size, open: open) { pixels, why in
                 arrived = pixels
                 failed = pixels == nil
+                failure = why
             }
         }
         .animation(Theme.Motion.state, value: arrived)
@@ -101,6 +138,7 @@ private struct ReplySinglePicture: View {
 /// Two or more pictures as squares (`ReplyImageLayout.grid`); the last one drawn counts those that are not.
 private struct ReplyPictureGrid: View {
     var block: ReplyImageBlock
+    var scope: FileScope?
     var zoom: Namespace.ID
     var open: (Int) -> Void
     @Environment(\.displayScale) private var scale
@@ -112,7 +150,10 @@ private struct ReplyPictureGrid: View {
         ReplyGridLayout(count: block.shown.count) {
             ForEach(Array(block.shown.prefix(grid.shown).enumerated()), id: \.element) { n, index in
                 let image = block.all[index]
-                ReplyPictureTile(image: image, path: ReplyPictureSource.path(image.url, size: size), size: size, open: { open(index) })
+                let identity = ReplyPictureSource.Identity(url: image.url, scope: scope)
+                ReplyPictureTile(image: image, path: ReplyPictureSource.path(image.url, size: size),
+                                 file: ReplyPictureSource.file(image, scope: scope), identity: identity, size: size, open: { open(index) })
+                    .id(identity)
                     .overlay {
                         if n == grid.shown - 1, grid.more > 0 { MoreTile(count: grid.more) }
                     }
@@ -139,26 +180,32 @@ private struct MoreTile: View {
 }
 
 /// One picture filling the frame it is given: the well's color while it comes, then the picture (cut to the frame);
-/// one that did not load says so and retries on a tap. A tap on a picture opens the viewer; a long press offers the
-/// original on its site.
+/// one that did not load says why and retries only after a tap. A tap on a picture opens the viewer; a long press offers
+/// the original on its site or in the machine's file viewer.
 private struct ReplyPictureTile: View {
     var image: ReplyImage
     var path: String
+    var file: FileRef?
+    var identity: ReplyPictureSource.Identity
     var size: Int
     var open: () -> Void
-    /// Its pixels once it arrived, nil when it did not (the lone picture's frame follows them).
-    var arrived: ((CGSize?) -> Void)? = nil
+    /// Its pixels once it arrived, and a machine-file failure reason when it did not (the lone picture's frame follows them).
+    var arrived: ((CGSize?, String?) -> Void)? = nil
     @Environment(\.openURL) private var openURL
     @State private var picture: UIImage?
     @State private var failed = false
+    @State private var failure: String?
     @State private var attempt = 0
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-        let shown = picture ?? LarkMedia.shared.cached(path)
+        let cached = file.flatMap { ChatImageLoader.cached($0, side: CGFloat(size)) }
+            ?? (image.isLocal ? nil : LarkMedia.shared.cached(path))
+        let shown = picture ?? cached
         Button {
             if failed {
                 failed = false
+                failure = nil
                 attempt += 1
             } else if shown != nil {
                 open()
@@ -171,7 +218,7 @@ private struct ReplyPictureTile: View {
                     if let shown {
                         Image(uiImage: shown).resizable().scaledToFill()
                     } else if failed {
-                        ImageNotLoaded(canRetry: true)
+                        ImageNotLoaded(canRetry: true, reason: failure)
                     }
                 }
                 .clipShape(shape)
@@ -181,19 +228,49 @@ private struct ReplyPictureTile: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier(failed ? "reply-picture-failed" : "reply-picture")
         .accessibilityLabel(image.alt.isEmpty ? Text("Photo") : Text(verbatim: image.alt))
-        .accessibilityHint(failed ? Text("Image didn't load. Tap to retry") : Text("Image, tap to enlarge"))
+        .accessibilityValue(failed ? Text(verbatim: failure ?? "") : Text(""))
+        .accessibilityHint(failed ? Text(failure ?? "Image didn't load. Tap to retry") : Text("Image, tap to enlarge"))
         .contextMenu {
             if let url = URL(string: image.url) {
                 Button { openURL(url) } label: { Label("Open original", systemImage: Theme.Icon.safari) }
             }
         }
         .animation(Theme.Motion.state, value: picture != nil)
-        .task(id: "\(path)#\(attempt)") {
+        .task(id: ReplyPictureSource.TaskIdentity(image: identity, attempt: attempt)) {
+            if let file {
+                do {
+                    let loaded = try await ChatImageLoader.image(file, side: CGFloat(size))
+                    guard !Task.isCancelled else { return }
+                    let why = loaded == nil ? String(localized: "Can't show this image") : nil
+                    picture = loaded
+                    failed = loaded == nil
+                    failure = why
+                    arrived?(loaded?.pixelSize, why)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    let why = error.shown ?? String(localized: "Image didn't load. Tap to retry")
+                    picture = nil
+                    failed = true
+                    failure = why
+                    arrived?(nil, why)
+                }
+                return
+            }
+            if image.isLocal {
+                // A local destination outside a conversation has no machine to read from; never send it to LarkMedia.
+                let why = String(localized: "Can't show this image")
+                picture = nil
+                failed = true
+                failure = why
+                arrived?(nil, why)
+                return
+            }
             let loaded = await LarkMedia.shared.image(path, maxPixel: CGFloat(size))
             guard !Task.isCancelled else { return }
             picture = loaded
             failed = loaded == nil
-            arrived?(loaded?.pixelSize)
+            failure = nil
+            arrived?(loaded?.pixelSize, nil)
         }
     }
 }
@@ -203,9 +280,15 @@ private struct ReplyPictureTile: View {
 private struct ReplySingleLayout: Layout {
     var pixels: CGSize?
     var failed: Bool
+    var detailedFailure = false
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        if failed { return CGSize(width: Theme.Size.replyPictureFailed, height: Theme.Size.replyPictureFailed) }
+        if failed {
+            // A machine-file failure keeps the image's box so its reason fits and the text below does not jump. The
+            // existing web-image failure remains the small retry tile.
+            if detailedFailure { return ReplyImageLayout.single(pixels: nil, column: proposal.width ?? Theme.Size.replyPictures, height: Theme.Size.replyPicture) }
+            return CGSize(width: Theme.Size.replyPictureFailed, height: Theme.Size.replyPictureFailed)
+        }
         return ReplyImageLayout.single(pixels: pixels, column: proposal.width ?? Theme.Size.replyPictures, height: Theme.Size.replyPicture)
     }
 
@@ -239,12 +322,12 @@ private struct ReplyGridLayout: Layout {
     }
 }
 
-/// A web picture in Markdown that is not in a run (`ReplyImages`): a picture inside a quote, a note, a page. Drawn as
-/// a lone reply picture. Pages with their own pictures set their own provider (a file's relative images, Feishu
-/// documents); anything not on the web is left to MarkdownUI's default.
+/// A web or machine-local picture in Markdown that is not in a run (`ReplyImages`): a picture inside a quote, a note,
+/// a page. Drawn as a lone reply picture. Pages with their own pictures set their own provider (a file's relative images,
+/// Feishu documents); other schemes keep MarkdownUI's default.
 struct WebMarkdownImages: ImageProvider {
     func makeImage(url: URL?) -> some View {
-        if let url, ReplyImages.isWeb(url.absoluteString) {
+        if let url, ReplyImages.isWeb(url.absoluteString) || ReplyImages.isLocal(url.absoluteString) {
             ReplyPictureRun(block: ReplyImageBlock(all: [ReplyImage(url: url.absoluteString, alt: "")], shown: 0 ..< 1))
         } else {
             DefaultImageProvider.default.makeImage(url: url)

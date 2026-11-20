@@ -18,11 +18,17 @@ nonisolated enum ChatImageLoader {
         "\(p.identity)@\(side.map { Int($0) } ?? 0)" as NSString
     }
 
+    private static func key(_ f: FileRef, _ side: CGFloat?) -> NSString {
+        // A relative path is a different file in another session or after its cwd changes.
+        "machine-file:\(f.machineRef.path):\(f.cwd ?? ""):\(f.path)@\(side.map { Int($0) } ?? 0)" as NSString
+    }
+
     /// Settings › Storage cleared the files: drop the decoded copies too.
     static func clearMemory() { images.removeAllObjects() }
 
     /// Already decoded: lets a row that scrolls back into view show its image without a placeholder frame.
     static func cached(_ p: ImagePayload, side: CGFloat?) -> UIImage? { images.object(forKey: key(p, side)) }
+    static func cached(_ f: FileRef, side: CGFloat?) -> UIImage? { images.object(forKey: key(f, side)) }
 
     /// The image, scaled down to fit `side` × `side` (nil: full size). Decoding runs off the main thread.
     static func image(_ p: ImagePayload, side: CGFloat?) async -> UIImage? {
@@ -32,15 +38,39 @@ nonisolated enum ChatImageLoader {
         let fullPageLoad = FullPageLoads.shared.begin()
         defer { FullPageLoads.shared.end(fullPageLoad) }
         guard let data = await data(p) else { return nil }
-        let img: UIImage? = await Task.detached(priority: .userInitiated) {
-            guard let full = UIImage(data: data) else { return nil }
-            guard let side else { return full.preparingForDisplay() ?? full }
-            return full.preparingThumbnail(of: ZoomMath.fittedSize(image: full.size, in: CGSize(width: side, height: side))) ?? full
-        }.value
+        let img = await decode(data, side: side)
         if let img { images.setObject(img, forKey: k, cost: Int(img.size.width * img.size.height * img.scale * img.scale * 4)) }
         // Downloaded bytes that are not a picture (a proxy's page, a cut body) must not stay on disk: a retry fetches again.
         else if p.data.isEmpty, let ref = p.ref { await fetches.forget(ref) }
         return img
+    }
+
+    /// An image file on the session's machine. The whole path, cwd and hub group identify both the request and its cache entry.
+    /// File errors keep their localized reason for the caller; no attachment-image result or retry behavior changes.
+    static func image(_ f: FileRef, side: CGFloat?, api client: APIClient? = nil) async throws -> UIImage? {
+        let k = key(f, side)
+        if let img = images.object(forKey: k) { return img }
+        let fullPageLoad = FullPageLoads.shared.begin()
+        defer { FullPageLoads.shared.end(fullPageLoad) }
+        let api: APIClient?
+        if let client {
+            api = client
+        } else {
+            api = await MainActor.run { AppModel.shared.api(f.group) }
+        }
+        guard let api else { throw URLError(.userAuthenticationRequired) }
+        let data = try await api.fileBytes(machine: f.machineID, path: f.path, cwd: f.cwd)
+        let img = await decode(data, side: side)
+        if let img { images.setObject(img, forKey: k, cost: Int(img.size.width * img.size.height * img.scale * img.scale * 4)) }
+        return img
+    }
+
+    private static func decode(_ data: Data, side: CGFloat?) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) {
+            guard let full = UIImage(data: data) else { return nil }
+            guard let side else { return full.preparingForDisplay() ?? full }
+            return full.preparingThumbnail(of: ZoomMath.fittedSize(image: full.size, in: CGSize(width: side, height: side))) ?? full
+        }.value
     }
 
     /// The encoded bytes (for saving / sharing the original).
@@ -186,23 +216,36 @@ struct ChatThumbnail: View {
 struct ImageNotLoaded: View {
     var canRetry: Bool
     var retry: (() -> Void)? = nil
+    /// Why a machine-local image failed, when the hub supplied a reason. Web-image placeholders stay unchanged.
+    var reason: String? = nil
+
+    private var spokenReason: Text {
+        if let reason { return Text(verbatim: reason) }
+        return canRetry ? Text("Image didn't load. Tap to retry") : Text("Can't show this image")
+    }
 
     var body: some View {
         if canRetry, let retry {
             Button(action: retry) { words.contentShape(.rect) }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Image didn't load. Tap to retry")
+                .accessibilityLabel(spokenReason)
         } else {
             words
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(canRetry ? Text("Image didn't load. Tap to retry") : Text("Can't show this image"))
+                .accessibilityLabel(spokenReason)
         }
     }
 
     /// A narrow placeholder (a portrait screenshot, a small photo): the sentence, else Retry, else the symbol alone.
     private var words: some View {
         Group {
-            if canRetry {
+            if let reason {
+                VStack(spacing: Theme.Space.xxs) {
+                    ThemedIcon(canRetry ? Theme.Icon.retry : Theme.Icon.error)
+                    Text(verbatim: reason)
+                    if canRetry { Text("Retry [Components b8784c]") }
+                }
+            } else if canRetry {
                 ViewThatFits(in: .horizontal) {
                     Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
                     Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
@@ -217,7 +260,8 @@ struct ImageNotLoaded: View {
         }
         .font(Theme.Font.label)
         .foregroundStyle(.secondary)
-        .lineLimit(1)
+        .lineLimit(reason == nil ? 1 : 2)
+        .multilineTextAlignment(.center)
         .padding(.horizontal, Theme.Space.s)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

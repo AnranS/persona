@@ -12,10 +12,15 @@ import UIKit
 struct ViewerImage: Identifiable, Hashable {
     var payload: ImagePayload?
     var file: FileRef?
+    /// A reply's machine-local image: read in full through ChatImageLoader, not a path-only FileThumbnails entry.
+    var download: FileRef?
     var url: String?
     var title: String?
     var detail: String?
-    var id: String { payload?.identity ?? file.map { "file:" + $0.id } ?? url.map { "url:" + $0 } ?? "" }
+    var id: String {
+        if let download { return "download:" + download.machineRef.path + ":" + (download.cwd ?? "") + ":" + download.path }
+        return payload?.identity ?? file.map { "file:" + $0.id } ?? url.map { "url:" + $0 } ?? ""
+    }
 
     /// Width × height in pixels when known before decoding.
     var pixelSize: String? {
@@ -400,6 +405,10 @@ enum ViewerLoader {
         if let url = item.url {
             if let side { return await LarkMedia.shared.image(url, size: url.hasPrefix("/") ? larkThumbEdge(points: side / 3) : nil, maxPixel: side) }
             return await LarkMedia.shared.image(url, maxPixel: 4096)
+        }
+        if let f = item.download {
+            // Reply-local files use the same complete download and cwd-aware cache as their thumbnails.
+            return try? await ChatImageLoader.image(f, side: side)
         }
         if let f = item.file, AppModel.shared.features(f.group).contains("file_thumb"), let api = AppModel.shared.api(f.group) {
             // Only the file is known: the biggest thumbnail the node draws (1024 px); Open in Files has the original.

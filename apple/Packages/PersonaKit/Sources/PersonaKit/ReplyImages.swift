@@ -1,15 +1,20 @@
 import CoreGraphics
 import Foundation
 
-/// A picture a reply names by address (Markdown `![alt](https://…)`).
+/// A picture a reply names by address (Markdown `![alt](https://…)` or `![alt](path/on/the/machine.png)`).
 public nonisolated struct ReplyImage: Sendable, Hashable {
     public let url: String
     public let alt: String
+    /// The decoded machine path when `url` is an absolute or cwd-relative local destination; nil for web and other schemes.
+    public let localPath: String?
 
     public init(url: String, alt: String) {
         self.url = url
         self.alt = alt
+        localPath = URL(string: url).flatMap(PathLinkURL.localPath)
     }
+
+    public var isLocal: Bool { localPath != nil }
 }
 
 /// One run of pictures as the theme reads it back from its fence (`ReplyImages.apply`): every picture of the reply in
@@ -27,10 +32,10 @@ public nonisolated struct ReplyImageBlock: Sendable, Equatable {
 }
 
 /// The pictures in a reply, drawn to fit the text (#9474; the web's are the same rules, #9475). A line that holds only
-/// pictures on the web (http or https) is a block picture, however it sits in its paragraph (replies often put one right
-/// under a line of text); block pictures with only line breaks or blank lines between them are one run. Before the
-/// reply is parsed each run becomes one fenced block in `language`, which the theme draws (one picture, or a grid);
-/// a picture inside a line of text stays in it. Code (fenced or indented) and quotes are left as they are.
+/// pictures on the web (http or https) or the session machine is a block picture, however it sits in its paragraph; block
+/// pictures with only line breaks or blank lines between them are one run. Before the reply is parsed each run becomes one
+/// fenced block in `language`, which the theme draws (one picture, or a grid); a picture inside a line of text stays in it.
+/// Code (fenced or indented) and quotes are left as they are.
 public nonisolated enum ReplyImages {
     /// The fence's language: the theme's code block draws it as pictures.
     public static let language = "persona-images"
@@ -79,7 +84,7 @@ public nonisolated enum ReplyImages {
         return out.joined(separator: "\n")
     }
 
-    /// Every web picture the reply names outside code, in order (block and inline).
+    /// Every web or machine-local picture the reply names outside code, in order (block and inline).
     public static func all(in text: String) -> [ReplyImage] {
         guard text.contains("![") else { return [] }
         return scan(text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)).all
@@ -95,21 +100,26 @@ public nonisolated enum ReplyImages {
             let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
             return ReplyImage(url: String(parts[0]).trimmingCharacters(in: .whitespaces), alt: parts.count > 1 ? String(parts[1]) : "")
         }
-        guard last < all.count, all.allSatisfy({ isWeb($0.url) }) else { return nil }
+        guard last < all.count, all.allSatisfy({ isWeb($0.url) || $0.isLocal }) else { return nil }
         return ReplyImageBlock(all: all, shown: first ..< last + 1)
     }
 
-    /// Whether `url` is a picture on the web (http or https), the only ones drawn this way.
+    /// Whether `url` is a picture on the web (http or https).
     public static func isWeb(_ url: String) -> Bool {
         let lower = url.lowercased()
         return (lower.hasPrefix("https://") || lower.hasPrefix("http://")) && url.count > 8
+    }
+
+    /// Whether `url` is an absolute or cwd-relative file on the session's machine, rather than a web or custom-scheme image.
+    public static func isLocal(_ url: String) -> Bool {
+        URL(string: url).flatMap(PathLinkURL.localPath) != nil
     }
 
     // MARK: Scanning
 
     struct Scan {
         var all: [ReplyImage] = []
-        /// Per line: it holds only web pictures (and spaces), outside code and quotes.
+        /// Per line: it holds only supported pictures (and spaces), outside code and quotes.
         var blocks: [Bool] = []
         /// Per line: the place of its first picture among `all`, and how many it has.
         var firstImage: [Int] = []
@@ -144,10 +154,10 @@ public nonisolated enum ReplyImages {
                 continue
             }
             let (images, rest) = Self.images(in: trimmed)
-            let web = images.filter { isWeb($0.url) }
-            s.all.append(contentsOf: web)
-            s.count.append(web.count)
-            s.blocks.append(!images.isEmpty && web.count == images.count && indent < 4
+            let supported = images.filter { isWeb($0.url) || $0.isLocal }
+            s.all.append(contentsOf: supported)
+            s.count.append(supported.count)
+            s.blocks.append(!images.isEmpty && supported.count == images.count && indent < 4
                 && rest.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         return s
