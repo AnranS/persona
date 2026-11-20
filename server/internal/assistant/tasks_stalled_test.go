@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -224,6 +225,18 @@ func TestTaskStalledTimeoutNotifiesSupervisorOnce(t *testing.T) {
 	seen := supervisionOf(s, f, todo.ID)
 	if slices.Contains(seen.pending, "timed_out") || len(stalledTimeoutNotices(f, todo.ID)) != 1 {
 		t.Fatalf("timeout notification was repeated: pending=%v notices=%v", seen.pending, stalledTimeoutNotices(f, todo.ID))
+	}
+}
+
+func TestTaskStalledTimeoutRendered(t *testing.T) {
+	e := prompts.SuperviseEntry{ID: "todo_1", Title: "Fix the stall", Kind: sigTimedOut}
+	if got := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{e}}); !strings.Contains(got, "Agent 已停止") ||
+		!strings.Contains(got, "原会话和工作区保留") {
+		t.Fatalf("supervise:\n%s", got)
+	}
+	if got := prompts.RenderWorkerSupervise([]prompts.SuperviseEntry{e}); !strings.Contains(got, "the Agent was stopped") ||
+		!strings.Contains(got, "session and workspace are retained") {
+		t.Fatalf("worker supervise:\n%s", got)
 	}
 }
 
