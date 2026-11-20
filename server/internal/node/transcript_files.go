@@ -47,8 +47,9 @@ func (n *Node) readErr(id string, err error) error {
 // for): proto.NotFoundNoTranscript for a session it knows (knownSession), proto.NotFoundUnknownSession for one it has
 // no record of. A subagent ("<session>@<agent>") goes by its session. None until the node's records have come from the
 // hub on this connection (recordsLoaded: a session missing from them may still be Persona's), nor for a session an
-// Agent runtime runs: registered ownership, a transcript the runtime names, or a runtime assistant conversation. The
-// runtime-shaped id test is only a fallback for an unrecorded id: the node's own record can use that shape too (#11470).
+// Agent runtime runs: registered ownership, a transcript the runtime names, a runtime assistant conversation, or a
+// record of a runtime engine/DSH. For other recorded runtime-shaped ids, a prefix from the node's own launcher marks
+// its fallback id (otherSession); the shape alone does not make every non-UUID id a runtime conversation (#11470).
 func (n *Node) readReason(id, missing string) string {
 	if parent, _, ok := splitSubagent(id); ok && parent == missing {
 		id = parent
@@ -59,6 +60,12 @@ func (n *Node) readReason(id, missing string) string {
 		return ""
 	}
 	if n.knownSession(id) {
+		st, recorded := n.state.get(id)
+		runtimeRecord := recorded && (proto.RuntimeEngine(st.Launcher) || st.Launcher == "dsh" || n.runtimes.launcherRuntime(st.Launcher) != nil)
+		nodeFallback := recorded && !runtimeRecord && strings.HasPrefix(session, st.Launcher+"-")
+		if runtimeRecord || runtimeSessionID(session) && !nodeFallback {
+			return ""
+		}
 		return proto.NotFoundNoTranscript
 	}
 	if runtimeSessionID(session) || !n.recordsLoaded() {

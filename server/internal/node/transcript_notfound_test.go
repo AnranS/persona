@@ -132,6 +132,15 @@ func TestReadsGiveNoReasonTheyCannotKnow(t *testing.T) {
 	if err := read(runtime + subagentSep + "a1"); rpcCode(err) != codeNotFound || notFoundReason(err) != "" {
 		t.Errorf("a runtime's subagent: want not_found without a reason, got %q %v", notFoundReason(err), err)
 	}
+	for _, tc := range []struct{ id, launcher string }{
+		{"session-33333333-2222-3333-4444-555555555555", "dsh"},
+		{"paseo-agent-1", "paseo"},
+	} {
+		n.state.put(tc.id, sessionState{Launcher: tc.launcher, Cwd: home + "/work", StartedAt: time.Now().Add(-time.Hour).UTC()})
+		if err := read(tc.id); rpcCode(err) != codeNotFound || notFoundReason(err) != "" {
+			t.Errorf("a recorded non-assistant runtime session (%s): want not_found without a reason, got %q %v", tc.launcher, notFoundReason(err), err)
+		}
+	}
 
 	const unknown = "99999999-2222-3333-4444-555555555555"
 	n.stateReady = make(chan struct{}) // the first load failed (loading is over) and is tried again
