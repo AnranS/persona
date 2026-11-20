@@ -1710,12 +1710,13 @@ Clearing the main chat's context (**Clear context** in its ⋯ menu and `/clear`
 
 Deleting a Persona chat (#6172, web first) serves everyday people and reuses Menu, Dialog and Button without new tokens. **Delete…** appears in sidebar and History menus. The destructive one-object dialog has **Delete chat** and Cancel, with copy stating that Persona history is removed, task and Agent references and previously saved knowledge remain, and the computer transcript is retained. No physical-file checkbox is offered. It appears for ordinary and archived former main chats when the hub supports it. The main chat uses the existing Clear context action before its archived predecessor can be deleted. Cancel and repeat submission are disabled while the request is pending. Busy or waiting work is refused inline without removing the row; success removes it, while an already open reference shows **Conversation deleted** without a composer.
 
-Removing a link between two Knowledge entries (#10333, web `Relationships.tsx`; iPhone and iPad follow) is rung 2 with a
-narrow default: the dialog names both entries, says both are kept, and says only this link stays out while the rest keeps
-updating. The wider effect, stopping automatic changes to both whole lists, is a `Switch` in the dialog, off by default and
-fixed once the request is sent; turning it on spells out the two lists it protects. What was removed is listed under the
-related entries as **Removed by you**, each with **Allow again** (a secondary small `Button`), so the narrow default
-stays reversible without a toast. Allow again links nothing; it lets Persona decide again.
+Removing a link between two Knowledge entries serves everyday people. The web dialog (`Relationships.tsx`, #10333) and the
+content-height sheet on iPhone and iPad (`KBRemoveLinkSheet`, #10481, rung 3) name both entries and say what stays out.
+**Also stop automatic changes to both lists** starts off each time. Turning on the `Switch` or `Toggle` names both lists
+it will protect. Apple's sheet keeps **Cancel** and the destructive **Remove Link** visible in a vertical stack of themed
+buttons while the explanation scrolls when it needs more room. The link disappears immediately on submit, then the app checks both entries.
+**Removed by you** follows the related entries and offers a secondary **Allow again** action on each row. It makes the
+narrow removal reversible by letting Persona consider the link in a future update.
 
 A blocked terminal card on the web offers **Close Agent**, including when no choices can be parsed from the screen.
 Its footer reuses `Button`, explains that the pending confirmation is cancelled and the conversation kept, and
@@ -2531,6 +2532,8 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
 - [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
+- [ ] Other platforms: done / issue #N / not applicable (reason)
+- [ ] Parity list row updated
 
 **Rules**
 
@@ -2672,6 +2675,24 @@ is what is being chosen; a section with no rows now gets its bar all the same, s
 section that holds what needs the user (Needs you, Stuck) has no switch and says "Always shown" under its name in
 `--ink-3` (3.4: a session that needs the user is never hidden); a hidden one is the same hairline outline as a hidden
 card, "Hidden" under its name. The greeting and its summary are not part of it and stay first. No new token or component.
+
+## Arranging conversations in place (#12017)
+
+The Assistant's ordinary conversations use the same progressive-disclosure pattern in the sidebar's Recent and in All
+chats. **Arrange chats** lives in an existing row/display menu, so an untouched list has no extra handles or buttons.
+While arranging, each row keeps its own content, made `inert`; a grip starts an HTML drag onto another row, and named
+**Move up / Move down** `IconButton`s provide the same action to keyboard and touch users. The edit heading explains
+that the order is shared, with **Use activity time** (Reset with Undo) and **Done**. The main conversation and the
+Directions group stay fixed; a new or not-yet-loaded conversation remains visible in a deterministic place rather than
+being discarded. Android uses the same edit state and actions with its native long-press drag pattern. With no saved
+choice, the existing activity-time groups and rows are exactly as before. This is presentation only: it neither pins a
+conversation nor changes supervision. The shared row and edit heading add no color, spacing or elevation tokens.
+
+## Choosing conversation tag filters (#12018)
+
+All chats keeps its automatic row of one chip per tag in use until the user chooses **Customize tag filters…** in the existing display-options menu. Editing happens above the same list, not in a detached settings page: an exact-tag field and **Add filter**, a small × beside each chosen chip, **Reset to all in-use tags**, and **Done**. Chips still filter the list by exact tag while editing. Removing the selected chip also clears that filter rather than leaving an invisible selection; Reset restores the automatic chips. A deliberately empty custom row says **No tag filters** instead of silently refilling itself. Saves are optimistic and a refusal restores the previous entries and reports the error. The hub stores the exact entries and their order for every client; null means automatic and an empty array remains a real choice.
+
+The filter bar is a controlled component: its caller owns the entries, order, selection and editing state, and the bar owns only its draft and pending action. It can therefore move into another pane without moving conversation-list state with it. Default chips have no persistent editing controls, a fresh install with no tags has no empty row, and no sidebar structure, navigation pattern, token or dialog is added.
 
 ## Values a form fills in by itself (#4975)
 
