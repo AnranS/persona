@@ -207,6 +207,52 @@ func TestReportFromAReportingTodoLeavesQuietNoticesAlone(t *testing.T) {
 	}
 }
 
+func TestReportFromAReportingTodoDefersQuestionInItsConversation(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	if !s.laterBriefed(ctx) {
+		t.Fatal("the fixture needs a facts-enabled daily briefing to reproduce the main-queue diversion")
+	}
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	report := json.RawMessage(`{"kind":"question","text":"哪个分支？","evidence":["https://example.com/mr/7"],"urgent":false}`)
+	res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report)
+	if res.IsError || !strings.Contains(res.Content[0].Text, "Queued without waking your reporting conversation") {
+		t.Fatalf("report: %+v", res)
+	}
+	if got := s.laterOpen(ctx, time.Now()); len(got) != 0 {
+		t.Fatalf("the reporting question entered the main briefing queue: %+v", got)
+	}
+	items, _, err := s.feed(ctx, "lark1", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reports []reportBody
+	for _, item := range items {
+		if item.Kind != feedReport {
+			continue
+		}
+		var body reportBody
+		if err := json.Unmarshal(item.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		reports = append(reports, body)
+	}
+	if len(reports) != 1 || !reports[0].Later || reports[0].Kind != upReportQuestion || reports[0].Text != "哪个分支？" ||
+		len(reports[0].Evidence) != 1 {
+		t.Fatalf("reporting conversation's deferred report: %+v", reports)
+	}
+	if got := reportItems(t, s); len(got) != 0 {
+		t.Fatalf("the main conversation received the deferred question: %+v", got)
+	}
+	if pendingSignals(s) != 0 || len(f.noticesTo("lark1")) != 0 || len(f.notices()) != 0 {
+		t.Fatalf("the non-urgent question woke someone: pending %d, reporter %q, main %q",
+			pendingSignals(s), f.noticesTo("lark1"), f.notices())
+	}
+}
+
 func TestReportFromAReportingTodoRechecksReporterRegistration(t *testing.T) {
 	s, f := reportingWithTask(t)
 	ctx := context.Background()
