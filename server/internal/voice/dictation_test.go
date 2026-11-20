@@ -468,7 +468,11 @@ func TestDictationConnectionLossDoesNotReconnect(t *testing.T) {
 	a, _ := dictationTestReady(t, pl)
 	dictationTestWriteAudio(t, a, voicetest.PCM(script, 0.4))
 
-	dictationTestFatal(t, a, codeUpstreamFailed)
+	failure := dictationTestFatal(t, a, codeUpstreamFailed)
+	message, _ := failure["message"].(string)
+	if strings.Contains(message, "重连") || !strings.Contains(message, "重新开始听写") {
+		t.Fatalf("dictation failure message = %q, want a start-again message with no reconnect claim", message)
+	}
 	dictationTestClosed(t, a)
 	if starts := live.Starts(); len(starts) != 1 {
 		t.Fatalf("upstream starts after connection loss = %d, want exactly 1", len(starts))

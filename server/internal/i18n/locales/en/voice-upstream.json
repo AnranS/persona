@@ -1,3 +1,4 @@
 {
-  "unavailable": "The realtime voice service is unavailable for the moment. Try again later, or pick another voice model ({reason})"
+  "unavailable": "The realtime voice service is unavailable for the moment. Try again later, or pick another voice model ({reason})",
+  "dictation_disconnected": "The voice connection dropped. Start dictation again ({reason})"
 }
