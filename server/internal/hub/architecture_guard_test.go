@@ -322,6 +322,27 @@ func parseHubSnippet(t *testing.T, src string) *ast.File {
 	return f
 }
 
+// Extension scopes decide authorization; they are not a table of routes for the scoped-device matcher to register.
+// Keep this coupling pinned separately so making the general guard more permissive cannot hide it.
+func TestScopedDeviceRouteMatcherDoesNotRangeOverExtensionScopes(t *testing.T) {
+	const file = "scoped_tokens.go"
+	f := hubSources(t)[file]
+	if f == nil {
+		t.Fatalf("%s is missing", file)
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		rng, ok := n.(*ast.RangeStmt)
+		if !ok || !bodyRegistersRangeIdent(rng.Body, rangeNames(rng)) {
+			return true
+		}
+		if sel, ok := rng.X.(*ast.SelectorExpr); ok && selectorString(sel) == "extwire.RouteScopes" {
+			t.Errorf("%s registers scoped-device route patterns by ranging over extwire.RouteScopes; "+
+				"extension scopes are authorization metadata, not a relayed wire table; %s", file, guardDoc)
+		}
+		return true
+	})
+}
+
 func TestRangeOverAnUnknownIdentifierFailsTheGuard(t *testing.T) {
 	f := parseHubSnippet(t, `package hub
 func register(mux interface{ HandleFunc(string, any) }) {
