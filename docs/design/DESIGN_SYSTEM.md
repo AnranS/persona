@@ -2532,6 +2532,8 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
 - [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
 - [ ] Fast, local-first and stateful: local Sending is immediate, hub receipt shows Processing, failure recovers; before/after feedback and execution timings are separate (principle 7).
+- [ ] Other platforms: done / issue #N / not applicable (reason)
+- [ ] Parity list row updated
 
 **Rules**
 
@@ -2673,6 +2675,18 @@ is what is being chosen; a section with no rows now gets its bar all the same, s
 section that holds what needs the user (Needs you, Stuck) has no switch and says "Always shown" under its name in
 `--ink-3` (3.4: a session that needs the user is never hidden); a hidden one is the same hairline outline as a hidden
 card, "Hidden" under its name. The greeting and its summary are not part of it and stay first. No new token or component.
+
+## Arranging conversations in place (#12017)
+
+The Assistant's ordinary conversations use the same progressive-disclosure pattern in the sidebar's Recent and in All
+chats. **Arrange chats** lives in an existing row/display menu, so an untouched list has no extra handles or buttons.
+While arranging, each row keeps its own content, made `inert`; a grip starts an HTML drag onto another row, and named
+**Move up / Move down** `IconButton`s provide the same action to keyboard and touch users. The edit heading explains
+that the order is shared, with **Use activity time** (Reset with Undo) and **Done**. The main conversation and the
+Directions group stay fixed; a new or not-yet-loaded conversation remains visible in a deterministic place rather than
+being discarded. Android uses the same edit state and actions with its native long-press drag pattern. With no saved
+choice, the existing activity-time groups and rows are exactly as before. This is presentation only: it neither pins a
+conversation nor changes supervision. The shared row and edit heading add no color, spacing or elevation tokens.
 
 ## Values a form fills in by itself (#4975)
 
