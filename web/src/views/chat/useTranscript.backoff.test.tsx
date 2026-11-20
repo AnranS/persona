@@ -142,6 +142,63 @@ describe("loading an older page that fails", () => {
 // older page of such a session with an empty one (released apps ask again on an error), which would end paging, draw
 // the chat's start above what is cached and take the error away.
 describe("a history its computer can't find", () => {
+  const missingHistory = () => new ApiError(404, "Persona can't find its history", {
+    error: "Persona can't find its history", code: "not_found", reason: "no_transcript",
+    detail: "transcript for session s1 not found",
+  });
+  const olderPage = () => ({ items: [{ id: "older#0", seq: 5, role: "user", kind: "text", text: "older" }], has_more: true });
+
+  it("does not start an older-page read while a latest-page retry is unanswered", async () => {
+    let latest!: (page: ItemsPage) => void;
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? Promise.resolve(olderPage())
+      : new Promise<ItemsPage>((resolve) => { latest = resolve; }));
+    await act(async () => { tr.current.reload(); await Promise.resolve(); });
+    await loadEarlier();
+    expect(older()).toBe(0);
+
+    await act(async () => { latest(newest); await Promise.resolve(); });
+    await loadEarlier();
+    expect(older()).toBe(1);
+  });
+
+  it("does not apply an in-flight empty older page after the latest page reports missing history", async () => {
+    let answerOlder!: (page: ItemsPage) => void;
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? new Promise<ItemsPage>((resolve) => { answerOlder = resolve; })
+      : Promise.reject(missingHistory()));
+    let read!: Promise<symbol | undefined>;
+    act(() => { read = tr.current.loadEarlier(); });
+    expect(older()).toBe(1);
+    await act(async () => { tr.current.reload(); await Promise.resolve(); });
+    const message = tr.current.error;
+    expect(message).not.toBe("");
+
+    await act(async () => { answerOlder({ items: [], has_more: false }); await read; });
+    expect({ error: tr.current.error, hasMore: tr.current.hasMore }).toEqual({ error: message, hasMore: true });
+  });
+
+  it("keeps the missing-history error and older-page fence until a retry succeeds", async () => {
+    api.mockImplementation(async () => { throw missingHistory(); });
+    await act(async () => { tr.current.reload(); });
+    const message = tr.current.error;
+    expect(message).not.toBe("");
+
+    let latest!: (page: ItemsPage) => void;
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? Promise.resolve(olderPage())
+      : new Promise<ItemsPage>((resolve) => { latest = resolve; }));
+    await act(async () => { tr.current.reload(); await Promise.resolve(); });
+    expect({ error: tr.current.error, hasMore: tr.current.hasMore }).toEqual({ error: message, hasMore: true });
+    await loadEarlier();
+    expect(older()).toBe(0);
+
+    await act(async () => { latest(newest); await Promise.resolve(); });
+    expect(tr.current.error).toBe("");
+    await loadEarlier();
+    expect(older()).toBe(1);
+  });
+
   it("reads no older page and keeps the error", async () => {
     api.mockImplementation(async (path: string) => {
       if (path.includes("before_seq=")) return { items: [], has_more: false };
