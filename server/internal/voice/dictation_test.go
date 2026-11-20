@@ -301,7 +301,7 @@ func TestDictationSessionShape(t *testing.T) {
 }
 
 func TestDictationTranscriptsSuppressReplies(t *testing.T) {
-	script := voicetest.Script{FinalCaptions: true, ReplyAudio: true, ReplyCalls: true, ReplyCancelled: true, Sentences: []voicetest.Line{
+	script := voicetest.Script{FinalCaptions: true, StandardCaptions: true, ReplyAudio: true, ReplyCalls: true, ReplyCancelled: true, Sentences: []voicetest.Line{
 		{Start: 0.2, End: 1.4, Text: "Alpha first dictated sentence."},
 		{Start: 2.0, End: 3.2, Text: "Bravo second dictated sentence."},
 		{Start: 3.8, End: 5.0, Text: "Charlie third dictated sentence."},
@@ -352,6 +352,42 @@ func TestDictationOneSessionPerStart(t *testing.T) {
 	}
 }
 
+func TestDictationCaptionRefusalUsesStandardTranscripts(t *testing.T) {
+	script := voicetest.Script{RefuseCaptions: true, StandardCaptions: true, Sentences: []voicetest.Line{
+		{Start: 0.2, End: 1.4, Text: "Standard transcript after caption refusal."},
+	}}
+	live := voicetest.NewLive(t, script)
+	pl, _ := dictationTestPlugin(t, live)
+	a, _ := dictationTestReady(t, pl)
+
+	starts := live.Starts()
+	if len(starts) != 2 {
+		t.Fatalf("caption refusal caused %d starts, want the refused start and one standard-transcript fallback", len(starts))
+	}
+	for i, start := range starts {
+		dictationTestAssertShape(t, start, true)
+		if _, asked := start["extensions"]; asked != (i == 0) {
+			t.Errorf("start %d extensions = %v, asked %v", i+1, start["extensions"], i == 0)
+		}
+	}
+	dictationTestWriteAudio(t, a, voicetest.PCM(script, 2.2))
+	dictationTestFinal(t, a, "item-2-1", "Standard transcript after caption refusal.")
+}
+
+func TestDictationRequiresLiveUpstream(t *testing.T) {
+	live := voicetest.NewLive(t, voicetest.Script{})
+	hub := newFakeHub(t)
+	pl := testPlugin(t, Config{Default: "codex/m1", Providers: []Provider{{
+		ID: "codex", URL: live.URL(), Dialect: DialectCodex, Key: "k", Models: []string{"m1"},
+	}}}, hub.server(t))
+	a := dialApp(t, pl, dictationTestStart())
+	dictationTestFatal(t, a, codeNoUpstream)
+	dictationTestClosed(t, a)
+	if handshakes := live.Handshakes(); handshakes != 0 {
+		t.Fatalf("dictation without a live upstream made %d handshakes, want 0", handshakes)
+	}
+}
+
 func TestDictationTextOnlyRefusal(t *testing.T) {
 	script := voicetest.Script{FinalCaptions: true, TextOnlyRefused: true, Sentences: []voicetest.Line{
 		{Start: 0.2, End: 1.4, Text: "Fallback first dictated sentence."},
@@ -380,16 +416,18 @@ func TestDictationUpstreamFailure(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		script voicetest.Script
+		code   string
 		starts int
 	}{
-		{name: "connection unavailable", script: voicetest.Script{Reject: http.StatusServiceUnavailable}, starts: 0},
-		{name: "session start unavailable", script: voicetest.Script{RefuseVerbatim: 1}, starts: 1},
+		{name: "connection unavailable", script: voicetest.Script{Reject: http.StatusServiceUnavailable}, code: codeUpstreamUnavailable, starts: 0},
+		{name: "session start unavailable", script: voicetest.Script{RefuseVerbatim: 1}, code: codeUpstreamUnavailable, starts: 1},
+		{name: "generic startup refusal", script: voicetest.Script{Reject: http.StatusBadRequest}, code: codeUpstreamFailed, starts: 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			live := voicetest.NewLive(t, tt.script)
 			pl, hub := dictationTestPlugin(t, live)
 			a := dialApp(t, pl, dictationTestStart())
-			dictationTestFatal(t, a, codeUpstreamUnavailable)
+			dictationTestFatal(t, a, tt.code)
 			dictationTestClosed(t, a)
 			if starts := live.Starts(); len(starts) != tt.starts {
 				t.Fatalf("upstream starts = %d, want %d (no silent retry sessions)", len(starts), tt.starts)

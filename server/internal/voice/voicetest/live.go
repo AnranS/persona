@@ -68,6 +68,9 @@ type Script struct {
 	// FinalCaptions: a verbatim session granted the caption extension writes a whole, final user caption at each
 	// turn's end, using the same item id as that turn's interim captions.
 	FinalCaptions bool
+	// StandardCaptions: a verbatim session also writes a whole standard input transcript delta at each turn's end,
+	// whether or not it granted the interim-caption extension. With both, a client must choose one representation.
+	StandardCaptions bool
 	// ReplyAudio: a verbatim session also writes generated output audio with each reply.
 	ReplyAudio bool
 	// ReplyCalls: a verbatim session also writes a client delegation and its function call with each reply.
@@ -625,7 +628,7 @@ func (c *conn) sentenceCaption(whole bool) {
 // turnCaption sends a verbatim session's caption of its turn: an item per turn, as the measured service's verbatim
 // sessions with the extension had (an item per reply). Interim captions contain as much as the session has heard;
 // a final caption contains the whole turn and keeps the same item id.
-func (c *conn) turnCaption(final bool) {
+func (c *conn) turnText(final bool) string {
 	var b strings.Builder
 	for k, i := range c.idx {
 		text := c.text(i)
@@ -634,7 +637,17 @@ func (c *conn) turnCaption(final bool) {
 		}
 		b.WriteString(text)
 	}
-	c.sendCaption(fmt.Sprintf("item-%d-%d", c.n, c.item), c.sessionMS(c.from), b.String(), final)
+	return b.String()
+}
+
+func (c *conn) turnCaption(final bool) {
+	c.sendCaption(fmt.Sprintf("item-%d-%d", c.n, c.item), c.sessionMS(c.from), c.turnText(final), final)
+}
+
+// standardCaption sends the same turn through the standard delta representation, with the same upstream item id.
+func (c *conn) standardCaption() {
+	c.send(map[string]any{"type": "session.input_transcript.delta", "item_id": fmt.Sprintf("item-%d-%d", c.n, c.item),
+		"delta": c.turnText(true)})
 }
 
 // heardOf is as much of sentence i's text as the turn has heard of it.
@@ -677,6 +690,9 @@ func (c *conn) endTurn() {
 	}
 	if c.partials && c.l.s.FinalCaptions {
 		c.turnCaption(true)
+	}
+	if c.l.s.StandardCaptions {
+		c.standardCaption()
 	}
 	for _, i := range c.idx {
 		if c.replied[i] || i < 0 || i >= len(c.l.s.Sentences) {
