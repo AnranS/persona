@@ -80,6 +80,16 @@ func (s *Service) progressAfter(machine, session string, at time.Time) bool {
 	return w != nil && w.progressAt.After(at)
 }
 
+// timeoutActivityAfter reports activity that should cancel a recovered close. Polling during no_progress is still not
+// progress and must not restart the wait after a transient stop failure; silent-stall activity and real progress count.
+func (s *Service) timeoutActivityAfter(t Todo, c proto.Session, intent, now time.Time) bool {
+	if s.progressAfter(c.MachineID, c.SessionID, intent) {
+		return true
+	}
+	_, spinning := s.noProgressSignal(t, c, now)
+	return !spinning && stalledSessionMoved(c).After(intent)
+}
+
 // closeStalledTask records timeout_closing before stopping every current terminal Agent of task. If a response or the
 // final ledger write is lost, that durable intent completes only after the retained session is observed stopped.
 // Runtime-owned sessions never enter this path and keep their ordinary stalled / no_progress reminders.
@@ -181,7 +191,7 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 			continue
 		}
 		if !timeoutOwnedTerminal(live) || live.PaneID == "" || live.State != proto.StateWorking || live.PendingInteractions > 0 ||
-			recovering && (live.UpdatedAt.After(task.Supervision.UpdatedAt) || s.progressAfter(live.MachineID, live.SessionID, task.Supervision.UpdatedAt)) {
+			recovering && s.timeoutActivityAfter(current, live, task.Supervision.UpdatedAt, now) {
 			cancelClosing()
 			return
 		}

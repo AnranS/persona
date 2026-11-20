@@ -261,6 +261,38 @@ func TestTaskStalledStopFailureDoesNotMarkTimedOut(t *testing.T) {
 	}
 }
 
+func TestTaskStalledPollingStopFailureRetriesWithoutReset(t *testing.T) {
+	s, f, todo, agent, base := stalledTaskFixture(t, 0)
+	ctx := context.Background()
+	for i := 0; i <= 61; i++ {
+		now := base.Add(time.Duration(i) * time.Minute)
+		f.setSessions("box", stalledPolling(agent, base, i))
+		if i == 60 {
+			f.retireErr = errors.New("transient stop failure")
+		} else if i == 61 {
+			f.retireErr = nil
+		}
+		s.superviseWatch(ctx, now)
+		calls := retireCalls(f)
+		switch i {
+		case 60:
+			if len(calls) != 1 {
+				t.Fatalf("minute %d: first stop calls = %v, want one", i, calls)
+			}
+			if got := todoNow(s, todo.ID); got.Supervision.state(got) != "timeout_closing" {
+				t.Fatalf("failed stop did not retain its close intent: %+v", got.Supervision)
+			}
+		case 61:
+			if len(calls) != 2 {
+				t.Fatalf("minute %d: stop calls = %v, polling restarted the full timeout", i, calls)
+			}
+			if got := todoNow(s, todo.ID); got.Supervision.state(got) != "timed_out" {
+				t.Fatalf("successful retry did not mark the task timed out: %+v", got.Supervision)
+			}
+		}
+	}
+}
+
 // Runtime-owned sessions retain the existing stalled reminder, but this mechanism neither stops them nor marks their
 // tasks timed out.
 func TestTaskStalledRuntimeOnlyReminds(t *testing.T) {
