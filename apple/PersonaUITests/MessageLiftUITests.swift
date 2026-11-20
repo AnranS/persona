@@ -973,6 +973,7 @@ final class MessageLiftUITests: XCTestCase {
         let y = l.minY > 140 ? l.minY / 2 : (l.maxY + app.frame.maxY) / 2
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width * 0.1, dy: y)).tap()
         if lifted.exists { XCTAssertTrue(lifted.waitForNonExistence(timeout: 3), "\(name): the lift did not close") }
+        XCTAssertFalse(app.buttons["chat.pickCancel"].exists, "\(name): the scrim tap entered Select Messages")
     }
 
     /// Where to press words in the chat: down to a line above a folded message's Expand, which sits under what shows of
