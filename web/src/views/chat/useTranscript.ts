@@ -103,6 +103,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [loading, setLoading] = useState(!initial);
   const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
+  const latestReadPending = useRef(false);
   // The latest page's read said its computer can't find this history (#11450): no older page is read, which would
   // answer an empty one, end paging and take the error away.
   const historyMissing = useRef(false);
@@ -516,11 +517,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const before = history.current;
       const version = ++pageRequest;
       ready = false;
+      latestReadPending.current = true;
       if (!itemsRef.current.length && !liveRaw.current) setLoading(true);
       clearTimeout(refused);
       refused = undefined;
-      setError("");
-      historyMissing.current = false;
       try {
         const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}`, { signal: ctl.signal });
         if (dead || version !== pageRequest) return;
@@ -529,6 +529,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           return;
         }
         commitPage(p);
+        historyMissing.current = false;
+        setError("");
       } catch (e) {
         if (dead || version !== pageRequest) return;
         if (e instanceof ApiError && e.code === "conversation_deleted") { markConversationDeleted(mid, sid); return; }
@@ -538,7 +540,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           endRefused();
         } else if (!opts.starting) {
           const text = sessionLoadError(errorText(e));
-          historyMissing.current = sessionHistoryNotFound(e);
+          if (sessionHistoryNotFound(e)) historyMissing.current = true;
           if (isNotLoaded(e)) refused = window.setTimeout(() => endRefused(text), READ_TIMEOUT_MS);
           else setError(text);
         }
@@ -547,11 +549,15 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           if (!refused) { setLoading(false); setFirstRead(true); }
           lastArrival = Date.now();
           ready = true;
+          latestReadPending.current = false;
         }
       }
       if (!dead && version === pageRequest && (openWatch || before !== history.current)) subscribe();
     }
     reread.current = () => { void readPage(); };
+    // A different conversation starts clean; a retry of this conversation keeps its error until a read succeeds.
+    historyMissing.current = false;
+    setError("");
     void readPage();
 
     return () => {
@@ -582,7 +588,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     if (replacing.current || conversationDeleted(mid, sid)) return Promise.resolve(undefined);
     if (earlierInFlight.current) return earlierInFlight.current.promise;
     const delay = earlierRetryAt.current - Date.now();
-    if (!itemsRef.current.length || !hasMoreRef.current || historyMissing.current || (delay > 0 && !options?.waitForRetry)) return Promise.resolve(undefined);
+    if (!itemsRef.current.length || !hasMoreRef.current || latestReadPending.current || historyMissing.current || (delay > 0 && !options?.waitForRetry)) return Promise.resolve(undefined);
     const read: EarlierRead = { controller: new AbortController(), promise: Promise.resolve(undefined) };
     earlierInFlight.current = read;
     setLoadingEarlier(true);
@@ -591,11 +597,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const current = () => earlierInFlight.current === read && !signal.aborted;
       try {
         if (delay > 0) await waitForEarlierRetry(delay, signal);
-        if (!current() || !hasMoreRef.current) return;
+        if (!current() || !hasMoreRef.current || latestReadPending.current || historyMissing.current) return;
         const first = itemsRef.current[0];
         if (!first) return;
         const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`, { signal });
-        if (!current()) return;
+        if (!current() || latestReadPending.current || historyMissing.current) return;
         if (p.history && history.current && p.history !== history.current) {
           rewrite.current(p.history);
           return;
@@ -611,7 +617,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           return read.page;
         }
       } catch (e) {
-        if (!current()) return;
+        if (!current() || latestReadPending.current || historyMissing.current) return;
         // Kept in state for the caller to show; the next try waits instead of firing on every scroll tick.
         earlierWait.current = Math.min(earlierWait.current ? earlierWait.current * 2 : EARLIER_RETRY_MS, EARLIER_RETRY_MAX_MS);
         earlierRetryAt.current = Date.now() + earlierWait.current;
