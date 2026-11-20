@@ -967,10 +967,13 @@ final class MessageLiftUITests: XCTestCase {
         return lifted.waitForExistence(timeout: 2) && bar.exists
     }
 
-    /// A tap beside the lifted message puts it back (nothing is selected in it).
+    /// A tap on the scrim puts it back (nothing is selected in it). Below the message, clear the whole bar: Select
+    /// Messages extends past the lifted message's frame.
     @MainActor private func putTheLiftBack(_ name: String) {
         let l = lifted.frame
-        let y = l.minY > 140 ? l.minY / 2 : (l.maxY + app.frame.maxY) / 2
+        let select = app.buttons["chat.selectMessages"]
+        let bottom = select.exists ? max(l.maxY, select.frame.maxY) : l.maxY
+        let y = l.minY > 140 ? l.minY / 2 : (bottom + app.frame.maxY) / 2
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.width * 0.1, dy: y)).tap()
         if lifted.exists { XCTAssertTrue(lifted.waitForNonExistence(timeout: 3), "\(name): the lift did not close") }
         XCTAssertFalse(app.buttons["chat.pickCancel"].exists, "\(name): the scrim tap entered Select Messages")
