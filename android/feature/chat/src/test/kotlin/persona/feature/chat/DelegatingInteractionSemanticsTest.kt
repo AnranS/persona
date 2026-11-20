@@ -163,9 +163,8 @@ class DelegatingInteractionSemanticsTest {
         rule.onAllNodesWithText("Assistant's pick", useUnmergedTree = true).assertCountEquals(1)
         rule.onNode(hasText("1. pgx") and hasClickAction()).assertIsNotSelected()
 
-        // Turn the page only after the test picks the first answer; the second recommendation is not picked for us.
+        // Android advances after a single-choice pick; the second recommendation is not picked for us.
         rule.onNodeWithText("1. pgx").performClick()
-        rule.onNodeWithText("Next").performClick()
         rule.onNodeWithText("Run tests first?").assertExists()
         rule.onAllNodesWithText("Assistant's pick", useUnmergedTree = true).assertCountEquals(1)
         rule.onNode(hasText("2. No") and hasClickAction()).assertIsNotSelected()
