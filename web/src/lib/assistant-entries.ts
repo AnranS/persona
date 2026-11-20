@@ -1,9 +1,9 @@
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
-import { decisionDismissed, reviewState } from "./supervision";
+import { decisionDismissed, linkedParkInteraction, reviewState } from "./supervision";
 import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, linkedParkInteraction, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
@@ -131,7 +131,7 @@ export function decisionLaterKey(todo: Todo): string {
 export function assistantEntries(input: AssistantEntriesInput): AssistantEntries {
   const { conversation, main, todos, sessions, interactions, plans, feed } = input;
   const now = input.now ?? Date.now();
-  const lookup = withInteractionLookup(input.lookup ?? makeSessionLookup(sessions), interactions);
+  const lookup = input.lookup ?? makeSessionLookup(sessions);
   const isMain = !!main && main === conversation;
   const byTodo = new Map(todos.map((todo) => [todo.id, todo]));
   // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
@@ -179,7 +179,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const own = active.filter((a) => homeOf(a.machine_id, a.session_id) === todo.id);
     // what the task waits on the user for is its own Agents' (an Agent another task holds asks there)
     const status = own.length < active.length ? withNeeds(entryStatus(todo, lookup, plans), todoStatus({ ...todo, agents: own }, lookup)) : entryStatus(todo, lookup, plans);
-    const linked = linkedParkInteraction(todo, lookup);
+    const linked = linkedParkInteraction(todo, interactions);
     const ownAsks = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
     const asks = linked && !ownAsks.some((ix) => ix.id === linked.id) ?
       [...ownAsks, linked].sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id)) : ownAsks;

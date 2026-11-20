@@ -1,6 +1,6 @@
 import { formatDate, t } from "../i18n";
 import { currentHeaders, noteItemManager } from "./manager-choice";
-import { acceptanceStands, reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, linkedParkOwnerAsk, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
 import type { TodoSummary } from "./todo-view-wire";
@@ -11,7 +11,7 @@ import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import type { AgentState, Interaction, Machine, Session } from "./types";
+import type { AgentState, Machine, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
 import { stateName, waitName } from "./state-labels";
@@ -342,10 +342,7 @@ export function isRemovable(status: TodoStatus): boolean {
   return status !== "working" && status !== "needs_you";
 }
 
-export type SessionLookup = ((mid: string, sid: string) => Session | undefined) & {
-  /** Exact pending-card lookup, present when the caller supplied its current interaction list. */
-  interaction?: (id: string) => Interaction | undefined;
-};
+export type SessionLookup = (mid: string, sid: string) => Session | undefined;
 
 /** The hub closed it because its task's work was judged finished; reopening undoes it (docs/assistant/todos.md "Automatic completion"). */
 export function isAutoDone(todo: Todo): boolean {
@@ -377,37 +374,13 @@ export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 
-export function withInteractionLookup(base: SessionLookup, interactions: readonly Interaction[]): SessionLookup {
-  const lookup: SessionLookup = (mid: string, sid: string) => base(mid, sid);
-  // Resolve only when a park carries an explicit ID; ordinary status reads do not scan the pending cards.
-  lookup.interaction = (id) => interactions.find((ix) => ix.id === id);
-  return lookup;
-}
-
-export function makeSessionLookup(sessions: Session[] | Record<string, Session[]>, interactions?: readonly Interaction[]): SessionLookup {
-  let base: SessionLookup;
+export function makeSessionLookup(sessions: Session[] | Record<string, Session[]>): SessionLookup {
   if (Array.isArray(sessions)) {
     const map = new Map<string, Session>();
     for (const s of sessions) map.set(`${s.machine_id}/${s.session_id}`, s);
-    base = (mid, sid) => map.get(`${mid}/${sid}`);
-  } else {
-    base = (mid, sid) => (sessions[mid] ?? []).find((s) => s.session_id === sid);
+    return (mid, sid) => map.get(`${mid}/${sid}`);
   }
-  return interactions ? withInteractionLookup(base, interactions) : base;
-}
-
-function parkInteractionID(todo: Todo): string | undefined {
-  const evidence = todo.supervision?.parked?.evidence;
-  if (todo.done_at || todo.supervision?.state !== "parked" || evidence?.kind !== "external_event") return undefined;
-  return evidence.interaction_id?.trim() || undefined;
-}
-
-/** The current pending interaction an external-event park names, only when its exact worker belongs to this task. */
-export function linkedParkInteraction(todo: Todo, lookup: SessionLookup | undefined): Interaction | undefined {
-  const id = parkInteractionID(todo);
-  const ix = id ? lookup?.interaction?.(id) : undefined;
-  if (!id || !ix) return undefined;
-  return (todo.agents ?? []).some((a) => !a.dismissed_at && !a.start_error && a.machine_id === ix.machine_id && a.session_id === ix.session_id) ? ix : undefined;
+  return (mid, sid) => (sessions[mid] ?? []).find((s) => s.session_id === sid);
 }
 
 /**
@@ -427,10 +400,7 @@ export function linkedParkInteraction(todo: Todo, lookup: SessionLookup | undefi
 export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   if (todo.start_error) return "failed";
   if (todo.done_at) return "done";
-  const linkedID = parkInteractionID(todo);
-  if (linkedParkInteraction(todo, lookup)) return "needs_you";
-  // A manager's authoritative view covers secondary surfaces without a pending-card lookup; a present empty lookup wins.
-  if (linkedID && !lookup?.interaction && todo.view?.asks?.some((ask) => ask.interaction === linkedID)) return "needs_you";
+  if (linkedParkOwnerAsk(todo)) return "needs_you";
   const active = (todo.agents ?? []).filter((a) => !a.released_at);
   if (active.length === 0) return "not_started";
 

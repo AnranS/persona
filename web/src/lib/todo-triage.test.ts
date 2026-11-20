@@ -66,12 +66,10 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
           evidence: { kind: "external_event", target: "Read-only permission", wake: "The owner answers", interaction_id: ix.id } },
       },
     });
-    const pending = makeSessionLookup([session("worker", "idle")], [ix]);
-    expect(triage(td, pending, NOW)).toMatchObject({ section: "waiting", rule: "agent_asks" });
-    expect(triage(td, makeSessionLookup([session("worker", "idle")], []), NOW)).toMatchObject({ section: "parked", rule: "parked" });
     const authoritative = { ...td, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0,
       asks: [{ id: "run:worker", kind: "question", home: "run", interaction: ix.id }] } } as Todo;
-    expect(at(authoritative)).toMatchObject({ section: "waiting", rule: "agent_asks" });
+    expect(triage(authoritative, makeSessionLookup([session("worker", "idle")]), NOW)).toMatchObject({ section: "waiting", rule: "agent_asks" });
+    expect(triage(td, makeSessionLookup([session("worker", "idle")]), NOW)).toMatchObject({ section: "parked", rule: "parked" });
   });
 
   it.each([false, true])("keeps a stopped parked task unfinished (seen: %s)", (seen) => {
