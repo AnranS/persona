@@ -56,7 +56,7 @@ func taskHandoffTestStart(t *testing.T, s *Service, f *fakeHub, tool string) str
 	t.Helper()
 	args := json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"Inspect the regression"}`)
 	if tool == "task_plan" {
-		args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"box","cwd":"/code/app","prompt":"Inspect the regression","permission":"bypassPermissions","user_requested":true}]}`)
+		args = json.RawMessage(`{"tasks":[{"title":"Inspect","machine":"box","cwd":"/code/app","prompt":"Inspect the regression","role":"worker","permission":"bypassPermissions","user_requested":true}]}`)
 	}
 	return taskHandoffTestCall(t, s, f, tool, args)
 }
