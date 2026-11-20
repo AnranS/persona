@@ -5,16 +5,21 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/api";
+import type { ItemsEvent } from "../../lib/store";
 import type { ItemsPage } from "../../lib/types";
 import { useTranscript, type Transcript } from "./useTranscript";
 
 const api = vi.hoisted(() => vi.fn());
-const session = vi.hoisted(() => ({ reconnected: undefined as (() => void) | undefined }));
+const session = vi.hoisted(() => ({
+  reconnected: undefined as (() => void) | undefined,
+  items: undefined as ((event: ItemsEvent) => void) | undefined,
+}));
 vi.mock("../../lib/api", async (importOriginal) => ({ ...await importOriginal<typeof import("../../lib/api")>(), api }));
 vi.mock("../../lib/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/store")>(),
-  listenSession: (_mid: string, _sid: string, handlers: { reconnected?: () => void }) => {
+  listenSession: (_mid: string, _sid: string, handlers: { reconnected?: () => void; items?: (event: ItemsEvent) => void }) => {
     session.reconnected = handlers.reconnected;
+    session.items = handlers.items;
     return () => {};
   },
   send: () => {},
@@ -29,8 +34,8 @@ let root: Root;
 let host: HTMLDivElement;
 const tr: { current: Transcript } = { current: null! };
 
-function Probe({ sid = "s1" }: { sid?: string }) {
-  tr.current = useTranscript("hub", sid);
+function Probe({ sid = "s1", starting = false }: { sid?: string; starting?: boolean }) {
+  tr.current = useTranscript("hub", sid, { starting });
   return null;
 }
 
@@ -228,6 +233,47 @@ describe("a history its computer can't find", () => {
 
     await act(async () => { latest(newest); await Promise.resolve(); });
     expect(tr.current.error).toBe("");
+    await loadEarlier();
+    expect(older()).toBe(1);
+  });
+
+  it("unblocks older pages after an authoritative socket replay", async () => {
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? Promise.resolve(olderPage())
+      : Promise.reject(new ApiError(404, "runtime away", { code: "not_found", detail: "runtime away" })));
+    await act(async () => { tr.current.reload(); });
+    expect(tr.current.error).not.toBe("");
+
+    act(() => { session.items?.({ machine_id: "hub", session_id: "s1", items: newest.items, has_more: true, to_seq: 10 } as ItemsEvent); });
+    expect(tr.current.error).toBe("");
+    await loadEarlier();
+    expect(older()).toBe(1);
+  });
+
+  it("unblocks older pages when a replacement replay recovers a failed read", async () => {
+    api.mockResolvedValue({ ...newest, history: "v1" });
+    await act(async () => { tr.current.reload(); });
+    let failLatest!: (error: Error) => void;
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? Promise.resolve(olderPage())
+      : new Promise<ItemsPage>((_resolve, reject) => { failLatest = reject; }));
+    act(() => { session.items?.({ machine_id: "hub", session_id: "s1", history: "v2", items: [] } as ItemsEvent); });
+    act(() => { session.items?.({ machine_id: "hub", session_id: "s1", history: "v2", items: newest.items, has_more: true, to_seq: 10 } as ItemsEvent); });
+    await act(async () => { failLatest(new Error("offline")); await Promise.resolve(); });
+    expect(tr.current.error).toBe("");
+
+    await loadEarlier();
+    expect(older()).toBe(1);
+  });
+
+  it("unblocks older pages after a transient read error while starting", async () => {
+    await act(async () => root.render(<Probe sid="s2" starting />));
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? Promise.resolve(olderPage())
+      : Promise.reject(new Error("offline")));
+    await act(async () => { tr.current.reload(); });
+    await act(async () => root.render(<Probe sid="s2" starting={false} />));
+
     await loadEarlier();
     expect(older()).toBe(1);
   });

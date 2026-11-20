@@ -244,6 +244,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       setLoading(false);
       setFirstRead(true);
     };
+    const recovered = () => {
+      historyMissing.current = false;
+      setError("");
+    };
     // The newest page may start after everything the cached one holds, with turns missing between them: showing both
     // would hide that hole, so the page takes over and older history loads on scroll.
     const skipsCached = (page: Item[]) => page.length > 0 && page[0].seq > (cached?.items.at(-1)?.seq ?? Infinity);
@@ -435,7 +439,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const replay = e.has_more !== undefined && authoritative;
       if (e.has_more !== undefined) {
         latestMore = e.has_more;
-        setError("");
+        recovered();
         // The first replay can stand in for a failed read. Later replays describe only the newest two turns.
         const skips = !replay && skipsCached(batch);
         if (!replay) updateHasMore(latestMore);
@@ -496,6 +500,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (replacing.current || changed) endLive();
       replacing.current = false;
       authoritative = true;
+      recovered();
       replacementReplay = undefined;
       pendingItems = [];
       pendingHistory = "";
@@ -529,11 +534,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           return;
         }
         commitPage(p);
-        historyMissing.current = false;
-        setError("");
       } catch (e) {
         if (dead || version !== pageRequest) return;
         if (e instanceof ApiError && e.code === "conversation_deleted") { markConversationDeleted(mid, sid); return; }
+        if (opts.starting) recovered();
         // A subscribe may already have supplied the page while the HTTP read was pending.
         if (replacing.current && replacementReplay) {
           commitPage(replacementReplay);
