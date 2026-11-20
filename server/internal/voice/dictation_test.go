@@ -422,6 +422,13 @@ func TestDictationConnectionLossDoesNotReconnect(t *testing.T) {
 	if handshakes := live.Handshakes(); handshakes != 1 {
 		t.Fatalf("upstream handshakes after connection loss = %d, want exactly 1 (no reconnect)", handshakes)
 	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-live.Done(1):
+	case <-timer.C:
+		t.Fatal("the upstream session did not finish closing after the dictation ended")
+	}
 	if open := live.Open(); open != 0 {
 		t.Fatalf("open upstream sessions after fatal connection loss = %d, want 0", open)
 	}

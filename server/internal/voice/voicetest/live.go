@@ -220,6 +220,17 @@ func (l *Live) Handshakes() int {
 	return l.handshakes
 }
 
+// Done is closed after session n (1-based, in connection order) has ended and is no longer counted by Open.
+func (l *Live) Done(n int) <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n < 1 || n > len(l.conns) {
+		l.t.Fatalf("session %d does not exist (%d connections)", n, len(l.conns))
+		return nil
+	}
+	return l.conns[n-1].done
+}
+
 // Audio is the seconds of audio each session got, in the order they connected.
 func (l *Live) Audio() []float64 {
 	l.mu.Lock()
