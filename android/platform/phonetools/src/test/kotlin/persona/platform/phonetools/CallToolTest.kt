@@ -13,7 +13,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -92,7 +92,7 @@ class CallToolTest {
         assertFalse(message, message.contains("uncertain", ignoreCase = true) || message.contains("不确定"))
     }
 
-    @Test fun validDefaultAndPhoneKindsOnlyHandTheSanitizedNumberToTheDialer() = runTest {
+    @Test fun validDefaultAndPhoneKindsOnlyHandTheSanitizedNumberToTheDialer() = runBlocking {
         installDialer()
         val confirmations = mutableListOf<String>()
         val registry = registry(confirmations = confirmations)
@@ -119,7 +119,7 @@ class CallToolTest {
         assertNoIntent()
     }
 
-    @Test fun blankAlphabeticShortAndMultipleNumbersFailBeforeConfirmationOrIntent() = runTest {
+    @Test fun blankAlphabeticShortAndMultipleNumbersFailBeforeConfirmationOrIntent() = runBlocking {
         installDialer()
         val confirmations = mutableListOf<String>()
         val registry = registry(confirmations = confirmations)
@@ -139,7 +139,7 @@ class CallToolTest {
         assertNoIntent()
     }
 
-    @Test fun faceTimeKindsFailAsUnsupportedWithoutAnIntent() = runTest {
+    @Test fun faceTimeKindsFailAsUnsupportedWithoutAnIntent() = runBlocking {
         val registry = registry()
         for (kind in listOf("facetime", "facetime_audio")) {
             val result = registry.call(PhoneToolCall(kind, "phone_call_start", args("me@example.com", kind)))
@@ -152,13 +152,13 @@ class CallToolTest {
         assertNoIntent()
     }
 
-    @Test fun missingDialerFailsCleanlyWithoutSuccess() = runTest {
+    @Test fun missingDialerFailsCleanlyWithoutSuccess() = runBlocking {
         val result = registry().call(PhoneToolCall("no-dialer", "phone_call_start", args(RAW_NUMBER)))
         assertCleanHandoffFailure(result)
         assertNoIntent()
     }
 
-    @Test fun dialerLaunchFailureFailsCleanlyWithoutSuccess() = runTest {
+    @Test fun dialerLaunchFailureFailsCleanlyWithoutSuccess() = runBlocking {
         installDialer() // Resolution succeeds; the subsequent launch itself fails.
         val failingContext = object : ContextWrapper(context) {
             override fun getApplicationContext(): Context = this
@@ -176,7 +176,7 @@ class CallToolTest {
         assertNoIntent()
     }
 
-    @Test fun backgroundCallIsRejectedBeforeConfirmationOrIntent() = runTest {
+    @Test fun backgroundCallIsRejectedBeforeConfirmationOrIntent() = runBlocking {
         installDialer()
         val confirmations = mutableListOf<String>()
         val registry = registry(foreground = { false }, confirmations = confirmations)
