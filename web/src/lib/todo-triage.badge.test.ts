@@ -90,6 +90,7 @@ describe("the sidebar's To-dos badge, the issue's acceptance (#11085)", () => {
     expect(waitsOnOwner(pendingTodo, triage(pendingTodo, pending, NOW))).toBe("agent_asks");
     expect([...ownerBadge([pendingTodo], pending, NOW)]).toEqual(["linked"]);
     const resolved = makeSessionLookup(sessions);
+    expect(waitsOnOwner(pendingTodo, triage(pendingTodo, makeSessionLookup(sessions, []), NOW))).toBeNull();
     expect(waitsOnOwner(linked, triage(linked, resolved, NOW))).toBeNull();
     // The existing no-Agent-on-it badge rule still counts the parked task once; the link does not change that policy.
     expect([...ownerBadge([linked], resolved, NOW)]).toEqual(["linked"]);

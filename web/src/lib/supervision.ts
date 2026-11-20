@@ -40,7 +40,7 @@ export interface ParkEvidence {
   recorded_by?: string;
 }
 
-function parkInteractionID(todo: Todo): string | undefined {
+export function parkInteractionID(todo: Todo): string | undefined {
   const evidence = todo.supervision?.parked?.evidence;
   if (todo.done_at || todo.supervision?.state !== "parked" || evidence?.kind !== "external_event") return undefined;
   return evidence.interaction_id?.trim() || undefined;

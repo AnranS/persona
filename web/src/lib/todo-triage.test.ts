@@ -69,6 +69,9 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     const authoritative = { ...td, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0,
       asks: [{ id: "run:worker", kind: "question", home: "run", interaction: ix.id }] } } as Todo;
     expect(triage(authoritative, makeSessionLookup([session("worker", "idle")]), NOW)).toMatchObject({ section: "waiting", rule: "agent_asks" });
+    expect(triage(authoritative, makeSessionLookup([session("worker", "idle")], [ix]), NOW)).toMatchObject({ section: "waiting", rule: "agent_asks" });
+    // A stale owner-ask view must not survive the current pending list saying the card resolved.
+    expect(triage(authoritative, makeSessionLookup([session("worker", "idle")], []), NOW)).toMatchObject({ section: "parked", rule: "parked" });
     expect(triage(td, makeSessionLookup([session("worker", "idle")]), NOW)).toMatchObject({ section: "parked", rule: "parked" });
   });
 
