@@ -246,6 +246,19 @@ func dictationTestClosed(t *testing.T, a *app) {
 	}
 }
 
+// The speaker starts before the app's start is read. Let its 100 ms tick run before negotiation, then check the mode
+// negotiation under the race detector (go test -race): the write and every speaker read must be synchronized.
+func TestDictationStartSynchronizesSpeaker(t *testing.T) {
+	live := voicetest.NewLive(t, voicetest.Script{})
+	pl, _ := dictationTestPlugin(t, live)
+	a := dialApp(t, pl, nil)
+	time.AfterFunc(250*time.Millisecond, func() { a.send(dictationTestStart()) })
+	ready := a.until(ofType("ready"))
+	if ready["protocol"] != float64(2) {
+		t.Fatalf("dictation ready = %v", ready)
+	}
+}
+
 func TestDictationInfo(t *testing.T) {
 	live := voicetest.NewLive(t, voicetest.Script{})
 	pl, _ := dictationTestPlugin(t, live)

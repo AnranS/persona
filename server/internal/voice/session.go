@@ -359,7 +359,9 @@ func (c *conversation) negotiate(s *startFrame) error {
 		if s.Protocol < 2 {
 			return errors.New("dictation starts with protocol 2")
 		}
+		c.mu.Lock()
 		c.dictation = true
+		c.mu.Unlock()
 		return nil // one unbound session: no target preparation, history, resume, meeting or call features
 	}
 	meeting := s.Mode == modeMeeting
