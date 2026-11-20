@@ -137,7 +137,7 @@ import Testing
 
         // Keep this boundary on the Traex branch: nonempty composed text and no photos, files or uploads.
         let lead = start[..<callRange.lowerBound].suffix(1200)
-        #expect(lead.contains("\"traex\""))
+        #expect(lead.contains("terminalTraex"))
         #expect(lead.contains("!first.isEmpty"))
         #expect(lead.contains("attachments.isEmpty"))
         let composed = start.range(of: "let first = FirstMessage.text(")

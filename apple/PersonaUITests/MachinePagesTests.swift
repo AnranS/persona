@@ -432,7 +432,8 @@ final class MachinePagesTests: XCTestCase {
     @MainActor func testNewTraexSessionStartsWithItsFirstMessage() throws {
         let variants = [("light", "default", [String]()),
                         ("dark", "default", [String]()),
-                        ("light", "largest", ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])]
+                        ("light", "largest", ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]),
+                        ("dark", "largest", ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])]
         for (scheme, size, sizeArgs) in variants {
             _ = mock("reset") // reset clears STARTED, not SENT; each variant also baselines SENT below.
             launch(["-tab", "dev", "-cwd.server", "/home/me/code/persona", "-mode.server", "plan",
