@@ -808,20 +808,18 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 // questions for the next briefing (later.go). queued false: it could not be kept (no morning or evening briefing would
 // list it, or the queue is full), and the answer says why; the report then goes as an urgent one.
 func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, text string, evidence []string, now time.Time) (answer string, queued bool) {
-	if t.Supervision != nil && t.Supervision.Supervisor == t.Origin {
-		if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
-			if s.reporterStopped(ctx, t.Origin) {
-				return "Nobody receives this: your reporting conversation was stopped. Ask the user what you need the usual way.", true
-			}
-			body := reportBody{Kind: upReportQuestion, Text: text, Evidence: evidence, Later: true}
-			if _, err := s.appendFeed(ctx, t.Origin, feedReport, t.ID, body); err != nil {
-				s.logf("task %s: reporting question feed: %v", t.ID, err)
-				return "urgent:false was ignored: the reporting conversation could not keep the question, so it is sent as an urgent question. ", false
-			}
-			s.logf("task %s: %s reports a question deferred in its reporting conversation", t.ID, short(session))
-			return "Queued without waking your reporting conversation; it can answer there when it next runs. Go on with other work. " +
-				"If you cannot go on without an answer, ask it again without urgent:false.", true
+	if _, reporting := s.reportingStandIn(ctx, t); reporting {
+		if s.reporterStopped(ctx, t.Origin) {
+			return "Nobody receives this: your reporting conversation was stopped. Ask the user what you need the usual way.", true
 		}
+		body := reportBody{Kind: upReportQuestion, Text: text, Evidence: evidence, Later: true}
+		if _, err := s.appendFeed(ctx, t.Origin, feedReport, t.ID, body); err != nil {
+			s.logf("task %s: reporting question feed: %v", t.ID, err)
+			return "urgent:false was ignored: the reporting conversation could not keep the question, so it is sent as an urgent question. ", false
+		}
+		s.logf("task %s: %s reports a question deferred in its reporting conversation", t.ID, short(session))
+		return "Queued without waking your reporting conversation; it can answer there when it next runs. Go on with other work. " +
+			"If you cannot go on without an answer, ask it again without urgent:false.", true
 	}
 	if !s.laterBriefed(ctx) {
 		return "urgent:false was ignored: no morning or evening briefing is switched on to list it, so it is sent as an urgent question. ", false
@@ -850,7 +848,11 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	g := superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)}
-	if !s.deliverReportingReport(ctx, t, g) {
+	handled, err := s.deliverReportingReport(ctx, t, g)
+	if err != nil {
+		return "", err
+	}
+	if !handled {
 		s.signal(g)
 	}
 	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
@@ -862,8 +864,10 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	}
 	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
-	// the handoff; progress reports only update the card (the stream stays quiet).
-	if kind != upReportProgress {
+	// the handoff. Ordinary progress reports only update the card; a reporting conversation has no ledger, so its
+	// progress is retained in its report feed instead.
+	_, reporting := s.reportingStandIn(ctx, t)
+	if kind != upReportProgress || reporting {
 		body := reportBody{Kind: kind, Text: text, Evidence: evidence, Step: step, Steps: steps}
 		if _, err := s.appendFeed(ctx, t.Supervision.Supervisor, feedReport, t.ID, body); err != nil {
 			s.logf("task %s: report feed: %v", t.ID, err)
@@ -874,6 +878,9 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 		s.goRecordWorkerReport(ctx, t, machine, session, text, evidence, now)
 	}
 	if kind == upReportProgress {
+		if reporting {
+			return "Noted in your reporting conversation. Go on with the work.", nil
+		}
 		return "Noted for your supervisor: it reads it with its next supervision message. Go on with the work.", nil
 	}
 	return "Sent to your supervisor: it reads it within minutes and answers you by message. Don't wait idle for it if there is " +
@@ -881,52 +888,51 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 }
 
 // deliverReportingReport sends g to an active reporting conversation through the same notice path as its quiet tasks:
-// its own machine, no supervision-policy requirement, and notices removed when it is stopped. t names the reporter only
-// in the returned copy from superviseOpenTodoOf; no ledger is written. false selects the ordinary supervision route
-// when this is not a reporting report or its relay cannot be saved.
-func (s *Service) deliverReportingReport(ctx context.Context, t Todo, g superviseSignal) bool {
-	machine, reporting := s.reporterOf(ctx, t.Origin)
-	if !reporting || t.Supervision == nil || t.Supervision.Supervisor != t.Origin {
-		return false
+// its own machine, no supervision-policy requirement, and notices removed when it is stopped. handled is false only
+// when t is not reportingStandIn's report-only copy. A relay-save error is returned to the Agent, never rerouted to main.
+func (s *Service) deliverReportingReport(ctx context.Context, t Todo, g superviseSignal) (handled bool, err error) {
+	machine, reporting := s.reportingStandIn(ctx, t)
+	if !reporting {
+		return false, nil
 	}
 	if s.reporterStopped(ctx, t.Origin) {
-		return true
+		return true, nil
 	}
 	if g.level() == supervisionInfo {
-		return true // as signal does, progress stays on the card and wakes nobody
+		return true, nil // as signal does, progress stays in the feed and wakes nobody
 	}
 	entry, ok := s.digestEntry(ctx, g, s.webBase(ctx))
 	if !ok {
-		return true
+		return true, nil
 	}
 	msg := relayMsg{From: t.ID, FromTitle: "督办", Tool: noticeTool, At: g.At.UTC(),
 		Text: s.renderQueuedDigest(ctx, t.Origin, []prompts.SuperviseEntry{entry})}
-	queue := func() bool {
+	queue := func() error {
 		if _, err := s.queueRelayDurable(t.Origin, msg); err != nil {
 			s.logf("task %s: reporting report: %v", t.ID, err)
-			return false
+			return err
 		}
 		s.publish(ctx)
-		return true
+		return nil
 	}
 	c, ok := s.session(ctx, machine, t.Origin)
 	if !ok || c.Starting || c.Status == proto.StatusWorking || s.relayWaits(t.Origin, msg) {
-		if !queue() {
-			return false
+		if err := queue(); err != nil {
+			return true, err
 		}
 		if ok && !c.Starting && c.Status != proto.StatusWorking {
 			s.drainRelays(machine, []proto.Session{c})
 		}
-		return true
+		return true, nil
 	}
 	if err := s.tryDirectRelay(ctx, machine, t.Origin, &msg); err != nil {
 		if s.refusedDirect(ctx, machine, t.Origin, msg, err) {
-			return true
+			return true, nil
 		}
 		s.logf("task %s: reporting report: %v; queued", t.ID, err)
-		return queue()
+		return true, queue()
 	}
-	return true
+	return true, nil
 }
 
 // stoppedAgent: c is an agent that has stopped and is read-only (node stopped.go, #4754): its terminal engine keeps its

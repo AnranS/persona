@@ -108,6 +108,21 @@ func (s *Service) superviseOpenTodoOf(ctx context.Context, machine, session stri
 	return s.ensureSupervisor(ctx, t.ID)
 }
 
+// reportingStandIn is the reporter machine when t is superviseOpenTodoOf's report-only copy, not a genuinely
+// supervised task. The stored to-do must still have no ledger: a reporting conversation can also supervise its own
+// task for real, and that task keeps the ordinary supervision and deferred-question routes.
+func (s *Service) reportingStandIn(ctx context.Context, t Todo) (string, bool) {
+	if t.Supervision == nil || t.Supervision.Supervisor != t.Origin {
+		return "", false
+	}
+	stored, ok := s.todoNow(t.ID)
+	if !ok || stored.Supervision != nil {
+		return "", false
+	}
+	machine, ok := s.reporterOf(ctx, t.Origin)
+	return machine, ok
+}
+
 // agentTaskAtTurnEnd makes agent sid on machine a task when its turn ended having done work and it is on no todo: a
 // quiet todo of the main conversation, which supervises it (adoptAgent, as agent_supervise makes one, with its card in
 // the conversation). Only an agent Persona started, never one of a terminal, an assistant conversation
