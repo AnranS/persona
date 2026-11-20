@@ -71,8 +71,9 @@ func (c *conversation) connect(woken bool) error {
 	}
 	tools := c.toolSet()
 	var rate int
+	partial := false
 	if c.dictation {
-		rate, up, err = c.startDictation(dctx, up, p, w, model, c.instructions(in, nil))
+		rate, partial, up, err = c.startDictation(dctx, up, p, w, model, c.instructions(in, nil))
 	} else {
 		rate, err = c.startSession(dctx, up, w, p, model, voice, in, tools)
 	}
@@ -101,6 +102,7 @@ func (c *conversation) connect(woken bool) error {
 		return errors.New("closed")
 	}
 	c.up, c.ready, c.connectedAt = up, true, time.Now()
+	c.dictationPartial = partial
 	gen := c.gen
 	first := !c.started
 	why := "first"
@@ -188,7 +190,8 @@ func (c *conversation) instructions(in prompts.VoiceInstructions, tools []string
 
 // startUpstream sends session s's start on up and waits for the service to start it: the rate of its audio. A failure
 // closes up; the service's refusal is a *sessionRefused. A call's sessions and a read-aloud's (speak.go) start alike.
-func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s session) (int, error) {
+// onStarted, when given, receives the started event before the return (dictation reads its interim-caption grant).
+func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s session, onStarted ...func(event)) (int, error) {
 	if err := writeJSON(ctx, up, w.start(s)); err != nil {
 		_ = up.CloseNow()
 		return 0, err
@@ -205,6 +208,9 @@ func startUpstream(ctx context.Context, up upLink, w wire, p *Provider, s sessio
 		for _, e := range w.decode(b) {
 			switch e.kind {
 			case evStarted:
+				if len(onStarted) > 0 {
+					onStarted[0](e)
+				}
 				if e.rate == 0 {
 					return w.outputRate(p.inputRate()), nil
 				}
@@ -395,7 +401,7 @@ func (c *conversation) readUpstream(up upLink, gen int) {
 		}
 		var events []event
 		if c.dictation {
-			events = dictationEvents(c.w, b)
+			events = c.dictationEvents(b)
 		} else {
 			events = c.w.decode(b)
 		}

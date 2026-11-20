@@ -64,6 +64,8 @@ type conversation struct {
 	// no target, run, observation, suspension or hold path can run, while ready still negotiates protocol 2's features.
 	meeting   *meetingCall
 	dictation bool
+	// dictationPartial: session.started granted interim captions, so standard deltas are ignored in favor of them.
+	dictationPartial bool
 	// sendsAnyway: the app's start said speech_gate, true or false (#5904): it has Send Anyway for what the
 	// user-speech gate held back, so such a handover with a task is kept for its resend and the model is told the
 	// screen offers that. An app from before it says nothing and has no such button; a meeting call never has it
@@ -210,10 +212,16 @@ func (pl *Plugin) converse(ctx context.Context, app *websocket.Conn, role string
 		switch {
 		case errors.Is(err, errNoUpstream):
 			c.failCode(codeNoUpstream, "还没配实时语音服务：在 设置 › 扩展 › 实时语音 里填服务地址和 Key", true)
+		case errors.Is(err, errNoLiveUpstream):
+			c.failCode(codeNoUpstream, err.Error(), true)
 		case errors.As(err, &ce):
 			c.failCode(ce.code, ce.msg, true)
 		default:
-			c.failCode(upstreamCode(err), "语音会话没能建立："+err.Error(), true)
+			code := upstreamCode(err)
+			if c.dictation {
+				code = firstNonEmpty(code, codeUpstreamFailed)
+			}
+			c.failCode(code, "语音会话没能建立："+err.Error(), true)
 		}
 		return
 	}

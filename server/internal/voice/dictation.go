@@ -12,36 +12,62 @@ import (
 
 const modeDictation = "dictation"
 
-// startDictation starts one unbound, text-only session. A service that refuses output_modalities gets one replacement
-// without it, as meeting transcription does; no other failure opens another session.
-func (c *conversation) startDictation(ctx context.Context, up upLink, p *Provider, w wire, model, instructions string) (int, upLink, error) {
+// startDictation starts one unbound, text-only session. A service that refuses the interim-caption extension or
+// output_modalities gets a replacement without it, as meeting transcription does; no other failure opens another session.
+func (c *conversation) startDictation(ctx context.Context, up upLink, p *Provider, w wire, model, instructions string) (int, bool, upLink, error) {
+	partial := trMemoOf(p).captions.Load() != trNotGranted
 	textOnly := !trMemoOf(p).noTextOnly.Load()
 	for {
-		s := session{Model: model, InputRate: p.inputRate(), Instructions: instructions, Dictation: true, TextOnly: textOnly}
-		rate, err := startUpstream(ctx, up, w, p, s)
+		s := session{Model: model, InputRate: p.inputRate(), Instructions: instructions, Dictation: true, DictationCaptions: partial, TextOnly: textOnly}
+		granted := false
+		rate, err := startUpstream(ctx, up, w, p, s, func(e event) { granted = e.captions })
 		if err == nil {
-			return rate, up, nil
+			if partial {
+				if granted {
+					trMemoOf(p).captions.Store(trGranted)
+				} else {
+					trMemoOf(p).captions.Store(trNotGranted)
+				}
+			}
+			return rate, partial && granted, up, nil
 		}
 		var refused *sessionRefused
-		if !textOnly || !errors.As(err, &refused) || upstreamCode(err) != "" || refusedField(refused, false) != "text_only" {
-			return 0, up, err
+		if !errors.As(err, &refused) || upstreamCode(err) != "" {
+			return 0, false, up, err
 		}
-		if trMemoOf(p).noTextOnly.CompareAndSwap(false, true) {
-			c.logf("provider %s: the service refused text-only output (%s): dictation output audio is discarded, but billed", p.ID,
+		switch refusedField(refused, partial) {
+		case "captions":
+			if !partial {
+				return 0, false, up, err
+			}
+			trMemoOf(p).captions.Store(trNotGranted)
+			partial = false
+			c.logf("provider %s: the service refused interim captions (%s): dictation uses standard input transcripts", p.ID,
 				firstNonEmpty(refused.code, "no code"))
+		case "text_only":
+			if !textOnly {
+				return 0, false, up, err
+			}
+			if trMemoOf(p).noTextOnly.CompareAndSwap(false, true) {
+				c.logf("provider %s: the service refused text-only output (%s): dictation output audio is discarded, but billed", p.ID,
+					firstNonEmpty(refused.code, "no code"))
+			}
+			textOnly = false
+		default:
+			return 0, false, up, err
 		}
-		textOnly = false
 		up, err = c.dial(ctx, p, w, model)
 		if err != nil {
-			return 0, nil, err
+			return 0, false, nil, err
 		}
 	}
 }
 
-// dictationEvents adds the upstream item id and final flag of user captions to the call wire's events. Interim captions
-// are whole replacements; standard input transcript deltas are appended. Every other frame keeps its ordinary decoding,
-// so handleDictation can explicitly discard generated output.
-func dictationEvents(w wire, raw []byte) []event {
+// dictationEvents adds the upstream item id and final flag of user captions to the call wire's events. The extension
+// granted at session.started chooses one representation: negotiated partials are whole replacements, otherwise standard
+// input transcript deltas are appended. A service that sends both never duplicates a line. Other frames keep their
+// ordinary decoding, so handleDictation can explicitly discard generated output.
+func (c *conversation) dictationEvents(raw []byte) []event {
 	var f struct {
 		Type    string `json:"type"`
 		ItemID  string `json:"item_id"`
@@ -52,12 +78,18 @@ func dictationEvents(w wire, raw []byte) []event {
 	if json.Unmarshal(raw, &f) == nil {
 		switch {
 		case strings.HasSuffix(f.Type, trCaptionSuffix):
+			if !c.dictationPartial {
+				return nil
+			}
 			return []event{{kind: evUser, id: f.ItemID, text: f.Text, replace: true, final: f.IsFinal}}
 		case f.Type == "session.input_transcript.delta":
+			if c.dictationPartial {
+				return nil
+			}
 			return []event{{kind: evUser, id: f.ItemID, text: f.Delta, final: f.IsFinal}}
 		}
 	}
-	return w.decode(raw)
+	return c.w.decode(raw)
 }
 
 // handleDictation forwards only the user's words. Generated text, audio, reply boundaries, interruptions, delegations
