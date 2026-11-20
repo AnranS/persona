@@ -150,6 +150,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         reserved_refs = ("a" * 40 + "\trefs/heads/release/0.9.1-beta.9\n"
                          + "b" * 40 + "\trefs/heads/release/0.9.1-beta.10\n")
         for name, refs, expected in (("multiple", reserved_refs, ["0.9.1-beta.9", "0.9.1-beta.10"]),
+                                     ("unterminated", reserved_refs.removesuffix("\n"), ["0.9.1-beta.9", "0.9.1-beta.10"]),
                                      ("empty", "", [])):
             with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
                 fixture = Path(directory)
@@ -170,7 +171,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 env = {"PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
                        "RESERVED_REFS": refs, "PYTHON_ARGV_LOG": str(argv_log),
                        "REPOSITORY": "nwverse/persona", "stable": "v0.9.1", "branch": "release/0.9.1-beta.2"}
-                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], cwd=fixture, env=env,
+                case_fragment = fragment
+                if name == "unterminated":
+                    case_fragment = "\n".join(line for line in fragment.splitlines()
+                                              if "git ls-remote --heads" not in line)
+                    (fixture / "release-reserved.txt").write_text("0.9.1-beta.9\n0.9.1-beta.10")
+                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + case_fragment], cwd=fixture, env=env,
                                         capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(argv_log.read_text().splitlines(), prefix + expected)
