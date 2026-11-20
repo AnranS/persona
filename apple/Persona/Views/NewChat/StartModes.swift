@@ -17,6 +17,13 @@ nonisolated enum StartModes {
         return modes
     }
 
+    /// A known terminal Traex, discovered in the shell or explicitly typed without another runtime source. It takes no
+    /// Claude Code start choices; Paseo, desktop and unknown runtime sources keep their own paths (#1842).
+    static func terminalTraex(_ launcher: Launcher?) -> Bool {
+        guard let launcher, launcher.runtimeAgent == "traex" else { return false }
+        return launcher.source == "zshrc" || launcher.source?.isEmpty != false
+    }
+
     /// It takes its own modes, not Claude Code's: it lists them (`listed`), or, from a computer older than that list, it
     /// is a launcher of the Paseo engine (`source` "paseo") whose agent is neither Claude Code nor Codex, which the node
     /// reports with an agent of its own ("paseo", #8144).
@@ -31,6 +38,7 @@ nonisolated enum StartModes {
     /// lists its own has besides its own approval (Allow Everything, which says it can be switched back in the chat);
     /// Allow Everything for a limited launcher from an older computer. Empty: no choice to make.
     static func modes(for launcher: Launcher?) -> [SessionModes.Option] {
+        if terminalTraex(launcher) { return [] }
         if let listed = listed(launcher) {
             return listed.filter { $0 != SessionModes.ModeID.launcherDefault }.map { SessionModes.listedOption($0) }
         }
@@ -52,6 +60,7 @@ nonisolated enum StartModes {
     /// The efforts offered: the ones the model that will run lists (`known`), every start level while that is not
     /// known. A limited launcher's only from its model's list: none while that is not known.
     static func efforts(known: [String]?, for launcher: Launcher?) -> [SessionModes.Option] {
+        if terminalTraex(launcher) { return [] }
         guard let known else { return limited(launcher) ? [] : SessionModes.startEffortLevels }
         return SessionModes.startEffortLevels.filter { known.contains($0.id) }
     }
