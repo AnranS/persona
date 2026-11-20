@@ -71,7 +71,11 @@ jobs:
             # A previous failed scheduler owns this version. Never overwrite its different source: allocate the next one.
             echo "$branch has no open PR; preserve its failed source and select a new immutable version."
             git ls-remote --heads "https://github.com/$REPOSITORY.git" 'refs/heads/release/*' | cut -f2 | sed 's#refs/heads/release/##' > release-reserved.txt
-            version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved $(tr '\n' ' ' < release-reserved.txt))"
+            version_command=(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved)
+            while IFS= read -r reserved_version; do
+              version_command+=("$reserved_version")
+            done < release-reserved.txt
+            version="$("${version_command[@]}")"
             branch="release/$version"
             title="release: v$version"
           fi
