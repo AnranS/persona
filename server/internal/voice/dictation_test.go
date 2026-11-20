@@ -18,12 +18,14 @@ import (
 
 // dictationTestPlugin has a function-tool-capable upstream so a dictation session that accidentally inherits an
 // ordinary call's tools is visible in its start. The hub likewise records any attempt to bind a conversation.
-func dictationTestPlugin(t *testing.T, live *voicetest.Live) (*Plugin, *fakeHub) {
+func dictationTestPlugin(t *testing.T, live *voicetest.Live, inputRate ...int) (*Plugin, *fakeHub) {
 	t.Helper()
 	hub := newFakeHub(t)
-	pl := testPlugin(t, Config{Default: "rt/m1", Providers: []Provider{{
-		ID: "rt", URL: live.URL(), Dialect: DialectLive, Key: "k", Models: []string{"m1"}, Tools: new(true),
-	}}}, hub.server(t))
+	provider := Provider{ID: "rt", URL: live.URL(), Dialect: DialectLive, Key: "k", Models: []string{"m1"}, Tools: new(true)}
+	if len(inputRate) > 0 {
+		provider.InputRate = inputRate[0]
+	}
+	pl := testPlugin(t, Config{Default: "rt/m1", Providers: []Provider{provider}}, hub.server(t))
 	return pl, hub
 }
 
@@ -275,13 +277,21 @@ func TestDictationNegotiation(t *testing.T) {
 
 func TestDictationSessionShape(t *testing.T) {
 	live := voicetest.NewLive(t, voicetest.Script{})
-	pl, hub := dictationTestPlugin(t, live)
+	pl, hub := dictationTestPlugin(t, live, 24000)
 	_, ready := dictationTestReady(t, pl)
 	starts := live.Starts()
 	if len(starts) != 1 {
 		t.Fatalf("dictation made %d upstream starts, want 1", len(starts))
 	}
 	dictationTestAssertShape(t, starts[0], true)
+	if ready["input_rate"] != float64(24000) {
+		t.Errorf("ready input_rate = %v, want the provider's 24000", ready["input_rate"])
+	}
+	audio, _ := starts[0]["audio"].(map[string]any)
+	format, _ := audio["format"].(map[string]any)
+	if format["rate"] != float64(24000) {
+		t.Errorf("upstream input rate = %v, want the provider's 24000", format["rate"])
+	}
 	if ready["target"] != nil || hub.lookCount() != 0 {
 		t.Fatalf("dictation used conversation binding: target=%v lookups=%d", ready["target"], hub.lookCount())
 	}

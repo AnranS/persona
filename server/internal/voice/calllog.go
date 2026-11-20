@@ -221,6 +221,10 @@ func (c *conversation) logStart(s *startFrame, p *Provider) {
 	lines, runs := len(c.history), len(c.resume)
 	resumed, echoes, gateOff, modelID, voice := c.resumed, c.gate.echoes, c.gate.off, c.modelID, c.voice
 	c.mu.Unlock()
+	if c.dictation {
+		c.logf("start: protocol 2 (dictation), model %s (%s dialect), target unbound", modelID, p.Dialect)
+		return
+	}
 	protocol := fmt.Sprintf("protocol %d", c.version)
 	if c.asked > c.version {
 		protocol += fmt.Sprintf(" (asked %d)", c.asked)
@@ -228,9 +232,6 @@ func (c *conversation) logStart(s *startFrame, p *Provider) {
 	target := "the main conversation of the moment"
 	if c.version >= 2 && s.Target != nil {
 		target = s.Target.MachineID + "/" + s.Target.SessionID
-	}
-	if c.dictation {
-		protocol, target = "protocol 2 (dictation)", "unbound"
 	}
 	var more []string
 	if c.lang != "" {
