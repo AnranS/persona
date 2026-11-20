@@ -49,7 +49,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
-	return append(tools, s.knowledgeFolderTools(ctx)...)
+	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.
@@ -230,8 +230,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("title and body are required")
 		}
 		// An empty level is passed through, not normalised to P1: with ln mode on the hub decides by conversation
-		// (the main conversation's ordinary notices still interrupt, fleet_link.go lnNotifyPushLevel); with it off the
-		// hub derives P1 for a NotifyPush anyway (hub/lnmode.go levelFor), so delivery there is unchanged.
+		// (the main conversation's ordinary notices still interrupt, fleet_link.go pushGradingNotifyLevel); with it off the
+		// hub derives P1 for a NotifyPush anyway (hub/push_grading.go levelFor), so delivery there is unchanged.
 		switch a.PushLevel {
 		case "", assistantwire.LevelP0, assistantwire.LevelP1:
 		default:
