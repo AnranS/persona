@@ -4,6 +4,31 @@ import Testing
 import UIKit
 @testable import Persona
 
+private actor OlderNotFoundGate {
+    private var started = false
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func wait() async throws {
+        started = true
+        try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+
+    func waitForRequest() async -> Bool {
+        for _ in 0..<200 {
+            if started { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return started
+    }
+
+    func release(_ error: APIError) -> Bool {
+        guard let continuation else { return false }
+        self.continuation = nil
+        continuation.resume(throwing: error)
+        return true
+    }
+}
+
 /// A node can report that a chat's history is gone (#11451). That answer ends history loading; ordinary read failures
 /// keep their existing loading and explicit-retry behavior.
 @MainActor @Suite(.serialized)
@@ -74,6 +99,19 @@ struct HistoryNotFoundTests {
         #expect(!store.hasMore && !store.isLoadingOlder, "no older-history spinner can remain for an empty missing chat")
     }
 
+    @Test func reloadNotFoundShowsTheHubSentenceWithoutTheHistorySkeleton() async throws {
+        let (model, key, store, _, _) = fixture(notFound)
+        await model.reload(key)
+        #expect(store.error == Self.missingSentence)
+
+        let window = try host(model, key: key)
+        defer { close(window) }
+        let elements = await waitForHubSentence(Self.missingSentence, in: window)
+        #expect(elements.contains { $0.label == Self.missingSentence })
+        #expect(!elements.contains { $0.id == "chat-loading-placeholder" })
+        #expect(!store.hasMore && !store.isLoadingOlder)
+    }
+
     @Test(arguments: Control.allCases) func latestErrorsKeepTheExistingSkeleton(_ control: Control) async throws {
         let (model, key, store, _, _) = fixture(control.error)
         #expect(store.items.isEmpty && !store.loadedOnce)
@@ -102,6 +140,26 @@ struct HistoryNotFoundTests {
         #expect(await model.loadOlder(key) == false)
         #expect(!store.hasMore && !store.isLoadingOlder)
         #expect(hub.sent("GET", path).count == 1, "an explicit load after history ended must not send another request")
+    }
+
+    @Test func anOlderNotFoundFromThePreviousHistoryDoesNotEndItsReplacement() async throws {
+        let (model, key, store, hub, path) = fixture(notFound)
+        seedOlderPage(in: store)
+        let gate = OlderNotFoundGate()
+        hub.onAsync("GET", path) { _ in
+            try await gate.wait()
+            return Data()
+        }
+        let loading = Task { await model.loadOlder(key) }
+        #expect(await gate.waitForRequest())
+
+        store.apply([item(20)], span: ItemSpan(history: "replacement", from: nil, to: 20), backlog: true, hasMore: true)
+        #expect(store.history == "replacement" && store.hasMore && store.items.map(\.seq) == [20])
+        #expect(await gate.release(notFound))
+        #expect(await loading.value == false)
+        #expect(store.hasMore, "the older response belongs to the previous history and must not close the replacement")
+        #expect(store.items.map(\.seq) == [20])
+        #expect(!store.isLoadingOlder)
     }
 
     @Test(arguments: Control.allCases) func olderErrorsKeepHasMoreAndAllowAnExplicitRetry(_ control: Control) async throws {

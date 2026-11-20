@@ -3,6 +3,7 @@ package persona.core.data
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -42,6 +43,7 @@ class ChatHistoryNotFoundTest {
 
     private inner class Fixture(
         val repository: HubChatRepository,
+        val connection: FakeConnection,
         val scope: CoroutineScope,
         val frames: Frames?,
         val queries: ConcurrentLinkedQueue<ItemsQuery>,
@@ -73,14 +75,15 @@ class ChatHistoryNotFoundTest {
         val driver = frames?.let(::RustContinuityDriver)
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.Unconfined)
-        val repository = HubChatRepository(transport, FakeConnection(), FakeItemsCache(CachedChat()), FakeSessions(), scope,
+        val connection = FakeConnection()
+        val repository = HubChatRepository(transport, connection, FakeItemsCache(CachedChat()), FakeSessions(), scope,
             continuityFactory = { chat, applied ->
                 if (driver == null) KotlinContinuityAdapter(chat) else RustContinuityAdapter(chat, driver, applied)
             })
         val snapshot = AtomicReference(persona.core.contracts.api.ChatSnapshot())
         val observer = scope.launch { repository.observe(key).collect { snapshot.set(it) } }
         try {
-            Fixture(repository, scope, frames, queries, snapshot).test()
+            Fixture(repository, connection, scope, frames, queries, snapshot).test()
         } finally {
             observer.cancelAndJoin()
             job.cancelAndJoin()
@@ -172,6 +175,30 @@ class ChatHistoryNotFoundTest {
             pump { queries.size == 1 && !snapshot.get().loading }
             assertEquals(DataText.of(Key.ChatSyncFailed), snapshot.get().error)
             assertFalse(snapshot.get().loading)
+        }
+    }
+
+    @Test fun kotlinOlderNotFoundFromThePreviousHistoryDoesNotEndItsReplacement() = runBlocking {
+        val queries = ConcurrentLinkedQueue<ItemsQuery>()
+        val failure = CompletableDeferred<Nothing>()
+        val transport = transport(queries,
+            latest = { ItemsResponse(listOf(item(3), item(4)), hasMore = true, history = "h", toSeq = 4) },
+            older = { failure.await() })
+        fixture(Adapter.Kotlin, transport, queries) {
+            pump { snapshot.get().verified && snapshot.get().hasOlder }
+            val loading = scope.async { repository.loadOlder(key) }
+            pump { olderReads() == 1 }
+
+            connection.events.emit(ItemsEvent(key.machineId, key.sessionId, listOf(item(20)),
+                history = "replacement", fromSeq = 0, toSeq = 20, backlog = true, hasMore = true))
+            pump { snapshot.get().items.map { it.seq } == listOf(20) && snapshot.get().hasOlder }
+            failure.completeExceptionally(missingHistory())
+            pump { loading.isCompleted }
+            loading.await()
+
+            assertTrue("a response for the replaced history must not close its replacement", snapshot.get().hasOlder)
+            assertEquals(listOf(20), snapshot.get().items.map { it.seq })
+            assertFalse(snapshot.get().loadingOlder)
         }
     }
 

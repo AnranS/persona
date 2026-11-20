@@ -411,14 +411,15 @@ class HubChatRepository(
         entry.ready.await()
         if (entry.continuity.asynchronous) { loadOlderAsync(entry); return }
         entry.requests.withLock {
-            val action = entry.lock.withLock {
-                entry.continuity.accept(Input.LoadOlder)!!.requests.firstOrNull()?.also {
+            val (action, history) = entry.lock.withLock {
+                val action = entry.continuity.accept(Input.LoadOlder)!!.requests.firstOrNull()?.also {
                     entry.state.update { it.copy(loadingOlder = true, error = null) }
                 }
-            } as? Action.FetchOlder ?: return
-            val history = entry.lock.withLock { entry.reducer.history }
+                action to entry.reducer.history
+            }
+            val fetch = action as? Action.FetchOlder ?: return
             try {
-                val page = transport.items(session, ItemsQuery(beforeSeq = action.beforeSeq))
+                val page = transport.items(session, ItemsQuery(beforeSeq = fetch.beforeSeq))
                 entry.lock.withLock {
                     if (history != entry.reducer.history || page.history != null && history != null && page.history != history) {
                         entry.continuity.accept(Input.OlderFailed)
@@ -863,7 +864,7 @@ class HubChatRepository(
                 else {
                     firstPageIn(entry)
                     val missing = missingHistory(error)
-                    if (missing != null) entry.eventError = missing
+                    entry.eventError = missing
                     entry.state.update { it.copy(loading = false, error = missing ?: DataText.of(Key.ChatSyncFailed), verified = false) }
                 }
             } }
@@ -988,7 +989,7 @@ class HubChatRepository(
                 // While the open waits for the watch (awaitWatch), a catch-up its runtime refuses alike says nothing new.
                 if (entry.notLoadedWait?.isActive != true || !notLoaded(error)) {
                     val missing = missingHistory(error)
-                    if (missing != null) entry.eventError = missing
+                    entry.eventError = missing
                     entry.state.update { it.copy(error = missing ?: DataText.of(Key.ChatSyncFailed), verified = false) }
                 }
             } }

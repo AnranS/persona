@@ -2575,6 +2575,11 @@ final class AppModel {
             ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
         } catch {
             // The defer reports one failed completion for both transport errors and fence cancellation.
+            if error.isHistoryNotFound, shouldApply?() ?? true {
+                let store = chat(key)
+                store.error = error.shown
+                store.historyNotFound = true
+            }
         }
     }
 
@@ -2612,6 +2617,7 @@ final class AppModel {
     func loadOlder(_ key: SessionKey, turns: Int = 2) async -> Bool {
         let store = chat(key)
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
+        let requestedHistory = store.history
         store.isLoadingOlder = true
         #if DEBUG && os(iOS)
         ProductionContinuityShadow.shared.loadOlder(store)
@@ -2626,7 +2632,7 @@ final class AppModel {
             #if DEBUG && os(iOS)
             if !missing { ProductionContinuityShadow.shared.failed(.olderFailed, in: store) }
             #endif
-            if missing { prependBatch(store, items: [], hasMore: false) }
+            if missing, store.history == requestedHistory { prependBatch(store, items: [], hasMore: false) }
             if !error.isOffline { show(error) } // scrolling up while offline: the title says why nothing comes
             return false
         }

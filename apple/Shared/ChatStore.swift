@@ -453,7 +453,9 @@ final class ChatStore {
     @ObservationIgnored private var liveEnds: String?
     var screenStatus: SessionStatus = .unknown
     var screenUpdatedAt: Date?
-    var error: String?
+    var error: String? {
+        didSet { if oldValue != error { historyNotFound = false } }
+    }
     /// The latest history read answered 404/not_found: its error replaces the first-page loading placeholder.
     var historyNotFound = false
     var isLoadingOlder = false
