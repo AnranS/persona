@@ -143,6 +143,8 @@ import Testing
         let composed = start.range(of: "let first = FirstMessage.text(")
         #expect(composed.map { $0.upperBound <= callRange.lowerBound } == true)
         #expect(Self.argument("prompt", in: call) == "first")
+        #expect(Self.argument("launcher", in: call) == "runLauncher",
+                "a Traex chosen by Model Configuration must not fall back to the hub's empty-launcher Claude default")
 
         let async = Self.argument("async", in: call)
         #expect(async == nil || async == "nil" || async == "false", "Traex waits for the started session")

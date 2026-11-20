@@ -1063,7 +1063,7 @@ struct NewChatView: View {
                 if !first.isEmpty && attachments.isEmpty {
                     // A terminal Traex makes its own session from the inline prompt, as Android and the web start it.
                     // Do not reuse Claude's pre-assigned id or send the text again as an ordinary message (#1842).
-                    let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, agentType: "traex", prompt: first,
+                    let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: runLauncher, agentType: "traex", prompt: first,
                                                       workspaceID: targetPreset?.workspaceID, host: targetPreset?.host,
                                                       model: sentModel, tabName: name.isEmpty ? nil : name,
                                                       nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
