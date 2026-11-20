@@ -21,12 +21,12 @@ export function OverviewMachineCards({ machines, agentCounts, offlineText }: {
   const byMachine = useMemo(() => new Map((metrics ?? []).map((m) => [m.machine_id, m])), [metrics]);
   const rows = <OverviewMachineRows machines={machines} agentCounts={agentCounts} offlineText={offlineText} />;
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
-      <OverviewSummaryBoundary fallback={rows}>
-        <Suspense fallback={rows}>
+    <OverviewSummaryBoundary fallback={rows}>
+      <Suspense fallback={rows}>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
           <OverviewMachineCardList machines={machines} agentCounts={agentCounts} metricsByMachine={byMachine} error={error} offlineText={offlineText} />
-        </Suspense>
-      </OverviewSummaryBoundary>
-    </div>
+        </div>
+      </Suspense>
+    </OverviewSummaryBoundary>
   );
 }

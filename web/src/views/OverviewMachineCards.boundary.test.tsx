@@ -71,6 +71,7 @@ it("keeps Overview available after a summary chunk failure and retries on the ne
   expect(firstAttempts).toBeGreaterThan(0);
   expect(host.querySelector("[data-testid='other-overview-section']")?.textContent).toBe("Agents");
   expect(host.querySelector("a[href='/machines/mac']")?.textContent).toContain("Mac");
+  expect(host.querySelector(".grid")?.querySelector(".grid")).toBeNull();
   expect(host.querySelector("[data-testid='recovered-summary']")).toBeNull();
 
   state.fail = false;
