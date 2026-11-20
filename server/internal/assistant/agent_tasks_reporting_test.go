@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -58,6 +59,9 @@ func TestReportFromAReportingTodoReachesItsReportingConversation(t *testing.T) {
 		if res.IsError || !strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
 			t.Fatalf("the reporting conversation's open todo has no report receiver: %+v", res)
 		}
+		if got := todoNow(s, todo.ID); got.Supervision != nil {
+			t.Fatalf("the report changed the reporting task's stored supervision: %+v", got.Supervision)
+		}
 		waitFor(t, "the reporting conversation's supervision notice", func() bool {
 			return strings.Contains(strings.Join(f.noticesTo("lark1"), "\n"), "MR 提好了")
 		})
@@ -75,4 +79,125 @@ func TestReportFromAReportingTodoReachesItsReportingConversation(t *testing.T) {
 			t.Fatalf("the main conversation's feed received the report: %q", kinds)
 		}
 	})
+}
+
+func TestReportFromAReportingTodoUsesItsReporterMachine(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	s.markReporter(ctx, "other", "lark1")
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	f.setSessions("other", proto.Session{SessionID: "lark1", MachineID: "other", Assistant: true, Status: proto.StatusIdle})
+	report := json.RawMessage(`{"kind":"done","text":"remote reporter"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError ||
+		!strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
+		t.Fatalf("report: %+v", res)
+	}
+	waitFor(t, "the reporter on its own machine", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("lark1"), "\n"), "remote reporter")
+	})
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("the report fell back to main: %q", got)
+	}
+}
+
+func TestReportFromAReportingTodoKeepsRuntimeReporterDelivery(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, SourceKind: proto.SourceRuntime, Status: proto.StatusIdle})
+	report := json.RawMessage(`{"kind":"done","text":"runtime reporter"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError ||
+		!strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
+		t.Fatalf("report: %+v", res)
+	}
+	waitFor(t, "the runtime reporter's existing notice path", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("lark1"), "\n"), "runtime reporter")
+	})
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("the runtime report fell back to main: %q", got)
+	}
+}
+
+func TestReportFromAReportingTodoHonoursReporterStop(t *testing.T) {
+	s, f := reportingWithTask(t) // the reporting conversation is working, so its report queues
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	report := json.RawMessage(`{"kind":"done","text":"queued report"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError ||
+		!strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
+		t.Fatalf("report: %+v", res)
+	}
+	waitFor(t, "the queued reporting report", func() bool {
+		q, _ := s.queuedRelays()
+		return len(q["lark1"]) > 0
+	})
+	if _, err := s.stopReporting(ctx, "lark1", "app"); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := s.queuedRelays(); len(q["lark1"]) != 0 {
+		t.Fatalf("the stopped reporter still has a queued report: %q", q["lark1"])
+	}
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError ||
+		!strings.Contains(res.Content[0].Text, "Nobody receives this") {
+		t.Fatalf("post-stop report: %+v", res)
+	}
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("the stopped report went to main: %q", got)
+	}
+}
+
+func TestReportFromAReportingTodoLeavesQuietNoticesAlone(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	report := json.RawMessage(`{"kind":"progress","text":"still working"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError {
+		t.Fatalf("report: %+v", res)
+	}
+	before := len(f.noticesTo("lark1"))
+	agentTurn(s, f, proto.StatusDone, "MR 提好了", 0)
+	waitFor(t, "the existing quiet completion notice", func() bool {
+		got := f.noticesTo("lark1")
+		return len(got) > before && strings.Contains(strings.Join(got[before:], "\n"), "🔔")
+	})
+	if got := strings.Join(f.notices(), "\n"); strings.Contains(got, "MR 提好了") {
+		t.Fatalf("the quiet completion notice moved to main: %s", got)
+	}
+}
+
+func TestReportFromAReportingTodoRechecksReporterRegistration(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	first := json.RawMessage(`{"kind":"done","text":"before expiry"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", first); res.IsError {
+		t.Fatalf("first report: %+v", res)
+	}
+	waitFor(t, "the active reporter's report", func() bool { return len(f.noticesTo("lark1")) > 0 })
+
+	s.reporters.mu.Lock()
+	r := s.reporters.m["lark1"]
+	r.At = time.Now().Add(-reporterKeep - time.Hour)
+	s.reporters.m["lark1"] = r
+	s.reporters.mu.Unlock()
+	second := json.RawMessage(`{"kind":"done","text":"after expiry"}`)
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", second); res.IsError ||
+		!strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
+		t.Fatalf("expired report: %+v", res)
+	}
+	waitFor(t, "the expired reporter's main-conversation fallback", func() bool {
+		return strings.Contains(strings.Join(f.notices(), "\n"), "after expiry")
+	})
+	if got := strings.Join(f.noticesTo("lark1"), "\n"); strings.Contains(got, "after expiry") {
+		t.Fatalf("the expired reporter still received the report: %s", got)
+	}
 }
