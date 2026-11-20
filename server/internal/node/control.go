@@ -171,7 +171,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
 	var launch host.Launcher
-	if codex && kind == "codex" && resume == "" && mode == "" && launcher == "codex" && len(argv) == 1 && argv[0] == "codex" && n.startKind(ctx) == proto.EngineOrca {
+	if codex && kind == "codex" && resume == "" && mode == "" && stockOrcaCodexArgv(launcher, argv) && n.startKind(ctx) == proto.EngineOrca {
 		launch, err = n.launcherFor(n.startKind(ctx))
 		if err != nil {
 			return nil, err

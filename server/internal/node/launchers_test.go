@@ -156,8 +156,11 @@ func TestCodexOnTheMachineIsALauncher(t *testing.T) {
 	}
 	list, codex, _, _ := mergeLaunchers(asNodeIn(t, home, `alias ll="ls -l"`, launcherScript))
 	list = withoutInstalledWorkAgents(list)
-	if len(list) != 2 || list[0].Name != "claude" || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
+	if len(list) != 2 || list[0].Name != "claude" || list[1].Name != "codex" || list[1].Agent != "codex" {
 		t.Fatalf("got %v, codex %v", list, codex)
+	}
+	if _, configured := codex["codex"]; configured {
+		t.Fatalf("plain Codex has configured launcher words %q; stock starts must use the built-in fallback", codex["codex"])
 	}
 }
 

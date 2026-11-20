@@ -10,6 +10,18 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart"
 )
 
+// stockOrcaCodexArgv distinguishes the built-in stock launcher from a configured no-op alias
+// with the same words. Plain PATH Codex deliberately has no configured launcher-cache entry.
+func stockOrcaCodexArgv(launcher string, argv []string) bool {
+	if launcher != "codex" || len(argv) != 1 || argv[0] != "codex" {
+		return false
+	}
+	launcherCache.Lock()
+	_, configured := launcherCache.codex["codex"]
+	launcherCache.Unlock()
+	return !configured
+}
+
 // codexOrcaLaunchDefaults follows Orca's stock Codex launch profile. Configured launchers and explicit
 // Persona modes do not call this: their own complete launch configuration stays authoritative.
 func codexOrcaLaunchDefaults(ctx context.Context, launch host.Launcher, argv []string) ([]string, error) {
@@ -42,7 +54,7 @@ func codexOrcaLaunchDefaults(ctx context.Context, launch host.Launcher, argv []s
 	args := shellWords(raw)
 	// Execute literal argv, never evaluate shell operators, substitutions or variables.
 	for _, arg := range args {
-		if strings.ContainsAny(arg, "$`<>\x00") || slices.Contains([]string{";", "&", "&&", "|", "||", ">", "<"}, arg) {
+		if strings.ContainsAny(arg, "$`<>\x00~*?[") || slices.Contains([]string{";", "&", "&&", "|", "||", ">", "<"}, arg) {
 			return nil, refusal("codex_launch_preferences", "Orca's launch arguments require a shell. Select an explicitly configured launcher.", nil)
 		}
 	}

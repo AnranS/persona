@@ -230,6 +230,11 @@ func TestOrcaCodexLaunchPreferencesBypassConfiguredLaunchersAndExplicitModes(t *
 			want:      []string{"codex", "--model", "configured-model"},
 		},
 		{
+			name:      "configured no-op codex launcher",
+			launchers: map[string][]string{"codex": {"codex"}},
+			want:      []string{"codex"},
+		},
+		{
 			name: "explicit default mode",
 			mode: "default",
 			want: []string{"codex"},
@@ -316,6 +321,10 @@ func TestOrcaCodexLaunchPreferencesRefuseUnsafeOrUnavailableLaunches(t *testing.
 		{name: "sequence operator", args: "--model orca-model; codex --yolo"},
 		{name: "pipeline", args: "--model orca-model | tee /tmp/codex-model"},
 		{name: "background operator", args: "--model orca-model &"},
+		{name: "tilde expansion", args: "--add-dir ~/project"},
+		{name: "star glob", args: "--add-dir ./*"},
+		{name: "question mark glob", args: "--add-dir ./file?"},
+		{name: "character class glob", args: "--add-dir ./file[123]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newOrcaCodexPreferenceFixture(t, map[string][]string{})

@@ -263,7 +263,9 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	}
 	if codexWord != "" && words["codex"] == nil {
 		list = append(list, proto.Launcher{Name: "codex", Agent: "codex", Source: "zshrc", PromptOptional: true, RunHere: true})
-		codex["codex"] = []string{codexWord}
+		if codexWord != "codex" {
+			codex["codex"] = []string{codexWord}
+		}
 	}
 	for _, l := range ls {
 		if !seen[l.Name] {
