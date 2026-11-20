@@ -922,8 +922,9 @@ final class MessageLiftUITests: XCTestCase {
                         let y = probe.bottom ? f.maxY - 10 : f.minY + 10
                         guard band.contains(CGPoint(x: band.midX, y: y)), f.height >= 20 else { continue }
                         left.removeAll { $0.name == probe.name }
-                        // One line: its other end was this press already.
-                        if let other = pressedAt[probe.message], abs(other - y) < 20 { continue }
+                        // One line: its other end was this press already, except the reported second press at
+                        // long-end-top, which proves the first lift was really put back (#9687).
+                        if let other = pressedAt[probe.message], abs(other - y) < 20, probe.name != "long-end-top" { continue }
                         pressedAt[probe.message] = y
                         let at = CGPoint(x: min(f.minX + 24, band.maxX - 8), y: y)
                         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: at.x, dy: at.y)).press(forDuration: 0.6)
