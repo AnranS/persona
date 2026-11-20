@@ -1943,6 +1943,7 @@ func TestLeaderWorkersNeedABrief(t *testing.T) {
 	startTaskLeader(t, s, f)
 	s.briefsOptional = false
 	call := func(task map[string]any) proto.ToolResult {
+		task["role"] = "worker"
 		raw, _ := json.Marshal(map[string]any{"tasks": []any{task}})
 		return s.mcpCall(context.Background(), "box", "s1", "task_plan", raw, false)
 	}
