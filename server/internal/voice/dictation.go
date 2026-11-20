@@ -15,20 +15,13 @@ const modeDictation = "dictation"
 // startDictation starts one unbound, text-only session. A service that refuses the interim-caption extension or
 // output_modalities gets a replacement without it, as meeting transcription does; no other failure opens another session.
 func (c *conversation) startDictation(ctx context.Context, up upLink, p *Provider, w wire, model, instructions string) (int, bool, upLink, error) {
-	partial := trMemoOf(p).captions.Load() != trNotGranted
+	partial := true
 	textOnly := !trMemoOf(p).noTextOnly.Load()
 	for {
 		s := session{Model: model, InputRate: p.inputRate(), Instructions: instructions, Dictation: true, DictationCaptions: partial, TextOnly: textOnly}
 		granted := false
 		rate, err := startUpstream(ctx, up, w, p, s, func(e event) { granted = e.captions })
 		if err == nil {
-			if partial {
-				if granted {
-					trMemoOf(p).captions.Store(trGranted)
-				} else {
-					trMemoOf(p).captions.Store(trNotGranted)
-				}
-			}
 			return rate, partial && granted, up, nil
 		}
 		var refused *sessionRefused
@@ -40,7 +33,6 @@ func (c *conversation) startDictation(ctx context.Context, up upLink, p *Provide
 			if !partial {
 				return 0, false, up, err
 			}
-			trMemoOf(p).captions.Store(trNotGranted)
 			partial = false
 			c.logf("provider %s: the service refused interim captions (%s): dictation uses standard input transcripts", p.ID,
 				firstNonEmpty(refused.code, "no code"))

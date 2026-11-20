@@ -372,6 +372,9 @@ func TestDictationCaptionRefusalUsesStandardTranscripts(t *testing.T) {
 	}
 	dictationTestWriteAudio(t, a, voicetest.PCM(script, 2.2))
 	dictationTestFinal(t, a, "item-2-1", "Standard transcript after caption refusal.")
+	if got := trMemoOf(&pl.cfg.Providers[0]).captions.Load(); got != trUnknown {
+		t.Fatalf("dictation changed meeting transcription's caption memory to %d", got)
+	}
 }
 
 func TestDictationRequiresLiveUpstream(t *testing.T) {
