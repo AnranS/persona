@@ -202,6 +202,23 @@ class ChatHistoryNotFoundTest {
         }
     }
 
+    @Test fun kotlinOrdinaryLatestFailureKeepsTheHubsStickyError() = runBlocking {
+        val queries = ConcurrentLinkedQueue<ItemsQuery>()
+        val failure = CompletableDeferred<Nothing>()
+        val transport = transport(queries, latest = { failure.await() }, older = { error("No older page requested") })
+        fixture(Adapter.Kotlin, transport, queries) {
+            pump { queries.size == 1 }
+            connection.events.emit(ErrorEvent(key.machineId, key.sessionId, error = hubSentence, code = "internal"))
+            pump { snapshot.get().error == hubSentence }
+            failure.completeExceptionally(HubFailure(HubError.Server, "The read failed.", status = 503, code = "internal"))
+            pump { !snapshot.get().loading && snapshot.get().error == DataText.of(Key.ChatSyncFailed) }
+
+            connection.events.emit(MachinesEvent(emptyList()))
+
+            assertEquals("an ordinary failure must not clear the hub's sticky sentence", hubSentence, snapshot.get().error)
+        }
+    }
+
     @Test fun kotlinLatestNotFoundShowsTheHubSentenceAndStopsLoading() = runBlocking {
         latestMissingHistory(Adapter.Kotlin)
     }

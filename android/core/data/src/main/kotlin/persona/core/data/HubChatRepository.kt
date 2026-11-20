@@ -864,7 +864,7 @@ class HubChatRepository(
                 else {
                     firstPageIn(entry)
                     val missing = missingHistory(error)
-                    entry.eventError = missing
+                    if (missing != null) entry.eventError = missing
                     entry.state.update { it.copy(loading = false, error = missing ?: DataText.of(Key.ChatSyncFailed), verified = false) }
                 }
             } }
@@ -989,7 +989,7 @@ class HubChatRepository(
                 // While the open waits for the watch (awaitWatch), a catch-up its runtime refuses alike says nothing new.
                 if (entry.notLoadedWait?.isActive != true || !notLoaded(error)) {
                     val missing = missingHistory(error)
-                    entry.eventError = missing
+                    if (missing != null) entry.eventError = missing
                     entry.state.update { it.copy(error = missing ?: DataText.of(Key.ChatSyncFailed), verified = false) }
                 }
             } }
