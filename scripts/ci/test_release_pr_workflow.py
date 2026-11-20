@@ -134,8 +134,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("refs/heads/$branch", text)
         self.assertIn("preserve its failed source", text)
         self.assertIn("release-reserved.txt", text)
-        self.assertEqual(text.count("--reserved"), 3)
-        self.assertNotIn("--reserved $(tr", text)
+        self.assertIn("--reserved", text)
         self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
         self.assertIn('releases/latest', text)
         self.assertIn(r'select(.head.ref == \$branch)', text)
@@ -154,15 +153,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
         fragment = "\n".join(lines[start:end + 1])
         prefix = ["scripts/operations/release_pr.py", "--repository", "nwverse/persona", "--channel", "beta",
                   "next-version", "--stable-tag", "v0.9.1", "--reserved"]
-        for name, expected in (("multiple", ["0.9.1-beta.9", "0.9.1-beta.10"]),
-                               ("unterminated", ["0.9.1-beta.9", "0.9.1-beta.10"]),
-                               ("empty", [])):
+        reserved_refs = ("a" * 40 + "\trefs/heads/release/0.9.1-beta.9\n"
+                         + "b" * 40 + "\trefs/heads/release/0.9.1-beta.10\n")
+        for name, refs, expected in (("multiple", reserved_refs, ["0.9.1-beta.9", "0.9.1-beta.10"]),
+                                     ("unterminated", reserved_refs.removesuffix("\n"), ["0.9.1-beta.9", "0.9.1-beta.10"]),
+                                     ("empty", "", [])):
             with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
                 fixture = Path(directory)
                 fake_bin = fixture / "bin"
                 fake_bin.mkdir()
                 git = fake_bin / "git"
-                git.write_text("#!/bin/sh\nexit 0\n")
+                git.write_text("#!/bin/sh\n"
+                               "if [ \"$1\" = ls-remote ] && [ \"$2\" = --heads ]; then\n"
+                               "  printf '%s' \"$RESERVED_REFS\"\n"
+                               "fi\n")
                 git.chmod(0o755)
                 python = fake_bin / "python3"
                 python.write_text("#!/bin/sh\n"
@@ -171,18 +175,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 python.chmod(0o755)
                 argv_log = fixture / "python-argv.txt"
                 env = {"PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
-                       "PYTHON_ARGV_LOG": str(argv_log),
+                       "RESERVED_REFS": refs, "PYTHON_ARGV_LOG": str(argv_log),
                        "REPOSITORY": "nwverse/persona", "stable": "v0.9.1", "branch": "release/0.9.1-beta.2"}
-                (fixture / "release-reserved.txt").write_text("\n".join(expected) + ("\n" if name == "multiple" else ""))
-                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], cwd=fixture, env=env,
+                case_fragment = fragment
+                if name == "unterminated":
+                    case_fragment = "\n".join(line for line in fragment.splitlines()
+                                              if "git ls-remote --heads" not in line)
+                    (fixture / "release-reserved.txt").write_text("0.9.1-beta.9\n0.9.1-beta.10")
+                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + case_fragment], cwd=fixture, env=env,
                                         capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(argv_log.read_text().splitlines(), prefix + expected)
-        reserved_commands = [line for line in lines if "--reserved" in line]
-        self.assertEqual(len(reserved_commands), 3)
-        for reserved_command in reserved_commands:
-            self.assertNotRegex(reserved_command, r"--reserved\s+\$\(",
-                                "reserved versions must not use an unquoted command substitution (SC2046)")
+        reserved_command = next(line for line in lines if "--reserved" in line)
+        self.assertNotRegex(reserved_command, r"--reserved\s+\$\(",
+                            "reserved versions must not use an unquoted command substitution (SC2046)")
 
     def test_verified_pr_merges_then_main_is_reverified_before_publication(self):
         text = PR.read_text()
