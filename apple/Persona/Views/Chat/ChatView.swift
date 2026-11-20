@@ -946,7 +946,6 @@ struct ChatView: View {
         .environment(\.openPort, actions.openPort)
         // Web links open in the in-app sheet (Feishu docs in the native reader); local paths open the machine's file viewer.
         .environment(\.openURL, actions.openURL)
-        .markdownInlineImageProvider(MathInlineImages(scope: FileScope(machine: key.machineRef, cwd: session?.cwd ?? "")))
         #if os(macOS)
         .macLinkPanel($link, key: key) // the Mac's panel at the trailing edge (Mac/Link/MacLinkPanel.swift)
         #else

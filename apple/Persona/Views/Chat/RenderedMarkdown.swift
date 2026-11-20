@@ -502,27 +502,18 @@ private struct FittedDiagram: View {
 
 /// Inline formulas (`persona-math:` images, `MathMarkdown`): drawn at the body's size as template images, so they take
 /// the text's color; TeX that KaTeX cannot read shows as its source in monospace. A web picture inside a line of text
-/// is as tall as the line (#9474), loaded through the hub when it can (`ReplyPictureSource`); a machine-local inline
-/// picture uses the chat's file scope. Other inline images load as before.
+/// is as tall as the line (#9474), loaded through the hub when it can (`ReplyPictureSource`); other inline images load
+/// as before.
 struct MathInlineImages: InlineImageProvider {
     /// Whether web pictures load: not in what other people wrote (`AskedMarkdownImages`), where one may be a tracking
     /// pixel and an inline picture has no tap to ask.
     var web = true
-    /// The session machine and cwd for local inline images; nil outside a machine conversation.
-    var scope: FileScope? = nil
 
     func image(with url: URL, label: String) async throws -> Image {
         guard let tex = MathMarkdown.tex(url) else {
-            if ReplyImages.isWeb(url.absoluteString) {
-                guard web else { throw URLError(.cancelled) }
-                return try await Self.linePicture(url.absoluteString)
-            }
-            if let path = PathLinkURL.localPath(url) {
-                guard let scope else { throw URLError(.fileDoesNotExist) }
-                let ref = FileRef(group: scope.machine.group, machineID: scope.machine.id, path: path, cwd: scope.cwd)
-                return try await Self.linePicture(ref)
-            }
-            return try await DefaultInlineImageProvider.default.image(with: url, label: label)
+            guard ReplyImages.isWeb(url.absoluteString) else { return try await DefaultInlineImageProvider.default.image(with: url, label: label) }
+            guard web else { throw URLError(.cancelled) }
+            return try await Self.linePicture(url.absoluteString)
         }
         let points = await RenderedText.points
         if let image = try? await MarkdownRenderer.shared.image(.inlineMath, tex, dark: false, points: points) {
@@ -537,16 +528,6 @@ struct MathInlineImages: InlineImageProvider {
             return renderer.nsImage.map { i in i.isTemplate = true; return Image(nsImage: i) } ?? Image(systemName: Theme.Icon.code)
             #endif
         }
-    }
-
-    /// A local picture inside a line of text, decoded through the same bounded machine-file cache as block pictures.
-    private static func linePicture(_ file: FileRef) async throws -> Image {
-        let line = await RenderedText.points * Theme.ReplyPicture.inlineHeight
-        let size = ReplyImageLayout.sizes[0]
-        guard let picture = try await ChatImageLoader.image(file, side: CGFloat(size)), let cg = picture.cgImage else {
-            throw URLError(.cannotDecodeContentData)
-        }
-        return Image(uiImage: UIImage(cgImage: cg, scale: max(1, CGFloat(cg.height) / line), orientation: .up))
     }
 
     /// A web picture inside a line of text: the hub's smallest size, drawn as tall as the line (never enlarged).

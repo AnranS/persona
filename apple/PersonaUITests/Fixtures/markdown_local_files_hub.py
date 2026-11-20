@@ -70,9 +70,11 @@ def main():
         "![Missing screenshot](shots/missing.png)",
         "![Denied screenshot](private/denied.png)",
         "![Unreadable screenshot](" + unreadable_png + ")",
+        "Before ![Inline denied screenshot](private/denied.png) after",
         "[Missing report](reports/missing.md)",
         "[Denied report](private/denied.md)",
         "[Unreadable report](" + unreadable_md + ")",
+        "![Lone denied screenshot](private/denied.png)",
         "[Web report](https://example.com/report)",
     ])
     hub.ITEMS[hub.DSH_SESSION] = [

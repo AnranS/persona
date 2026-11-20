@@ -152,8 +152,13 @@ nonisolated enum ChatImageLoader {
     static let shared = ImageRetries()
     private var failures: Set<String> = []
     private var attempts: [String: Int] = [:]
+    private var reasons: [String: String] = [:]
+
+    private func key(_ f: FileRef) -> String { "machine-file:\(f.machineRef.path):\(f.cwd ?? ""):\(f.path)" }
 
     func didFail(_ p: ImagePayload) -> Bool { failures.contains(p.identity) }
+    func didFail(_ f: FileRef) -> Bool { failures.contains(key(f)) }
+    func failure(_ f: FileRef) -> String? { reasons[key(f)] }
 
     /// A tap on its tile asks it again: one fetched from the hub whose last load failed. Bytes already here that do not
     /// decode would only fail again; the viewer says why.
@@ -170,13 +175,35 @@ nonisolated enum ChatImageLoader {
         return true
     }
 
+    /// A local file's failed load belongs to its full scope, so recreating a tile never refetches it without a tap.
+    @discardableResult func retry(_ f: FileRef) -> Bool {
+        let k = key(f)
+        guard failures.contains(k) else { return false }
+        failures.remove(k)
+        reasons[k] = nil
+        attempts[k, default: 0] += 1
+        return true
+    }
+
     /// How many times it was asked again: keys the thumbnail's load, so a retry runs it once more.
     func attempt(_ p: ImagePayload) -> Int { attempts[p.identity] ?? 0 }
+    func attempt(_ f: FileRef) -> Int { attempts[key(f)] ?? 0 }
 
     /// Only a change is written: every tile on screen reads `failures`, and a write redraws them all.
     func loaded(_ p: ImagePayload, ok: Bool) {
         guard failures.contains(p.identity) == ok else { return }
         if ok { failures.remove(p.identity) } else { failures.insert(p.identity) }
+    }
+
+    func loaded(_ f: FileRef, reason: String?) {
+        let k = key(f)
+        if let reason {
+            failures.insert(k)
+            reasons[k] = reason
+        } else {
+            failures.remove(k)
+            reasons[k] = nil
+        }
     }
 }
 
@@ -216,36 +243,23 @@ struct ChatThumbnail: View {
 struct ImageNotLoaded: View {
     var canRetry: Bool
     var retry: (() -> Void)? = nil
-    /// Why a machine-local image failed, when the hub supplied a reason. Web-image placeholders stay unchanged.
-    var reason: String? = nil
-
-    private var spokenReason: Text {
-        if let reason { return Text(verbatim: reason) }
-        return canRetry ? Text("Image didn't load. Tap to retry") : Text("Can't show this image")
-    }
 
     var body: some View {
         if canRetry, let retry {
             Button(action: retry) { words.contentShape(.rect) }
                 .buttonStyle(.plain)
-                .accessibilityLabel(spokenReason)
+                .accessibilityLabel("Image didn't load. Tap to retry")
         } else {
             words
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(spokenReason)
+                .accessibilityLabel(canRetry ? Text("Image didn't load. Tap to retry") : Text("Can't show this image"))
         }
     }
 
     /// A narrow placeholder (a portrait screenshot, a small photo): the sentence, else Retry, else the symbol alone.
     private var words: some View {
         Group {
-            if let reason {
-                VStack(spacing: Theme.Space.xxs) {
-                    ThemedIcon(canRetry ? Theme.Icon.retry : Theme.Icon.error)
-                    Text(verbatim: reason)
-                    if canRetry { Text("Retry [Components b8784c]") }
-                }
-            } else if canRetry {
+            if canRetry {
                 ViewThatFits(in: .horizontal) {
                     Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
                     Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
@@ -260,8 +274,7 @@ struct ImageNotLoaded: View {
         }
         .font(Theme.Font.label)
         .foregroundStyle(.secondary)
-        .lineLimit(reason == nil ? 1 : 2)
-        .multilineTextAlignment(.center)
+        .lineLimit(1)
         .padding(.horizontal, Theme.Space.s)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

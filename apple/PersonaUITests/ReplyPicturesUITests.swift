@@ -148,7 +148,8 @@ final class MarkdownLocalFilesUITests: XCTestCase {
                 shot("valid", scheme: scheme, size: tag)
 
                 for (alt, words) in [("Missing screenshot", missingReason), ("Denied screenshot", deniedReason),
-                                     ("Unreadable screenshot", unreadableReason)] {
+                                     ("Unreadable screenshot", unreadableReason), ("Inline denied screenshot", deniedReason),
+                                     ("Lone denied screenshot", deniedReason)] {
                     _ = reveal(picture(alt, failed: true), alt + " failure tile")
                     XCTAssertTrue(reason(words).waitForExistence(timeout: 10), "\(alt) has no reason (\(words)):\n\(app.debugDescription)")
                 }
@@ -173,6 +174,11 @@ final class MarkdownLocalFilesUITests: XCTestCase {
         sleep(1)
         let unchanged = try await readCount(path: "shots/missing.png", cwd: "/Users/me/code/reports")
         XCTAssertEqual(unchanged, first, "a failed image retried without a tap")
+        for _ in 0..<8 { app.swipeUp() }
+        for _ in 0..<8 { app.swipeDown() }
+        _ = reveal(failed, "missing local image after scrolling away and back")
+        let reappeared = try await readCount(path: "shots/missing.png", cwd: "/Users/me/code/reports")
+        XCTAssertEqual(reappeared, first, "a recreated failure tile retried without a tap")
         failed.tap()
         sleep(2)
         let retried = try await readCount(path: "shots/missing.png", cwd: "/Users/me/code/reports")
@@ -180,6 +186,24 @@ final class MarkdownLocalFilesUITests: XCTestCase {
         sleep(1)
         let settled = try await readCount(path: "shots/missing.png", cwd: "/Users/me/code/reports")
         XCTAssertEqual(settled, retried, "the retry kept repeating without another tap")
+    }
+
+    @MainActor func testFullScreenLocalFailureReasonAndRetry() async throws {
+        _ = launch()
+        let absolute = reveal(picture("Absolute screenshot"), "absolute local PNG")
+        absolute.tap()
+        XCTAssertTrue(app.buttons["viewer-close"].waitForExistence(timeout: 15), "the full-screen viewer did not open")
+        let page = app.windows.firstMatch
+        for _ in 0..<2 { page.swipeLeft(velocity: .fast) }
+        XCTAssertTrue(reason(missingReason).waitForExistence(timeout: 15), "the full-screen failure lost its reason")
+        let first = try await readCount(path: "shots/missing.png", cwd: "/Users/me/code/reports")
+        let retry = app.buttons["Retry"].firstMatch
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), "the full-screen local failure cannot retry")
+        retry.tap()
+        sleep(2)
+        let retried = try await readCount(path: "shots/missing.png", cwd: "/Users/me/code/reports")
+        XCTAssertGreaterThan(retried, first, "the full-screen Retry did not reread the file")
+        app.buttons["viewer-close"].tap()
     }
 
     @MainActor func testLocalLinksOpenTheFileViewerAndWebLinksStayInApp() {

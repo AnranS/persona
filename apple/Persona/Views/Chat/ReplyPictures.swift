@@ -41,6 +41,9 @@ enum ReplyPictureSource {
     }
     struct TaskIdentity: Hashable {
         var image: Identity
+        var path: String
+        var file: FileRef?
+        var size: Int
         var attempt: Int
     }
 
@@ -125,11 +128,20 @@ private struct ReplySinglePicture: View {
         let file = ReplyPictureSource.file(image, scope: scope)
         let cached = file.flatMap { ChatImageLoader.cached($0, side: CGFloat(size))?.pixelSize }
             ?? (image.isLocal ? nil : LarkMedia.shared.cached(path).map(\.pixelSize))
-        ReplySingleLayout(pixels: arrived ?? cached, failed: failed, detailedFailure: failure != nil) {
-            ReplyPictureTile(image: image, path: path, file: file, identity: ReplyPictureSource.Identity(url: image.url, scope: scope), size: size, open: open) { pixels, why in
-                arrived = pixels
-                failed = pixels == nil
-                failure = why
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            ReplySingleLayout(pixels: arrived ?? cached, failed: failed) {
+                ReplyPictureTile(image: image, path: path, file: file, identity: ReplyPictureSource.Identity(url: image.url, scope: scope), size: size, open: open) { pixels, why in
+                    arrived = pixels
+                    failed = pixels == nil
+                    failure = why
+                }
+            }
+            if let failure {
+                Text(verbatim: failure)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("reply-picture-failure-reason")
             }
         }
         .animation(Theme.Motion.state, value: arrived)
@@ -156,7 +168,7 @@ private struct ReplyPictureGrid: View {
                     let identity = ReplyPictureSource.Identity(url: image.url, scope: scope)
                     ReplyPictureTile(image: image, path: ReplyPictureSource.path(image.url, size: size),
                                      file: ReplyPictureSource.file(image, scope: scope), identity: identity, size: size,
-                                     open: { open(index) }, arrived: { _, why in failures[index] = why }, showsReason: false)
+                                     open: { open(index) }, arrived: { _, why in failures[index] = why })
                         .id(identity)
                         .overlay {
                             if n == grid.shown - 1, grid.more > 0 { MoreTile(count: grid.more) }
@@ -205,13 +217,20 @@ private struct ReplyPictureTile: View {
     var open: () -> Void
     /// Its pixels once it arrived, and a machine-file failure reason when it did not (the lone picture's frame follows them).
     var arrived: ((CGSize?, String?) -> Void)? = nil
-    /// Grids carry full reasons below their tiles; a lone picture shows it in the image-sized failure box.
-    var showsReason = true
     @Environment(\.openURL) private var openURL
     @State private var picture: UIImage?
     @State private var failed = false
     @State private var failure: String?
     @State private var attempt = 0
+    private let retries = ImageRetries.shared
+
+    private var fileAttempt: Int { file.map { retries.attempt($0) } ?? attempt }
+    private var isFailed: Bool { file.map { retries.didFail($0) } ?? failed }
+    private var failureReason: String? { file.flatMap { retries.failure($0) } ?? failure }
+    private var retryHint: Text {
+        if let failureReason { return Text(verbatim: failureReason) }
+        return Text("Image didn't load. Tap to retry")
+    }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
@@ -219,10 +238,17 @@ private struct ReplyPictureTile: View {
             ?? (image.isLocal ? nil : LarkMedia.shared.cached(path))
         let shown = picture ?? cached
         Button {
-            if failed {
-                failed = false
-                failure = nil
-                attempt += 1
+            if isFailed {
+                if let file {
+                    if retries.retry(file) {
+                        failed = false
+                        failure = nil
+                    }
+                } else {
+                    failed = false
+                    failure = nil
+                    attempt += 1
+                }
             } else if shown != nil {
                 open()
             }
@@ -233,8 +259,8 @@ private struct ReplyPictureTile: View {
                 .overlay {
                     if let shown {
                         Image(uiImage: shown).resizable().scaledToFill()
-                    } else if failed {
-                        ImageNotLoaded(canRetry: true, reason: showsReason ? failure : nil)
+                    } else if isFailed {
+                        ImageNotLoaded(canRetry: true)
                     }
                 }
                 .clipShape(shape)
@@ -242,22 +268,31 @@ private struct ReplyPictureTile: View {
             .contentShape(shape)
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier(failed ? "reply-picture-failed" : "reply-picture")
+        .accessibilityIdentifier(isFailed ? "reply-picture-failed" : "reply-picture")
         .accessibilityLabel(image.alt.isEmpty ? Text("Photo") : Text(verbatim: image.alt))
-        .accessibilityValue(failed ? Text(verbatim: failure ?? "") : Text(""))
-        .accessibilityHint(failed ? Text(failure ?? "Image didn't load. Tap to retry") : Text("Image, tap to enlarge"))
+        .accessibilityValue(isFailed ? Text(verbatim: failureReason ?? "") : Text(""))
+        .accessibilityHint(isFailed ? retryHint : Text("Image, tap to enlarge"))
         .contextMenu {
             if let url = URL(string: image.url) {
                 Button { openURL(url) } label: { Label("Open original", systemImage: Theme.Icon.safari) }
             }
         }
         .animation(Theme.Motion.state, value: picture != nil)
-        .task(id: ReplyPictureSource.TaskIdentity(image: identity, attempt: attempt)) {
+        .task(id: ReplyPictureSource.TaskIdentity(image: identity, path: path, file: file, size: size, attempt: fileAttempt)) {
             if let file {
+                guard !retries.didFail(file) else {
+                    // A recreated failure tile shows the remembered reason without another machine-file request.
+                    picture = nil
+                    failed = true
+                    failure = retries.failure(file)
+                    arrived?(nil, failure)
+                    return
+                }
                 do {
                     let loaded = try await ChatImageLoader.image(file, side: CGFloat(size))
                     guard !Task.isCancelled else { return }
                     let why = loaded == nil ? String(localized: "Can't show this image") : nil
+                    retries.loaded(file, reason: why)
                     picture = loaded
                     failed = loaded == nil
                     failure = why
@@ -265,6 +300,7 @@ private struct ReplyPictureTile: View {
                 } catch {
                     guard !Task.isCancelled else { return }
                     let why = error.shown ?? String(localized: "Image didn't load. Tap to retry")
+                    retries.loaded(file, reason: why)
                     picture = nil
                     failed = true
                     failure = why
@@ -273,6 +309,7 @@ private struct ReplyPictureTile: View {
                 return
             }
             if image.isLocal {
+                guard !failed else { return }
                 // A local destination outside a conversation has no machine to read from; never send it to LarkMedia.
                 let why = String(localized: "Can't show this image")
                 picture = nil
@@ -296,15 +333,10 @@ private struct ReplyPictureTile: View {
 private struct ReplySingleLayout: Layout {
     var pixels: CGSize?
     var failed: Bool
-    var detailedFailure = false
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        if failed {
-            // A machine-file failure keeps the image's box so its reason fits and the text below does not jump. The
-            // existing web-image failure remains the small retry tile.
-            if detailedFailure { return ReplyImageLayout.single(pixels: nil, column: proposal.width ?? Theme.Size.replyPictures, height: Theme.Size.replyPicture) }
-            return CGSize(width: Theme.Size.replyPictureFailed, height: Theme.Size.replyPictureFailed)
-        }
+        // The full reason lives below this layout, so even an accessibility-size sentence is not clipped by a tile.
+        if failed { return CGSize(width: Theme.Size.replyPictureFailed, height: Theme.Size.replyPictureFailed) }
         return ReplyImageLayout.single(pixels: pixels, column: proposal.width ?? Theme.Size.replyPictures, height: Theme.Size.replyPicture)
     }
 

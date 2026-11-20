@@ -89,7 +89,16 @@ struct ReplyImagesTests {
         """)
 
         let inline = "Before ![icon](shots/icon.png) after"
-        #expect(ReplyImages.apply(inline) == inline)
+        #expect(ReplyImages.apply(inline) == """
+        Before
+
+        ~~~~persona-images
+        show 0 0
+        shots/icon.png\ticon
+        ~~~~
+
+        after
+        """)
         #expect(ReplyImages.all(in: inline).map(\.url) == ["shots/icon.png"])
     }
 
