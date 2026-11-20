@@ -96,6 +96,7 @@ struct ReplyPictureRun: View {
                     .matchedTransitionSource(id: block.shown.lowerBound, in: zoom)
             } else {
                 ReplyPictureGrid(block: block, scope: scope, zoom: zoom) { opened = Opened(index: $0) }
+                    .id(ReplyPictureSource.Identity(url: block.all.map(\.url).joined(separator: "\u{1F}"), scope: scope))
             }
         }
         .fullScreenCover(item: $opened) { o in
@@ -142,22 +143,35 @@ private struct ReplyPictureGrid: View {
     var zoom: Namespace.ID
     var open: (Int) -> Void
     @Environment(\.displayScale) private var scale
+    @State private var failures: [Int: String] = [:]
 
     var body: some View {
         let grid = ReplyImageLayout.grid(count: block.shown.count, column: Theme.Size.replyPictures, widest: Theme.Size.replyPictures, gap: Theme.Space.replyPictureGap)
         // The size for the largest square a column can give (two side by side), a square's picture filling it.
         let size = ReplyImageLayout.size(points: grid.tile * ReplyImageLayout.placeholder, scale: scale)
-        ReplyGridLayout(count: block.shown.count) {
-            ForEach(Array(block.shown.prefix(grid.shown).enumerated()), id: \.element) { n, index in
-                let image = block.all[index]
-                let identity = ReplyPictureSource.Identity(url: image.url, scope: scope)
-                ReplyPictureTile(image: image, path: ReplyPictureSource.path(image.url, size: size),
-                                 file: ReplyPictureSource.file(image, scope: scope), identity: identity, size: size, open: { open(index) })
-                    .id(identity)
-                    .overlay {
-                        if n == grid.shown - 1, grid.more > 0 { MoreTile(count: grid.more) }
-                    }
-                    .matchedTransitionSource(id: index, in: zoom)
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            ReplyGridLayout(count: block.shown.count) {
+                ForEach(Array(block.shown.prefix(grid.shown).enumerated()), id: \.element) { n, index in
+                    let image = block.all[index]
+                    let identity = ReplyPictureSource.Identity(url: image.url, scope: scope)
+                    ReplyPictureTile(image: image, path: ReplyPictureSource.path(image.url, size: size),
+                                     file: ReplyPictureSource.file(image, scope: scope), identity: identity, size: size,
+                                     open: { open(index) }, arrived: { _, why in failures[index] = why }, showsReason: false)
+                        .id(identity)
+                        .overlay {
+                            if n == grid.shown - 1, grid.more > 0 { MoreTile(count: grid.more) }
+                        }
+                        .matchedTransitionSource(id: index, in: zoom)
+                }
+            }
+            // Small squares cannot carry a sentence, especially at accessibility text sizes. Keep their retry action,
+            // and put every complete machine-file reason below the unchanged grid.
+            ForEach(failures.sorted(by: { $0.key < $1.key }), id: \.key) { index, reason in
+                Text(verbatim: reason)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("reply-picture-failure-reason-\(index)")
             }
         }
     }
@@ -191,6 +205,8 @@ private struct ReplyPictureTile: View {
     var open: () -> Void
     /// Its pixels once it arrived, and a machine-file failure reason when it did not (the lone picture's frame follows them).
     var arrived: ((CGSize?, String?) -> Void)? = nil
+    /// Grids carry full reasons below their tiles; a lone picture shows it in the image-sized failure box.
+    var showsReason = true
     @Environment(\.openURL) private var openURL
     @State private var picture: UIImage?
     @State private var failed = false
@@ -218,7 +234,7 @@ private struct ReplyPictureTile: View {
                     if let shown {
                         Image(uiImage: shown).resizable().scaledToFill()
                     } else if failed {
-                        ImageNotLoaded(canRetry: true, reason: failure)
+                        ImageNotLoaded(canRetry: true, reason: showsReason ? failure : nil)
                     }
                 }
                 .clipShape(shape)
