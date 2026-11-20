@@ -1,23 +1,31 @@
 package persona.feature.chat
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +41,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import persona.core.chatlist.ChatList
 import persona.core.chatlist.ChatListEffects
 import persona.core.chatlist.ChatListState
@@ -52,6 +61,7 @@ import kotlinx.serialization.json.JsonObject
 
 /** #11451 through the real repository, ChatScreen and the same older-page effect the screen binds. */
 @RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp")
 class ChatHistoryNotFoundScreenTest {
     @get:Rule val rule = createComposeRule()
@@ -121,7 +131,7 @@ class ChatHistoryNotFoundScreenTest {
 
     private fun loadingNodes() = rule.onAllNodes(hasContentDescription("Loading"), useUnmergedTree = true).fetchSemanticsNodes()
 
-    private fun latestPage(style: AppStyle) {
+    private fun latestPage(style: AppStyle, nameSuffix: String = "") {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val transport = Transport(latestFailure = missingHistory())
@@ -140,9 +150,12 @@ class ChatHistoryNotFoundScreenTest {
                 override suspend fun refresh() = Unit
                 override suspend fun resolve(id: String, resolution: Resolution) = Unit
             }
+            var dark by mutableStateOf(false)
             rule.setContent {
-                PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
-                    ChatScreen(key, chats, sender, interactions, sessions, onBack = {})
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("history-not-found-shot")) {
+                        ChatScreen(key, chats, sender, interactions, sessions, onBack = {})
+                    }
                 }
             }
             rule.waitUntil(15_000) {
@@ -153,6 +166,16 @@ class ChatHistoryNotFoundScreenTest {
             assertTrue("$style must show the hub's exact sentence; shown=${texts()}", hubSentence in texts())
             assertTrue("$style must show neither ChatSkeleton nor a loading spinner; shown=${texts()}", loadingNodes().isEmpty())
             assertEquals("the failed latest page is not retried", 1, transport.latestReads.get())
+            val out = File(System.getProperty("persona.shots") ?: "build/history-not-found-shots").also { it.mkdirs() }
+            for (night in listOf(false, true)) {
+                rule.runOnIdle { dark = night }
+                rule.waitForIdle()
+                val name = "history-not-found-${style.name.lowercase()}-${if (night) "dark" else "light"}$nameSuffix.png"
+                File(out, name).outputStream().use {
+                    assertTrue(rule.onNodeWithTag("history-not-found-shot").captureToImage().asAndroidBitmap()
+                        .compress(Bitmap.CompressFormat.PNG, 100, it))
+                }
+            }
         } finally {
             scope.cancel()
         }
@@ -161,6 +184,17 @@ class ChatHistoryNotFoundScreenTest {
     @Test fun glassLatestNotFoundShowsHubErrorWithoutSkeleton() = latestPage(AppStyle.Glass)
 
     @Test fun briefLatestNotFoundShowsHubErrorWithoutEndlessSpinner() = latestPage(AppStyle.Brief)
+
+    @Test fun boardLatestNotFoundShowsHubErrorWithoutEndlessSpinner() = latestPage(AppStyle.Board)
+
+    @Test @Config(fontScale = 2f)
+    fun glassLatestNotFoundLargeTextShowsHubErrorWithoutSkeleton() = latestPage(AppStyle.Glass, "-text200")
+
+    @Test @Config(fontScale = 2f)
+    fun briefLatestNotFoundLargeTextShowsHubErrorWithoutEndlessSpinner() = latestPage(AppStyle.Brief, "-text200")
+
+    @Test @Config(fontScale = 2f)
+    fun boardLatestNotFoundLargeTextShowsHubErrorWithoutEndlessSpinner() = latestPage(AppStyle.Board, "-text200")
 
     private fun olderPageEffect(failure: HubFailure, expectedReads: Int, explicitRetry: Boolean = false) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

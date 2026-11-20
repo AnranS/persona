@@ -2505,7 +2505,9 @@ final class AppModel {
             let res = try await api.items(key, beforeSeq: nil)
             settle(key, applyBatch(chat(key), kind: .latest, items: res.items, span: res.span, backlog: true, hasMore: res.hasMore))
         } catch {
-            chat(key).error = error.shown
+            let store = chat(key)
+            store.error = error.shown
+            store.historyNotFound = error.isHistoryNotFound
         }
     }
 
@@ -2620,9 +2622,11 @@ final class AppModel {
             prependBatch(store, items: res.items, hasMore: res.hasMore)
             return true
         } catch {
+            let missing = error.isHistoryNotFound
             #if DEBUG && os(iOS)
-            ProductionContinuityShadow.shared.failed(.olderFailed, in: store)
+            if !missing { ProductionContinuityShadow.shared.failed(.olderFailed, in: store) }
             #endif
+            if missing { prependBatch(store, items: [], hasMore: false) }
             if !error.isOffline { show(error) } // scrolling up while offline: the title says why nothing comes
             return false
         }

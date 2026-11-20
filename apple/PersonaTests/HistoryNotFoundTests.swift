@@ -66,6 +66,7 @@ struct HistoryNotFoundTests {
         let window = try host(model, key: key)
         defer { close(window) }
         let elements = await waitForHubSentence(Self.missingSentence, in: window)
+        await holdForScreenshot()
         #expect(elements.contains { $0.label == Self.missingSentence },
                 "the chat must draw the hub's exact sentence: \(elements.map(\.label))")
         #expect(!elements.contains { $0.id == "chat-loading-placeholder" },
@@ -121,10 +122,21 @@ struct HistoryNotFoundTests {
         try automation(true)
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.frame = UIScreen.main.bounds
         window.rootViewController = UIHostingController(rootView: NavigationStack {
-            ChatView(key: key)
-        }.environment(model))
+            Group {
+                if FileManager.default.fileExists(atPath: "/tmp/persona-history-not-found-large") {
+                    ChatView(key: key).environment(\.sizeCategory, .accessibilityExtraExtraExtraLarge)
+                } else {
+                    ChatView(key: key)
+                }
+            }.environment(model)
+        })
+        if FileManager.default.fileExists(atPath: "/tmp/persona-history-not-found-dark") {
+            window.overrideUserInterfaceStyle = .dark
+        } else if FileManager.default.fileExists(atPath: "/tmp/persona-history-not-found-light") {
+            window.overrideUserInterfaceStyle = .light
+        }
         window.isHidden = false
         window.layoutIfNeeded()
         return window
@@ -163,6 +175,14 @@ struct HistoryNotFoundTests {
             current = elements(in: window)
         }
         return current
+    }
+
+    private func holdForScreenshot() async {
+        let files = FileManager.default
+        guard files.fileExists(atPath: "/tmp/persona-history-not-found-light")
+                || files.fileExists(atPath: "/tmp/persona-history-not-found-dark") else { return }
+        try? Data("ready\n".utf8).write(to: URL(fileURLWithPath: "/tmp/persona-history-not-found-ready"))
+        try? await Task.sleep(for: .seconds(10))
     }
 
     private func automation(_ on: Bool) throws {
