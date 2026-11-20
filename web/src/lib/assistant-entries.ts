@@ -1,7 +1,7 @@
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
-import { decisionDismissed, linkedParkInteraction, reviewState } from "./supervision";
+import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
 import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
 import { awaitsReview, dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
@@ -153,6 +153,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const folded = new Set<string>();
   const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
   const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
+  const homeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at || parkInteractionID(todo)));
   // One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent several of these tasks list asks under one of them,
   // the task the hub ties its session to (`todo`), else the first that lists it. The others neither repeat its cards nor
   // wait on the user for them; they are in progress.
@@ -160,7 +161,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   for (const card of slots) {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     if (!todo) continue;
-    for (const a of activeAgents(todo)) {
+    for (const a of homeAgents(todo)) {
       const k = sessionKey(a.machine_id, a.session_id);
       const ids = listing.get(k) ?? [];
       if (!ids.includes(todo.id)) listing.set(k, [...ids, todo.id]);
@@ -172,9 +173,12 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     return tied && ids?.includes(tied) ? tied : ids?.[0];
   };
   for (const card of slots) {
-    const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
+    const sourceTodo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     // a plan task with no to-do yet is its plan's row (below); a to-do the hub no longer sends is finished
-    if (!todo) continue;
+    if (!sourceTodo) continue;
+    const candidate = linkedParkInteraction(sourceTodo, interactions);
+    const linkedHome = candidate ? homeOf(candidate.machine_id, candidate.session_id) : undefined;
+    const todo = linkedHome !== undefined && linkedHome !== sourceTodo.id ? withoutParkInteraction(sourceTodo) : sourceTodo;
     const active = activeAgents(todo);
     const own = active.filter((a) => homeOf(a.machine_id, a.session_id) === todo.id);
     // what the task waits on the user for is its own Agents' (an Agent another task holds asks there)

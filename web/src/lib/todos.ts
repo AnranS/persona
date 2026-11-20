@@ -414,10 +414,13 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   if (todo.start_error) return "failed";
   if (todo.done_at) return "done";
   const linkedID = parkInteractionID(todo);
-  const linked = linkedID ? lookup?.interaction?.(linkedID) : undefined;
-  if (linked && linkedParkInteraction(todo, [linked])) return "needs_you";
+  const ownerAsk = linkedParkOwnerAsk(todo);
+  const viewKeepsPark = linkedID && todo.view && !ownerAsk && todo.view.section !== "needs_you" && todo.view.section !== "can_wait";
+  const candidate = viewKeepsPark ? undefined : linkedID ? lookup?.interaction?.(linkedID) : undefined;
+  const linked = candidate && linkedParkInteraction(todo, [candidate]);
+  if (linked) return "needs_you";
   // With no pending-card list, use the manager's view; a supplied list, including an empty one after resolution, wins.
-  if (linkedID && !lookup?.interaction && linkedParkOwnerAsk(todo)) return "needs_you";
+  if (linkedID && !lookup?.interaction && ownerAsk) return "needs_you";
   const active = (todo.agents ?? []).filter((a) => !a.released_at);
   if (active.length === 0) return "not_started";
 
@@ -437,6 +440,10 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
     // its child sessions' state folded in (#5120): one waiting on the user makes the task wait, one working works
     const st: AgentState = s ? foldedState(s) : "offline";
     if (st === "needs_you") {
+      if (linkedID && !linked && s?.work?.interaction_id === linkedID) {
+        // The exact linked card is gone; this is its stale session state, not a new owner question.
+        continue;
+      }
       hasNeedsYou = true;
       break;
     }

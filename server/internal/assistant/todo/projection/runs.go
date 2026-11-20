@@ -70,13 +70,24 @@ func (r run) since() time.Time {
 	return r.s.UpdatedAt
 }
 
+func parkEvidenceInteractionID(f *Facts) string {
+	sv := f.Supervision
+	if sv == nil || sv.State != reviewParked || sv.Parked == nil || sv.Parked.Evidence == nil || sv.Parked.Evidence.Kind != parkExternalEvent {
+		return ""
+	}
+	return sv.Parked.Evidence.InteractionID
+}
+
+func parkInteractionID(f *Facts, a Agent) string {
+	if a.DismissedAt != nil || a.StartError != "" {
+		return ""
+	}
+	return parkEvidenceInteractionID(f)
+}
+
 // linkedParkCard is the exact pending card a current external-event park names for this worker, if it still exists.
 func linkedParkCard(f *Facts, a Agent) *proto.Interaction {
-	sv := f.Supervision
-	if sv == nil || sv.State != reviewParked || sv.Parked == nil || sv.Parked.Evidence == nil || sv.Parked.Evidence.Kind != parkExternalEvent || a.DismissedAt != nil || a.StartError != "" {
-		return nil
-	}
-	id := sv.Parked.Evidence.InteractionID
+	id := parkInteractionID(f, a)
 	if id == "" {
 		return nil
 	}
@@ -121,6 +132,9 @@ func activeRuns(f *Facts, now time.Time) []run {
 		r.kind = runReading(r, now)
 		if linked != nil {
 			r.kind = runAsks
+		} else if r.card == nil && r.kind == runAsks && r.s.Work != nil && r.s.Work.InteractionID == parkInteractionID(f, a) {
+			// The exact linked card is gone; this is its stale session state, not a new owner question.
+			r.kind = runIdle
 		}
 		out = append(out, r)
 	}

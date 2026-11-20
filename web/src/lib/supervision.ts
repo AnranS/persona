@@ -60,6 +60,14 @@ export function linkedParkOwnerAsk(todo: Todo): boolean {
   return !!id && !!todo.view?.asks?.some((ask) => ask.interaction === id);
 }
 
+/** A local copy of a to-do whose linked request is homed elsewhere; its recorded evidence is not mutated. */
+export function withoutParkInteraction(todo: Todo): Todo {
+  if (!parkInteractionID(todo)) return todo;
+  const supervision = todo.supervision!;
+  const parked = supervision.parked!;
+  return { ...todo, supervision: { ...supervision, parked: { ...parked, evidence: { ...parked.evidence!, interaction_id: undefined } } } };
+}
+
 export interface ReviewCheck {
   criterion: string;
   met: boolean;

@@ -112,6 +112,34 @@ describe("a parked external event linked to an existing owner prompt (#10527)", 
     expect(active.parked).toEqual([]);
   });
 
+  it("keeps one home when a released linked task shares its worker with a tied active task", () => {
+    const linked = todo(interactionID);
+    const other = { ...todo(undefined, false), id: "todo_2", title: "Other task" };
+    const tied = { ...idle, state: "needs_you", todo: { id: "todo_2", title: "Other task" } } as Session;
+    const cards = [linked, other].map((td) => ({ id: `plan:${td.id}:0`, todo_id: td.id, plan_id: `plan_${td.id}`, index: 0, at, updated_at: at, state: "working" as const }));
+    const got = assistantEntries({ conversation: "main", main: "main", todos: [linked, other], sessions: [tied], interactions: [prompt], plans: {}, feed: [],
+      now: Date.parse("2026-11-10T09:00:00Z"), cards });
+    expect(got.needsYou).toHaveLength(1);
+    expect(got.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_2", asks: [prompt] });
+    expect(got.parked.map((item) => item.key)).toEqual(["task:todo_1"]);
+  });
+
+  it("returns an active worker to Parked when its linked interaction resolved but its session is stale", () => {
+    const stale = { ...idle, state: "needs_you", status: "blocked", work: { phase: "blocked", interaction_id: interactionID } } as Session;
+    const input = { conversation: "main", main: "main", todos: [todo(interactionID, false)], sessions: [stale], interactions: [] as Interaction[], plans: {}, feed: [],
+      now: Date.parse("2026-11-10T09:00:00Z"),
+      cards: [{ id: "plan:plan_1:0", todo_id: "todo_1", plan_id: "plan_1", index: 0, at, updated_at: at, state: "working" as const }] };
+    const got = assistantEntries(input);
+    expect(got.needsYou).toEqual([]);
+    expect(got.parked.map((item) => item.key)).toEqual(["task:todo_1"]);
+
+    // A different current card is still real owner input, not the resolved one.
+    const newer = { ...prompt, id: "ix_new" };
+    const next = assistantEntries({ ...input, sessions: [{ ...stale, work: { phase: "blocked", interaction_id: "ix_new" } }], interactions: [newer] });
+    expect(next.needsYou).toHaveLength(1);
+    expect(next.needsYou[0]).toMatchObject({ kind: "task", key: "task:todo_1", asks: [newer] });
+  });
+
   it.each([
     ["no interaction is linked", undefined, [prompt]],
     ["the referenced interaction is unknown", "ix_not_pending", []],
