@@ -1,6 +1,13 @@
 package node
 
-import "github.com/nwverse/persona/server/internal/proto"
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
 
 const (
 	originInbox = "inbox"
@@ -11,20 +18,27 @@ const (
 // assistantOrigin is the manager-recorded origin for a model call. Session state covers Claude from before process
 // start and every resumed conversation; the process record covers Codex while its proc-* key is becoming a thread id.
 func (n *Node) assistantOrigin(id string) string {
+	origin, _ := n.assistantOriginCwd(id)
+	return origin
+}
+
+// assistantOriginCwd also returns the trusted directory the assistant process started in. A hook's current cwd may
+// have changed since then and must not inherit directory-local assumptions made for the original assistant directory.
+func (n *Node) assistantOriginCwd(id string) (string, string) {
 	if n.state != nil {
 		if st, ok := n.state.get(id); ok && st.Origin != "" {
-			return st.Origin
+			return st.Origin, st.Cwd
 		}
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	read := func(p *assistantProc) string {
+	read := func(p *assistantProc) (string, string) {
 		if p == nil {
-			return ""
+			return "", ""
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		return p.origin
+		return p.origin, p.cwd
 	}
 	if p := n.procs[id]; p != nil {
 		return read(p)
@@ -40,7 +54,68 @@ func (n *Node) assistantOrigin(id string) string {
 			return read(p)
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// inboxReadRules lets an Inbox investigation read the owner's installed Skills and knowledge base. Claude Code checks
+// both a requested symlink path and its resolved target, so a linked Skills root or direct child Skill needs both rules.
+// Nested links keep the usual permission flow. A comma cannot be carried by the comma-joined --allowedTools value.
+func (n *Node) inboxReadRules() []string {
+	var skillRoots []string
+	if n.home != "" {
+		skillRoots = append(skillRoots, filepath.Join(n.home, ".claude", "skills"))
+	}
+	if n.dir != "" {
+		skillRoots = append(skillRoots, filepath.Join(n.dir, "skills"))
+	}
+	roots := slices.Clone(skillRoots)
+	if n.dir != "" {
+		roots = append(roots, filepath.Join(n.dir, "data"))
+	}
+	var rules []string
+	add := func(path string) {
+		if path == "" || strings.Contains(path, ",") {
+			return
+		}
+		path = filepath.ToSlash(filepath.Clean(path))
+		if path[0] != '/' {
+			path = "/" + path // a Windows drive path
+		}
+		rule := "Read(/" + path + "/**)"
+		if !slices.Contains(rules, rule) {
+			rules = append(rules, rule)
+		}
+	}
+	for _, root := range roots {
+		if strings.Contains(root, ",") {
+			continue
+		}
+		add(root)
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			add(resolved)
+		}
+	}
+	// Installed Skills are commonly one symlink per Skill. Resolve just this bounded level rather than walking a Skill's
+	// contents: its files may contain unrelated links, which retain the normal approval boundary.
+	for _, root := range skillRoots {
+		if strings.Contains(root, ",") {
+			continue
+		}
+		entries, _ := os.ReadDir(root)
+		for _, entry := range entries {
+			if entry.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			resolved, err := filepath.EvalSymlinks(filepath.Join(root, entry.Name()))
+			if err != nil {
+				continue
+			}
+			if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+				add(resolved)
+			}
+		}
+	}
+	return rules
 }
 
 // inboxLarkOutbound says whether a parsed command can make a Lark change or is too opaque to prove read-only. It runs
