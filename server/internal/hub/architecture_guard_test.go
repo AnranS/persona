@@ -281,7 +281,7 @@ func selectorString(e *ast.SelectorExpr) string {
 }
 
 // mergedListsCovered checks the loop `for pattern, key := range mergedLists`. The key is registered only when it is
-// already a relayed route, either as written or with the method prefix removed (extwire.Routes has no method).
+// already a relayed route, either as written or with the method prefix removed for a path-only relay entry.
 func mergedListsCovered(relayed []string) error {
 	var missing []string
 	for pattern := range mergedLists {
