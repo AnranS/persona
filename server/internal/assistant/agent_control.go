@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -832,8 +833,11 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 		s.recordBriefCompletion(ctx, t, briefCompletionReport, now)
 	}
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
-	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
-		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)})
+	g := superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
+		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)}
+	if !s.deliverReportingReport(ctx, t, g) {
+		s.signal(g)
+	}
 	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
 	if text != progress.Text {
 		progress.Detail = text
@@ -859,6 +863,55 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	}
 	return "Sent to your supervisor: it reads it within minutes and answers you by message. Don't wait idle for it if there is " +
 		"other work in the task; stop when you cannot go on.", nil
+}
+
+// deliverReportingReport sends g to an active reporting conversation through the same notice path as its quiet tasks:
+// its own machine, no supervision-policy requirement, and notices removed when it is stopped. t names the reporter only
+// in the returned copy from superviseOpenTodoOf; no ledger is written. false selects the ordinary supervision route
+// when this is not a reporting report or its relay cannot be saved.
+func (s *Service) deliverReportingReport(ctx context.Context, t Todo, g superviseSignal) bool {
+	machine, reporting := s.reporterOf(ctx, t.Origin)
+	if !reporting || t.Supervision == nil || t.Supervision.Supervisor != t.Origin {
+		return false
+	}
+	if s.reporterStopped(ctx, t.Origin) {
+		return true
+	}
+	if g.level() == supervisionInfo {
+		return true // as signal does, progress stays on the card and wakes nobody
+	}
+	entry, ok := s.digestEntry(ctx, g, s.webBase(ctx))
+	if !ok {
+		return true
+	}
+	msg := relayMsg{From: t.ID, FromTitle: "督办", Tool: noticeTool, At: g.At.UTC(),
+		Text: s.renderQueuedDigest(ctx, t.Origin, []prompts.SuperviseEntry{entry})}
+	queue := func() bool {
+		if _, err := s.queueRelayDurable(t.Origin, msg); err != nil {
+			s.logf("task %s: reporting report: %v", t.ID, err)
+			return false
+		}
+		s.publish(ctx)
+		return true
+	}
+	c, ok := s.session(ctx, machine, t.Origin)
+	if !ok || c.Starting || c.Status == proto.StatusWorking || s.relayWaits(t.Origin, msg) {
+		if !queue() {
+			return false
+		}
+		if ok && !c.Starting && c.Status != proto.StatusWorking {
+			s.drainRelays(machine, []proto.Session{c})
+		}
+		return true
+	}
+	if err := s.tryDirectRelay(ctx, machine, t.Origin, &msg); err != nil {
+		if s.refusedDirect(ctx, machine, t.Origin, msg, err) {
+			return true
+		}
+		s.logf("task %s: reporting report: %v; queued", t.ID, err)
+		return queue()
+	}
+	return true
 }
 
 // stoppedAgent: c is an agent that has stopped and is read-only (node stopped.go, #4754): its terminal engine keeps its

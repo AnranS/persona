@@ -19,9 +19,9 @@ import (
 //   - a todo the user made by hand gets a supervisor when an agent is linked to it (superviseLinkedTodo), and any open
 //     todo's agent that reports gets one then (superviseOpenTodoOf), so report_to_supervisor has a receiver.
 //
-// The supervisor is the conversation that started the agent when it supervises (the main conversation, a leader) or
-// reports, else the main conversation. Agents the user starts by hand in a terminal are not Persona's and are left
-// alone. With the setting off none of this runs.
+// The supervisor is the conversation that started the agent when it supervises (the main conversation, a leader), else
+// the main conversation. Agents the user starts by hand in a terminal are not Persona's and are left alone. With the
+// setting off none of this runs.
 
 // agentTasks: assistant.agent_tasks is on (off by default).
 func (s *Service) agentTasks(ctx context.Context) bool {
@@ -30,8 +30,8 @@ func (s *Service) agentTasks(ctx context.Context) bool {
 }
 
 // agentTaskSupervisor is the conversation that supervises the task of an agent conversation started ("" for an app's
-// start or the user's own todo): conversation itself when it supervises or reports, else the main conversation. false
-// while assistant.agent_tasks is off or there is no main conversation to fall back to.
+// start or the user's own todo): conversation itself when it supervises, else the main conversation. false while
+// assistant.agent_tasks is off or there is no main conversation to fall back to.
 func (s *Service) agentTaskSupervisor(ctx context.Context, conversation string) (string, bool) {
 	if !s.agentTasks(ctx) {
 		return "", false
@@ -39,15 +39,14 @@ func (s *Service) agentTaskSupervisor(ctx context.Context, conversation string) 
 	if s.supervises(ctx, conversation) {
 		return conversation, true
 	}
-	if _, reports := s.reporterOf(ctx, conversation); reports {
-		return conversation, true
-	}
 	main := s.settings(ctx).Main
 	return main, main != ""
 }
 
 // ensureSupervisor gives open todo id a supervisor when it has none (agentTaskSupervisor of the conversation that
-// opened it), with no done_when: the todo with its ledger, false when it stays unsupervised.
+// opened it), with no done_when: the todo with its ledger, false when it stays unsupervised. A reporting
+// conversation's task stays unsupervised so its ordinary quiet notices are unchanged; superviseOpenTodoOf routes its
+// Agent's report through the reporter's own delivery path instead.
 func (s *Service) ensureSupervisor(ctx context.Context, id string) (Todo, bool) {
 	t, ok := s.todoNow(id)
 	if !ok || t.DoneAt != nil {
@@ -58,6 +57,9 @@ func (s *Service) ensureSupervisor(ctx context.Context, id string) (Todo, bool) 
 	}
 	supervisor, ok := s.agentTaskSupervisor(ctx, t.Origin)
 	if !ok {
+		return Todo{}, false
+	}
+	if _, reports := s.reporterOf(ctx, t.Origin); reports {
 		return Todo{}, false
 	}
 	v, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
@@ -87,9 +89,10 @@ func (s *Service) superviseLinkedTodo(ctx context.Context, id string) {
 	}
 }
 
-// superviseOpenTodoOf is the open todo agent machine/session works for, whoever opened it, with a supervisor
-// (ensureSupervisor): where its report goes when taskOf finds no supervised task. false: it is on no open todo, or
-// that todo stays unsupervised.
+// superviseOpenTodoOf is the open todo agent machine/session works for, whoever opened it, with a supervisor for its
+// report. An active reporting conversation's todo keeps its stored state unsupervised: only the returned copy names
+// that conversation, and reportNow delivers through the reporter's existing notice path. Other unsupervised todos get
+// a ledger (ensureSupervisor). false: it is on no open todo, or that todo stays unsupervised.
 func (s *Service) superviseOpenTodoOf(ctx context.Context, machine, session string) (Todo, bool) {
 	if !s.agentTasks(ctx) {
 		return Todo{}, false
@@ -97,6 +100,10 @@ func (s *Service) superviseOpenTodoOf(ctx context.Context, machine, session stri
 	t, ok := s.openTodoOfAgent(machine, session)
 	if !ok {
 		return Todo{}, false
+	}
+	if _, reports := s.reporterOf(ctx, t.Origin); reports && !s.reporterStopped(ctx, t.Origin) {
+		t.Supervision = &Supervision{Supervisor: t.Origin}
+		return t, true
 	}
 	return s.ensureSupervisor(ctx, t.ID)
 }
