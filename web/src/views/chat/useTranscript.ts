@@ -211,6 +211,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     setLoading(!cached);
     setFirstRead(false);
     setError("");
+    historyMissing.current = false;
     updateHasMore(cached?.hasMore ?? false);
     setStreamEnded(false);
     deltas.current.flush("");
@@ -555,9 +556,6 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (!dead && version === pageRequest && (openWatch || before !== history.current)) subscribe();
     }
     reread.current = () => { void readPage(); };
-    // A different conversation starts clean; a retry of this conversation keeps its error until a read succeeds.
-    historyMissing.current = false;
-    setError("");
     void readPage();
 
     return () => {
