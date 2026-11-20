@@ -615,7 +615,7 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	if p, err := restarted.loadPlan(ctx, todo.PlanID); err != nil || p.Tasks[0].Role != roleLeader || p.Tasks[0].Parent != "" {
 		t.Fatalf("the leader's plan after a restart: %+v %v", p, err)
 	}
-	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "box/s1" || p.Tasks[0].Role != "" || p.Tasks[0].Parent != todo.ID {
+	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "box/s1" || p.Tasks[0].Role != "worker" || p.Tasks[0].Parent != todo.ID {
 		t.Fatalf("the worker's plan after a restart: %+v %v", p, err)
 	}
 	// And in the rows the link is read from:
