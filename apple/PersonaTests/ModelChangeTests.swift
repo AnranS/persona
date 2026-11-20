@@ -136,7 +136,7 @@ struct ModelChangeTests {
         let lines = marked([
             user(1, "first"), answer(2, Self.opus),
             user(3, "older node"), answer(4, nil),
-            user(5, "synthetic"), answer(6, nil, "API Error: rate limited"),
+            user(5, "synthetic"), answer(6, "<synthetic>", "API Error: rate limited"),
             user(7, "third"), answer(8, Self.sonnet),
         ])
         #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
@@ -227,7 +227,6 @@ struct ModelChangeTests {
     }
 
     private func settle(_ store: ChatStore) async throws {
-        try await Task.sleep(for: .milliseconds(50))
         for _ in 0..<100 where store.isRebuilding || !store.backlogBuilt {
             try await Task.sleep(for: .milliseconds(20))
         }
