@@ -9,10 +9,14 @@ import type { ItemsPage } from "../../lib/types";
 import { useTranscript, type Transcript } from "./useTranscript";
 
 const api = vi.hoisted(() => vi.fn());
+const session = vi.hoisted(() => ({ reconnected: undefined as (() => void) | undefined }));
 vi.mock("../../lib/api", async (importOriginal) => ({ ...await importOriginal<typeof import("../../lib/api")>(), api }));
 vi.mock("../../lib/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/store")>(),
-  listenSession: () => () => {},
+  listenSession: (_mid: string, _sid: string, handlers: { reconnected?: () => void }) => {
+    session.reconnected = handlers.reconnected;
+    return () => {};
+  },
   send: () => {},
 }));
 
@@ -160,6 +164,35 @@ describe("a history its computer can't find", () => {
     await act(async () => { latest(newest); await Promise.resolve(); });
     await loadEarlier();
     expect(older()).toBe(1);
+  });
+
+  it("keeps an in-flight older page fenced during a reconnect until the latest page succeeds", async () => {
+    let answerOlder!: (page: ItemsPage) => void;
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? new Promise<ItemsPage>((resolve) => { answerOlder = resolve; })
+      : Promise.reject(missingHistory()));
+    let read!: Promise<symbol | undefined>;
+    act(() => { read = tr.current.loadEarlier(); });
+    await act(async () => { tr.current.reload(); await Promise.resolve(); });
+    const message = tr.current.error;
+    expect(message).not.toBe("");
+
+    let latest!: (page: ItemsPage) => void;
+    let latestRequested = false;
+    api.mockImplementation((path: string) => path.includes("before_seq=")
+      ? Promise.resolve(olderPage())
+      : new Promise<ItemsPage>((resolve) => { latest = resolve; latestRequested = true; }));
+    await act(async () => { session.reconnected?.(); await Promise.resolve(); });
+    expect(latestRequested).toBe(true);
+    await act(async () => { answerOlder({ items: [], has_more: false }); await read; });
+    expect({ error: tr.current.error, hasMore: tr.current.hasMore }).toEqual({ error: message, hasMore: true });
+    await loadEarlier();
+    expect(older()).toBe(1);
+
+    await act(async () => { latest(newest); await Promise.resolve(); });
+    expect(tr.current.error).toBe("");
+    await loadEarlier();
+    expect(older()).toBe(2);
   });
 
   it("does not apply an in-flight empty older page after the latest page reports missing history", async () => {
