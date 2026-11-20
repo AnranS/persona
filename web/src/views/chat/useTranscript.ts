@@ -103,9 +103,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [loading, setLoading] = useState(!initial);
   const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
-  const latestReadPending = useRef(false);
-  // The latest page's read said its computer can't find this history (#11450): no older page is read, which would
-  // answer an empty one, end paging and take the error away.
+  // The latest page's read is unanswered or said its computer can't find this history (#11450): no older page is read,
+  // which would answer an empty one, end paging and take the error away.
   const historyMissing = useRef(false);
   const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const hasMoreRef = useRef(hasMore);
@@ -518,7 +517,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const before = history.current;
       const version = ++pageRequest;
       ready = false;
-      latestReadPending.current = true;
+      historyMissing.current = true;
       if (!itemsRef.current.length && !liveRaw.current) setLoading(true);
       clearTimeout(refused);
       refused = undefined;
@@ -541,7 +540,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           endRefused();
         } else if (!opts.starting) {
           const text = sessionLoadError(errorText(e));
-          if (sessionHistoryNotFound(e)) historyMissing.current = true;
+          historyMissing.current = sessionHistoryNotFound(e);
           if (isNotLoaded(e)) refused = window.setTimeout(() => endRefused(text), READ_TIMEOUT_MS);
           else setError(text);
         }
@@ -550,7 +549,6 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           if (!refused) { setLoading(false); setFirstRead(true); }
           lastArrival = Date.now();
           ready = true;
-          latestReadPending.current = false;
         }
       }
       if (!dead && version === pageRequest && (openWatch || before !== history.current)) subscribe();
@@ -586,20 +584,20 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     if (replacing.current || conversationDeleted(mid, sid)) return Promise.resolve(undefined);
     if (earlierInFlight.current) return earlierInFlight.current.promise;
     const delay = earlierRetryAt.current - Date.now();
-    if (!itemsRef.current.length || !hasMoreRef.current || latestReadPending.current || historyMissing.current || (delay > 0 && !options?.waitForRetry)) return Promise.resolve(undefined);
+    if (!itemsRef.current.length || !hasMoreRef.current || historyMissing.current || (delay > 0 && !options?.waitForRetry)) return Promise.resolve(undefined);
     const read: EarlierRead = { controller: new AbortController(), promise: Promise.resolve(undefined) };
     earlierInFlight.current = read;
     setLoadingEarlier(true);
     read.promise = (async () => {
       const { signal } = read.controller;
-      const current = () => earlierInFlight.current === read && !signal.aborted;
+      const current = () => earlierInFlight.current === read && !signal.aborted && !historyMissing.current;
       try {
         if (delay > 0) await waitForEarlierRetry(delay, signal);
-        if (!current() || !hasMoreRef.current || latestReadPending.current || historyMissing.current) return;
+        if (!current() || !hasMoreRef.current) return;
         const first = itemsRef.current[0];
         if (!first) return;
         const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`, { signal });
-        if (!current() || latestReadPending.current || historyMissing.current) return;
+        if (!current()) return;
         if (p.history && history.current && p.history !== history.current) {
           rewrite.current(p.history);
           return;
@@ -615,7 +613,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           return read.page;
         }
       } catch (e) {
-        if (!current() || latestReadPending.current || historyMissing.current) return;
+        if (!current()) return;
         // Kept in state for the caller to show; the next try waits instead of firing on every scroll tick.
         earlierWait.current = Math.min(earlierWait.current ? earlierWait.current * 2 : EARLIER_RETRY_MS, EARLIER_RETRY_MAX_MS);
         earlierRetryAt.current = Date.now() + earlierWait.current;
