@@ -348,6 +348,29 @@ class HttpMachineManagementTest {
         machines.setCodexSetting("mac", "model", JsonNull)
         assertEquals("""{"key":"model","value":null}""", (server.takeRequest().body.readUtf8()).zhAny())
     }
+
+    @Test fun agySettingsUseTheirOwnPathAndTheSameBody() = withHub { server, machines ->
+        val table = """{"settings":[{"key":"toolPermission","title":"工具权限","detail":"调用工具前要不要问你","type":"enum",
+            "options":["ask","always-proceed"],"default":"ask","value":"ask"},
+            {"key":"showFeedbackSurvey","type":"bool","default":true,"value":null}]}"""
+        server.enqueue(MockResponse().setBody(table))
+        val read = machines.agySettings("mac")
+        assertEquals("/api/v1/machines/mac/agy-settings", (server.takeRequest().path).zhAny())
+        assertEquals(listOf("ask", ""), (read.map { it.stringValue }).zhAny())
+        assertTrue(read[1].isDefault)
+        assertEquals(listOf("ask", "always-proceed"), (read[0].options).zhAny())
+
+        server.enqueue(MockResponse().setBody(table))
+        machines.setAgySetting("mac", "toolPermission", JsonPrimitive("always-proceed"))
+        server.takeRequest().let {
+            assertEquals("PUT", (it.method).zhAny())
+            assertEquals("/api/v1/machines/mac/agy-settings", (it.path).zhAny())
+            assertEquals("""{"key":"toolPermission","value":"always-proceed"}""", (it.body.readUtf8()).zhAny())
+        }
+        server.enqueue(MockResponse().setBody(table))
+        machines.setAgySetting("mac", "model", JsonNull)
+        assertEquals("""{"key":"model","value":null}""", (server.takeRequest().body.readUtf8()).zhAny())
+    }
 }
 
 class HttpModelConfigurationTest {
@@ -383,6 +406,40 @@ class HttpModelConfigurationTest {
         server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"revision conflict"}"""))
         assertEquals(ModelPurposeSave.Conflict, models.save(purpose, ModelConfigurationDraft(model = "next")))
         assertEquals("next", (JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["model"]?.jsonPrimitive?.content).zhAny())
+    }
+
+    @Test fun extensionCandidatesRoundTripOnTheExistingPurposeWithItsRevision() = withHub { server, models ->
+        val json = """{"purpose":{"id":"extension.notes","revision":7,"provider_ids":["launcher.one"],
+            "candidates":{"mode":"custom","modes":["extension","off","custom"],"most":3,"direct_provider_ids":[],
+            "custom":[{"provider":"launcher.one","model":"resolved-default","configured_model":"","available":true}],
+            "requested":[{"models":[{"model":"missing","available":false,"problem":"No provider offers this model."}],"last_used":"2026-06-02T12:30:00Z"}]}}}"""
+        server.enqueue(MockResponse().setBody(json))
+        val p = models.purpose("extension.notes").purpose
+        assertEquals("/api/v1/model-config/purposes/extension.notes", server.takeRequest().path)
+        val candidates = requireNotNull(p.candidates)
+        assertEquals(emptyList<String>(), candidates.directProviderIds)
+        assertEquals("No provider offers this model.", candidates.requested.single().models.single().problem)
+        assertEquals("2026-06-02T12:30:00Z", candidates.requested.single().lastUsed)
+        val draft = ModelConfigurationDraft.from(p)
+        assertEquals("", draft.candidates?.custom?.single()?.model)
+        val off = draft.copy(candidates = draft.candidates?.copy(mode = "off"))
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"revision conflict"}"""))
+        assertEquals(ModelPurposeSave.Conflict, models.save(p, off))
+        val patch = server.takeRequest()
+        assertEquals("PATCH", patch.method)
+        assertEquals("/api/v1/model-config/purposes/extension.notes", patch.path)
+        assertEquals(JsonCodec.parseToJsonElement("""{"revision":7,"candidates":{"mode":"off"}}"""),
+            JsonCodec.parseToJsonElement(patch.body.readUtf8()))
+        val latest = json.replace("\"revision\":7", "\"revision\":8")
+        server.enqueue(MockResponse().setBody(latest))
+        val refreshed = models.purpose(p.id).purpose
+        assertEquals("GET", server.takeRequest().method)
+        server.enqueue(MockResponse().setBody(latest.replace("\"revision\":8", "\"revision\":9").replace("\"mode\":\"custom\"", "\"mode\":\"off\"")))
+        val result = models.save(refreshed, ModelConfigurationDraft.from(refreshed).copy(candidates = off.candidates)) as ModelPurposeSave.Saved
+        assertEquals("off", result.detail.purpose.candidates?.mode)
+        assertEquals(9L, result.detail.purpose.revision)
+        assertEquals(JsonCodec.parseToJsonElement("""{"revision":8,"candidates":{"mode":"off"}}"""),
+            JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
     }
 
     @Test fun providerModelsAskTheHubAndOlderHubsHaveNone() = withHub { server, models ->

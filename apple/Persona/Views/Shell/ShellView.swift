@@ -114,7 +114,16 @@ struct ShellView: View {
                          onMachines: { go(.machines) },
                          onOpenExtension: { go(.extensionPage($0)) },
                          openHealth: { go(.health) },
-                         openRecordingsPage: openRecordingsPage)
+                         openRecordingsPage: openRecordingsPage,
+                         openStarred: openStarredPage)
+    }
+
+    private var openStarredPage: (() -> Void)? {
+        #if os(iOS)
+        { go(.starred) }
+        #else
+        nil
+        #endif
     }
 
     /// The drawer's Recordings: the page, which shows the recording running, else Record to start one.
@@ -205,7 +214,7 @@ private struct ShellMovingBar: View {
     let pager: ShellPager
 
     var body: some View {
-        if let railEdge, pager.moving || pager.lingering {
+        if let railEdge, pager.standsIn(rail: true) {
             movingRail(railEdge)
         } else if pager.moving || pager.lingering {
             let p = Double(min(CGFloat(pager.pageCount - 1), max(0, pager.position)))

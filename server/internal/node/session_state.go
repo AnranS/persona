@@ -31,6 +31,9 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	TaskInstructions        string          `json:"task_instructions,omitempty"`
+	TaskInstructionFile     string          `json:"task_instruction_file,omitempty"`
+	TaskInstructionChannel  string          `json:"task_instruction_channel,omitempty"`
 	CreationID              string          `json:"creation_id,omitempty"`
 	Incarnation             string          `json:"incarnation,omitempty"`
 	Pane                    string          `json:"pane,omitempty"`
@@ -38,14 +41,22 @@ type sessionState struct {
 	Model                   string          `json:"model,omitempty"`
 	ModelFingerprint        string          `json:"model_fingerprint,omitempty"`
 	ModelEffort             string          `json:"model_effort,omitempty"`
-	Origin                  string          `json:"origin,omitempty"` // manager-recorded conversation source, for model-call authorization
+	TaskExecution           bool            `json:"task_execution,omitempty"` // the last Assistant input used strict scheduled execution
+	Origin                  string          `json:"origin,omitempty"`         // manager-recorded conversation source, for model-call authorization
+	OriginKnown             bool            `json:"origin_known,omitempty"`   // manager explicitly decided origin; false on pre-upgrade records
 	ConfigDir               string          `json:"config_dir,omitempty"`
 	Cwd                     string          `json:"cwd"`
+	TaskID                  string          `json:"task_id,omitempty"`
+	WorkspaceID             string          `json:"workspace_id,omitempty"`
+	WorkspaceLabel          string          `json:"workspace_label,omitempty"`
 	IsMain                  bool            `json:"is_main,omitempty"`
 	SupervisionInstructions string          `json:"supervision_instructions,omitempty"`
 	StartedAt               time.Time       `json:"started_at"`
 	StopCause               proto.StopCause `json:"stop_cause,omitempty"`
 	StopCauseAt             int64           `json:"stop_cause_at,omitempty"`
+	// RanAt: when a node last saw the Agent run (unix seconds, written at most every ranAtEvery). A session whose agent
+	// ran until shortly before this node started and is gone now was stopped by the restart (interrupted.go, #11441).
+	RanAt int64 `json:"ran_at,omitempty"`
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
@@ -64,6 +75,8 @@ type sessionState struct {
 	Tasks []string `json:"tasks,omitempty"`
 	// Compaction: the last compaction the user asked for (assistant_compact.go).
 	Compaction *proto.Compaction `json:"compaction,omitempty"`
+	// IdleCompaction is the main chat's user-idle clock and unattended compaction latch.
+	IdleCompaction *idleCompactionState `json:"idle_compaction,omitempty"`
 	// Guest: a guest conversation's tools (assistant_guest.go): every process it runs in has no built-in tools and
 	// only these of Persona's. Nil is an ordinary conversation.
 	Guest []string `json:"guest,omitempty"`
@@ -397,11 +410,16 @@ func (s *stateFile) put(id string, v sessionState) bool {
 	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	if old, ok := s.Sessions[id]; ok {
+		// Owned by state.update: a send's earlier copy must not erase a user's newer arrival.
+		v.IdleCompaction = old.IdleCompaction
 		if old.CreationID != "" {
 			v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
 		}
 		if v.StopCauseAt == 0 && old.StopCauseAt != 0 {
 			v.StopCauseAt = max(time.Now().UnixNano(), old.StopCauseAt+1)
+		}
+		if v.RanAt == 0 {
+			v.RanAt = old.RanAt // owned by recordRunning
 		}
 	}
 	s.Sessions[id] = v

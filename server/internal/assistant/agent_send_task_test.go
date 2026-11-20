@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // secretary is an agent the main conversation did not hand out (a long-lived one the user opened), working on no todo.
@@ -242,6 +243,52 @@ func TestAgentSendTaskFailedSend(t *testing.T) {
 	}
 }
 
+func TestAgentSendReportsUncertainDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		uncertain bool
+	}{
+		{"relayed deadline", relayedDeadline, true},
+		{"node failed after writing", nodeAfterWrite, true},
+		{"could not read the write receipt", nil, true},
+		{"node refused before writing", nodeRefused, false},
+		{"request never written", rpc.NotSent(context.DeadlineExceeded), false},
+	} {
+		for _, handoff := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/handoff=%t", tc.name, handoff), func(t *testing.T) {
+				s, f := newQuietService(t)
+				secretary(f)
+				failSends(f, tc.err)
+				if tc.err == nil {
+					f.answerNode(DeviceSessionSend, unreadableWriteReceipt)
+				}
+				args := map[string]any{"machine": "box", "session_id": "sec00001", "text": "Check the weekly figures"}
+				if handoff {
+					args["task"] = map[string]any{"title": "Weekly figures"}
+				}
+				_, err := runJSON(t, s, "conv1", "agent_send", args)
+				if err == nil || tc.err != nil && !errors.Is(err, tc.err) || strings.Contains(err.Error(), "check with agent_read before sending again") != tc.uncertain {
+					t.Errorf("agent_send returned %v; uncertain = %t", err, tc.uncertain)
+				}
+				if n := sessionSends(f); n != 1 {
+					t.Errorf("sent %d times", n)
+				}
+				_, kept := s.openTodoOfAgent("box", "sec00001")
+				if want := handoff && tc.uncertain; kept != want || (feedKinds(s, "conv1") == "task") != want {
+					t.Errorf("handoff kept = %v, feed = %q; want card = %v", kept, feedKinds(s, "conv1"), want)
+				}
+				if !tc.uncertain {
+					failSends(f, nil)
+					if _, err := runJSON(t, s, "conv1", "agent_send", args); err != nil || len(sentToAgent(f)) != 1 {
+						t.Errorf("retry after a definite refusal: %v; delivered = %v", err, sentToAgent(f))
+					}
+				}
+			})
+		}
+	}
+}
+
 // /exit closes the agent: it hands it no work, so it makes no task.
 func TestAgentSendTaskExitIsNoWork(t *testing.T) {
 	s, f := newQuietService(t)
@@ -409,7 +456,7 @@ func TestAgentSendEmptyTaskIsAReply(t *testing.T) {
 			onBoxTask(t, s, "done0001", "conv2", true, "done criteria")  // another conversation's closed task
 			before := taskLedger(t, s, "conv1", "conv2")
 
-			side := prompts.RenderSideConversation(prompts.SideConversation{From: "conv1", Text: "A reply"})
+			side := prompts.RenderSideConversation("A reply")
 			for _, c := range []struct{ self, sid, receipt, sent string }{
 				{"conv1", "free0001", "Sent to free0001 on box.", "A reply"},
 				{"conv1", "peer0001", "Sent to peer0001 on box.", side},
@@ -609,7 +656,7 @@ func TestAgentSendExitToAnotherConversationsAgentIsRefused(t *testing.T) {
 			if res, err := s.runTool(ctx, "server", "conv1", "agent_send", args); err != nil || !strings.HasPrefix(res, "Sent to peer0001 on box.") {
 				t.Fatalf("/exit with an attachment: %q %v", res, err)
 			}
-			if sent := sentToAgent(f); len(sent) != 6 || !strings.HasPrefix(sent[5], prompts.RenderSideConversation(prompts.SideConversation{From: "conv1", Text: "/exit"})) {
+			if sent := sentToAgent(f); len(sent) != 6 || !strings.HasPrefix(sent[5], prompts.RenderSideConversation("/exit")) {
 				t.Fatalf("/exit with an attachment: sent %q", sent[5:])
 			}
 			if after := taskLedger(t, s, "conv1", "conv2"); after != before {

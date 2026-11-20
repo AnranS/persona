@@ -30,9 +30,10 @@ import (
 // Starting a Codex from the phone (docs/integrations/codex.md "Starting from the phone"). A Codex launcher (plain `codex`, or an alias whose
 // command is codex) runs in a new herdr tab with an optional first message as its prompt argument: Codex makes the thread
 // itself — on the shared app-server daemon for a plain 0.163, where #220 joins it (codex_daemon.go); in its own process
-// for 0.153 or a launcher with -c, on the terminal route. Neither the message nor the launcher's words (an alias can
-// carry a key) are parsed as shell code or typed onto the screen: they are written to a file only the user can read, the tab runs
-// `personad codex-start <file>`, and that runs the words with any message as one argument after "--". A start with a message answers once the new thread is known — the rollout in that directory, begun after the
+// for 0.153 or a launcher with -c, on the terminal route. Launcher words (an alias can carry a key) stay in a private
+// file: the tab runs `personad codex-start <file>`. The helper passes the message as one native argv value after
+// "--" on every OS. Windows terminal input is a character stream and cannot carry a long first message reliably;
+// no prompt is typed through it, and no shell parses the native argument. A start with a message answers once the new thread is known — the rollout in that directory, begun after the
 // launch, whose first message is exactly this one — with that thread's id, so the phone opens the session that is
 // there; it fails, with what the tab shows, when none comes in time. Without a message it returns a waiting row (codex_waiting.go).
 
@@ -174,14 +175,17 @@ func codexExecutionArgs(argv []string, e modelExecution) []string {
 	if e.Effort != "" {
 		extra = append(extra, "-c", "model_reasoning_effort="+e.Effort)
 	}
+	if e.ServiceTier != "" {
+		extra = append(extra, "-c", "service_tier="+e.ServiceTier)
+	}
 	return insertBeforeDashDash(argv, extra)
 }
 
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
-// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go). In a pane it was
+// known, its record naming the model and effort asked for (execution), which a resume runs again (retire.go). With no message it returns the waiting row once Codex's input box is up (codex_waiting.go). In a pane it was
 // given (adoptedPane: a switch from Claude Code, engine_switch.go) it starts there, and a start that fails leaves that
 // pane open: what it left in front is for the caller to clear.
-func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName, mode string) (*proto.Session, error) {
+func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, execution modelExecution, prompt, ws, tabName, mode string) (*proto.Session, error) {
 	waiting := strings.TrimSpace(prompt) == ""
 	if waiting {
 		prompt = ""
@@ -210,6 +214,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	file := filepath.Join(dir, "start.json")
 	owner, _ := launch.(interface{ Kind() string })
 	isolateHooks := owner != nil && owner.Kind() == host.Orca
+	if runtime.GOOS == "windows" {
+		prompt = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(inertControls(prompt))
+	}
 	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
@@ -270,7 +277,10 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		// A pane it did not open (a switch from Claude Code, engine_switch.go) is the user's terminal and is never
 		// closed: the switch quits what the start left in it (clearPane).
 		if adoptedPane(ctx) == nil {
-			cleanupErr = closeCodexStart(ctx, start)
+			identify, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			start.session = n.failedCodexSession(identify, pane, began)
+			cancel()
+			cleanupErr = n.closeFailedCodexStart(ctx, start)
 		}
 		if cleanupErr != nil {
 			n.mu.Lock()
@@ -291,18 +301,22 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		return nil, fmt.Errorf("%w\n%s", err, lastLines(shown, 12))
 	}
 	if waiting {
-		return n.openCodexWait(ctx, pane, cwd, launcher, mode, began), nil
+		return n.openCodexWait(ctx, pane, cwd, launcher, mode, execution, began), nil
 	}
 	defer n.unclaimCodexThread(id)
 	n.bindPane(pane, id)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
+	n.namePersonaTab(ctx, pane, id) // the tab was marked before the thread was known (personatab.go)
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, TaskInstructions: execution.TaskInstructions}
+	if st.TaskInstructions != "" && slices.Contains(argv, codexTaskConfig(st.TaskInstructions)) {
+		st.TaskInstructionChannel = "codex"
+	}
 	if mode == "plan" {
 		st.AppMode = mode
 	}
 	if legs, ok := engineHistoryOf(ctx); ok { // a switch from Claude Code starts it (engine_switch.go)
 		st.EngineHistory = legs
 	}
-	n.state.put(id, st)
+	n.putAgentState(ctx, launch, id, st)
 	_ = n.refreshHosts(ctx)
 	a, ok := n.agent(id)
 	if !ok {
@@ -328,12 +342,7 @@ func codexOnRemote(argv []string) bool {
 func (n *Node) claimCodexThread(pane, id string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for p, bound := range n.panes {
-		if bound == id && p != pane {
-			return false
-		}
-	}
-	if owner, ok := n.codexClaims[id]; ok && owner != pane {
+	if !n.codexThreadAvailableLocked(pane, id, n.panes) {
 		return false
 	}
 	if n.codexClaims == nil {
@@ -341,6 +350,18 @@ func (n *Node) claimCodexThread(pane, id string) bool {
 	}
 	n.codexClaims[id] = pane
 	return true
+}
+
+// codexThreadAvailableLocked checks both the caller's bindings and a start that has claimed the thread but has
+// yet to bind its pane. The caller holds n.mu through the claim or binding.
+func (n *Node) codexThreadAvailableLocked(pane, id string, bindings map[string]string) bool {
+	for p, bound := range bindings {
+		if bound == id && p != pane {
+			return false
+		}
+	}
+	owner, claimed := n.codexClaims[id]
+	return !claimed || owner == pane
 }
 
 func (n *Node) unclaimCodexThread(id string) {
@@ -404,14 +425,9 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 			}
 			continue
 		}
-		if strings.Contains(text, "Update available") && strings.Contains(text, "Skip") {
-			if d := screen.ParseDialog(text); d != nil {
-				for _, o := range d.Options {
-					if o.Label == "Skip" {
-						_ = n.sendKeys(ctx, pane, o.Keys...)
-					}
-				}
-			}
+		if keys := codexSkipUpdateKeys(text); keys != nil {
+			_ = n.sendKeys(ctx, pane, keys...)
+			_ = sleepCtx(ctx, codexDialogPause)
 		}
 	}
 	message := fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）", int(codexStartWait.Seconds()))
@@ -594,6 +610,9 @@ func CodexStart(args []string) error {
 		argv = append(argv, "--", f.Prompt)
 	}
 	path, argv, env, _ = codexStartExec(path, argv, env, explicit)
+	if err := codexStartCommandLine(argv); err != nil {
+		return fmt.Errorf("%s %w", codexStartError, err)
+	}
 	return osproc.Exec(path, argv, env)
 }
 

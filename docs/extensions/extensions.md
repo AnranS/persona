@@ -82,7 +82,7 @@ so the old extension-system terms **keep working** where listed below. This does
 | Command `personad plugin …` | `personad extension …`, short form `personad ext …` | `plugin` still works; the CLI calls the new path first and falls back to the old path when the hub is still an old version (not restarted yet) |
 | Marketplace list key `plugins` | `persona-extensions.json`, list key `extensions` | GitHub, git and HTTPS-directory marketplaces use only the canonical index filename. Both list keys are accepted; an explicitly registered full JSON URL remains its exact address |
 | Env vars `PERSONA_PLUGIN_*` | `PERSONA_EXTENSION_*` | Both extension-system spellings are accepted; only the canonical product prefix is supported |
-| manager.json `plugins` | `extensions` | Both read; if the same id appears in both, the one in `extensions` is used |
+| manager.json `plugins` | `extensions` | Deprecated: startup warns when legacy entries are present. Both keys are read during the one-release warning window; if the same id appears in both, the one in `extensions` is used. See the retirement schedule below |
 | Directory `~/.persona/plugins/` | `~/.persona/extensions/` | At startup the hub moves the old directory over whole and leaves a link `plugins → extensions` in its place (manual `ssh -R` to `~/.persona/plugins/<id>.sock` and rollbacks to an old hub still find it). If it can't be moved or both exist, the old directory stays in use and a log line is written; startup is not blocked |
 | features `plugins` / `plugin_manager` / `plugin_ui_slots` / `plugin_auto_upgrade` | `extensions` / `extension_manager` / `extension_ui_slots` / `extension_auto_upgrade`, plus `extension_market_spec` | The old ones are still reported. A new client that sees `extensions` uses the new paths; otherwise (old hub) it uses the old paths |
 | WebSocket events `plugin_ui {plugin, …}`, `plugin_upgrade {plugin, …}` | `extension_ui {extension, …}`, `extension_upgrade {extension, …}` | During the compatibility period both are sent (old first); push payloads carry both `plugin_upgrade` and `extension_upgrade` keys |
@@ -90,10 +90,12 @@ so the old extension-system terms **keep working** where listed below. This does
 | Go packages `internal/plugin`, `plugin/host`, `plugin/serve`, `plugin/conformance` | `internal/extension/…` | — |
 | Database tables `plugins`, `plugin_secrets`, `plugin_audit`, `plugin_markets`, setting key `plugin_upgrades`, push `thread-id` `plugin_upgrade`, model purpose `plugin.<id>`, hub↔node `plugin_skills`, `~/.persona/plugin-skills/`, slot name `plugin_page`, icon name `plugin`, error codes `plugin_failed` / `invalid_plugin` / `no_plugins` | **Unchanged** | Identities in persistence and internal protocols (same approach as Previous-brand → Persona, `docs/operations/rename.md`); changing them would need a data migration, and node and hub would fall out of sync |
 
+**Manager-configuration `plugins` retirement (#2656)**: the release that introduces the deprecation warning keeps reading legacy `plugins` entries for that one release, preserving the merge order and `extensions`-wins behavior. The next release stops reading `plugins` and uses only `extensions`; the release after that removes the alias and its merge code. This schedule applies only to the manager-configuration key, not to the other compatibility entries in this table.
+
 **Marketplace move**: after a marketplace repository is renamed or moved (for example, `<org>/<old repository>` → `<org>/<new repository>`), extensions installed from it have the source `market:<market id>/<extension id>`, and the market id must not change.
 Use `personad extension market set-spec <market id> <new URL>` (API `PUT /api/v1/extensions/-/markets/{id}` `{spec}`) to change the URL in place. It first reads the new URL once with the market's existing token; if that fails, nothing changes.
 
-**How long it stays**: the compatibility layer stays at least until **2027-05-05** (six months, covering the 90-day lifetime of released TestFlight builds and old Android versions), and until the hub logs show **30 consecutive days with no calls** to the old API.
+**How long the other compatibility items stay**: apart from the manager-configuration `plugins` schedule above, the compatibility layer stays at least until **2027-05-05** (six months, covering the 90-day lifetime of released TestFlight builds and old Android versions), and until the hub logs show **30 consecutive days with no calls** to the old API.
 The hub counts every call to an old path per route (`legacyCalls` in `extension_compat.go`; on the first call each day it logs the previous day's counts as one line, `extensions: old plugin API calls since …`; step 7 wires this into the admin UI).
 That decides whether it can be removed. Removal gets its own issue: drop the items in the table above one by one, and rewrite stored manifests to `extension_protocol`.
 The `persona-plugin.json` generated in packages follows the same deadline: after 2027-05-05, and once nobody runs a pre-rename hub anymore, `personad extension pack` and the package.sh packaging scripts of the two extension repositories stop generating it.
@@ -101,7 +103,7 @@ Removing `tags` from packages and indexes must wait longer, until the marketplac
 
 ## Extension points
 
-What an extension contributes where is written in the manifest's `contributes`: keys are extension points, values are lists of contributions, and each item has an `id` (globally unique within that extension point; a clash with another extension or with the hub itself means it can't be installed).
+What an extension contributes where is written in the manifest's `contributes`: keys are extension points, values are lists of contributions, and each item has an `id`. IDs must be unique within that extension point across installed extensions, except for `ui`: a UI ID belongs to its extension, so `volc/status` and `example/status` can coexist whether either extension is enabled or disabled. A duplicate UI ID inside one manifest is still refused. Other contribution points and the hub's reserved IDs keep their existing conflict checks, both in preview and when committing an install or upgrade.
 
 | Extension point | Namespace (method prefix) | Fields per item | Requirements | Wired to |
 | --- | --- | --- | --- | --- |
@@ -117,7 +119,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
 | `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
-| `ui` (version 9) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
+| `ui` (version 10) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` and `icon_color?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
@@ -133,6 +135,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `error_reports` (version 1, #5533) | `error_reports.` | `id`, `sources?` (`hub` / `manager` / `web` / `android` / `ios` / `mac` / `watch` / `vision`; omitted means all) | Process speaks the protocol, `on_startup`, permission `error_reports` | The hub's and the devices' errors and crashes, scrubbed, given to the program as `error_reports.deliver`; see "Error reports" below |
 | `auth_relay` (version 1, #5644) | `auth_relay.` | `id`, `name?`, `hosts` (exact lowercase host names, 1–16), `paths` (exact paths, 1–16; a trailing `/` is ignored) | Process speaks the protocol, permission `auth_relay`; **starts off** at install and when an upgrade adds it, whatever `off_by_default` says | Authorization links the user's Agents stop at, on these hosts and paths and printed by the Agent's own command, handed to the program as `auth_relay.complete` to complete with the account it is signed in with; see [auth-relay.md](../operations/auth-relay.md) |
 | `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
+| `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
 
@@ -420,7 +423,11 @@ Restore commits atomically, clears old-installation replay receipts and leaves d
 
 This generic store is **not a legacy filesystem importer, business-schema upgrade/downgrade, lease-renewal service, media URL or protocol-specific send/recovery implementation**. Migrations needing those contracts remain blocked until their separately scoped implementation and installed-source restart/crash acceptance preserve the original behavior. The store's schema version is 1; unsupported persisted versions fail closed. Source-default packages, marketplace indexes, signing changes and production activation remain separate phase gates.
 
+The [authenticated source handler design](source-api-handlers.md) defines how owner confirmation, manager-owned reservations and external-effect receipts compose with this store. It is a design gate, not an implemented capability.
+
 #### Hub API: scopes (#1855)
+
+The [source handler design](source-api-handlers.md) keeps its per-operation session rename/mode tickets separate from these legacy standing scopes; it neither broadens nor silently migrates them.
 
 To call the hub's HTTP API, an extension lists the scopes it uses in `permissions.hub` instead of asking for the full token:
 
@@ -441,15 +448,17 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
-| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories` |
+| `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out |
 | `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
-| `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`; a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
+| `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
+| `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
+| `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
 The to-do's owner bounds all three repository routes to the extension's manager. `{repo_id}` identifies an association within that to-do; it never selects another manager.
@@ -487,8 +496,8 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
 - **Compatibility**: old extensions with `hub_api: true` still get the hub's full token (only in env vars), with an extra warning on install and upgrade, "hub_api is the legacy form"; extensions in manager.json still get the full token. On a manager other than the built-in one, both get a token of every scope instead (none of the routes open to full credentials only): that manager has no token of the hub's to hand on. Every other extension's token there opens the scopes it asked for and no more.
   An attached package ("Attaching an installed package") granted `hub_api` gets a token of every scope too, on any manager, in `initialize` only: its program is not the manager's child, so it never gets the hub's own token.
   One installed from `remote:` and granted `hub_api` gets no hub token (one granted scopes gets a token of those).
-  A token of every scope has every scope but `agents.permission_mode` and `assistant.start_defaults`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
-  The `hub_api` grant covers every scope but `agents.permission_mode` and `assistant.start_defaults`: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those two (which `added_permissions` then lists); the reverse does.
+  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `dispatch.guard` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
+  The `hub_api` grant covers every scope but those four named-only scopes: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those four (which `added_permissions` then lists); the reverse does.
 - The permission summary includes the scopes (normalized: sorted, deduplicated); for extensions without `hub` the summary is the same as before. An upgrade that adds scopes needs consent again, and `added_permissions` shows "Use more of the hub's features".
 
 <a id="知识库-rpc1908"></a>
@@ -541,6 +550,14 @@ The locked fields it writes become its own with `evidence` (`[{chat, day, n?, no
 `before` is each written field's previous value (`null` when unset, the old `summary` text), for the extension's undo. Rules and how this sits with the built-in pipeline: [Knowledge base](../assistant/knowledge.md#who-holds-a-field-6100).
 
 The update fields follow the existing knowledge base update API, plus `pinned`, `lock` and `remove_people/remove_chats/remove_aliases/remove_projects`.
+A link the user removed (`excluded` in the entity's meta, `removed` in `kb.get`) is not made again: it is dropped from `people` / `chats` / `projects` and named in `ignored`, and the rest applies ("Removed links" in `docs/assistant/knowledge.md`).
+
+Project list rows and detail include `freshness`, canonical `sources`, and `project_mode` when the owner made the
+project reference-only. Check `freshness.needs_review` before relying on a conclusion, and inspect the field's own
+cutoff and maintainer for the review. A project source's `delivery_state` records the source observation and
+`environment_verification` records the independent verification status. A detail write to a reference-only project
+returns `invalid_params` with the refused fields and applies none of the update. The project mode and external
+pointers are controlled by the owner. See `docs/assistant/knowledge.md` ("Project freshness and reference-only sources").
 Each kind takes only the fields it uses ("Fields each kind takes" in `docs/assistant/knowledge.md`); the others are not applied, and the answer names them in `ignored: [{field, reason}]`, so nothing is dropped silently (a person's `summary` and `log`, for one).
 
 **A person's profile** (`profile`, people only): what the extension knows of the person, in four parts kept apart: `facts`, the user's own words about them (`views`), `inferences` (each with its `basis`, shown as only a hint), and `commitments` either way (`owes: user | them`, `due?`, `done?`). Every item needs `sources`.
@@ -575,7 +592,7 @@ which follows "Knowledge base" (`kb`) until the user picks another connection or
 
 | Method | Parameters | Returns | Scope |
 | --- | --- | --- | --- |
-| `model.complete` | `{system?, messages: [{role: user\|assistant, content}], max_tokens?, json_schema?, timeout_seconds?, label?}` | `{text, json?, model, stop_reason, usage}` | `models` |
+| `model.complete` | `{system?, messages: [{role: user\|assistant, content}], max_tokens?, json_schema?, timeout_seconds?, label?, models?}` | `{text, json?, model, stop_reason, usage, candidate?, attempts?}` | `models` |
 
 The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.Hub.ModelComplete`.
 
@@ -585,11 +602,28 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   checks it against the schema and asks once more with what was wrong (`tools/json_schema_retry.md`). The result's `json` is the decoded value; a second miss is `invalid_output` with `{problem, text, usage}`.
   It works the same on every connection (no vendor structured-output feature is needed). Checked keywords: `type`, `enum`, `const`, `properties`, `required`, `additionalProperties`, `items`, `prefixItems`,
   `minItems`/`maxItems`, `minLength`/`maxLength`, `minimum`/`maximum` and the exclusive ones, `allOf`/`anyOf`/`oneOf` (taken as `anyOf`), local `$ref`; others (`format`, `pattern`…) are left to the extension. At most 64 KiB.
-- **No budget and no cap** (the user's decision): there is no daily limit and no fallback model. `usage` is what the call spent, every request of it together (`input_tokens`, `output_tokens`,
+- **No budget and no cap** (the user's decision): there is no daily limit. Without `models` there is no fallback model. `usage` is what the call spent, every request of it together (`input_tokens`, `output_tokens`,
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
+- **Candidate models** (#10398): `models` is an optional ordered list of 1 to 8 distinct model IDs. Each candidate is a whole call of its own (the same prompt, `max_tokens` and
+  `json_schema` with its one retry); the next one is tried when a candidate fails (`model_failed`, `model_refused`, `model_paused`), runs past `timeout_seconds` (which then bounds
+  each candidate; the whole call stops at 600 seconds), answers with no text (`model_failed`, "the reply was empty") or still does not match `json_schema` (`invalid_output`).
+  The extension only names models: each runs on a provider the user configured in Settings › Model providers that the hub calls directly (a direct API provider, or a Persona-managed
+  Messages launcher with an address and a key; not hidden) that offers it (#10657): first the purpose's own provider when it lists the model (its default, tier, small, subagent or custom model,
+  or its model list) or the purpose is bound to that model there, then direct API providers, then launchers that list it, in their order; failing those, the purpose's own provider when it
+  declares no model list (it has not said what it serves, so its gateway is asked; one that does not serve the model fails like any candidate). Other providers without a list are never tried.
+  A model nothing offers is skipped as `model_unavailable` (data `{model}`) without a request.
+  The result adds `candidate` (the entry of `models` that answered; `model` stays what the upstream says) and `attempts`, the candidates that failed before it (`{model, code, message, until?, seconds, usage}`);
+  `usage` covers every attempt. A single candidate that fails answers with its own code and data, exactly as a call without candidates would, so an extension that sends one model per call and
+  counts failures itself keeps its existing error handling. When two or more all fail the error is `model_candidates_failed`, its message naming each candidate and how it failed, its data `{attempts, usage}`.
+  Pick the list per call, for example a short-text chain and a long-text chain chosen by the input's length.
+  The manager logs a line per attempt (`candidate i/n <model> via <provider>: <outcome>`) and one for the outcome (`answered by candidate <model> (<upstream model>) after <n> failed`, or `every candidate failed`).
+  The user keeps control on the extension's purpose in Settings › Model configuration (docs/assistant/model-config.md "Extensions' own purposes"): the lists the extension sent are shown there,
+  and the user can switch them off (every call runs on the purpose's model, and the result has no `candidate`) or replace them with a list of their own (`candidate` then names the user's model).
+  Without `models` (and without a list of the user's) the call is exactly as before. A hub older than this field answers `invalid_params` (`unknown field "models"`): send the call again without it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
 - **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
-  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, a selected model that is missing / unavailable to this key, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`.
+  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, a selected model that is missing / unavailable to this key, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`,
+  `model_candidates_failed` (with candidates, every one failed).
 - **A declined input**: when the model declines to answer (the Messages API's `stop_reason: "refusal"`, a Responses API refusal part, a Chat Completions refusal, or a response stopped by a `content_filter`)
   the answer is `model_refused` with `{stop_reason, usage}`; `usage` is what the declined call spent. Sending the same input again gets the same answer: split it into smaller pieces, drop
   a part or report which input was declined. Match the code, never the message, which is for people and may change. Hubs older than this code answer `model_failed`
@@ -599,6 +633,20 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 
 ```json
 {"permissions":{"hub":["kb.read","kb.write","models"]}}
+```
+
+A call with candidates and an answer from the second one:
+
+```json
+{"system": "...", "messages": [{"role": "user", "content": "..."}], "json_schema": {"type": "object"},
+ "timeout_seconds": 90, "label": "curate", "models": ["fast-model", "strong-model", "small-model"]}
+```
+
+```json
+{"text": "{...}", "json": {}, "model": "strong-model", "candidate": "strong-model",
+ "attempts": [{"model": "fast-model", "code": "timeout", "message": "model.complete: timed out", "seconds": 90,
+               "usage": {"input_tokens": 0, "output_tokens": 0, "requests": 0}}],
+ "stop_reason": "end_turn", "usage": {"input_tokens": 1200, "output_tokens": 300, "requests": 1}}
 ```
 
 ### Transcription for extensions (#8485)
@@ -769,6 +817,17 @@ Whatever scopes it was granted, an extension's token never sees:
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
   are left out of `GET /api/v1/interactions` and `/interactions/history`.
 - **Values typed into a card's fields** (`resolution.values` in the history).
+- **A to-do's answered cards, and the conversation of a to-do that may hold the health space's words**
+  (`GET /api/v1/todos/{id}/timeline` and the rounds on `GET /api/v1/todos/{id}`,
+  `docs/assistant/todo-status-sop.md` "The to-do's timeline"): the timeline leaves out every answered card, since its
+  record holds what was typed into the card and does not say whose card it was. A to-do has no conversation when it was
+  opened from a health conversation, when a health conversation wrote to it (a hand-off the owner confirmed included), or
+  when any run it ever had works in the space, taken off it or not, done or not. This is decided from what the manager
+  keeps of the to-do (the directory each run's link keeps, the conversations its history was written in, the record of a
+  deleted one), not only from what is live, and it fails closed: a conversation the hub does not list and has no deletion
+  record of, or a run whose link keeps no directory and whose session cannot be read, hides it too. Its timeline then
+  answers 404 as for a to-do that does not exist, and its item leaves out the rounds, recap and results; the row is the
+  one `GET /api/v1/todos` lists.
 
 The apps' and devices' credentials are not affected.
 
@@ -1093,6 +1152,9 @@ Besides the whole extension's toggle, **each contribution** (`<extension point>/
 - Ids that are off still belong to this extension: other extensions can't take them by installing; permissions, the permission summary and upgrade comparisons all use the full manifest, so turning off contributions doesn't make the extension "ask for fewer permissions".
 - A **connector**'s toggle is the connector's own toggle (already used by **Settings › Connectors**, the Inbox and the knowledge base); this is just another entry point to the same toggle. **Channels** bound to a connector follow that connector.
   In the list they are `via: "connector"`, `can_disable: false`, and changes go through the connector's toggle (409 `not_running` when the connector hasn't started yet).
+  Whichever entry point is used, a change of that toggle restarts the extension that contributes the connector, once, like the other toggles (#10467): its new `initialize`'s
+  `active.connectors` lists only the connectors that are on, so a program that works for a connector on its own (a live listener, replies) knows to leave a switched-off one alone.
+  A toggle set to what it already was, and the hub's own connectors, restart nothing; an extension that is off has no program to restart and reads the toggle at its next start.
 - Extensions from manager.json can't have individual contributions turned off (change manager.json instead).
 - Stored in `plugins.disabled_contributions` (migration `0363`, `["ui/usage", …]`); kept across upgrades and rollbacks (if the new version no longer has that item, it has no effect).
 - **Off by default** (#2829): the manifest's `off_by_default: ["<extension point>/<id>", …]` lists contributions that start off when installed, e.g. the extension's existing features are on at install while a newly added sidebar page waits for the user to turn it on.
@@ -1265,7 +1327,7 @@ A GitHub marketplace can commit installable archives alongside its catalog: no R
 - Relative paths must stay inside the marketplace and be normalized (no absolute paths, `..`, repeated separators or `.` segments). Reads are bounded by the existing 4 MiB catalog and 200 MiB package limits and the download timeout; the hosting API may impose a smaller file limit. Declared package size and SHA256 are checked before accepting the downloaded archive.
 - An unpinned nonofficial marketplace publishes the ordinary plain index with no `signatures` field; it needs no publishing signing key and receives no official provenance or default sandbox exemption. This distribution method does not change the official catalog's compiled-in signature requirement or the manager's existing owner-pin checks (see "Signing" below).
 
-**Endpoints** (full-access devices; the admin UI has the same set under `/api/v1/admin/extensions/-/…`, going through its session):
+**Endpoints** (full-access devices, except the self-refresh row; the admin UI has the same full-access set under `/api/v1/admin/extensions/-/…`, going through its session):
 
 | Endpoint | What it does |
 | --- | --- |
@@ -1273,6 +1335,7 @@ A GitHub marketplace can commit installable archives alongside its catalog: no R
 | `POST /api/v1/extensions/-/markets` `{spec, token?, token_from?}` | Reads the index once first; if it cannot be read it is not registered (400, `error` gives the reason: bad address, private needs a token, wrong token); returns the marketplace. `token_from` is the id of another registered marketplace whose token to use (one account's token reading several private repos); the caller never sees the token, and only one of it and `token` may be given; on the command line `market add <spec> --token-from=<marketplace id>` |
 | `DELETE /api/v1/extensions/-/markets/{id}` | Stop reading this marketplace; extensions installed from it stay, but their auto-upgrade pauses with `auto_upgrade_paused: "market_removed"`. Add its original registration address again to restore upgrades under the saved settings |
 | `POST /api/v1/extensions/-/markets/{id}/refresh` | Re-read the index now; on a bad signature returns 400 `market_signature` (the last good index is kept) |
+| `POST /api/v1/extensions/-/self/market/refresh` | **Extension token with `market.refresh_own` only**, routed to that token's manager. The current install record alone chooses the market; there is no market parameter and no admin or legacy alias. An accepted call starts (or joins) the existing deduplicated background read and returns 202 at once. Missing scope returns 403; an install not from a market (including an attached one) returns 409 `not_from_market`; an origin market no longer registered returns 404 `not_found`. At most one self-refresh request per market is accepted every 10 minutes, shared by all its extensions; inside the window it returns 429 `rate_limited` with `Retry-After` in seconds. Scheduled and full-access reads keep their existing behavior |
 | `PUT /api/v1/extensions/-/markets/{id}/token` `{token}` | Replace the token (empty string removes it) and re-read |
 | `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags and every translation's name and description (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
 | `GET /api/v1/extensions/-/catalog/{mid}/{id}/icon?sha256=<package digest>` | Authenticated bundled PNG for a currently trusted registered catalog entry; lazily downloads/verifies the selected package through the existing package cache. Never installs or executes it. Missing, stale, invalid or unavailable artwork returns 404. |
@@ -1402,6 +1465,7 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 
 - **Reading marketplaces**: once a minute the hub checks which marketplaces are due: last read 6 hours ago (plus a random 0–30 minutes per marketplace to spread them out); failed reads back off 15 minutes, 30 minutes… doubling, up to 6 hours.
   The log gets one line when a marketplace becomes unreadable and one when it recovers, not one every time. When the app opens the catalog (`catalog`), indexes older than 6 hours are still re-read in the background as before.
+- **Extension-requested reads (#10797)**: an extension explicitly granted `market.refresh_own` can use the literal self-refresh route above to ask its own manager for an earlier read of the market in its current install record. The 202 response does not wait for the read and does not run an upgrade inline. The read uses the same `readLater` deduplication and verified catalog state; the ordinary auto-upgrade check then consumes it, with the same grants, consent, signature and quarantine behavior. The 10-minute admission window is per market, shared by every extension from it, and held in the owning manager's memory alongside the background-read state. It limits accepted self-refresh calls, not the scheduled or full-access reads. Joining an in-flight read queues no second trailing read: 202 acknowledges acceptance, not freshness or upstream success, and a release published after that read began may wait for a later read. An upstream failure does not refund the window. A manager restart or market removal and re-addition resets the in-memory window. No Agent-token capability is added.
 - **When to upgrade**: the source marketplace is still registered, the new version is higher than the installed one, usable on this hub (has a package for its platform, `engines` satisfied), the extension is enabled, both the master switch and this extension's own switch are on (both on by default),
   **it asks for no more than the user approved** (`MorePermissions` is false; the permission summary equals `granted_digest`), and the extension is idle: no calls in flight, no open HTTP requests or WebSockets
   (a connector always holds its extension, which does not count as in use), and the assistant is not working (its next step might call this extension's tools). If busy, check again the next minute.
@@ -1415,7 +1479,7 @@ For extensions installed from an extension marketplace (source `market:<marketpl
   The hub keeps each extension's `auto_upgrade` preference, and `PUT …/auto-upgrade` can still change it. Add the marketplace again with its original registration address (`spec`) to restore its id and resume upgrades under the saved settings; an extension that is still disabled then reports `disabled` instead. If the address was edited after registration, use the original address that generated the id in the extension's origin.
   An unreadable catalog, a bad signature or a missing catalog entry does not mean the marketplace was removed.
   Every marketplace extension's view keeps `market` (the marketplace it upgrades from) after that marketplace is removed, so a client can count, before a deletion, the manager's own extensions that stop upgrading (leaving out other managers' copies: a marketplace id is the same wherever its address is registered).
-  Clients: Android (#2399) greys out the switch and says how to resume; the web and Apple grey out the switch and **Check for updates**, say how to resume, and count the affected extensions in their deletion confirmations.
+  Clients disable the saved auto-upgrade switch and explain same-address recovery; web and Apple also disable **Check for updates**. Their deletion confirmations count the manager's own affected installed extensions. A failed installed-list read, ambiguous ownership, or an old hub that reports `auto_upgrade` without `market` keeps the uncounted warning instead of inventing a zero.
 - **More permissions**: no upgrade; the user is told once ("Example UI 1.2.0 needs one more permission: broader network access (api.example.com), go confirm"), and the upgrade happens only after the user confirms in the app
   (through the marketplace preview and upgrade, with the permission summary).
   While the master switch or the extension's own switch is off, such a version (more permissions, a changed permission summary, or new dependencies or pack members to confirm) is only shown on the extension's page (#1828):
@@ -1498,13 +1562,15 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
   `data_dir` in the details (`personad extension show <id>`) says where that data directory is, so a program run on its own on the same machine can keep using it in place.
 - **What is checked**: the sockets must be the ones the package's runtime uses (`rpc` for one that speaks the protocol, `http` when it serves HTTP), and the program on them must answer `manifest` (`GET /manifest` for an HTTP-only one) with the package's id and version, so attaching grants nothing the package did not have. Each connection asks again before `initialize` ("Refused" above), so a program swapped for another one or version later gets nothing either.
   A package with no program, or a source runtime one, cannot be attached; one installed from `remote:` has no package and is attached already.
-- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope (but `agents.permission_mode`) when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
+- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
 - **No upgrade or rollback while attached**: both are refused, and it never upgrades itself. Detach it, upgrade the package, and attach the new version's program.
 - **Audit**: `attach` (version and sockets) and `detach` (version) go to the extension's audit log, and the manager switches the extension's connection at once.
 
 ## Source runtime (#5956)
 
 The [2026-11-07 migration and acceptance record](../archive/extensions/source-extension-migration-2026-11-07.md) separates merged implementation, native-client evidence, complete source-package acceptance and outstanding production/platform gates. It is a historical snapshot, not deployment authorization.
+
+The [authenticated source API and assistant handler contract](source-api-handlers.md) is the design gate for source-dispatched API routes, bounded media and durable external writes. It does not make the source runtime an HTTP host or authorize activation.
 
 Executable packages retain the default `runtime.mode: "process"` behavior. A source package explicitly selects `"deno"` and carries a prebuilt, self-contained JavaScript module:
 
@@ -1699,7 +1765,12 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
       proxy and reaches only the saved addresses, as before.
     - The Go SDK's `ext.SettingsCheckClient(params)` is an HTTP client through `proxy` (an ordinary one without it); in
       another language, use `proxy` as the proxy of the check's requests.
-    - Source runtimes get none yet: their fetches go through the runtime's broker (#1180).
+    - A source runtime uses that same credential through its fixed runtime broker, not a direct proxy connection. The
+      TypeScript SDK's `settingsCheckFetch(params)` returns a fetch for this one check: its requests and every redirect
+      carry the credential to the broker, while ordinary global `fetch` calls and overlapping checks keep their own
+      targets. The broker derives candidate targets from the owner-approved `config:` entries, applies the same DNS,
+      protected-target, redirect, body, deadline and concurrency rules, and accepts no target list or extension identity
+      from the guest. An older hub sends no `proxy`, and the helper behaves like ordinary `fetch`.
   - A refusal saves nothing and is not audited. The route answers 400 `check_failed` with the extension's words.
   - Before the words go back, every secret handed to the check is replaced by `***`: whole, and any prefix or suffix of
     6 characters or more. The words are cut to 300 characters.
@@ -1762,6 +1833,8 @@ When a request goes to the extension's own HTTP (the last row of the table above
 
 ## App endpoints
 
+The [source handler contract](source-api-handlers.md) deliberately keeps this native contribution separate from a future source-dispatched `namespaces.api` handler; an existing `api` grant does not open an inbound source route.
+
 An extension contributes `api` to provide a set of app-facing endpoints `/api/v1/<prefix>/…` on its own HTTP side (`PERSONA_EXTENSION_SOCKET`):
 
 - The hub authenticates first (like any other endpoint; read-only devices are restricted as usual), then forwards as-is to the extension: path unchanged, `Authorization` and `token` removed, `X-Persona-Device` (device id, empty for the master token) and
@@ -1784,6 +1857,8 @@ An extension contributes `api` to provide a set of app-facing endpoints `/api/v1
 ## Assistant
 
 An extension contributes `assistant`:
+
+The [source handler contract](source-api-handlers.md) defines the separate typed command-to-handler mapping and its independent credential-reference and per-write grants. It does not replace this command gate or open a generic command forwarder.
 
 - `skills`: skill directories in the package (each with a `SKILL.md`). The hub brings them in `assistant.prepare` to the computer that runs the assistant (each skill's files only once per computer, after that only a digest;
   those the node reports as "missing" are brought again next time). The assistant's check of its directories every minute compares the skills' digests as well as the CLAUDE.md, so a skill that an upgrade changes reaches that computer within a minute even when the CLAUDE.md stays the same (#4256). The node puts them in `~/.persona/plugin-skills/<name>` and copies them into the assistant directory like built-in skills; the user's own skill with the same name takes precedence; they are removed from the assistant directory when the extension is disabled or uninstalled.
@@ -1959,6 +2034,11 @@ The open-source repo ships no quota extension for any particular gateway.
 
 ## Declarative UI
 
+Each UI contribution is identified by its extension ID and its local UI ID together. The API already uses
+`/api/v1/extensions/{id}/-/ui/{ui}`, and discovery returns both `extension` and `id`. Page state, badges,
+contribution switches and `opens` references stay within that extension. Sharing a local ID with another
+extension needs no prefix, rename or migration; existing page links and saved switches keep their identities.
+
 Extensions **do not run code in the app**: they return a View (a few fixed kinds of items), which iOS, Mac, Android and web each draw with their own design system (correct in every interface style and in light and dark),
 and button actions go back to the extension. Views and components are defined in `schema/extension/view.schema.json` (the types on all four clients are generated from it, see [schema/extension/README.md](../../schema/extension/README.md));
 the hub first checks against the schema (`wire.Validate`, `sdk/go/wire`), then checks what the schema cannot express (item count per page, no duplicate field names, consistent labels across chart series), in `server/internal/extension/ui.go`.
@@ -1972,7 +2052,7 @@ the hub first checks against the schema (`wire.Validate`, `sdk/go/wire`), then c
 
 **The hub's endpoints** (full-access devices):
 
-- `GET /api/v1/extensions/-/ui?placement=<p>[&launcher=<name>&machine=<machine>]` → `{ui: [{extension, extension_name, id, title, placement, size, icon?, opens?, badge?}]}`: what enabled, running extensions draw here;
+- `GET /api/v1/extensions/-/ui?placement=<p>[&launcher=<name>&machine=<machine>]` → `{ui: [{extension, extension_name, id, title, placement, size, icon?, icon_color?, opens?, badge?}]}`: what enabled, running extensions draw here;
   `launcher_section` needs `launcher` and only lists those whose gateway matches; without `placement`, all slots except `launcher_section` (main navigation, overview and machine details in one go).
   Extension details also have `ui` (its `plugin_page` and `nav_page`, both full pages reachable from settings).
 - `POST /api/v1/extensions/{id}/-/ui/{ui}` `{context?: {launcher, machine, item, tz, locale, platform, size, ui_version}, state?, action?, values?}` (for the items of `context` see "UI slots", "Context"): without `action` it draws (returns `{view}`),
@@ -2044,8 +2124,8 @@ Where each client puts them:
 
 | placement | Web | Mac | iOS | Android |
 | --- | --- | --- | --- | --- |
-| `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages") and choose one as the page the app opens on (web.md "Start page", #9071); a page that names a `group` comes in under that group's heading, a foldable section of its own after **Pages** (web.md "The sidebar's pages"); after a reload the entries and an open page's last view are drawn from this browser's cache until the hub answers (web.md "Extension pages on reload") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
-| `overview_card` | On the Overview page (`/overview`), a row of cards below the Agent summary | No Overview page: above the list in **Settings › Extensions** | No Overview page: above the list in **Settings › Extensions** | Same as iOS |
+| `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages") and choose one as the page the app opens on (web.md "Start page", #9071); a page that names a `group` comes in under that group's heading, a foldable section of its own after **Pages** (web.md "The sidebar's pages"); with **Colored** sidebar icons its icon is in its `icon_color` (#10822); after a reload the entries and an open page's last view are drawn from this browser's cache until the hub answers (web.md "Extension pages on reload") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
+| `overview_card` | On the Overview page (`/overview`), a row of cards at the end of the page, under the Agent sections and the computers, in the hub's order (by extension, then the manifest's) unless the user arranged them: order, hidden, half or full row, and their place among Overview's own sections (#10905), kept per user on the hub (web.md "Overview's extension cards", #9745) | No Overview page: above the list in **Settings › Extensions** | No Overview page: above the list in **Settings › Extensions** | Same as iOS |
 | `machine_section` | Machine detail page | Machine detail page | Machine detail page | Machine detail page |
 | `inbox_item` | The Inbox detail pane: the header (title, source, **Done**, ✦ summary, **AI draft reply** / **Hand to AI**) stays, and the conversation / body below is replaced by what the extension draws | When an item from this connector's source is opened in the Inbox, the right column (✦ summary and buttons, **Done**) stays, and the conversation / body on the left is replaced by the extension's View | When an item from this connector's source is opened in the Inbox, the action bar under the navigation bar (✦ summary, **AI Draft Reply** / **Hand to AI**) and **Done** stay, and the conversation / body below is replaced by the extension's View | Same as web (Android's own PR) |
 
@@ -2061,7 +2141,8 @@ In the manifest:
 
 - Only `nav_page` can name a `group` (#9071): `{"id": "workbench", "title": "工作台"}`, the id `^[a-z][a-z0-9-]{0,31}$` and the title 1–40 characters in the manifest's language, translated in `l10n/<language>.json` under `groups` (`{"groups": {"workbench": "Workbench"}}`). Pages of any extension naming the same id share the group (the first one listed names it). It is only where the page goes by default: the user can move any page to another group, rename, reorder or remove groups, and a removed group's pages go back to **Pages**. `GET …/-/ui` lists it as the place's `group`, its title in the request's language. A hub from before reads manifests strictly and refuses one with `group`; iOS and Android ignore the field until their own PRs.
 - Only `nav_page` can set `icon`, picked from a fixed few: `plugin` (default), `chart`, `gauge`, `list`, `bell`, `doc`, `calendar`, `money`; each client maps them to the icon with the same meaning in its own design system,
-  and draws unknown ones as `plugin`. Extensions cannot supply images, SF Symbol names or colors.
+  and draws unknown ones as `plugin`. Extensions cannot supply images or SF Symbol names, and their only color is `icon_color` below.
+- Only `nav_page` can set `icon_color` (#10822): one of the named colors (`Color`, the same as a row's `icon_color`), for the page's icon in the sidebar. It is drawn only while the owner chose **Colored** in Settings › Appearance › **Sidebar icons** (off by default, `docs/design/DESIGN_SYSTEM.md` "Sidebar icon colors"); in **Monochrome**, and for a page without it, the icon stays the sidebar's neutral ink, and the open page's icon keeps the open row's ink either way. `GET …/-/ui` lists it as the place's `icon_color`. A hub from before reads manifests strictly and refuses one with `icon_color`; iOS and Android ignore the field until their own PRs (#10822 tracks them).
 - Only `overview_card` can set `opens`: the id of a `nav_page` or `plugin_page` of the same extension; without it the card is not tappable (buttons and rows inside the card still are).
 - Titles are 1–40 characters; when they do not fit in navigation, each client truncates them (single line), never wrapping.
 - Only `inbox_item` can set `connector`, and it must; see "Inbox items" below.
@@ -2081,7 +2162,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `9`; the web sends `9` (its native stream `7`), Android and iOS send `8` (their native streams too) until they draw all of UI version 9; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `10`; the web sends `10` (its native stream `7`), Android and iOS send `10`; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -2224,7 +2305,7 @@ If you do not want to see an extension's entries and cards: disable the extensio
 
 ### Compatibility
 
-**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 9).
+**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9"; for 10 see "UI version 10". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 10).
 
 `progress.style` is an unversioned drawing hint: an app that does not recognize it keeps drawing a bar, so it needs no UI version bump or downgrade. Native stream does not accept this field.
 
@@ -2302,7 +2383,7 @@ Cards in assistant replies use the same components and renderer as extension Vie
   - `stat` → `metric {label: title or "Value", value, detail: note}`.
   - `stacked_bar` → `metric {label: Total, value: total (the sum of parts if absent), detail: note}`; one stacked bar chart, one series per part (beyond 4 parts, the first three plus "Other"; `rest` and "Other" are `neutral`),
     one point per series with `title` or "Total" as its label; then one `row {title: label, subtitle: note, value}` per part. Use `total`'s unit, or the card's if absent. Since every series has the single category's one point, the chart is the horizontal segmented bar above, not a column (see "New items", `chart`; #5386).
-  - `ring` (#3061, one day's total and its parts; `stacked_bar` is for comparing days or people) → one `donut` chart, one series with a point per part (beyond 8 parts, the first seven plus "Other"),
+  - `ring` (#3061, one day's total and its parts as a donut) → one `donut` chart, one series with a point per part (beyond 8 parts, the first seven plus "Other"),
     `center` the total with its unit (left out past 20 characters), `detail: note`; then one `row` per part. When `total` is more than the parts' sum, a "Remaining" part (total minus the sum) comes last.
     Use `total`'s unit, or the card's if absent. iOS draws `donut` / `pie` with `RingChart` (ring, total in the hole, legend with shares); an app that does not know `ring` keeps the code block
     (iOS from #3397 shows it in words instead, below).
@@ -2498,7 +2579,7 @@ Still no arbitrary values: colors are named, icons a fixed set, text sizes two m
 | `FieldKind` | `date`, `time`, `datetime`, `multichoice`, `multiline` | Values stay strings: `YYYY-MM-DD`, `HH:MM` (24 hours), `YYYY-MM-DDTHH:MM` local to `context.tz` (no offset), a JSON array of the chosen `value`s, the text with `\n` |
 | `field` | `earliest`, `latest` (date / time / datetime), `detail` | Bounds written like `value` (`earliest ≤ latest`); a line of help under any field |
 | `TextStyle` | `title`, `headline` | A section's big title and a small heading (at most 200 characters) |
-| `Color` | `red orange amber yellow green teal blue indigo purple pink gray` | On `Badge.color`, `row.icon_color`, `metric.icon_color`, `empty.icon_color`, `Tile.color`, `ChartSeries.color`, `Spark.color` only, never on text. `tone` is a meaning (good / caution / bad), `color` only a category: one object never has both. A chart's series colors differ |
+| `Color` | `red orange amber yellow green teal blue indigo purple pink gray` | On `Badge.color`, `row.icon_color`, `metric.icon_color`, `empty.icon_color`, `Tile.color`, `ChartSeries.color`, `Spark.color` only, and in the manifest on a `nav_page`'s `icon_color` (#10822), never on text. `tone` is a meaning (good / caution / bad), `color` only a category: one object never has both. A chart's series colors differ |
 | `NavIcon` | 46 more (`home`, `light`, `power`, `thermometer`, `camera`, `lock`, `music`, `trend_up`, …) | Also `metric.icon`. Each app maps every name to its own icon |
 
 Field names starting with `~` are the hub's (below) and refused in an extension's view.
@@ -2713,8 +2794,163 @@ color's tint, its arc with round ends; the value is in `text-xl` (`text-lg` in a
 tiles keep the grid's columns (`max_columns`, at least 150 px each), so a phone has two a line. The web's native stream still sends 7.
 `web/e2e/extension-gauge.mjs` checks it in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1`).
 
-**iOS and Android** have the field in their generated types and still send 8: the hub draws them the tile without its ring until
-they draw version 9 (their own changes, after #9337).
+**iOS and Android** both draw the ring natively on grid and carousel tiles, with the named palette colour's tint for its track,
+the value and unit (or the percentage) in its centre, the same accessibility reading (the exact meter readout) and an eased ratio
+change which snaps with Reduce Motion. Android's `ExtensionGaugeRing` is shared by grid and carousel tiles at 96 dp on a page and
+80 dp in a compact card. `JTile` keeps the existing surface, badge, switch, action and extra-action menu, and adds meter semantics
+without removing the button behaviour of an actionable tile. iOS's native stream stays at its earlier version and receives
+the downgraded tile. Android's native stream sends 10; its `NativeTile` uses `JTile`, `ExtensionGaugeRing` and the same meter
+readout, retaining the active treatment, badge, switch and whole-tile switch action. `NativeExtensionProfile` accepts the
+gauge's named `color`, so supported native grid and carousel tiles keep the ring too (unsupported fields still use the legacy
+renderer rather than losing them).
+
+## UI version 10 (#9727)
+
+A canvas for graph-shaped data: work handed out to agents that splits into parts, parts that split again, the same task tried
+several ways, hundreds of parts in a wide fan-out; a plan whose steps wait for others. The person sees the shape at a glance,
+drags and zooms, taps a node to open it, folds what they do not need, and watches states change while the work runs. The app
+sends `10` in `context.ui_version`; `hub.extension_points.ui` is `10`; there is no new `features` entry (an older hub holds the
+app's version to its own, and the extension sees that). One new component, `graph`, authoritative in
+`schema/extension/view.schema.json` (`GraphComponent`, `GraphNode`, `GraphEdge`, `x-since: 10`); examples are
+`schema/extension/examples/View.v10-*.json`. **An app sends 10 only when it draws all of the below** (and all of 9).
+
+Extensions still run no code in the app: they say what the nodes and edges are, and each app lays them out and draws them with
+its own design system, so light and dark, every interface style and every theme color are right without the extension knowing
+them (`docs/design/PRINCIPLES.md`, principle 4).
+
+| Field | What it does |
+| --- | --- |
+| `nodes` (1–300) | `{id, title, subtitle?, badge?, tone? \| color?, icon?, progress?, group?, action?}`. Each node counts as one of the page's 300 components. `tone` (a role color) or `color` (a named color), never both, colors the node's edge and state dot, never its text; `progress` (0–1) is a thin bar along its foot; `action` is a row's (confirm, push, values) |
+| `edges` (0–600) | `{from, to}`: `from` is the parent. A node's children are in the edges' order |
+| `layout` | `tree` (the default): at most one parent each, a parent centred beside its children. `layered`: several parents allowed, each node one layer past its furthest parent |
+| `direction` | `right` (the default: roots at the start, children after them, so a wide fan-out reads down the screen like an outline) or `down` |
+| `group` (on a node) | Nodes with the same parents and the same `group` sit next to each other inside one quiet frame titled with it (the same task tried several ways) |
+| `selected` | A node drawn as selected; the canvas opens centred on it |
+| `folded` | Nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for this `key` |
+| `key` | As every component's: keeps the person's pan, zoom and folding across redraws |
+| `started_at` | Unix seconds (at least 0) when the node started; drawn on the timeline and read out in the inspector |
+| `ended_at` | Unix seconds (at least 0) when the node ended; omitted while it still runs, and never before `started_at` when both are set |
+| `facts` | Up to 8 `Fact` items (`value`, optional `label` and `icon`): short readings shown in the node inspector |
+| `detail` | Up to 2000 characters of plain text (a summary, verifier feedback or an error) shown in the node inspector |
+| `links` | Up to 8 `{title, url}` items in the node inspector: `title` 1–80 characters, a credential-free `https://` url up to 2000 characters |
+
+The last five are optional and only feed the inspector and the timeline, so a source that has them adds depth without changing
+the graph's shape.
+
+The layout rules are exact and shared: `spec/fixtures/graph-layout/README.md` states them, `scripts/gen/graph_layout.py` is the
+reference and writes the cases every app and the hub check themselves against. A layout is in slots (a node and its gap); each
+app multiplies by its own node size.
+
+**The hub's checks** (`sdk/go/wire`, as for other components; the whole page is refused otherwise): ids unique within the graph; every
+edge names known nodes, never one node twice (`from` = `to`) and never the same pair twice; no cycle; in a `tree`, no node with two
+parents; `selected` and every `folded` id name a node; not both `tone` and `color` on a node; the page's components, each node
+counted, at most 300. A graph's nodes' actions are the view's actions (`wire.Actions`): their `push` is checked as any other, an
+assistant-only action is taken out of an extension's view. The optional inspector and timeline fields are checked too: `started_at`
+and `ended_at` are seconds at least 0, `ended_at` is never before `started_at` when both are set, `facts` holds at most 8 items
+(each a `Fact`), `detail` at most 2000 characters, and `links` at most 8 items whose `title` is 1–80 characters and whose `url` is a
+credential-free `https://` address of at most 2000 characters.
+
+**Drawing, on every app:**
+
+- **A node** is a box of one size (the app's graph node token, about 224 × 64 at the default text size, growing with the text): the
+  icon at the start, the title on one line, the subtitle under it in the quiet ink, the badge at the end of the title's line, the
+  progress bar along the foot; `tone` / `color` as a 3-wide bar on its leading edge and the state dot; a selected node has the
+  accent's ring. Text that does not fit ends in an ellipsis; the whole of it is read out and shown on hover (web) or long press.
+- **A fold control** sits on the side of a node with children where they leave it: a chevron while open; once folded, the number
+  hidden (`+12`). It is its own control, at least 44 × 44 pt (48 dp) to touch, and does not press the node.
+- **Edges** are thin curves in the quiet ink from the parent's children side to the child's parent side; **a group's frame** is a
+  rounded quiet fill behind its members with its title above, in the caption style.
+- **The canvas** is the page's background. Drag (or scroll, on the web and a trackpad) pans; pinch, ⌘ / Ctrl + wheel and the
+  buttons zoom, from 25% to 200%; a floating group at the bottom end holds Zoom out, Zoom in, Fit and Full screen. It opens at
+  the fitted scale held to 50%–100%, centred on `selected` when there is one, else with the first root at the top start; Fit
+  fits everything (down to 25%). Full screen covers the window with the same canvas (its position, zoom and folds), closed by its
+  close button, Esc or Back.
+- **On a page** the canvas is 70% of the page's visible height, at least 320 and at most 900 pt / dp / px, and the page scrolls
+  around it. **In a card** (`compact`, an overview card, a launcher or computer section, an assistant card) it is a still preview
+  fitted into 200 tall: no buttons, no gestures, no node presses; pressing it opens Full screen. The graph is one of the
+  card's 12 items, however many nodes it has (its nodes still count toward the page's 300).
+- **Redraws:** the layout follows from the nodes, edges and folds alone, so a redraw that changes only states keeps every node in
+  place; the app keeps the position and zoom for the `key`, unless the person has not moved the canvas since it opened, when it
+  takes the opening view again. New and changed nodes fade their state in; with Reduce Motion nothing moves.
+- **Reading it without seeing it:** the canvas is a list of its visible nodes in reading order (`order` in the shared cases). Each
+  reads its title, then its badge, subtitle and progress ("40%"), then "under <parent's title>"; it is a button when it has an
+  action. Its fold control reads "Fold" or "Show 12 hidden". On the web every node is reachable with Tab in reading order and
+  pressed with Enter or Space, a focused node is panned into view, and with the canvas focused the arrow keys pan, `+` / `-` zoom
+  and `0` fits.
+
+### Compatibility
+
+The hub draws version 10 for an older app (`downgrade10`, `server/internal/extension/ui_v10.go`, before the older downgrades), so
+the same titles, states and actions are there, as a list:
+
+| Version 10 | Version 1–9 |
+| --- | --- |
+| `graph` | one `row` per visible node (the view's `folded` applied) in reading order, indented by its depth: `│ ` for each level above its parent's and `└ ` before its title, as extensions drew trees by hand; in a card, only the rows that fit its 12 items, in reading order |
+| a node's `subtitle`, `badge`, `icon`, `color`, `action` | the row's `subtitle`, `badge`, `icon`, `icon_color`, `action` |
+| a node's `progress` | the row's `value`, the percentage (`40%`) |
+| a folded node | its row's `value` gains `+12` (the nodes it hides), after the percentage with ` · ` when it has one; what it hides has no row |
+| `tone`, `group`, `selected`, `layout`, `direction`, `key` | left out (a row's key is `key/id` when the graph has a key and that is free on the page; a native stream's row always has a key, so a taken or overlong one becomes a free digest of the node id) |
+| a node's `started_at`, `ended_at`, `facts`, `detail`, `links` | left out: neither a fallback row nor a native stream's row carries timing, inspector or timeline data |
+
+Below versions 6 and 3 the rows then lose what those versions did not have (`icon_color`, `icon`), as any row. A native stream's
+client (whose components never include `graph`) gets the same rows, so it never sees the inspector or timeline fields either.
+Extensions may still draw an older app differently (`ui_version`). An older client that does send `10` but predates these fields
+simply ignores the unknown node properties; only the downgrade below 10 strips them. An action's `items` holding a graph are left
+out for an app below 10, which then draws the whole page again.
+
+**The web** (#9727) draws all of it and sends `10` (`web/src/views/extensions/ViewBody10.tsx`, a chunk loaded with the first view that has
+a graph; the page keeps the canvas's height meanwhile, and the card's fallback keeps the card's height too). The nodes are cards of the node token's size — growing with the
+page's text-size choice as every font does — on a layer one transform pans and zooms, the edges thin curves in one SVG behind them, a group a quiet frame with its title, the
+selected node ringed. A node with an action is a button; one without is a focusable group whose whole label reads out. The canvas is 70% of the page's visible height
+(320–900 px) and opens fitted, held to 50%–100%, centred on `selected`, else with the first root at the top start; pan by dragging or the wheel, zoom by pinching, Ctrl/Cmd +
+wheel or buttons (25%–200%), Fit down to 25%; Full screen draws the same canvas over the window (Back closes it on every width). A fold is its own round control beside the
+node, never over it — inside the node's own list item, so Tab walks a node then its fold — and it counters the zoom so it never shrinks below its own 24 px on screen (a
+44 px hit); the person's folds, pan and zoom are kept per `key` and per owner (the extension) across redraws (re-fitting while untouched), the view's `folded` applying until
+they fold one themselves. The keyboard walks the nodes in reading order (arrows pan, +/- zoom, 0 fits) and a focused node is panned into view; nodes fade in only when they
+are new or their fields changed. A card draws the same graph as a still fitted preview 200 px tall — fitted with no zoom floor, so a big graph fits too — with no buttons or
+presses; pressing it opens Full screen, the same interactive canvas as the page's. The web's native stream still sends 7.
+
+**The web's non-still canvas** (#11234) is a control room; a page, Full screen and a card's Full screen all draw it (the card itself stays a
+still 200 px preview). A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
+Enter opens the selected node's first link or runs its action, and Escape clears the selection and closes the inspector. Tapping a node
+that carries `facts`, `detail` or `links` opens an in-place node inspector beside the canvas (stacked below on narrow screens) with
+those readings, summary, HTTPS links (`openLink` opens hub session links in the side panel when supported) and any node `action`
+button; nodes without rich inspector metadata still run their `action` directly on tap. Beneath the canvas a collapsible parallel
+wall-clock timeline draws every node's `started_at`–`ended_at` span on one clock with adaptive ticks (`15s` / `1m` / `5m` / `15m` / `1h` / `6h`,
+scaling to date ticks across multi-day spans), so attempts running side by side read as concurrent bars; pressing a row selects and
+inspects that node in place, without leaving the page. In a `tree`, a run of more than 6 sibling leaves packs into columns instead of
+one long line. The opening viewport stays readable: when the fitted scale would fall below 65% it opens at 75% instead, centred on
+`selected`, else on the first running, caution or danger node, so a wide graph opens where the action is; Fit still zooms down to
+25% to show all of it.
+`web/e2e/extension-graph.mjs` checks it in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1`), keyboard included.
+
+**iOS** (#9727) draws all of it and sends `10` for whole pages and the app's cards and sections
+(`ExtensionUIContext.pageVersion` and `cardVersion`); the native stream stays at `8` and receives rows, and the frozen
+Mac app keeps its earlier version. `apple/Persona/Views/Settings/ExtensionGraphLayout.swift` is a pure, nonisolated
+copy of the shared layout, checked against every field of every shared case by `ExtensionGraphLayoutTests`.
+`apple/Persona/Views/Settings/ExtensionGraph.swift` draws one edge `Canvas`, the group frames and native node cards,
+with 44 pt fold targets, reading-order VoiceOver elements and a fold custom action (without a duplicate spoken chip).
+Drag, pinch and iPad pointer scrolling move the canvas; Command/Control + wheel zooms around the pointer. The floating
+Zoom out, Zoom in, Fit and Full screen controls use the design system, and the cover keeps the same model, transform
+and folds, closing by its button, Esc or VoiceOver Back. A page (including an Inbox item's full-size detail) gives it 70%
+of the visible height, clamped to 320–900 pt; a compact card has an always-fitted still 200 pt preview which opens
+the cover. `ExtensionGraphModel` lays out and restores off the main actor, persists the transform and explicit fold
+choices per component key, scoped to the hub, page and placement, in a bounded `StateCache` document with serialized,
+coalesced wheel-end writes. Interactive canvases refit only while untouched. `ExtensionGraphModelTests` covers
+restoration, folding, gesture saving and fitting;
+`ExtensionGraphUITests` checks zoom, fold, node push, full screen and the compact preview against the mock
+(`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1`).
+
+**Android** (#9727) draws the canvas in `android/feature/settings/src/main/kotlin/persona/feature/settings/ExtensionGraph.kt` and
+sends `10` (`HttpExtensionManagement.UI_VERSION`). The pure-Kotlin `ExtensionGraphLayout` reproduces the shared slot layout and
+reading order; the Compose canvas draws its curves, group frames, node cards, selected ring and separate 48 dp fold targets with
+the design system's tokens in every style and theme. Transformable gestures and the floating controls zoom from 25% to 200%, Fit
+includes the whole graph, and `JFullScreen` shares the originating canvas's transform and folds. `rememberSaveable`, keyed by the
+graph key, keeps both across recreation; an untouched canvas takes its opening view again after a redraw. A compact card is a
+200 dp still preview whose only action opens Full screen. Nodes use the existing row-action path and read aloud in shared order,
+including badge, subtitle, progress and parent; the graph never enters the native stream's component set, whose clients still
+receive the hub's rows. `ExtensionGraphLayoutTest` replays every shared case, while the Compose tests cover actions, folding,
+restoration, full-screen continuity and compact-preview boundaries.
 
 ## System-level placements (#1858)
 
@@ -2931,7 +3167,7 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
   out while none; the hub files a new direction under the project most of its tasks are filed under); `ended: true`
   once it left `assistant.leaders` (nothing is deleted; made a leader again, it is sent without `ended`). Sent once per
   change: what was last told is kept in the hub's store, so a restart or a replay of the same state sends nothing.
-- **`level?`** on `leader.report`: present only while the hub's push tiering (the low-distraction switch, `docs/server/server.md`) is on: `P1` for `progress`, `reached` and `stuck`, which an extension keeps in its log and briefing without alerting anyone (no message that rings, no mention); `P0` for a `decision`. Left out with the switch off, when an extension does as before.
+- **`level?`** on `leader.report`: present only while the hub's push tiering (the push grading switch, `docs/server/server.md`) is on: `P1` for `progress`, `reached` and `stuck`, which an extension keeps in its log and briefing without alerting anyone (no message that rings, no mention); `P0` for a `decision`. Left out with the switch off, when an extension does as before.
 - **`leader.report {id, leader, kind, todo, plan?, text, link?, at, reached?, doing?, needs_you?, links?, level?}`**: written by the hub from the task's ledger, never by a
   model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner, or a plan of the
   leader's waits for the owner's Start: then `plan` is the plan's id and `todo` is `""`, as a plan has no to-do until
@@ -2969,7 +3205,7 @@ Extensions with an `auth_relay` contribution (and the permission `auth_relay`) c
 When an extension decides "this needs a person", it sends a phone alert through the hub: `POST /api/v1/notify` (scope `notify`, or full access; use `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN`); parameters in `docs/protocol/protocol.md`.
 
 - **The extension chooses the level**: `active` (default, normal notification) or `time-sensitive` (breaks through Focus, vibrates the watch when the phone is locked; users can turn it off in system settings). iOS needs the app's `com.apple.developer.usernotifications.time-sensitive` entitlement to truly show it as time-sensitive; without it the system treats it as `active` (the hub's own "Needs you" pushes are affected too, see #1572). No `critical` (requires separate Apple approval) or `passive`.
-- **Urgency for push grading**: the optional `push_level` says how urgent the alert is — `P0` (must interrupt), `P1`, the default (worth knowing) or `P2` (background news). It is independent of `level` (the APNs interruption level). When the hub's push grading switch is off every level alerts as usual; when it is on, only `P0` alerts, `P1` is held for briefings and `P2` stays silent, and the same `id` (the related key) alerts at most once in 12 hours. A held alert is recorded with its reason and readable at `GET /api/v1/push/intercepts`, so the extension can avoid repeating what was held back. Reading it needs both the `notify` scope and the extension's ID in the hub's `intercept_readers` allow-list (`hub.json`); an extension not listed gets 403, and a listed one still sees its own manager's entries only (filtered before the 200-entry limit). The answer's `body` is a stored summary (title plus at most 140 runes), never the full held-push text, which can contain the owner's decision questions, agent replies or `notify_user` content; the extension gets `title`, the summary `body`, `level`, `reason`, `at`, `related_key` and the merged `also` titles — enough for an extension panel — while full credentials read through the same shape. The switch itself is readable at `GET /api/v1/push/ln-mode` (scope `notify`; only full credentials may PUT it), and `GET /api/v1/push/stats/daily` (`?days=1..14` or `?since=<RFC3339>`, scope `notify`) reports per UTC day how many of the extension's pushes were delivered (`sent`) and held (`intercepted`, with `by_reason`), counted from the hub's full records so the numbers stay exact past 200 entries. There is no "opened / handled" count: the hub has no data source for push taps.
+- **Urgency for push grading**: the optional `push_level` says how urgent the alert is — `P0` (must interrupt), `P1`, the default (worth knowing) or `P2` (background news). It is independent of `level` (the APNs interruption level). When the hub's push grading switch is off every level alerts as usual; when it is on, only `P0` alerts, `P1` is held for briefings and `P2` stays silent, and the same `id` (the related key) alerts at most once in 12 hours. A held alert is recorded with its reason and readable at `GET /api/v1/push/intercepts`, so the extension can avoid repeating what was held back. Reading it needs both the `notify` scope and the extension's ID in the hub's `intercept_readers` allow-list (`hub.json`); an extension not listed gets 403, and a listed one still sees its own manager's entries only (filtered before the 200-entry limit). The answer's `body` is a stored summary (title plus at most 140 runes), never the full held-push text, which can contain the owner's decision questions, agent replies or `notify_user` content; the extension gets `title`, the summary `body`, `level`, `reason`, `at`, `related_key` and the merged `also` titles — enough for an extension panel — while full credentials read through the same shape. The switch itself is readable at `GET /api/v1/push/ln-mode` or its neutral alias `GET /api/v1/push/grading` (same handler and response; scope `notify`; only full credentials may PUT either alias), and `GET /api/v1/push/stats/daily` (`?days=1..14` or `?since=<RFC3339>`, scope `notify`) reports per UTC day how many of the extension's pushes were delivered (`sent`) and held (`intercepted`, with `by_reason`), counted from the hub's full records so the numbers stay exact past 200 entries. There is no "opened / handled" count: the hub has no data source for push taps.
 - **Responsibilities**: when to notify, how often per session and how to detect a stall are the extension's business; the hub only delivers and honors user settings: no notification when the device has **Needs you** (`input`) off, the session is blocked, or the phone is muted. The hub's own pushes (questions, permissions, completion) stay as before; extensions cannot intercept them and do not cause them to be sent twice.
 - **Opening**: alerts with `machine_id` + `session_id` are grouped by session and open that session on tap; without them it is just a message. Buttons are covered in "System-level placements", "Notification buttons".
 - Example: subscribe to `agent.needs_you` / `agent.finished`, then poll `GET /api/v1/sessions`; if a session is stuck waiting for confirmation (no screen reading, no interaction card created by the hub) or has been spinning for 30 minutes, send one `time-sensitive` alert, at most once per session in 30 minutes.
@@ -3312,7 +3548,8 @@ events `{"event","params"}`. Hub-started extensions use stdin / stdout, remote o
 ```
 
 `active` lists contributions used in this run, one entry per extension point (disabled connectors and individually disabled contributions omitted; see "Contribution switches"); extensions exporting points also get `contributions_to_me` (see "Dependencies, exports and bundles"). `hub.role` (#1503) is this hub's role in its linked-hub group: `center` (alone or primary hub: serving apps, driving computers), or
-`member` (another hub is primary: group work such as reacting to chat-service events, running /agent and full crawling is handed to the primary). Role changes restart extensions contributing `connectors` or `api`.
+`member` (another hub is primary: group work such as reacting to chat-service events, running /agent and full crawling is handed to the primary). Role changes restart extensions contributing `connectors` or `api`;
+switching one of an extension's connectors on or off restarts that extension, so `active` is never older than the toggles.
 `hub.timezone` is the user's time zone (IANA, as reported by devices), used for displayed times ("today", message timestamps); empty when only the hub's own clock is known, read at each start.
 `hub.locale` is the user's language (`zh-Hans` / `en` / `ja`, `docs/protocol/i18n.md` ("Protocol")); extensions use it for human-facing text (status, sign-in prompts, bot replies), read at each start, defaulting to `zh-Hans` if absent.
 `hub.capabilities` (#1680) lists what this hub can do so extensions can adapt: `inbox_group` (associate batches of new connector messages with Inbox events, `docs/assistant/inbox.md` ("Event grouping")); `inbox_group_state` (a grouping connector may report the events the user read or replied to in the source, and its fallback plan may assign messages to an already handled event, which the hub accepts and reopens; `docs/assistant/inbox.md` ("Following up")); `tool_images` (a connector's `tools.call` answer may carry pictures for the model, `docs/protocol/connector-protocol.md` ("Pictures in a tool's answer"), #8484).

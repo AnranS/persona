@@ -264,34 +264,35 @@ type StoragePermission struct {
 // Contributes: contributions by extension point. A point this hub does not know installs with a warning, not taking
 // effect.
 type Contributes struct {
-	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
-	Voice           []NamedItem          `json:"voice,omitempty"`
-	Transcription   []NamedItem          `json:"transcription,omitempty"`
-	Speech          []NamedItem          `json:"speech,omitempty"`
-	Computer        []NamedItem          `json:"computer,omitempty"`
-	Browser         []NamedItem          `json:"browser,omitempty"`
-	Iphone          []NamedItem          `json:"iphone,omitempty"`
-	Quota           []QuotaItem          `json:"quota,omitempty"`
-	Providers       []ProviderItem       `json:"providers,omitempty"`
-	API             []APIItem            `json:"api,omitempty"`
-	Assistant       []AssistantItem      `json:"assistant,omitempty"`
-	McpServers      []MCPServerItem      `json:"mcp_servers,omitempty"`
-	UI              []UIItem             `json:"ui,omitempty"`
-	AgentSources    []AgentSourceItem    `json:"agent_sources,omitempty"`
-	Channel         []ChannelItem        `json:"channel,omitempty"`
-	Events          []EventsItem         `json:"events,omitempty"`
-	Shortcuts       []ShortcutItem       `json:"shortcuts,omitempty"`
-	Skills          []SkillItem          `json:"skills,omitempty"`
-	Prompts         []PromptItem         `json:"prompts,omitempty"`
-	Themes          []ThemeItem          `json:"themes,omitempty"`
-	Looks           []LookItem           `json:"looks,omitempty"`
-	TriageTemplates []TriageTemplateItem `json:"triage_templates,omitempty"`
-	AgentFilters    []AgentFilterItem    `json:"agent_filters,omitempty"`
-	Tunnels         []TunnelItem         `json:"tunnels,omitempty"`
-	ErrorReports    []ErrorReportsItem   `json:"error_reports,omitempty"`
-	AuthRelay       []AuthRelayItem      `json:"auth_relay,omitempty"`
-	SecretProviders []SecretProviderItem `json:"secret_providers,omitempty"`
-	Messaging       []MessagingItem      `json:"messaging,omitempty"`
+	Connectors          []ConnectorItem          `json:"connectors,omitempty"`
+	Voice               []NamedItem              `json:"voice,omitempty"`
+	Transcription       []NamedItem              `json:"transcription,omitempty"`
+	Speech              []NamedItem              `json:"speech,omitempty"`
+	Computer            []NamedItem              `json:"computer,omitempty"`
+	Browser             []NamedItem              `json:"browser,omitempty"`
+	Iphone              []NamedItem              `json:"iphone,omitempty"`
+	Quota               []QuotaItem              `json:"quota,omitempty"`
+	Providers           []ProviderItem           `json:"providers,omitempty"`
+	API                 []APIItem                `json:"api,omitempty"`
+	Assistant           []AssistantItem          `json:"assistant,omitempty"`
+	McpServers          []MCPServerItem          `json:"mcp_servers,omitempty"`
+	UI                  []UIItem                 `json:"ui,omitempty"`
+	AgentSources        []AgentSourceItem        `json:"agent_sources,omitempty"`
+	Channel             []ChannelItem            `json:"channel,omitempty"`
+	Events              []EventsItem             `json:"events,omitempty"`
+	Shortcuts           []ShortcutItem           `json:"shortcuts,omitempty"`
+	Skills              []SkillItem              `json:"skills,omitempty"`
+	Prompts             []PromptItem             `json:"prompts,omitempty"`
+	Themes              []ThemeItem              `json:"themes,omitempty"`
+	Looks               []LookItem               `json:"looks,omitempty"`
+	TriageTemplates     []TriageTemplateItem     `json:"triage_templates,omitempty"`
+	AgentFilters        []AgentFilterItem        `json:"agent_filters,omitempty"`
+	Tunnels             []TunnelItem             `json:"tunnels,omitempty"`
+	ErrorReports        []ErrorReportsItem       `json:"error_reports,omitempty"`
+	AuthRelay           []AuthRelayItem          `json:"auth_relay,omitempty"`
+	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
+	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
+	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
 }
@@ -302,7 +303,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -334,7 +335,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -572,6 +573,39 @@ type SecretProviderItem struct {
 	Schemes []string `json:"schemes"`
 }
 
+// RepositoryProviderItem: A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's
+// repositories and links there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe;
+// repository.schema.json) and re-checks every answer. Needs the program to speak the protocol. A host another
+// installed extension claims, on or off, fails the install, and so does one host in two items.
+type RepositoryProviderItem struct {
+	ID string `json:"id"`
+	// What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no control
+	// characters.
+	Name string `json:"name"`
+	// The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+	// not an IP address, and not a host the built-in GitHub and GitLab read.
+	Hosts []string `json:"hosts"`
+	// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
+	// kinds stay issue and pull_request.
+	LinkKinds []RepositoryLinkLabel `json:"link_kinds,omitempty"`
+}
+
+// RepositoryLinkLabel: the word a repository provider shows for one kind of its links (MR for a pull_request).
+type RepositoryLinkLabel struct {
+	Kind string `json:"kind"`
+	// Not only spaces, no control characters.
+	Label string `json:"label"`
+}
+
+// RepositoryLinkKind: the kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+const (
+	RepositoryLinkKindIssue       = "issue"
+	RepositoryLinkKindPullRequest = "pull_request"
+)
+
+// RepositoryLinkKinds are the values of RepositoryLinkKind, in order.
+var RepositoryLinkKinds = []string{"issue", "pull_request"}
+
 // ErrorReportsItem: it is given the error and crash reports of the hub and the user's devices
 // (error_reports.deliver): needs the program to speak the protocol, on_startup and permissions.error_reports.
 type ErrorReportsItem struct {
@@ -711,6 +745,9 @@ type UIItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 	// nav_page only.
 	Icon string `json:"icon,omitempty"`
+	// nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+	// owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+	IconColor string `json:"icon_color,omitempty"`
 	// overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension.
 	Opens string `json:"opens,omitempty"`
 	// inbox_item only: one of the extension's own connectors.
@@ -1105,6 +1142,8 @@ type UIPlace struct {
 	Connector     string `json:"connector,omitempty"`
 	// A nav_page's sidebar group, its title in the request's language (#9071).
 	Group *UIGroup `json:"group,omitempty"`
+	// A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822).
+	IconColor string `json:"icon_color,omitempty"`
 }
 
 type UIPlaces struct {
@@ -1804,10 +1843,17 @@ type Component struct {
 	Aspect string `json:"aspect,omitempty"`
 	Fit    string `json:"fit,omitempty"`
 	// Tapping does nothing (else it shows the picture full screen).
-	NoZoom     bool   `json:"no_zoom,omitempty"`
-	Tiles      []Tile `json:"tiles,omitempty"`
-	MaxColumns int    `json:"max_columns,omitempty"`
-	Width      string `json:"width,omitempty"`
+	NoZoom     bool        `json:"no_zoom,omitempty"`
+	Tiles      []Tile      `json:"tiles,omitempty"`
+	MaxColumns int         `json:"max_columns,omitempty"`
+	Width      string      `json:"width,omitempty"`
+	Nodes      []GraphNode `json:"nodes,omitempty"`
+	Edges      []GraphEdge `json:"edges,omitempty"`
+	Layout     string      `json:"layout,omitempty"`
+	Direction  string      `json:"direction,omitempty"`
+	// Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+	// this key.
+	Folded []string `json:"folded,omitempty"`
 }
 
 // Component types.
@@ -1838,13 +1884,75 @@ const (
 	ComponentImage         = "image"
 	ComponentGrid          = "grid"
 	ComponentCarousel      = "carousel"
+	ComponentGraph         = "graph"
 )
 
 // ComponentTypes are the types of Component, in order.
-var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"}
+var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph"}
 
 // ComponentSince is the UI version that brought each type.
-var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6}
+var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10}
+
+// GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
+// bar, in tone's role color or color's named color (never both), with optional timing and inspector details.
+type GraphNode struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Badge    *Badge `json:"badge,omitempty"`
+	Tone     string `json:"tone,omitempty"`
+	Color    string `json:"color,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	// A thin bar along the node's foot, 0 to 1.
+	Progress *float64 `json:"progress,omitempty"`
+	// Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+	// task tried several ways).
+	Group  string  `json:"group,omitempty"`
+	Action *Action `json:"action,omitempty"`
+	// Unix timestamp in seconds when this node started.
+	StartedAt *float64 `json:"started_at,omitempty"`
+	// Unix timestamp in seconds when this node ended; omitted while still running.
+	EndedAt *float64 `json:"ended_at,omitempty"`
+	// Short label/value readings shown in the node inspector.
+	Facts []Fact `json:"facts,omitempty"`
+	// Plain-text summary, verifier feedback or error shown in the node inspector.
+	Detail string `json:"detail,omitempty"`
+	// HTTPS links shown in the node inspector (for example work and verifier sessions across attempts).
+	Links []GraphNodeLink `json:"links,omitempty"`
+}
+
+// GraphNodeLink: an https link shown in a graph node's inspector (UI version 10).
+type GraphNodeLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// GraphEdge: an edge from one node to another (UI version 10): from is the parent, to the child.
+type GraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// GraphLayout: tree (the default): every node has at most one parent, children under it, a parent centred over its
+// children. layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose
+// steps wait for several others).
+const (
+	GraphLayoutTree    = "tree"
+	GraphLayoutLayered = "layered"
+)
+
+// GraphLayouts are the values of GraphLayout, in order.
+var GraphLayouts = []string{"tree", "layered"}
+
+// GraphDirection: right (the default): roots at the start, children after them, so a wide fan-out reads down the
+// screen like an outline. down: roots at the top, children below.
+const (
+	GraphDirectionRight = "right"
+	GraphDirectionDown  = "down"
+)
+
+// GraphDirections are the values of GraphDirection, in order.
+var GraphDirections = []string{"right", "down"}
 
 // ImageSource: where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref
 // the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref:
@@ -2571,12 +2679,14 @@ type MessagingMe struct {
 }
 
 type MessagingAccount struct {
-	ID       string `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Avatar   string `json:"avatar,omitempty"`
-	Tenant   string `json:"tenant,omitempty"`
-	SignedIn bool   `json:"signed_in"`
-	Unread   int    `json:"unread,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Tenant    string `json:"tenant,omitempty"`
+	SignedIn  bool   `json:"signed_in"`
+	Unread    int    `json:"unread,omitempty"`
 }
 
 type MessagingAccounts struct {
@@ -2596,9 +2706,11 @@ const (
 var MessagingConversationKinds = []string{"direct", "group", "topic_group", "bot"}
 
 type MessagingConversation struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Avatar          string    `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL       string    `json:"avatar_url,omitempty"`
 	Kind            string    `json:"kind"`
 	Unread          int       `json:"unread"`
 	MarkedUnread    bool      `json:"marked_unread,omitempty"`
@@ -2623,7 +2735,9 @@ type MessagingPerson struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name"`
 	Avatar string `json:"avatar,omitempty"`
-	Kind   string `json:"kind,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL string `json:"avatar_url,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type MessagingMembers struct {
@@ -2943,9 +3057,11 @@ type MessagingProfileField struct {
 }
 
 type MessagingProfile struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Avatar      string                  `json:"avatar,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+	// Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+	AvatarURL   string                  `json:"avatar_url,omitempty"`
 	Cover       string                  `json:"cover,omitempty"`
 	Kind        string                  `json:"kind,omitempty"`
 	Subtitle    string                  `json:"subtitle,omitempty"`
@@ -3436,6 +3552,10 @@ type ConnectorTool struct {
 	// with tool search when needed (#7317). A connector does not need to send it; the manager sets it on every list
 	// whatever a connector sent.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Set by Persona itself on the tool list of an assistant conversation with the work guide on: the tool is found on
+	// demand through the guide (#11078). A connector does not need to send it; the manager sets it on every list
+	// whatever a connector sent.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // ConnectorTools: tools.list and actions.list.
@@ -3737,6 +3857,10 @@ type ConnectorInboxThing struct {
 	// Where a reply goes and who sees it.
 	ReplyTo  string `json:"reply_to,omitempty"`
 	CanReply bool   `json:"can_reply,omitempty"`
+	// The thread's picture: one of the connector's own media refs (thread.media, as a ThreadChat's avatar) or an https
+	// address the hub fetches, either always naming the same bytes (docs "Avatars"). The other person of a private chat,
+	// a group's own. The Inbox row draws it; without one, the initial.
+	Avatar string `json:"avatar,omitempty"`
 	// ConnectorTier, or empty for the model.
 	Tier string `json:"tier,omitempty"`
 	Why  string `json:"why,omitempty"`
@@ -3915,6 +4039,15 @@ type ConnectorArchiveChat struct {
 	// The owner marked it done.
 	Done      bool      `json:"done,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	// Where the conversation stands at the source, as the source records it (a pull request or issue: open, merged or
+	// closed); omitted when the source has no such state. A fact, not the owner's done flag: the selection does not read
+	// it; the knowledge base keeps it on the chat, finishes projects whose chats have all ended and leaves ended chats
+	// out of the assistant's snapshot.
+	State string `json:"state,omitempty"`
+	// When the conversation got to state; omitted when unknown.
+	StateAt time.Time `json:"state_at,omitzero"`
+	// Stable HTTP(S) link to the conversation at its source, when available.
+	SourceURL string `json:"source_url,omitempty"`
 }
 
 // ConnectorArchiveMessage: one archived message. The archive only appends: a message without at, or without text and
@@ -4065,6 +4198,8 @@ type ConnectorKBItem struct {
 	LockedFields []string  `json:"locked_fields,omitempty"`
 	// The store's: which extension holds a locked field. A connector's is ignored.
 	Provenance map[string]ConnectorKBProvenance `json:"provenance,omitempty"`
+	// The store's: the links the user removed, by list. A connector's is ignored.
+	Excluded map[string][]string `json:"excluded,omitempty"`
 }
 
 // ConnectorKBProvenance: who holds a locked field of a knowledge-base entity, and from what (kb.schema.json
@@ -4407,6 +4542,16 @@ type ChannelMessage struct {
 	// The chat app's id of the message: the same message delivered again is taken once.
 	ID   string `json:"id"`
 	Text string `json:"text,omitempty"`
+	// The chat where the owner invoked a mention channel, as display context rather than an instruction.
+	Chat string `json:"chat,omitempty"`
+	// The topic or thread within chat, when the request came from one.
+	Topic string `json:"topic,omitempty"`
+	// Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
+	// instructions.
+	Context string `json:"context,omitempty"`
+	// The extension's attestation that this is the owner's own request. A mention channel must send true; false or
+	// omitted is refused. Optional for an im channel's older messages.
+	Owner *bool `json:"owner,omitempty"`
 	// At most 4 are kept.
 	Images []ChannelBlob `json:"images,omitempty"`
 	Files  []ChannelBlob `json:"files,omitempty"`
@@ -4416,6 +4561,10 @@ type ChannelMessage struct {
 	Forward string `json:"forward,omitempty"`
 	// The chat app's id of the message it answers.
 	ReplyTo string `json:"reply_to,omitempty"`
+	// The chat app's thread the message is in, as an opaque key. For a channel with capabilities.threads, each thread
+	// has a conversation of its own: its first message starts a new one (the channel's target stays as it is), later
+	// ones continue it. Without it, or without threads, the message goes to the channel's target.
+	Thread string `json:"thread,omitempty"`
 	// What it had that the channel cannot bring, for people (a voice message, a sticker).
 	Unsupported []string `json:"unsupported,omitempty"`
 }
@@ -4574,6 +4723,10 @@ type KBEntry struct {
 	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
 	// absent on other kinds, before a match and from an older hub.
 	MeetingID string `json:"meeting_id,omitempty"`
+	// Reference-only for a project that stores pointers. Omitted means full.
+	ProjectMode string              `json:"project_mode,omitempty"`
+	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
+	Sources     []KBProjectSource   `json:"sources,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
@@ -4615,11 +4768,14 @@ type KBDetail struct {
 	Path string `json:"path"`
 	// The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
 	// Status uses the same locked_fields and provenance as other corrected fields.
-	Meta     json.RawMessage      `json:"meta"`
-	Summary  string               `json:"summary,omitempty"`
-	Log      []string             `json:"log,omitempty"`
-	Recent   string               `json:"recent,omitempty"`
-	Links    []KBEntry            `json:"links,omitempty"`
+	Meta    json.RawMessage `json:"meta"`
+	Summary string          `json:"summary,omitempty"`
+	Log     []string        `json:"log,omitempty"`
+	Recent  string          `json:"recent,omitempty"`
+	Links   []KBEntry       `json:"links,omitempty"`
+	// The links the user removed by hand (meta's excluded), named as links are; automatic organizing and extensions
+	// leave them out until the user links them again (docs/assistant/knowledge.md "Removed links").
+	Removed  []KBEntry            `json:"removed,omitempty"`
 	Moments  []KBMomentRef        `json:"moments,omitempty"`
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
 	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
@@ -4631,6 +4787,57 @@ type KBDetail struct {
 	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
 	// (docs/assistant/knowledge.md "Person profiles").
 	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+	// Reference-only for a project that stores pointers. Omitted means full.
+	ProjectMode string              `json:"project_mode,omitempty"`
+	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
+	Sources     []KBProjectSource   `json:"sources,omitempty"`
+}
+
+type KBProjectSource struct {
+	// Canonical source identity shared across project views.
+	ID   string   `json:"id"`
+	URL  string   `json:"url,omitempty"`
+	Refs []string `json:"refs,omitempty"`
+	// State observed at the source, such as merged.
+	DeliveryState string    `json:"delivery_state,omitempty"`
+	DeliveryAt    time.Time `json:"delivery_at,omitzero"`
+	// Unverified when only source delivery facts are available.
+	EnvironmentVerification string `json:"environment_verification,omitempty"`
+}
+
+type KBProjectFreshness struct {
+	NeedsReview bool                               `json:"needs_review"`
+	TimelineEnd int64                              `json:"timeline_end"`
+	Evidence    []KBProjectEvidenceRef             `json:"evidence,omitempty"`
+	Fields      map[string]KBProjectFieldFreshness `json:"fields"`
+}
+
+type KBProjectFieldFreshness struct {
+	// Omitted when historical authorship is unknown.
+	Writer       string           `json:"writer,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	Cutoff       *KBProjectCutoff `json:"cutoff,omitempty"`
+	LockReason   string           `json:"lock_reason,omitempty"`
+	ReviewBy     string           `json:"review_by"`
+	NeedsReview  bool             `json:"needs_review"`
+	ReviewReason string           `json:"review_reason,omitempty"`
+	// Omitted when the gap cannot be counted.
+	UncoveredEvidenceCount *int `json:"uncovered_evidence_count,omitempty"`
+}
+
+type KBProjectCutoff struct {
+	TimelineFrom    int64 `json:"timeline_from"`
+	TimelineThrough int64 `json:"timeline_through"`
+	// True if earlier timeline entries were outside this refresh window.
+	TimelineTruncated bool                   `json:"timeline_truncated,omitempty"`
+	Sources           []KBProjectEvidenceRef `json:"sources,omitempty"`
+}
+
+type KBProjectEvidenceRef struct {
+	Ref string `json:"ref"`
+	// Opaque revision of this input.
+	Position string `json:"position"`
+	SourceID string `json:"source_id,omitempty"`
 }
 
 type KBProfileRecord struct {
@@ -4831,8 +5038,8 @@ type KBUpdateResult struct {
 	// The previous value of each field written (null when unset; summary is the old text, profile this extension's own
 	// profile before), for the extension's own undo.
 	Before map[string]json.RawMessage `json:"before,omitempty"`
-	// Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each with
-	// why.
+	// Fields the update carried that its kind does not use (a person's summary and log, for one), and links to make that
+	// the user removed: not applied, each with why.
 	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
@@ -4963,20 +5170,22 @@ type LeaderReportEvent struct {
 // status or a dropped connection); model_refused (the model declined to answer this input, a refusal or a content
 // filter: sending it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal);
 // timeout (past timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after
-// one more try; data ModelInvalidOutput).
+// one more try; data ModelInvalidOutput); model_candidates_failed (with two or more candidates, every one failed;
+// data ModelCandidatesFailed names how each did; a single candidate that fails answers with its own code and data).
 const (
-	ModelErrorCodeInvalidParams    = "invalid_params"
-	ModelErrorCodeAssistantOffline = "assistant_offline"
-	ModelErrorCodeModelUnavailable = "model_unavailable"
-	ModelErrorCodeModelPaused      = "model_paused"
-	ModelErrorCodeModelFailed      = "model_failed"
-	ModelErrorCodeModelRefused     = "model_refused"
-	ModelErrorCodeTimeout          = "timeout"
-	ModelErrorCodeInvalidOutput    = "invalid_output"
+	ModelErrorCodeInvalidParams         = "invalid_params"
+	ModelErrorCodeAssistantOffline      = "assistant_offline"
+	ModelErrorCodeModelUnavailable      = "model_unavailable"
+	ModelErrorCodeModelPaused           = "model_paused"
+	ModelErrorCodeModelFailed           = "model_failed"
+	ModelErrorCodeModelRefused          = "model_refused"
+	ModelErrorCodeTimeout               = "timeout"
+	ModelErrorCodeInvalidOutput         = "invalid_output"
+	ModelErrorCodeModelCandidatesFailed = "model_candidates_failed"
 )
 
 // ModelErrorCodes are the values of ModelErrorCode, in order.
-var ModelErrorCodes = []string{"invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output"}
+var ModelErrorCodes = []string{"invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output", "model_candidates_failed"}
 
 // ModelMessage: one turn of the conversation: the user's, or the model's earlier answer.
 type ModelMessage struct {
@@ -5009,6 +5218,17 @@ type ModelCompleteParams struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// What the call is for (daily, weekly…): it goes in the hub's log line with the usage.
 	Label string `json:"label,omitempty"`
+	// Candidate model ids, tried in order (#10398): one that fails (model_failed, model_refused, model_paused), runs
+	// past timeout_seconds, answers with no text (model_failed) or, with json_schema, still does not match it after its
+	// second try (invalid_output) hands over to the next. Each runs on a provider the user configured in Settings ›
+	// Model providers that offers it, the purpose's own provider first (a model none offers is model_unavailable with
+	// data {model}, nothing sent). One candidate that fails answers with its own error; when two or more all fail the
+	// error is model_candidates_failed. timeout_seconds bounds each candidate; the whole call stops at 600 seconds. The
+	// user can switch these lists off (the result then has no candidate) or replace them with a list of their own
+	// (candidate names the user's model) on the extension's purpose in Settings › Model configuration. Without models
+	// the call runs on the purpose's model, as it always did; a hub older than this field answers invalid_params
+	// (unknown field "models").
+	Models []string `json:"models,omitempty"`
 }
 
 // ModelUsage: what the call spent, every request of it together (a second try for json_schema included), as the
@@ -5029,8 +5249,37 @@ type ModelCompleteResult struct {
 	// The model that answered.
 	Model string `json:"model"`
 	// end_turn, or max_tokens when the answer was cut off.
-	StopReason string     `json:"stop_reason"`
-	Usage      ModelUsage `json:"usage"`
+	StopReason string `json:"stop_reason"`
+	// What the call spent; with models, every attempt's requests together.
+	Usage ModelUsage `json:"usage"`
+	// With models (or the user's own list): the candidate that answered.
+	Candidate string `json:"candidate,omitempty"`
+	// The candidates that failed before it, in order.
+	Attempts []ModelAttempt `json:"attempts,omitempty"`
+}
+
+// ModelAttempt: A candidate that did not answer: its model, the error code it failed with (a ModelErrorCode; a reply
+// with no text is model_failed), what happened, how long it took and what it spent.
+type ModelAttempt struct {
+	Model   string `json:"model"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// model_paused: when its connection lets go, an RFC 3339 time.
+	Until   string     `json:"until,omitempty"`
+	Seconds float64    `json:"seconds"`
+	Usage   ModelUsage `json:"usage"`
+}
+
+// ModelNotOffered: the data of model_unavailable for a candidate no provider the user configured offers.
+type ModelNotOffered struct {
+	Model string `json:"model"`
+}
+
+// ModelCandidatesFailed: the data of model_candidates_failed: every candidate's failure in order, and what they spent
+// together.
+type ModelCandidatesFailed struct {
+	Attempts []ModelAttempt `json:"attempts"`
+	Usage    ModelUsage     `json:"usage"`
 }
 
 // ModelPause: the data of model_paused.
@@ -5900,6 +6149,103 @@ type TranscriptionFinishResult struct {
 	Seconds float64 `json:"seconds"`
 }
 
+// RepoErrorCode: error.code a provider answers besides the base ErrorCode: not_found (no such repository or link, or
+// the account it uses cannot see it), not_signed_in (the user has to sign in to the source first), refused (the
+// source said no: say why in message), failed (anything else, say why in message). The manager shows the message on
+// one line, clipped.
+const (
+	RepoErrorCodeNotFound    = "not_found"
+	RepoErrorCodeNotSignedIn = "not_signed_in"
+	RepoErrorCodeRefused     = "refused"
+	RepoErrorCodeFailed      = "failed"
+)
+
+// RepoErrorCodes are the values of RepoErrorCode, in order.
+var RepoErrorCodes = []string{"not_found", "not_signed_in", "refused", "failed"}
+
+// RepoParseParams: repo.parse: what repository an address on one of the contribution's hosts names (a web address, an
+// https clone address, ssh://git@host/... or git@host:...). Answer only from the address when it can; the manager
+// asks repo.check before it saves one.
+type RepoParseParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The address as the user or an Agent wrote it (an Agent's may be any page on the contribution's hosts).
+	URL string `json:"url"`
+}
+
+// RepoParseResult: the repository the address names. instance_url is exactly https://<host> or https://<host>:<port>,
+// a lowercase host the contribution claims and nothing after it; the default port is left out
+// (https://code.acme.test, never https://code.acme.test:443, which is refused), path its plain segments without a
+// leading or trailing / (acme/tools), canonical_url exactly instance_url + "/" + path.
+type RepoParseResult struct {
+	InstanceURL  string `json:"instance_url"`
+	Path         string `json:"path"`
+	CanonicalURL string `json:"canonical_url"`
+	// How to clone it when that is not canonical_url: https or ssh on one of the contribution's hosts, no credentials,
+	// query or fragment.
+	CloneURL string `json:"clone_url,omitempty"`
+	// A name for people (Acme Tools): the catalog's default name for it.
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+// RepoCheckParams: repo.check: whether the repository exists and the account the program uses can see it, before the
+// manager saves it. Answered with Empty, or not_found / not_signed_in / refused / failed.
+type RepoCheckParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The repository's canonical_url as repo.parse answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoIdentity: A saved repository of the provider's, as repo.parse answered it.
+type RepoIdentity struct {
+	InstanceURL  string `json:"instance_url"`
+	Path         string `json:"path"`
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoLinkParams: repo.link: one of the repository's issues or pull requests for a to-do, named by an address (url)
+// or by kind and number. The manager asks only for a link it has not stored yet.
+type RepoLinkParams struct {
+	// The repository_providers item's id.
+	Contribution string       `json:"contribution"`
+	Repo         RepoIdentity `json:"repo"`
+	// The link's address as the user or an Agent wrote it; empty when kind and number name it. The hub only checks that
+	// the answer is under repo, so answer the link this address names, or an error when it names none.
+	URL string `json:"url,omitempty"`
+	// With number, when there is no url: the answer must be this kind.
+	Kind string `json:"kind,omitempty"`
+	// With kind: the answer must have this number.
+	Number string `json:"number,omitempty"`
+}
+
+// RepoLinkResult: the link: its kind and number, and its canonical address under the repository's canonical_url
+// (https, no credentials, query or fragment).
+type RepoLinkResult struct {
+	Kind         string `json:"kind"`
+	Number       string `json:"number"`
+	CanonicalURL string `json:"canonical_url"`
+	// Its title when the program knows it; kept on one line.
+	Title string `json:"title,omitempty"`
+}
+
+// RepoDescribeParams: repo.describe (optional): the title and state of a link the manager has stored, by its
+// canonical address.
+type RepoDescribeParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The link's canonical_url as repo.link answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoDescribeResult: what the link is called and where it stands.
+type RepoDescribeResult struct {
+	// Kept on one line.
+	Title string `json:"title"`
+	// Left out when the source has no such word for it.
+	State string `json:"state,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -6090,6 +6436,14 @@ func (v requiredJSONComponent) MarshalJSON() ([]byte, error) {
 			plain: plain(v),
 			Tiles: v.Tiles,
 		})
+	case "graph":
+		return json.Marshal(struct {
+			plain
+			Nodes []GraphNode `json:"nodes"`
+		}{
+			plain: plain(v),
+			Nodes: v.Nodes,
+		})
 	default:
 		return json.Marshal(plain(v))
 	}
@@ -6191,6 +6545,8 @@ var newDef = map[string]func() any{
 	"TriageTemplateItem":            func() any { return new(TriageTemplateItem) },
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
+	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
+	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },
 	"AgentFilterItem":               func() any { return new(AgentFilterItem) },
@@ -6267,6 +6623,9 @@ var newDef = map[string]func() any{
 	"View":                          func() any { return new(View) },
 	"Section":                       func() any { return new(Section) },
 	"Component":                     func() any { return new(Component) },
+	"GraphNode":                     func() any { return new(GraphNode) },
+	"GraphNodeLink":                 func() any { return new(GraphNodeLink) },
+	"GraphEdge":                     func() any { return new(GraphEdge) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
 	"RowAction":                     func() any { return new(RowAction) },
@@ -6501,6 +6860,11 @@ var newDef = map[string]func() any{
 	"KBGetParams":                   func() any { return new(KBGetParams) },
 	"KBGetResult":                   func() any { return new(KBGetResult) },
 	"KBDetail":                      func() any { return new(KBDetail) },
+	"KBProjectSource":               func() any { return new(KBProjectSource) },
+	"KBProjectFreshness":            func() any { return new(KBProjectFreshness) },
+	"KBProjectFieldFreshness":       func() any { return new(KBProjectFieldFreshness) },
+	"KBProjectCutoff":               func() any { return new(KBProjectCutoff) },
+	"KBProjectEvidenceRef":          func() any { return new(KBProjectEvidenceRef) },
 	"KBProfileRecord":               func() any { return new(KBProfileRecord) },
 	"KBPersonProfile":               func() any { return new(KBPersonProfile) },
 	"KBProfileItem":                 func() any { return new(KBProfileItem) },
@@ -6532,6 +6896,9 @@ var newDef = map[string]func() any{
 	"ModelCompleteParams":           func() any { return new(ModelCompleteParams) },
 	"ModelUsage":                    func() any { return new(ModelUsage) },
 	"ModelCompleteResult":           func() any { return new(ModelCompleteResult) },
+	"ModelAttempt":                  func() any { return new(ModelAttempt) },
+	"ModelNotOffered":               func() any { return new(ModelNotOffered) },
+	"ModelCandidatesFailed":         func() any { return new(ModelCandidatesFailed) },
 	"ModelPause":                    func() any { return new(ModelPause) },
 	"ModelInvalidOutput":            func() any { return new(ModelInvalidOutput) },
 	"ModelRefusal":                  func() any { return new(ModelRefusal) },
@@ -6596,6 +6963,14 @@ var newDef = map[string]func() any{
 	"TranscriptionSegment":          func() any { return new(TranscriptionSegment) },
 	"TranscriptionGap":              func() any { return new(TranscriptionGap) },
 	"TranscriptionFinishResult":     func() any { return new(TranscriptionFinishResult) },
+	"RepoParseParams":               func() any { return new(RepoParseParams) },
+	"RepoParseResult":               func() any { return new(RepoParseResult) },
+	"RepoCheckParams":               func() any { return new(RepoCheckParams) },
+	"RepoIdentity":                  func() any { return new(RepoIdentity) },
+	"RepoLinkParams":                func() any { return new(RepoLinkParams) },
+	"RepoLinkResult":                func() any { return new(RepoLinkResult) },
+	"RepoDescribeParams":            func() any { return new(RepoDescribeParams) },
+	"RepoDescribeResult":            func() any { return new(RepoDescribeResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -6695,4 +7070,8 @@ var Calls = map[string]Call{
 	"transcription.audio":            {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
 	"transcription.finish":           {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
 	"transcription.cancel":           {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
+	"repo.parse":                     {Name: "repo.parse", From: "hub", Params: "RepoParseParams", Result: "RepoParseResult"},
+	"repo.check":                     {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
+	"repo.link":                      {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
+	"repo.describe":                  {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
 }

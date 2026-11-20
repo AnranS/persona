@@ -585,6 +585,16 @@ func (ps *extensions) changed(c extension.Change) {
 	ps.kept.forgetProvider(c.ID) // and give other values, or none
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
+		if c.Old != nil && c.Old.Full != nil && ps.h.avatars != nil {
+			for _, api := range c.Old.Full.APIs() {
+				if api.Prefix == "lark" {
+					ps.h.avatars.Drop(larkAvatarCache(c.ID))
+				}
+			}
+			for _, source := range c.Old.Full.Messaging() {
+				ps.h.avatars.Drop(messagingAvatarCache(source.ID))
+			}
+		}
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
 			ps.logf("plugin %s removed: its hand-off rules were not: %v", c.ID, err)
@@ -832,7 +842,7 @@ func (hp *hubExtension) setProxy(id string) {
 			if res.Header.Get("Cache-Control") == "" {
 				res.Header.Set("Cache-Control", "no-store")
 			}
-			return nil
+			return addLarkAvatarResponse(res)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Cache-Control", "no-store")
@@ -1476,4 +1486,36 @@ func (ps *extensions) roleChanged(ctx context.Context) {
 			ps.apply(ctx, p.Record.ID)
 		}
 	}
+}
+
+// connectorSwitched restarts the extension whose connector id the user just switched on or off: its program got the
+// connectors that were on at initialize (active.connectors) and is never told again, so one that works for a connector
+// by itself (a listener, replies) would go on after the switch (docs/extensions/extensions.md "Turning contributions
+// on and off"). Only one that runs now (an extension that is off has no process and no connectors registered); the
+// hub's own connectors restart nothing. Called once the choice is kept, outside the manager's locks.
+func (ps *extensions) connectorSwitched(ctx context.Context, id string, on bool) {
+	if ps == nil || ps.h == nil || ps.h.connectors == nil {
+		return
+	}
+	c := ps.h.connectors.Get(id)
+	if c == nil {
+		return
+	}
+	owner := ""
+	ps.mu.Lock()
+	for eid, hp := range ps.byID {
+		if hp.proc != nil && slices.ContainsFunc(hp.conns, func(x *proc.Conn) bool { return connector.Connector(x) == c }) {
+			owner = eid
+		}
+	}
+	ps.mu.Unlock()
+	if owner == "" {
+		return
+	}
+	state := "off"
+	if on {
+		state = "on"
+	}
+	ps.logf("plugin %s: restarted for its connector %s switched %s", owner, id, state)
+	ps.apply(ctx, owner)
 }

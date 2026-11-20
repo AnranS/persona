@@ -28,6 +28,8 @@ export interface AgentLaunch {
   /** Picked in "New agent" for this start only (launcher-models.ts startPicks); none: the launcher's own. */
   model?: string;
   effort?: string;
+  /** Keep the launcher's native effort even when Model settings configures this launcher. */
+  launcherDefaultEffort?: boolean;
   /** Claude Code's permission mode for this start ("New agent"'s "Permission mode"); none: the launcher's own. */
   permissionMode?: string;
   /** The exact runtime workspace, scoped to machine and host; absent for an ordinary folder start. */
@@ -36,6 +38,8 @@ export interface AgentLaunch {
   host?: string;
   /** Turn ultracode on once Claude is up (#3428); only ever true: off is what a new Claude is (docs/protocol/protocol.md). */
   ultracode?: boolean;
+  /** Optional title source when the first message contains private project content. */
+  nameHint?: string;
   text: string;
   attachments: LocalAttachment[];
   todoId?: string;
@@ -44,6 +48,9 @@ export interface AgentLaunch {
   outgoing?: { text: string; images: { mime: string; data: string }[] };
   uploaded: Record<string, string>;
   error?: string;
+  /** The body of a shell_waiting refusal it failed with: the question the start's tab stopped on, answered from the
+   *  launch's page (lib/start-continue.ts). */
+  shellWaiting?: Record<string, unknown>;
   /** The start's op id (the hub does it once per id); `startPromptOpId` is for the Codex start with a first message. */
   startOpId: string;
   startPromptOpId: string;
@@ -58,7 +65,7 @@ export interface AgentLaunch {
 }
 
 /** `open: false` starts it without opening its conversation (Compare runs starts several and opens their page, #8916). */
-export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "workSession" | "inlinePrompt" | "model" | "effort" | "permissionMode" | "host" | "ultracode" | "text" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
+export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "workSession" | "inlinePrompt" | "model" | "effort" | "launcherDefaultEffort" | "permissionMode" | "host" | "ultracode" | "text" | "nameHint" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
   const launch: AgentLaunch = { ...input, id: `local-${uuid()}`, phase: "creating", uploaded: {}, ...launchOpIds() };
   putLaunch(launch);
   if (options.open !== false) navigate({ name: "session", mid: launch.machineId, sid: launch.id });
@@ -116,6 +123,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         machine_id: launch.machineId, cwd: launch.cwd, workspace_id: launch.workspaceId || undefined,
         launcher: launch.launcher || undefined, agent_type: launch.agentType, work_session: launch.workSession,
         model: launch.model || undefined, host: launch.host || undefined, todo_id: launch.todoId || undefined,
+        launcher_default_effort: launch.launcherDefaultEffort,
       };
       // A Codex (and a compatible CLI) takes its first message with the start. With none, a computer that can opens
       // Codex waiting for one (docs/integrations/codex.md "Starting without a first message"); an older one refuses.
@@ -123,7 +131,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         if (launch.attachments.length) throw new Error(t("lib-new-agent.launcher_no_attachments"));
         let r: { session: Session };
         try {
-          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, prompt: launch.text || undefined });
+          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, name_hint: launch.nameHint, prompt: launch.text || undefined });
         } catch (e) {
           if (!launch.text && e instanceof ApiError && (e.code === "codex_needs_prompt" || e.code === "work_prompt_required")) throw new Error(t("lib-new-agent.launcher_needs_text"));
           throw e;
@@ -138,7 +146,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         try {
           const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
             ...target, effort: launch.effort || undefined, permission_mode: launch.permissionMode || undefined,
-            ultracode: launch.ultracode === true ? true : undefined, async: true, name_hint: launch.text || undefined,
+            ultracode: launch.ultracode === true ? true : undefined, async: true, name_hint: launch.nameHint ?? (launch.text || undefined),
           });
           session = r.session;
         } catch (e) {
@@ -198,6 +206,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       error: noUltracode ? t("ultracode.start_refused", { error: ultracodeErrorText(e) }) : t(creating ? "lib-new-agent.start_failed" : sending ? "lib-new-agent.first_message_failed" : "lib-new-agent.attachments_failed", { error: errorText(e) }),
       clearable: e instanceof ApiError && e.code === "input_draft" && typeof e.body.clearable === "string" ? e.body.clearable : undefined,
       draft: e instanceof ApiError && e.code === "input_draft" ? String(e.body.draft ?? "") : undefined,
+      shellWaiting: e instanceof ApiError && e.code === "shell_waiting" ? e.body : undefined,
     });
   } finally {
     clearTimeout(deadline);

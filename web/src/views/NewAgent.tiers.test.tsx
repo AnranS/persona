@@ -89,6 +89,10 @@ async function open() {
 
 async function openPanel() {
   act(() => pill().click());
+  await act(async () => vi.dynamicImportSettled());
+  await flush();
+  // These caller tests inspect model actions; disclose the catalog first.
+  for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
 
@@ -114,8 +118,8 @@ describe("New agent: presets (#2225)", () => {
     expect(hint()?.textContent).toBe("预设 review · 代码审查和设计");
     // the model it runs is lit in its launcher's group (a preset row itself never is)
     await openPanel();
-    expect(row("model:fast\nm-review")!.getAttribute("aria-selected")).toBe("true");
-    expect(preset("review")!.getAttribute("aria-selected")).toBe("false");
+    expect(row("model:fast\nm-review")!.getAttribute("aria-pressed")).toBe("true");
+    expect(preset("review")!.getAttribute("aria-pressed")).toBe("false");
     act(() => pill().click());
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "fast", model: "m-review", effort: "high" });
@@ -183,7 +187,7 @@ describe("New agent: presets (#2225)", () => {
     await pick("preset:review");
     expect(hint()?.textContent).toBe("预设 review · 代码审查和设计");
     await openPanel();
-    expect(document.body.querySelector("[data-follow-row]")!.getAttribute("aria-selected")).toBe("false");
+    expect(document.body.querySelector("[data-follow-row]")!.getAttribute("aria-pressed")).toBe("false");
     act(() => document.body.querySelector<HTMLElement>("[data-follow-row]")!.click());
     await flush();
     expect(hint()).toBeNull();
@@ -215,5 +219,13 @@ describe("New agent: presets (#2225)", () => {
     expect(launched[0]).toMatchObject({ launcher: "claude" });
     expect(launched[0]?.model).toBeUndefined();
     expect(launched[0]?.effort).toBeUndefined();
+  });
+
+  it("applies a preset's permission_mode when picked and launches with it", async () => {
+    tiers = [{ name: "guarded", launcher: "fast", model: "m-review", effort: "high", permission_mode: "plan" }];
+    await open();
+    await pick("preset:guarded");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review", effort: "high", permissionMode: "plan" });
   });
 });

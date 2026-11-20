@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -175,7 +176,8 @@ func (s *Service) lastTurnItems(ctx context.Context, machine, sid string) (items
 	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1}, &res); err != nil {
 		return nil, false
 	}
-	return res.Items, true
+	_, items = splitLastTurn(res.Items)
+	return items, true
 }
 
 // lastTwoTurns are the items of the agent's turn before its latest one (earlier; none when there is none) and of its
@@ -215,10 +217,24 @@ func turnExchange(items []proto.Item) (ask, answer string) {
 	}
 	for i := len(items) - 1; i >= 0; i-- {
 		if it := items[i]; it.Kind == proto.KindText && it.Role == "assistant" && strings.TrimSpace(it.Text) != "" {
-			return ask, strings.TrimSpace(it.Text)
+			return ask, turnReplyText(it.Text, it.FullSize > 0)
 		}
 	}
 	return ask, ""
+}
+
+// Indentation is significant in a Markdown report. A clipped excerpt ending exactly at its rule
+// still has more text after it and cannot be read as the final report.
+func turnReplyText(text string, clipped bool) string {
+	if !strings.Contains(text, "### Persona ") {
+		return strings.TrimSpace(text)
+	}
+	if clipped {
+		if _, ok := textfmt.FinalWorkReport(text); ok {
+			return text + "\n…"
+		}
+	}
+	return text
 }
 
 // userStoppedNotice is the notice the transcript reader puts where the user stopped a turn (Claude Code's "[Request
@@ -230,26 +246,34 @@ const userStoppedNotice = transcript.InterruptedNotice
 // (it retries once with a hidden "no visible output" prompt, then stops); Codex's rollout maps to the same items.
 // Thinking alone is no output: the user sees nothing.
 func silentTurn(items []proto.Item) bool {
+	none, stopped := turnWithoutOutput(items)
+	return none && !stopped // stopped: the user stopped it (Esc), no failure to report
+}
+
+// turnWithoutOutput: a turn the node could read (none: it has items, at least the prompt) in which the agent neither
+// replied nor called a tool, and whether the transcript says it was stopped (the interrupted notice). Thinking alone
+// is no output.
+func turnWithoutOutput(items []proto.Item) (none, stopped bool) {
 	if len(items) == 0 {
-		return false // nothing to go by (an older node, a runtime that does not page items): not judged silent
+		return false, false // nothing to go by (an older node, a runtime that does not page items): not judged silent
 	}
 	for _, it := range items {
 		if it.Kind == proto.KindNotice && it.Text == userStoppedNotice {
-			return false // the user stopped it (Esc): no failure to report
+			stopped = true
 		}
 		if it.Role != "assistant" {
 			continue
 		}
 		switch it.Kind {
 		case proto.KindToolUse, proto.KindImage:
-			return false
+			return false, stopped
 		case proto.KindText:
 			if strings.TrimSpace(it.Text) != "" {
-				return false
+				return false, stopped
 			}
 		}
 	}
-	return true
+	return true, stopped
 }
 
 // sameRequest: ask is the task's own prompt (as sent, maybe with context around it).

@@ -32,6 +32,26 @@ class ModelsTest {
         assertEquals(0, s.pendingInteractions)
     }
 
+    @Test fun sessionDecodesUndeliveredMessagesAndAnAbsentListIsEmpty() {
+        val session = JsonCodec.decodeFromString<Session>(
+            """{"session_id":"s","assistant":true,"undelivered":[""" +
+                """{"id":"kept-waiting","text":"hello","images":2,"at":"2026-11-17T10:00:00Z","state":"waiting",""" +
+                """"attempts":2,"next_at":"2026-11-17T10:01:00Z","error":"The assistant could not start"},""" +
+                """{"id":"kept-failed","text":"later","at":"2026-11-17T10:02:00Z","state":"failed"}]}""",
+        )
+        assertEquals(listOf("kept-waiting", "kept-failed"), session.undelivered.orEmpty().map { it.id })
+        val waiting = session.undelivered.orEmpty().first()
+        assertEquals("hello", waiting.text)
+        assertEquals(2, waiting.images)
+        assertEquals("2026-11-17T10:00:00Z", waiting.at)
+        assertEquals("waiting", waiting.state)
+        assertEquals(2, waiting.attempts)
+        assertEquals("2026-11-17T10:01:00Z", waiting.nextAt)
+        assertEquals("The assistant could not start", waiting.error)
+        assertEquals("failed", session.undelivered.orEmpty().last().state)
+        assertTrue(JsonCodec.decodeFromString<Session>("""{"session_id":"s"}""").undelivered.isNullOrEmpty())
+    }
+
     @Test fun suggestionRiskDecodesAndAnAbsentFieldIsSafeByDefault() {
         for ((field, expected) in mapOf("\"suggestion_risky\":true" to true,
             "\"suggestion_risky\":false" to false, "" to false)) {
@@ -163,6 +183,15 @@ class ModelsTest {
         assertEquals(false, own.alwaysHonored)
     }
 
+    @Test fun interactionDecodesOptionalPlanThen() {
+        val plan = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_plan_then","kind":"plan","plan":"1. Ship it","plan_then":"default"}""",
+        )
+        val encoded = JsonCodec.encodeToString(plan)
+        assertTrue(encoded, encoded.contains(""""plan_then":"default""""))
+        assertEquals(plan, JsonCodec.decodeFromString<Interaction>(encoded))
+    }
+
     @Test fun interactionDecodesOptionalToolTitles() {
         val titled = JsonCodec.decodeFromString<Interaction>(
             """{"id":"ix_titles","kind":"permission","tool_name":"mcp__persona__report_to_supervisor",""" +
@@ -240,6 +269,11 @@ class ModelsTest {
     @Test fun personaOwnMcpServerShowsAsPersona() {
         assertEquals("Persona · agent read", toolDisplayName("mcp__persona__agent_read"))
         assertEquals("Persona · agent send", toolDisplayName("mcp__plugin_persona__agent_send"))
+        assertEquals("Persona · notify user", toolDisplayName("mcp_persona_notify_user"))
+        assertEquals("Persona · notify user", toolDisplayName("mcp_persona_0c671287_notify_user"))
+        for (server in ProtocolCompatibility.personaServers) {
+            assertEquals("mcp__persona__task_review", canonicalMcpToolName("mcp_${server}_55a1c59d_task_review"))
+        }
         assertEquals("Persona", toolDisplayName("mcp__persona"))
         assertEquals("github · create issue", toolDisplayName("mcp__github__create_issue"))
         assertEquals("persona_extra · x", toolDisplayName("mcp__persona_extra__x"))
@@ -276,5 +310,29 @@ class ModelsTest {
         val old = JsonCodec.decodeFromString<Interaction>("""{"id":"old","kind":"screen","dialog":{"question":"Continue?"}}""").dialog!!
         assertNull(old.command); assertNull(old.description); assertNull(old.warning); assertNull(old.risk)
         assertNull(old.deadline); assertNull(old.deadlineAction); assertNull(old.deadlineAt)
+    }
+
+    @Test fun clarificationCapabilityAndCurrentDeadlineRoundTripWithoutChangingOldHubDefaults() {
+        val updated = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_clarified","machine_id":"computer","session_id":"chat","kind":"permission",""" +
+                """"expires_at":"2026-11-20T03:00:00Z","can_clarify":true}""",
+        )
+        assertEquals(java.time.Instant.parse("2026-11-20T03:00:00Z"), parseTime(updated.expiresAt))
+        val wire = JsonCodec.encodeToString(updated)
+        assertTrue(wire, wire.contains(""""can_clarify":true"""))
+        assertTrue(wire, wire.contains(""""expires_at":"2026-11-20T03:00:00Z""""))
+        assertEquals(updated, JsonCodec.decodeFromString<Interaction>(wire))
+
+        val oldHub = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_old","kind":"permission","expires_at":"2026-11-19T03:00:00Z"}""",
+        )
+        val oldWire = JsonCodec.encodeToString(oldHub)
+        assertFalse(oldWire, oldWire.contains("can_clarify"))
+        assertEquals(oldHub, JsonCodec.decodeFromString<Interaction>(oldWire))
+        // A malformed additive flag drops only itself, retaining the legacy card and its fail-closed default.
+        val malformed = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_malformed","kind":"permission","can_clarify":"yes"}""",
+        )
+        assertFalse(JsonCodec.encodeToString(malformed).contains("can_clarify"))
     }
 }

@@ -9,7 +9,7 @@ import type { Launcher, Machine, Session } from "./types";
 import { copyText, toast } from "../ui/atoms";
 import { openNewAgent } from "./new-agent";
 import { navigate } from "./router";
-import { openNewWorktree } from "./worktree";
+import { openNewWorktree } from "./worktree-request";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
 import { providerIdNote, providerTitle } from "./provider-names";
@@ -19,6 +19,8 @@ export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
 export interface MenuNode {
   kind: NodeKind;
+  /** Session rows describe the conversation, never operations on its terminal pane. */
+  sessionOnly?: boolean;
   mid: string;
   /** The machine is online; a node of one that is away is only copied from. */
   online?: boolean;
@@ -344,6 +346,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   const omit = new Set(opts.omit);
+  if (node.sessionOnly) for (const key of ["node-split", "node-close-pane", "node-copy-id"]) omit.add(key);
   return groups
     .map((g) => g.filter((it) => !omit.has(it.key)))
     .filter((g) => g.length)
@@ -361,6 +364,7 @@ export function machineNode(m: Machine, extra: Partial<MenuNode> = {}): MenuNode
 export function sessionNode(s: Session, online: boolean, extra: Partial<MenuNode> = {}): MenuNode {
   return {
     kind: "pane",
+    sessionOnly: true,
     mid: s.machine_id,
     online,
     host: s.space_kind,

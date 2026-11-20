@@ -126,7 +126,7 @@ func TestLoadAllToolsSetting(t *testing.T) {
 	}
 	get := func() string { out, _ := tool(`{"action":"get","key":"assistant.load_all_tools"}`); return out }
 	deferred := func() bool {
-		return s.withToolLoading(ctx, []proto.Tool{{Name: "inbox_move"}}, true)[0].DeferLoading
+		return s.withToolLoading(ctx, "", []proto.Tool{{Name: "inbox_move"}}, true)[0].DeferLoading
 	}
 	if get() != "false" || !deferred() {
 		t.Fatalf("default: %s, deferred %v", get(), deferred())
@@ -216,11 +216,127 @@ func TestLoadAllToolsReachesRunningConversations(t *testing.T) {
 func TestToolLoadingCopies(t *testing.T) {
 	s := newTestService(t, newFakeHub().withMachine())
 	in := []proto.Tool{{Name: "ask_user", DeferLoading: true}, {Name: "inbox_move"}}
-	out := s.withToolLoading(context.Background(), in, true)
+	out := s.withToolLoading(context.Background(), "", in, true)
 	if out[0].DeferLoading || !out[1].DeferLoading {
 		t.Fatalf("marked %+v", out)
 	}
 	if !in[0].DeferLoading || in[1].DeferLoading {
 		t.Fatalf("the given list changed: %+v", in)
+	}
+}
+
+// Exercise the initial node response, so the attested session id must reach loading
+// classification. Membership changes tool loading, never a tool's caller permissions.
+func TestToolLoadingUsesTheConversationRole(t *testing.T) {
+	ft := newFleetTest(t)
+	ft.f.hello.Assistant.MachineID = "mac"
+	s := ft.s
+	setSettings(t, s, func(v *Settings) {
+		v.Main = "main0001"
+		v.Leaders = []string{"lead0001", "main0001"} // main is still main even if present here
+	})
+	wantLeader := []string{"leader_progress", "todo_create", "ask_escalate", "direction_name"}
+	if !slices.Equal(leaderCoreTools, wantLeader) {
+		t.Fatalf("leader tool defaults changed: %v", leaderCoreTools)
+	}
+	for _, tc := range []struct {
+		name, session string
+		deferred      bool
+	}{
+		{"leader", "lead0001", false},
+		{"main", "main0001", true},
+		{"ordinary", "side0001", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]any{"assistant": true, "session_id": tc.session})
+			out, handled, err := s.NodeRequest(t.Context(), "mac", "mcp.tools", raw)
+			if err != nil || !handled {
+				t.Fatalf("tool list: %v, handled %v", err, handled)
+			}
+			b, _ := json.Marshal(out)
+			var res struct {
+				Tools []proto.Tool `json:"tools"`
+			}
+			if err := json.Unmarshal(b, &res); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range wantLeader {
+				i := slices.IndexFunc(res.Tools, func(tool proto.Tool) bool { return tool.Name == name })
+				if i < 0 || res.Tools[i].DeferLoading != tc.deferred {
+					t.Errorf("%s: tool absent or deferred incorrectly (index %d, want %v)", name, i, tc.deferred)
+				}
+			}
+			for _, tool := range res.Tools {
+				if slices.Contains(coreTools, tool.Name) && tool.DeferLoading {
+					t.Errorf("shared core tool %s was deferred", tool.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkGuideLoadingScopeAndScheduledGrant(t *testing.T) {
+	s := newFleetTest(t).s
+	set := func(on, all bool) { setSettings(t, s, func(v *Settings) { v.WorkGuide = &on; v.LoadAllTools = &all }) }
+	ctx := t.Context()
+	tools := []proto.Tool{{Name: "todo_get"}, {Name: "task_plan"}, {Name: "todo_extension"}, {Name: "ask_user"}}
+	set(false, false)
+	baseline := s.withToolLoading(ctx, "ordinary", tools, true)
+	s.noteCleanRound("scheduled", "task-1")
+	set(true, false)
+	for _, tc := range []struct {
+		name                  string
+		ctx                   context.Context
+		self                  string
+		assistant, todo, plan bool
+	}{
+		{"assistant", ctx, "ordinary", true, true, true},
+		{"agent or guest", ctx, "ordinary", false, false, false},
+		{"background supervision", withToolSet(ctx, json.RawMessage(`{"tool_set":"supervise"}`)), "ordinary", true, false, false},
+		{"scheduled first plan", ctx, "scheduled", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.withToolLoading(tc.ctx, tc.self, tools, tc.assistant)
+			if got[0].WorkGuideTool != tc.todo || got[1].WorkGuideTool != tc.plan || got[2].WorkGuideTool || got[3].WorkGuideTool {
+				t.Fatal(got)
+			}
+		})
+	}
+	set(true, true)
+	if !s.withToolLoading(ctx, "ordinary", tools, true)[0].WorkGuideTool {
+		t.Fatal("full-loading preference overrode lab")
+	}
+	set(false, true)
+	for _, tool := range s.withToolLoading(ctx, "ordinary", tools, true) {
+		if tool.WorkGuideTool || tool.DeferLoading {
+			t.Fatalf("rollback with load_all_tools: %+v", tool)
+		}
+	}
+	set(false, false)
+	b, _ := json.Marshal(baseline)
+	off, _ := json.Marshal(s.withToolLoading(ctx, "ordinary", tools, true))
+	if string(b) != string(off) || tools[0].WorkGuideTool {
+		t.Fatal("rollback or copy", string(off), string(b))
+	}
+}
+
+func TestWorkGuideScheduledPreflightKeepsOriginalTools(t *testing.T) {
+	s := newFleetTest(t).s
+	ctx := t.Context()
+	s.noteCleanRound("grant", "task")
+	tools := []proto.Tool{{Name: "task_plan"}}
+	for name := range grantSafeTools {
+		tools = append(tools, proto.Tool{Name: name})
+	}
+	before := s.withToolLoading(ctx, "grant", tools, true)
+	setSettings(t, s, func(v *Settings) { v.WorkGuide = ptr(true) })
+	after := s.withToolLoading(ctx, "grant", tools, true)
+	b, _ := json.Marshal(before)
+	a, _ := json.Marshal(after)
+	if string(b) != string(a) {
+		t.Fatalf("grant preflight changed: %s -> %s", b, a)
+	}
+	if grantSafeTools["work_tools_search"] {
+		t.Fatal("discovery should not authorize a scheduled dispatch")
 	}
 }

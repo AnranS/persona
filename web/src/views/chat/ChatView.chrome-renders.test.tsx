@@ -58,6 +58,9 @@ vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" })
 
 import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
 import { whenComposer } from "../../lib/links";
+import { closePanel, getPanel, openPanel } from "../../lib/panel";
+import { currentPlatform } from "../../lib/shortcuts";
+import { useShortcuts } from "../../lib/use-shortcuts";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -94,6 +97,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  act(() => closePanel());
   host.remove();
   live.listeners.clear();
   reset();
@@ -133,6 +137,18 @@ it("a completed task remains a labelled, clickable owner, not a prompt to link i
   } finally {
     navigate.mockRestore();
   }
+});
+
+// Rename…, Rename space… and Delete… open dialogs from a chunk of their own (#10382): the ⋯ menu starts it as it opens, so
+// the click draws the dialog in its own render, with no wait for the chunk and no empty frame.
+it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws its dialog on the click", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+  await import("./SessionMenuDialogs"); // the chunk the menu asked for, in
+  await settle();
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent?.includes(t("chat-chatview.rename")))!;
+  act(() => item.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("chat-sessiondialogs.session_name"));
 });
 
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
@@ -326,6 +342,107 @@ it("after the pushes, sending and stopping still go out", async () => {
   act(() => applyCompleteSessions([row({ status: "idle", state: "idle" })]));
   await settle();
   expect(pressed()).toBeNull();
+});
+
+it("toggles the session overview and leaves it open while using the chat", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  const composer = host.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  const overview = document.getElementById(trigger.getAttribute("aria-controls")!);
+  expect(overview?.tagName).toBe("ASIDE");
+  expect(overview?.textContent).toContain(t("chat-sessionoverview.environment"));
+  expect(trigger.getAttribute("aria-pressed")).toBe("true");
+  act(() => composer.click());
+  expect(overview?.isConnected).toBe(true);
+  act(() => overview!.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+  expect(overview?.isConnected).toBe(true);
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  expect(overview?.isConnected).toBe(false);
+  expect(host.querySelector("textarea")).toBe(composer);
+});
+
+function ShortcutChat({ chat = true }: { chat?: boolean }) {
+  const pane = chat ? { mid: "mac", sid: "s1" } : undefined;
+  useShortcuts({ route: chat ? { name: "session", mid: "mac", sid: "s1" } : { name: "home" }, pane, narrow: false, toggleDrawer: () => {} });
+  return chat ? <ChatView mid="mac" sid="s1" inPage /> : null;
+}
+
+const pressB = () => act(() => void dispatchEvent(new KeyboardEvent("keydown", {
+  key: "b", code: "KeyB", bubbles: true, cancelable: true,
+  ...(currentPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true }),
+})));
+const overviewDetail = { kind: "background", mid: "mac", sid: "s1", run: "w1", from: "overview" } as const;
+const filesPanel = { kind: "files", mid: "mac", sid: "s1", cwd: "/code" } as const;
+
+async function openShortcutOverview() {
+  const workflows = [{ task_id: "w1", name: "Overview run", status: "running", running: true, started_at: "2026-11-12T02:00:00Z" }] as Session["workflows"];
+  await open(<ShortcutChat />, row({ workflows }));
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  await settle();
+  return trigger;
+}
+
+function openOverviewRun() {
+  act(() => host.querySelector<HTMLButtonElement>('[data-session-overview] [data-bg-run="w1"] [data-bg-row-button]')!.click());
+  expect(getPanel()).toEqual(overviewDetail);
+}
+
+it("does not reopen a remembered overview detail after its origin closes", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  pressB();
+  expect(getPanel()).toEqual(filesPanel);
+});
+
+it("reopens an overview detail with Cmd+B only while its origin stays open", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  pressB();
+  expect(getPanel()).toEqual(overviewDetail);
+  act(() => trigger.click());
+  expect(getPanel()).toBeNull();
+  pressB();
+  expect(getPanel()).toEqual(filesPanel);
+});
+
+it("forgets a remembered overview detail when its conversation unmounts", async () => {
+  await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => root.render(<ShortcutChat chat={false} />));
+  pressB();
+  expect(getPanel()).toBeNull();
+});
+
+it("keeps a list-origin detail in Cmd+B memory when the overview closes", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  const listed = { kind: "background", mid: "mac", sid: "s1", run: "w1" } as const;
+  act(() => openPanel(listed)); // a chat card replaces the overview detail with its list-origin equivalent
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  pressB();
+  expect(getPanel()).toEqual(listed);
 });
 
 it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {

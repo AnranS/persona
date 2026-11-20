@@ -42,22 +42,68 @@ var (
 )
 
 // retire stops session id's agent when it is still and keeps its pane, or closes the pane when closeTerminal (the
-// user's "Archive and close"); done false (and no error) when it was not running.
-func (n *Node) retire(ctx context.Context, id string, closeTerminal bool) (done bool, err error) {
+// user's "Archive and close", or the owner's setting to close an Agent's terminal when its session ends, #10355);
+// done false (and no error) when it was not running. With afterExit, an Agent that already quit has the marked, idle
+// shell it left closed too (closeAfterExit: Herdr only, refused when anything else is in it). cause is what the
+// close records: an automatic one (idle, task_completed) keeps the supervisor's resume, anything else is the user's;
+// an after-exit close keeps the cause the Agent stopped with.
+func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit bool, cause proto.StopCause) (done bool, err error) {
 	if !closeTerminal {
 		return n.stopWithCause(ctx, id, true, proto.StopUnknown)
 	}
 	release := n.recovery.lock(id)
 	defer release()
 	unlock, _, ok, err := n.stoppable(id, true)
-	if err != nil || !ok {
+	if err != nil {
 		return false, err
 	}
+	if !ok {
+		if !afterExit {
+			return false, nil
+		}
+		return n.closeExited(ctx, id)
+	}
 	defer unlock()
-	if err := n.close(ctx, id); err != nil {
+	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart {
+		cause = proto.StopUser
+	}
+	if err := n.closeWithCause(ctx, id, cause); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// closeExited closes the shell session id's agent left when it quit (closeAfterExit), under the recovery lock its
+// caller holds; done false when there is no such shell. Its stop cause stays as it was.
+func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
+	if !validID(id) {
+		return false, fmt.Errorf("invalid session id %q", id)
+	}
+	if err := n.switchingRefusal(id); err != nil {
+		return false, err
+	}
+	unlock := n.typing.lock(id)
+	defer unlock()
+	if _, running := n.agent(id); running {
+		return false, refusal(notRetirable, "the agent is running again", nil)
+	}
+	st, mine := n.state.get(id)
+	if !mine {
+		return false, nil // not Persona's: never closed
+	}
+	pane := st.Pane
+	if pane == "" {
+		p, _ := n.keptPane(id)
+		pane = p.PaneID
+	}
+	if pane == "" || host.ParsePane(pane).Kind != host.Herdr {
+		return false, nil // no shell it left that Persona can tell apart safely: kept, as before
+	}
+	_, kept := n.keptPane(id) // in the hosts' last snapshots; closeAfterExit reads the engine again before closing
+	if err := n.closeAfterExit(ctx, id, st); err != nil {
+		return false, err
+	}
+	return kept, nil
 }
 
 // stop quits session id's agent and keeps its pane (retire: only one that is still); stopped false (and no error)
@@ -93,7 +139,7 @@ func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause 
 // stoppable checks that session id's agent may be stopped now (retire: only a still one) and holds its typing lock
 // (unlock releases it) when ok; ok false with no error when it is not running.
 func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, ok bool, err error) {
-	if !validID(id) {
+	if !validID(id) && !n.agyPaneRow(id) {
 		return nil, a, false, fmt.Errorf("invalid session id %q", id)
 	}
 	no := func(code, why string) (func(), host.Agent, bool, error) {
@@ -137,7 +183,7 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 			return fail(notRetirable, "the agent is "+a.AgentStatus)
 		}
 		switch a.Agent {
-		case "", "claude", "codex", traexAgent:
+		case "", "claude", "codex", traexAgent, agyAgent: // agy leaves its TUI on two Ctrl+C presses too (#11087)
 		default:
 			return fail(notRetirable, "cannot stop a "+a.Agent)
 		}
@@ -207,15 +253,19 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 // resumed is what a Claude session that is not running is resumed with: the directory, launcher and model it was
 // started with, the modes it ran in and its title as the tab's name.
 type resumed struct {
-	cwd, launcher, mode, effort, tab string
-	execution                        modelExecution
+	cwd, launcher, mode, effort, tab    string
+	taskID, workspaceID, workspaceLabel string
+	execution                           modelExecution
 }
 
 // resumeWith is how a Claude session that is not running comes back, by a message (send) or by a start that resumes
 // it and leaves these out (session.start, fillResume).
 func (n *Node) resumeWith(id string, opts sendOpts) resumed {
 	st, _ := n.state.get(id)
-	r := resumed{cwd: st.Cwd, tab: n.resumeTabName(id)}
+	r := resumed{cwd: st.Cwd, tab: n.resumeTabName(id), taskID: st.TaskID, workspaceID: st.WorkspaceID, workspaceLabel: st.WorkspaceLabel}
+	if r.taskID == "" {
+		r.taskID, r.workspaceID, r.workspaceLabel = opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel
+	}
 	r.launcher, r.execution = n.resumeLauncher(st, id, opts)
 	if r.cwd == "" {
 		if p := n.transcriptPath(id); p != "" {
@@ -250,6 +300,15 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	out.mode = cmp.Or(asked.mode, r.mode)
 	out.effort = cmp.Or(asked.effort, r.effort)
 	out.tab = cmp.Or(asked.tab, r.tab)
+	out.taskID = cmp.Or(asked.taskID, r.taskID)
+	if r.taskID != "" && out.taskID == r.taskID {
+		// The node's own task record is authoritative; a conflicting user workspace is never adopted.
+		out.workspaceID = cmp.Or(r.workspaceID, asked.workspaceID)
+		out.workspaceLabel = cmp.Or(r.workspaceLabel, asked.workspaceLabel)
+	} else {
+		out.workspaceID = cmp.Or(asked.workspaceID, r.workspaceID)
+		out.workspaceLabel = cmp.Or(asked.workspaceLabel, r.workspaceLabel)
+	}
 	return out
 }
 
@@ -272,6 +331,9 @@ func (n *Node) resumeTabName(id string) string {
 // what a Codex thread started outside Persona is resumed with (codex_resume.go).
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
 	ctx = n.withResumeHost(ctx, id)
+	if st.TaskID != "" {
+		ctx, _ = withTaskSpace(ctx, st.TaskID, st.WorkspaceID, st.WorkspaceLabel)
+	}
 	if r := n.notRunningRefusal(ctx, id); r != nil {
 		return r
 	}
@@ -293,7 +355,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
-		argv = codexExecutionArgs(argv, modelExecution{Model: st.Model})
+		argv = codexTaskArgs(codexExecutionArgs(argv, n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), st.Cwd, modelExecution{Model: st.Model, Effort: st.ModelEffort})), codexKeptTaskInstructions(st))
 		if home, thread, ok := n.codexThread(id); ok && codexArchived(home, n.codexPath(id)) {
 			// Restore through Codex itself before its TUI can block the first prompt on an archive confirmation.
 			restored, err := n.codexArchive(ctx, id, home, thread, false)
@@ -312,7 +374,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	if len(paths) > 0 {
 		text = strings.TrimSpace(text) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 	}
-	ws, err := n.workspaceFor(ctx, launch, st.Cwd)
+	ws, err := n.tabSpace(ctx, launch, st.Cwd, "")
 	if err != nil {
 		return err
 	}
@@ -370,6 +432,9 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	for {
 		if err := n.refreshHosts(wait); err == nil {
 			if a, ok := n.agent(id); ok && a.PaneID == pane {
+				// Codex may come up behind its own update offer, whose default is Update now: the next Enter (a
+				// message, a /compact) would install it and quit Codex (#11316). Skipped as a new start skips it.
+				n.settleCodexStartup(wait, pane)
 				return nil
 			}
 		}
@@ -387,19 +452,31 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 }
 
 // newTab opens a tab in workspace ws for cwd, named tabName (or agent-<n>); with no workspace, a new one named after
-// the directory, whose first tab it is. The pane is marked as Persona's (personaTabToken, the session id when it is
-// already known): once its agent exits, the tab stays with the shell, linked to the session (personatab.go).
+// the directory, whose first tab it is. Its shell starts with startShellEnv where the engine takes one (startenv.go).
+// The pane is marked as Persona's (personaTabToken, the session id when it is already known): once its agent exits,
+// the tab stays with the shell, linked to the session (personatab.go).
 func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabName, id string) (*host.Created, error) {
+	ts := taskSpaceIn(ctx, launch)
 	if c := adoptedPane(ctx); c != nil { // "Run Agent Here": the pane the user picked, not a new tab (panes_actions.go)
+		if ts != nil {
+			ts.adopted = true
+		}
 		return c, nil
 	}
 	if c, err := keptClaimOf(ctx).tab(ctx); err != nil || c != nil { // a failed start's kept tab (startremedy.go)
+		if ts != nil {
+			ts.adopted = true
+		}
 		return c, err
 	}
 	var created *host.Created
 	var err error
 	if ws == "" {
-		if created, err = launch.CreateSpace(ctx, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
+		label := filepath.Base(cwd)
+		if ts != nil {
+			label = ts.label
+		}
+		if created, err = createStartSpace(ctx, launch, cwd, label); err == nil && created.SlotID != "" {
 			var taken map[string]bool
 			if _, ok := launch.(*herdrCoreHost); ok {
 				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder.
@@ -407,11 +484,27 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
 	} else {
-		created, err = launch.CreateSlot(ctx, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+		if err == nil {
+			if ts != nil && created != nil && created.SpaceID == "" {
+				created.SpaceID = ws
+			}
+			n.closeWorktreeShells(ctx, launch, ws, created.Pane.String()) // the Agent's tab is the worktree's tab now
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
+	ts.opened(created.SpaceID)
 	markPersonaTab(ctx, launch, created.Pane, id)
+	markTaskTerminal(ctx, launch, created.Pane)
+	n.agentTerminalOpened(launch, created.Pane) // finished_close.go
 	return created, nil
+}
+
+// agyPaneRow: id is the pane-derived row (otherSession) of an agy herdr is running now. agy rows never carry a
+// session id of the hex form validID accepts, so without this an agy Agent could not be stopped or retired (#11087).
+func (n *Node) agyPaneRow(id string) bool {
+	a, ok := n.agent(id)
+	return ok && a.Agent == agyAgent && a.PaneID != "" && id == otherSession(a)
 }

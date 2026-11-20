@@ -102,6 +102,8 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
@@ -236,6 +238,10 @@ data class BackgroundTask(
     @WireTime @SerialName("expires_at") val expiresAt: String? = null,
     /** A workflow's run (`wf_…`): which of [Session.workflows] it is. */
     @SerialName("run_id") val runId: String? = null,
+    /** Retained results have a terminal status, a stop time and, when observed, an exit code. */
+    val status: String? = null,
+    @WireTime @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
 ) {
     /** A Workflow run: shown from [Session.workflows] where the hub sends them, never counted twice. */
     val isWorkflow: Boolean get() = kind == "workflow"
@@ -282,6 +288,7 @@ data class SessionCapabilities(
 @Serializable(with = WorkStateSerializer::class)
 data class WorkState(
     val phase: String = "",
+    @SerialName("just_finished") val justFinished: Boolean = false,
     val on: String? = null,
     val line: String? = null,
     val wait: String? = null,
@@ -361,6 +368,23 @@ fun unknownAgentName(agent: String?, label: String?, launcher: String?): String 
     return said?.takeUnless { it.equals(PaseoAgent, ignoreCase = true) } ?: launcher?.trim()?.takeIf(String::isNotEmpty) ?: said ?: agent
 }
 
+/** A permission mode change recorded by the session's manager (GET …/mode-changes, #10297). */
+@Serializable
+data class ModeChange(
+    /** set, restart_done, restart_failed or restart_dropped. */
+    val kind: String = "",
+    val from: String? = null,
+    val to: String? = null,
+    /** For set: now, restart when it takes effect after this turn, or empty from an older node. */
+    val applied: String? = null,
+    /** Who asked: device, hub or extension. */
+    @SerialName("actor_kind") val actorKind: String? = null,
+    @SerialName("device_name") val deviceName: String? = null,
+    /** Why a queued restart finished as it did; a code, not display text. */
+    val reason: String? = null,
+    @WireTime val at: String = "",
+)
+
 @KeepGeneratedSerializer
 @Serializable(with = SessionSerializer::class)
 data class Session(
@@ -434,6 +458,12 @@ data class Session(
      * process by the node; #1379, #3957). False while unknown and from older hubs: then Allow Everything is a start's choice.
      */
     @SerialName("bypass_available") val bypassAvailable: Boolean = false,
+    /**
+     * Allow Everything was picked for this terminal Claude Code while it cannot reach it with shift+tab: the node restarts
+     * the session in it once its turn is over (#6476, docs/integrations/claude-integration.md "Full access by a restart").
+     * Until then the session still runs in [permissionMode]. False from older hubs.
+     */
+    @SerialName("bypass_pending") val bypassPending: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
     @SerialName("archived") val archived: Boolean = false,
@@ -453,6 +483,11 @@ data class Session(
     @SerialName("origin") val origin: String? = null,
     /** What it was opened for: the inbox item, the task, the conversation, the channel, the extension. */
     @SerialName("origin_ref") val originRef: String? = null,
+    /**
+     * The extension whose token opened it (`POST /api/v1/assistant/conversations`, docs/protocol/protocol.md "Origin of
+     * assistant chats"); absent for everyone else and from older hubs. Its mark draws that extension's icon (#10358).
+     */
+    @SerialName("opened_by") val openedBy: String? = null,
     @SerialName("space_id") val spaceId: String? = null,
     @SerialName("space_name") val spaceName: String? = null,
     @SerialName("slot_name") val slotName: String? = null,
@@ -480,6 +515,8 @@ data class Session(
      */
     @SerialName("queued_relayed") val queuedRelayed: Int? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
+    /** A short-lived list of shell and Monitor outcomes. Summary rows and older hubs can omit it. */
+    @SerialName("background_ended") val backgroundEnded: List<BackgroundTask>? = null,
     /**
      * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
@@ -506,7 +543,8 @@ data class Session(
     @SerialName("turn_error") val turnError: String? = null,
     /**
      * What the agent or the hub called [turnError] (docs/protocol/protocol.md): `usage_limit` is a subscription limit
-     * until it resets, not a turn to continue as an interruption. Older hubs never send it.
+     * until it resets, not a turn to continue as an interruption; `no_output` and `stopped` are the hub's own word on a
+     * task Agent's turn with no output (#10187), [turnError] then being its sentence, not an API error. Older hubs never send it.
      */
     @SerialName("turn_error_kind") val turnErrorKind: String? = null,
     /** When a `usage_limit` resets (RFC3339). Absent when that time is not known. */
@@ -622,6 +660,10 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** Earlier stretches of this conversation, oldest first, after a handoff to the other engine. */
+    @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
+    /** The manager's current queue. A complete session row without the field has no held messages. */
+    val undelivered: List<HeldAgentMessage>? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
@@ -680,6 +722,14 @@ data class Session(
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
+
+    /** The launcher's catalog identity when a row omits an explicit launcher. */
+    val effectiveLauncher: String get() = launcher?.takeIf(String::isNotEmpty) ?: when {
+        spaceKind == "codex_app" -> "codex-app"
+        isCodex -> "codex"
+        else -> "claude"
+    }
+
     /** Claude Code, or an older hub that does not name the agent: what Claude-only controls (modes, /model, /clear) need. */
     val isClaude: Boolean get() = !isCodex && (agent.isNullOrEmpty() || agent == "claude")
     /**
@@ -866,6 +916,8 @@ data class Item(
     val model: String? = null,
     /** What the model requests this item stands for used (#5426). Older hubs omit it. */
     val usage: List<TokenUsage> = emptyList(),
+    val narration: Boolean? = null,
+    @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
 )
 
 /**
@@ -941,6 +993,17 @@ data class PendingSwitch(
 )
 
 object PendingSwitchSerializer : WireSerializer<PendingSwitch>(PendingSwitch.generatedSerializer())
+
+/** The session and cutoff of one earlier stretch of an Agent conversation. */
+@KeepGeneratedSerializer
+@Serializable(with = EngineLegSerializer::class)
+data class EngineLeg(
+    @SerialName("session_id") val sessionId: String = "",
+    val agent: String = "",
+    @WireTime val until: String? = null,
+)
+
+object EngineLegSerializer : WireSerializer<EngineLeg>(EngineLeg.generatedSerializer())
 
 /** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
 @KeepGeneratedSerializer
@@ -1090,7 +1153,9 @@ data class Interaction(
     @SerialName("questions") val questions: List<Question>? = null,
     /** The runtime can discard this question without answering or interrupting the task. */
     @SerialName("can_cancel") val canCancel: Boolean? = null,
+    val reversible: Boolean? = null,
     @SerialName("plan") val plan: String? = null,
+    @SerialName("plan_then") val planThen: String? = null,
     @SerialName("tool_input") val toolInput: JsonElement? = null,
     @SerialName("summary") val summary: String? = null,
     @SerialName("screen") val screen: String? = null,
@@ -1127,8 +1192,16 @@ data class Interaction(
     @SerialName("tool_name_title") val toolNameTitle: String? = null,
     /** The rule a question a supervisor passed up suggests (#4929); the card comes again without it once it was answered. */
     val suggestion: RuleSuggestion? = null,
+    /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
+    @SerialName("can_clarify") val canClarify: Boolean = false,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */
+    val recordedPlanThen: String?
+        get() = when (planThen) {
+            "default", "acceptEdits", "auto", "bypassPermissions" -> planThen
+            else -> null
+        }
     /** The page that answers it; resolution still uses this interaction's own id and session. */
     val homeKey: SessionKey get() = SessionKey(machineId, foldedUnder?.takeIf(String::isNotBlank) ?: sessionId)
 
