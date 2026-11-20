@@ -126,6 +126,18 @@ class PlanCardConversationTest {
         rule.mainClock.advanceTimeBy(500)
     }
 
+    /** performScrollTo needs real choreographer frames; a frozen clock can otherwise fill the Robolectric heap. */
+    private fun scrollIntoView(node: SemanticsNodeInteraction) {
+        rule.mainClock.autoAdvance = true
+        try {
+            node.performScrollTo()
+            rule.waitForIdle()
+        } finally {
+            rule.mainClock.autoAdvance = false
+        }
+        settle()
+    }
+
     private fun capture(name: String): Int {
         val directory = File(System.getProperty("persona.shots") ?: "build/plan-card-shots").also { it.mkdirs() }
         val bitmap = rule.onNodeWithTag("plan-shot").captureToImage().asAndroidBitmap()
@@ -393,7 +405,7 @@ class PlanCardConversationTest {
     }
 
     /** Folded: provenance and a summary only. The fourth task proves that no brief leaves the existing task/card intact. */
-    private fun briefMatrixIsFolded() {
+    private fun briefMatrixIsFolded(style: AppStyle) {
         rule.onAllNodesWithTag("plan-brief").assertCountEquals(3)
         rule.onAllNodesWithTag("plan-brief-toggle").assertCountEquals(3)
         rule.onAllNodesWithText("Show All").assertCountEquals(3)
@@ -417,10 +429,19 @@ class PlanCardConversationTest {
         rule.onAllNodesWithText("Do not change payments").assertCountEquals(0)
         rule.onAllNodesWithText("Original owner criterion").assertCountEquals(0)
         // The task without a brief keeps its old content and the plan keeps all of its controls; there is no fourth disclosure.
-        rule.onNodeWithText("Keep the existing card").assertIsDisplayed()
+        rule.onNodeWithText("Keep the existing card", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Existing plan details stay visible").assertIsDisplayed()
         rule.onNodeWithText("legacy").assertIsDisplayed()
-        rule.onNodeWithText("Read-only requested").assertIsDisplayed()
+        rule.onNodeWithText("Read-only requested").let { chip ->
+            if (style == AppStyle.Glass) chip.assertIsDisplayed()
+            else {
+                // Brief/Board keep their old horizontal chip row; exercise the off-screen chip without leaving it scrolled.
+                scrollIntoView(chip)
+                chip.assertIsDisplayed()
+                scrollIntoView(rule.onNodeWithText("legacy"))
+                rule.onNodeWithText("legacy").assertIsDisplayed()
+            }
+        }
         rule.onNodeWithText("Start directly here and in subfolders").assertIsDisplayed()
         rule.onNodeWithText("Start 4 tasks").assertIsEnabled()
         rule.onNodeWithText("Edit").assertIsEnabled()
@@ -449,6 +470,12 @@ class PlanCardConversationTest {
         return (bounds.bottom - bounds.top).value
     }
 
+    /** Leave the legacy task's horizontal chip row at its natural leading position for review captures. */
+    private fun captureBriefMatrix(style: AppStyle, name: String): Int {
+        if (style != AppStyle.Glass) scrollIntoView(rule.onAllNodesWithText("Build server")[3])
+        return capture(name)
+    }
+
     /** The real PlanCard in every style and theme, with one disclosure per brief; captures include folded and expanded forms. */
     private fun everyStyleBriefMatrix(style: AppStyle, largeText: Boolean = false) {
         val dark = mutableStateOf(false)
@@ -456,13 +483,13 @@ class PlanCardConversationTest {
         val foldedColors = mutableListOf<Int>()
         for (night in listOf(false, true)) {
             dark.value = night; settle()
-            briefMatrixIsFolded()
+            briefMatrixIsFolded(style)
             val theme = if (night) "dark" else "light"
             val size = if (largeText) "-large" else ""
             if (!largeText) {
                 val ownerFolded = briefTextHeight(ownerRequest)
                 val handoverFolded = briefTextHeight(reconstructedHandover)
-                foldedColors += capture("plan-briefs-${style.name.lowercase()}-$theme-folded$size")
+                foldedColors += captureBriefMatrix(style, "plan-briefs-${style.name.lowercase()}-$theme-folded$size")
                 for (n in 0 until 3) {
                     rule.onAllNodesWithTag("plan-brief-toggle")[n].assertTextEquals("Show All").performClick()
                     settle()
@@ -470,15 +497,15 @@ class PlanCardConversationTest {
                 briefMatrixIsExpanded()
                 assertTrue("Show All reveals the whole owner request", briefTextHeight(ownerRequest) > ownerFolded)
                 assertTrue("Show All reveals the whole hand-over", briefTextHeight(reconstructedHandover) > handoverFolded)
-                capture("plan-briefs-${style.name.lowercase()}-$theme-open$size")
+                captureBriefMatrix(style, "plan-briefs-${style.name.lowercase()}-$theme-open$size")
                 for (n in 0 until 3) {
                     rule.onAllNodesWithTag("plan-brief-toggle")[n].assertTextEquals("Show less").performClick()
                     settle()
                 }
-                briefMatrixIsFolded()
+                briefMatrixIsFolded(style)
                 assertEquals("Show less folds the request again", ownerFolded, briefTextHeight(ownerRequest), 1f)
                 assertEquals("Show less folds the hand-over again", handoverFolded, briefTextHeight(reconstructedHandover), 1f)
-            } else foldedColors += capture("plan-briefs-${style.name.lowercase()}-$theme-folded$size")
+            } else foldedColors += captureBriefMatrix(style, "plan-briefs-${style.name.lowercase()}-$theme-folded$size")
         }
         assertNotEquals("dark brief capture must differ from light", foldedColors[0], foldedColors[1])
     }
