@@ -88,8 +88,8 @@ func taskOrphan(t Todo, agents []orphanAgent, now time.Time) (TodoOrphan, bool) 
 	if t.DoneAt != nil || len(agents) == 0 {
 		return TodoOrphan{}, false
 	}
-	if st := t.Supervision.state(t); st == reviewPending || st == reviewNeedsUser || st == reviewParked {
-		return TodoOrphan{}, false // a parked task waits on purpose: nobody is meant to work on it (parked.go)
+	if st := t.Supervision.state(t); st == reviewPending || st == reviewNeedsUser || st == reviewParked || st == reviewTimedOut || st == reviewClosing {
+		return TodoOrphan{}, false // a parked or timed-out task waits on purpose: nobody is meant to work on it
 	}
 	rank := map[string]int{orphanError: 3, orphanOffline: 2, orphanClosed: 1}
 	var o TodoOrphan

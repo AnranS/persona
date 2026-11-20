@@ -151,6 +151,15 @@ func TestTaskStalledProgressAndSupervisorActionResetClock(t *testing.T) {
 // it does not release the link, start a replacement Agent, archive the session, or remove its workspace.
 func TestTaskStalledContinuationResumesOriginalSession(t *testing.T) {
 	s, f, todo, agent, base := stalledTaskFixture(t, 0)
+	// The production transcript reader requires a full session ID, unlike the short IDs sufficient for node-call fakes.
+	s.todos.mu.Lock()
+	delete(s.todos.activeBySession, [2]string{"box", agent.SessionID})
+	agent.SessionID = "agent-0001"
+	s.todos.todos[todo.ID].Agents[0].SessionID = agent.SessionID
+	s.todos.activeBySession[[2]string{"box", agent.SessionID}] = todo.ID
+	s.todos.mu.Unlock()
+	todo = todoNow(s, todo.ID)
+	f.setSessions("box", agent)
 	ctx := context.Background()
 	s.superviseWatch(ctx, base)
 	s.superviseWatch(ctx, base.Add(time.Hour))
