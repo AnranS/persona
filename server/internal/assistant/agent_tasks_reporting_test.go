@@ -10,6 +10,26 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func reportingFeedReports(t *testing.T, s *Service, conversation string) []reportBody {
+	t.Helper()
+	items, _, err := s.feed(context.Background(), conversation, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []reportBody
+	for _, item := range items {
+		if item.Kind != feedReport {
+			continue
+		}
+		var body reportBody
+		if err := json.Unmarshal(item.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, body)
+	}
+	return out
+}
+
 // An agent on a reporting conversation's open todo reports back to that conversation while agent tasks are on. The
 // report keeps the conversation's existing reporter destination instead of becoming a main-conversation supervision
 // message. With agent tasks off, the old no-receiver answer and absence of report side effects are unchanged.
@@ -225,21 +245,7 @@ func TestReportFromAReportingTodoDefersQuestionInItsConversation(t *testing.T) {
 	if got := s.laterOpen(ctx, time.Now()); len(got) != 0 {
 		t.Fatalf("the reporting question entered the main briefing queue: %+v", got)
 	}
-	items, _, err := s.feed(ctx, "lark1", time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var reports []reportBody
-	for _, item := range items {
-		if item.Kind != feedReport {
-			continue
-		}
-		var body reportBody
-		if err := json.Unmarshal(item.Body, &body); err != nil {
-			t.Fatal(err)
-		}
-		reports = append(reports, body)
-	}
+	reports := reportingFeedReports(t, s, "lark1")
 	if len(reports) != 1 || !reports[0].Later || reports[0].Kind != upReportQuestion || reports[0].Text != "哪个分支？" ||
 		len(reports[0].Evidence) != 1 {
 		t.Fatalf("reporting conversation's deferred report: %+v", reports)
@@ -251,6 +257,106 @@ func TestReportFromAReportingTodoDefersQuestionInItsConversation(t *testing.T) {
 		t.Fatalf("the non-urgent question woke someone: pending %d, reporter %q, main %q",
 			pendingSignals(s), f.noticesTo("lark1"), f.notices())
 	}
+}
+
+func TestReportFromAReportingTodoRetainsProgressInItsConversation(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	agentTasksOn(t, s)
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	report := json.RawMessage(`{"kind":"progress","text":"two of five done","step":2,"steps":5}`)
+	res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report)
+	if res.IsError || !strings.Contains(res.Content[0].Text, "Noted in your reporting conversation") {
+		t.Fatalf("progress report: %+v", res)
+	}
+	reports := reportingFeedReports(t, s, "lark1")
+	if len(reports) != 1 || reports[0].Kind != upReportProgress || reports[0].Text != "two of five done" ||
+		reports[0].Step != 2 || reports[0].Steps != 5 || reports[0].Later {
+		t.Fatalf("reporting conversation's progress: %+v", reports)
+	}
+	if got := reportItems(t, s); len(got) != 0 {
+		t.Fatalf("progress reached main: %+v", got)
+	}
+	if pendingSignals(s) != 0 || len(f.noticesTo("lark1")) != 0 || len(f.notices()) != 0 {
+		t.Fatalf("progress woke someone: pending %d, reporter %q, main %q", pendingSignals(s), f.noticesTo("lark1"), f.notices())
+	}
+	if got := onlyTodo(s); got.Supervision != nil {
+		t.Fatalf("progress created a ledger: %+v", got.Supervision)
+	}
+}
+
+func TestReportFromAReportingTodoDoesNotFallBackToMainOnSaveFailure(t *testing.T) {
+	st := &failedBatchRelayFailStore{Store: &memStore{}}
+	s, f := reportingWithTask(t) // the reporting conversation is working, so its report queues
+	ctx := context.Background()
+	s.store = func() Store { return st } // inject only the relay write failure, after the in-memory task exists
+	agentTasksOn(t, s)
+	st.setFail(true)
+	report := json.RawMessage(`{"kind":"done","text":"unsaved report"}`)
+	res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report)
+	if !res.IsError {
+		t.Fatalf("an unsaved reporting report was acknowledged: %+v", res)
+	}
+	if pendingSignals(s) != 0 || len(f.notices()) != 0 {
+		t.Fatalf("the failed reporting delivery fell back to main: pending %d, notices %q", pendingSignals(s), f.notices())
+	}
+	if q, _ := s.queuedRelays(); len(q["lark1"]) != 0 {
+		t.Fatalf("the failed durable write stayed queued: %q", q["lark1"])
+	}
+}
+
+func TestReportFromAReportingTodoKeepsRealSupervision(t *testing.T) {
+	real := func(t *testing.T) (*Service, *fakeHub) {
+		t.Helper()
+		s, f := reportingWithTask(t)
+		ctx := context.Background()
+		agentTasksOn(t, s)
+		todo := onlyTodo(s)
+		s.superviseTodo(ctx, todo.ID, "lark1", nil, 0)
+		if got := todoNow(s, todo.ID); got.Supervision == nil || got.Supervision.Supervisor != "lark1" {
+			t.Fatalf("real supervision fixture: %+v", got.Supervision)
+		}
+		f.setSessions("server",
+			proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+			proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+		return s, f
+	}
+	t.Run("immediate report uses the real supervision pipeline", func(t *testing.T) {
+		s, f := real(t)
+		ctx := context.Background()
+		s.setReporterStopped(ctx, "lark1", "app")
+		report := json.RawMessage(`{"kind":"done","text":"real supervision"}`)
+		if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError {
+			t.Fatalf("report: %+v", res)
+		}
+		waitFor(t, "the real supervisor's message", func() bool {
+			return strings.Contains(strings.Join(f.noticesTo("lark1"), "\n"), "real supervision")
+		})
+		f.mu.Lock()
+		var source any
+		for _, send := range f.sends {
+			if send["session_id"] == "lark1" {
+				source = send["message_source"]
+			}
+		}
+		f.mu.Unlock()
+		if source == nil {
+			t.Fatal("a genuinely supervised reporter was sent a plain task notice instead of supervision")
+		}
+	})
+	t.Run("deferred question uses the ordinary briefing queue", func(t *testing.T) {
+		s, _ := real(t)
+		ctx := context.Background()
+		report := json.RawMessage(`{"kind":"question","text":"real deferred question","urgent":false}`)
+		if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", report); res.IsError {
+			t.Fatalf("report: %+v", res)
+		}
+		if got := s.laterOpen(ctx, time.Now()); len(got) != 1 || got[0].Text != "real deferred question" {
+			t.Fatalf("the real supervisor's question missed the briefing queue: %+v", got)
+		}
+	})
 }
 
 func TestReportFromAReportingTodoRechecksReporterRegistration(t *testing.T) {
