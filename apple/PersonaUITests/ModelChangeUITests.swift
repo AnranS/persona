@@ -45,6 +45,9 @@ final class ModelChangeUITests: XCTestCase {
             let app = launch(try hub(), appearance: look)
             let reply = labeled(app, "排好了：用时短的菜谱排在前面，同样用时的按收藏数。")
             XCTAssertTrue(reply.waitForExistence(timeout: 30), "the recipes chat did not load:\n\(app.debugDescription)")
+            acceptIconAlert(timeout: 2)
+            let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            XCTAssertTrue(board.alerts.firstMatch.waitForNonExistence(timeout: 3), "a system alert covers the divider screenshot")
 
             let divider = app.descendants(matching: .any).matching(identifier: "chat.modelChange").firstMatch
             XCTAssertTrue(divider.waitForExistence(timeout: 10), "no divider for the model that actually answered:\n\(app.debugDescription)")
