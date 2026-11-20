@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -148,6 +149,9 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 				return false
 			}
 			v.State = ""
+			if v.Round > 0 {
+				v.State = reviewRework
+			}
 			return true
 		})
 	}
@@ -245,7 +249,7 @@ func (s *Service) continueTimedOut(ctx context.Context, task Todo) (json.RawMess
 		}
 		m, ok := s.device(ctx, a.MachineID)
 		if !ok || !m.Reachable {
-			return nil, machineOffline(m.Name)
+			return nil, machineOffline(cmp.Or(m.Name, a.MachineID))
 		}
 		var result struct {
 			Session proto.Session `json:"session"`

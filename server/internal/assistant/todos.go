@@ -867,8 +867,9 @@ func (s *Service) taskOf(ctx context.Context, mid, sid string) (Todo, bool) {
 	return copyTodoLocked(t), true
 }
 
-// completedTodo reports whether mid/sid still belongs to a completed todo and no open one. Unlike closedTaskOf,
-// manual todos and user completions count too: a new turn alone does not authorize automatic follow-ups.
+// completedTodo reports whether mid/sid still belongs to a completed todo and no open one, or to an open task whose
+// timeout holds automatic follow-ups. Unlike closedTaskOf, manual todos and user completions count too: a new turn
+// alone does not authorize automatic follow-ups.
 func (s *Service) completedTodo(ctx context.Context, mid, sid string) (bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return false, err

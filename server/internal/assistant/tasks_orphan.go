@@ -252,6 +252,9 @@ func (s *Service) orphanSignal(t Todo) (superviseSignal, bool) {
 	if !ok || t.Supervision == nil || t.DoneAt != nil {
 		return superviseSignal{}, false
 	}
+	if st := t.Supervision.state(t); st == reviewTimedOut || st == reviewClosing {
+		return superviseSignal{}, false
+	}
 	return superviseSignal{Todo: t.ID, Kind: sigOrphaned, Key: o.key, Machine: o.machine, Session: o.session,
 		Detail: o.detail, Orphan: o.Reason}, true
 }
