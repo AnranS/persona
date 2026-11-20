@@ -7,16 +7,6 @@ import (
 	"time"
 )
 
-// Keep the acceptance request local until the public schema describes renew.
-// Execute remains the public operation boundary under test.
-type queueRenewAcceptanceParams struct {
-	RequestID    string `json:"request_id"`
-	Key          string `json:"key"`
-	ID           string `json:"id"`
-	Lease        string `json:"lease"`
-	LeaseSeconds int    `json:"lease_seconds"`
-}
-
 func queueRenewAcceptanceFixture(t *testing.T) (State, Scope, time.Time, string, Job) {
 	t.Helper()
 	state, scope := NewState(), testScope()
@@ -42,7 +32,7 @@ func queueRenewAcceptanceFixture(t *testing.T) (State, Scope, time.Time, string,
 func TestQueueRenewMaximumSuccessAndExactReceiptReplay(t *testing.T) {
 	state, scope, now, id, claimed := queueRenewAcceptanceFixture(t)
 	renewAt := now.Add(2 * time.Second)
-	in := queueRenewAcceptanceParams{
+	in := Renew{
 		RequestID: NewRequestID(renewAt), Key: "queue/jobs", ID: id, Lease: claimed.Lease,
 		LeaseSeconds: int(LeaseMost / time.Second),
 	}
@@ -104,7 +94,7 @@ func TestQueueRenewRejectsInvalidDurationsWithoutMutation(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			state, scope, now, id, claimed := queueRenewAcceptanceFixture(t)
 			probeAt := now.Add(time.Second)
-			probe := queueRenewAcceptanceParams{RequestID: NewRequestID(probeAt), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: int(LeaseMost / time.Second)}
+			probe := Renew{RequestID: NewRequestID(probeAt), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: int(LeaseMost / time.Second)}
 			if _, changed, err := call(t, &state, scope, "storage.queue.renew", probe, probeAt); err != nil || !changed {
 				t.Fatal("valid renew prerequisite:", changed, err)
 			}
@@ -140,12 +130,12 @@ func TestQueueRenewRejectsStaleMissingAndRevokedRequestsWithoutMutation(t *testi
 		t.Run(row.name, func(t *testing.T) {
 			state, scope, now, id, claimed := queueRenewAcceptanceFixture(t)
 			probeAt := now.Add(time.Second)
-			probe := queueRenewAcceptanceParams{RequestID: NewRequestID(probeAt), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: int(LeaseMost / time.Second)}
+			probe := Renew{RequestID: NewRequestID(probeAt), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: int(LeaseMost / time.Second)}
 			if _, changed, err := call(t, &state, scope, "storage.queue.renew", probe, probeAt); err != nil || !changed {
 				t.Fatal("valid renew prerequisite:", changed, err)
 			}
 			at := now.Add(2 * time.Second)
-			in := queueRenewAcceptanceParams{RequestID: NewRequestID(at), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: 5}
+			in := Renew{RequestID: NewRequestID(at), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: 5}
 			switch row.name {
 			case "expired":
 				at = time.UnixMilli(state.Queues[in.Key][id].LeaseUntil)
@@ -187,7 +177,7 @@ func TestQueueRenewReceiptDoesNotReviveExpiredDeletedOrReplacedLease(t *testing.
 		t.Run(scenario, func(t *testing.T) {
 			state, scope, now, id, claimed := queueRenewAcceptanceFixture(t)
 			at := now.Add(time.Second)
-			in := queueRenewAcceptanceParams{RequestID: NewRequestID(at), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: int(LeaseMost / time.Second)}
+			in := Renew{RequestID: NewRequestID(at), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: int(LeaseMost / time.Second)}
 			if _, changed, err := call(t, &state, scope, "storage.queue.renew", in, at); err != nil || !changed {
 				t.Fatal("commit renew before stale replay:", changed, err)
 			}
@@ -224,7 +214,7 @@ func TestQueueRenewReceiptCannotBypassCurrentGrantWithdrawal(t *testing.T) {
 		t.Run(withdrawal, func(t *testing.T) {
 			state, scope, now, id, claimed := queueRenewAcceptanceFixture(t)
 			at := now.Add(time.Second)
-			in := queueRenewAcceptanceParams{RequestID: NewRequestID(at), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: 5}
+			in := Renew{RequestID: NewRequestID(at), Key: "queue/jobs", ID: id, Lease: claimed.Lease, LeaseSeconds: 5}
 			if _, changed, err := call(t, &state, scope, "storage.queue.renew", in, at); err != nil || !changed {
 				t.Fatal("commit renew before grant withdrawal:", changed, err)
 			}

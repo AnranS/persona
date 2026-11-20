@@ -15,14 +15,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extmgr/storage"
 )
 
-type dbQueueRenewAcceptanceParams struct {
-	RequestID    string `json:"request_id"`
-	Key          string `json:"key"`
-	ID           string `json:"id"`
-	Lease        string `json:"lease"`
-	LeaseSeconds int    `json:"lease_seconds"`
-}
-
 func dbQueueRenewAcceptanceInitial(t *testing.T) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(storage.NewState())
@@ -126,7 +118,7 @@ func TestExtensionStorageQueueRenewDurabilityAndExactReplay(t *testing.T) {
 	receiptCount := len(beforeState.Receipts)
 
 	renewAt := now.Add(2 * time.Second)
-	in := dbQueueRenewAcceptanceParams{
+	in := storage.Renew{
 		RequestID: storage.NewRequestID(renewAt), Key: key, ID: enqueued.ID, Lease: claimed.Job.Lease,
 		LeaseSeconds: int(storage.LeaseMost / time.Second),
 	}
@@ -167,8 +159,8 @@ func TestExtensionStorageQueueRenewDurabilityAndExactReplay(t *testing.T) {
 		t.Fatal("durable renew did not commit exactly one receipt")
 	}
 	receipt, exists := renewedState.Receipts[in.RequestID]
-	if !exists || !bytes.Equal(receipt.Result, firstResult) {
-		t.Fatal("persisted renew receipt does not hold the original successful result")
+	if !exists || !jsonEqual(t, string(receipt.Result), string(firstResult)) {
+		t.Fatal("persisted renew receipt does not hold the original successful result; exists", exists, "got", receipt.Result, "want", firstResult, "request", in.RequestID)
 	}
 
 	_, beforeReplay, beforeRevision := dbQueueRenewAcceptanceState(t, other, row.ID)

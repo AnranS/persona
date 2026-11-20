@@ -12,14 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-type extmgrQueueRenewAcceptanceParams struct {
-	RequestID    string `json:"request_id"`
-	Key          string `json:"key"`
-	ID           string `json:"id"`
-	Lease        string `json:"lease"`
-	LeaseSeconds int    `json:"lease_seconds"`
-}
-
 func extmgrQueueRenewAcceptanceJSON(t *testing.T, value any) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -75,7 +67,7 @@ func TestStorageSourceAdapterQueueRenewLostAckReplayAndRunFence(t *testing.T) {
 		t.Fatal("claim adapter renew fixture:", claimed, err)
 	}
 	original := *claimed.Job
-	in := extmgrQueueRenewAcceptanceParams{
+	in := wire.StorageRenewParams{
 		RequestID: storageProcessID(t, old), Key: key, ID: original.ID, Lease: original.Lease,
 		LeaseSeconds: int(storage.LeaseMost / time.Second),
 	}
