@@ -251,7 +251,7 @@ Every snapshot includes `profile`, the subset hub needs. hub retains the latest 
 
 - Identify phone messages to main chat (`isMainOn`), machine for model configuration's "Main chat" purpose, default launcher (`launcher`: assistant setting, else `manager.json`'s `assistant.launcher`, else claude), AI twin default machine, machine selection for `/api/v1/skills`, launcher tests and usage, and `assistant.lark` only for the assistant machine.
 - User timezone (`userLocation`, `hub/usertz.go`): all hub time reads use it.
-- `keep`: sessions nodes must list regardless of inactivity (main chat, replaced old main chats, scheduled-task chats, Agents linked to unfinished to-dos, #4510; the background supervisor; current directions' lead conversations, on the computer their direction record names, else the assistant's, #11392). A listed row does not keep its transcript file. Since 2026-11-04 the assistant process connects computers ([machines.md](../server/machines.md) ("Who connects to computers")):
+- `keep`: sessions nodes must list regardless of inactivity (main chat, replaced old main chats, scheduled-task chats, Agents linked to unfinished to-dos, #4510; the background supervisor; current directions' lead conversations, on the computer their direction record names, else the assistant's, #11392; the sessions placed under current directions, #11515: per direction the owner's live filings, newest filing first, then the conversations its lead conversation opened, newest first, at most 50, on the computer each names; [unified-entry.md](unified-entry.md) ("The direction tree")). The part placed under directions is sorted by computer and session, so an unchanged list is not sent again. A listed row does not keep its transcript file. `keep` is left out (`null`: the nodes keep the list they were last given) when the scheduled tasks, the to-dos, the direction filing book, the recorded conversation openers, the conversation deletion record or the direction records cannot be read. `keep` does not change the age window of Codex Agent threads (a node lists them from rollouts written in the last 14 days; a kept one only gets past its agent filter, `server/internal/node/codex_registry.go`) or how other runtimes list their sessions. Since 2026-11-04 the assistant process connects computers ([machines.md](../server/machines.md) ("Who connects to computers")):
   on snapshot reporting, its device layer (`internal/devices` `SetKeep`) sends `node.configure keep_sessions` once to changed machines, all machines on the first snapshot; also supplied on node connection (`configureNode`). hub only retains this copy.
 - **The first second or two after hub restart, before the assistant reports**: hub uses its persisted copy (`loadAssistantProfile`, before plugins and connectors start). Startup plugins need user timezone;
   an in-memory-only copy means they get hub timezone during these seconds and keep it until their own restart.
@@ -1334,6 +1334,15 @@ Each dispatched linked run starts with its to-do ID. When its watched turn settl
 on its `ScheduleRun` in `assistant.runs`: `progress`, `no_progress`, `unknown` or `inactive`, with the to-do ID,
 consecutive assessable no-progress count and the run's explanation. Skipped or unstarted attempts are `not_run`;
 a newer completed run makes a late older unassessed result `superseded`. A still-running, unassessed run is `pending`.
+
+The explanation is the run's own reply (#11553): the last reply after the prompt that carries the run's key, up to the
+next message that opened a turn. A run in its source conversation shares that conversation with its other work:
+supervision messages, the owner's words, and other schedules' runs. There the explanation is never just the latest turn's
+reply. Two linked runs due in the same minute in one supervising conversation each keep their own reply, although both
+watchers see the conversation settle only after the second answer. When the run's turn is not its own (its prompt was
+queued into another turn, or another message was queued into its turn), or its prompt is not on the page, the
+explanation is the hub's evidence line ("no new Agent reply, criterion change or progress report"). A run in a
+conversation of its own falls back to that conversation's latest turn.
 
 The baseline is the previous assessment, or a before-dispatch snapshot on the first run. Observable progress is
 any changed nonempty last Agent answer on a current unreleased, undismissed task Agent, a state change of an
