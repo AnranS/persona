@@ -123,10 +123,10 @@ func (s *Service) closeStalledTask(ctx context.Context, task Todo, agents []prot
 
 	// A supervisor action or a link move must win over a stop already being recovered. Keep their writers out while
 	// the current ledger and live rows are rechecked and the durable close intent is written.
-	s.supervise.writeMu.Lock()
-	defer s.supervise.writeMu.Unlock()
 	s.todos.writing.Lock()
 	defer s.todos.writing.Unlock()
+	s.supervise.writeMu.Lock()
+	defer s.supervise.writeMu.Unlock()
 	current, ok := s.todoNow(task.ID)
 	if !ok || current.DoneAt != nil || current.Supervision == nil ||
 		!current.Supervision.UpdatedAt.Equal(task.Supervision.UpdatedAt) || current.Supervision.state(current) != state {
