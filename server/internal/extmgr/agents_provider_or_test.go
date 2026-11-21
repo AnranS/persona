@@ -227,6 +227,13 @@ func TestPersonalAgentHTTPProviderORValidationAndCursor(t *testing.T) {
 
 	firstValues := url.Values{"summary": {"1"}, "limit": {"1"}, "provider": {"provider-a", "provider-b"}}
 	first := personalORMustPage(t, handler, firstValues)
+	withCounts := personalORCloneHTTP(firstValues)
+	withCounts.Set("with_counts", "1")
+	both := personalORMustPage(t, handler, withCounts)
+	wantCounts := personalORMustCounts(t, handler, personalORCloneHTTP(firstValues))
+	if both.Counts == nil || !reflect.DeepEqual(*both.Counts, wantCounts) {
+		t.Fatalf("inline OR counts = %+v, want standalone %+v", both.Counts, wantCounts)
+	}
 	for name, providers := range map[string][]string{
 		"changed set": {"provider-a", "other"},
 		"added value": {"provider-a", "provider-b", "other"},
