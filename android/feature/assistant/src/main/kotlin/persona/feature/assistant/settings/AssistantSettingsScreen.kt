@@ -311,10 +311,10 @@ private fun SettingsHome(
             JGroupItem(GroupPosition.Single) {
                 if (manager == null) {
                     JRow(stringResource(R.string.assistant_settings_name), value = identityName,
-                        leadingIcon = PhIcons.UserCircle)
+                        leadingIcon = PersonaIcons.person)
                 } else {
                     JRow(stringResource(R.string.assistant_settings_rename), value = identityName,
-                        leadingIcon = PhIcons.PencilSimple, enabled = !renameBusy, chevron = false,
+                        leadingIcon = PersonaIcons.edit, enabled = !renameBusy, chevron = false,
                         onClick = { renameFailed = false; renaming = true })
                 }
             }
