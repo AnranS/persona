@@ -25,6 +25,7 @@ class LarkMentionsTest {
         assertEquals("", larkMentionQuery("@"))
         assertEquals("小", larkMentionQuery("Saturday @小"))
         assertEquals("To", larkMentionQuery("@Zhou together @To"))
+        assertEquals("To", larkMentionQuery("Saturday,@To"))
         assertNull(larkMentionQuery("Saturday"))
         assertNull(larkMentionQuery("mail me@example"))
         assertNull(larkMentionQuery("@Tom "))

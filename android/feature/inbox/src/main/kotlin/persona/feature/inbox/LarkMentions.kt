@@ -26,10 +26,13 @@ import persona.core.designsystem.Tokens
 fun larkMentionFeed(feedId: String, conversation: LarkConversation): String? =
     feedId.takeIf { conversation.isTopic || conversation.isGroup == true }
 
-/** The name after an @ at the end of the draft, with no whitespace or email-style word before it. */
+/** The name after an @ at the end of the draft, or null for an email-style ASCII word, whitespace or a long query. */
 fun larkMentionQuery(text: String): String? {
     val at = text.lastIndexOf('@').takeIf { it >= 0 } ?: return null
-    if (at > 0 && !text[at - 1].isWhitespace()) return null
+    if (at > 0) {
+        val before = text[at - 1]
+        if (before in 'a'..'z' || before in 'A'..'Z' || before in '0'..'9') return null
+    }
     val query = text.substring(at + 1)
     return query.takeIf { it.length <= 20 && it.none(Char::isWhitespace) }
 }
