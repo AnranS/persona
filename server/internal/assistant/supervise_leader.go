@@ -376,14 +376,19 @@ func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session s
 			return
 		}
 	}
-	if err := s.noteAgentArchive(ctx, row, true); err != nil {
+	changedAt, err := s.noteAgentArchiveAt(ctx, row, true)
+	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
 		return
 	}
-	if err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC()); err != nil { // what it writes as it goes is not new work
+	row.ArchiveChangedAt = archiveChangedAt(changedAt)
+	completed, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
+	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
 	}
-	s.publishList(row.MachineID)
+	if completed {
+		s.publishList(row.MachineID)
+	}
 	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
 }
 
