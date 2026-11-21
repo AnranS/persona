@@ -48,6 +48,7 @@ class LarkMentionsTest {
         assertEquals(listOf(tom), larkMentions("@Tom Saturday", picked = listOf(zhou, tom)))
         assertEquals(emptyList<LarkMention>(), larkMentions("@To Saturday", picked = listOf(tom)))
         assertEquals(listOf(tommy, zhou), larkMentions("@Tommy @Zhou Saturday", picked = listOf(tom, tommy, zhou)))
-        assertEquals(listOf(zhou), larkMentions("Saturday", picked = listOf(zhou, tom)))
+        assertEquals(listOf(zhou), larkMentions("@Zhou Saturday", picked = listOf(zhou, tom)))
+        assertEquals(emptyList<LarkMention>(), larkMentions("Saturday", picked = listOf(zhou, tom)))
     }
 }
