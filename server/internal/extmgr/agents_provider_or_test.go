@@ -75,7 +75,7 @@ func personalORReference(rows []agents.Session, providers ...string) ([]string, 
 	matching := make([]agents.Session, 0)
 	counts := sessionlist.Counts{
 		Machine: map[string]int{}, Project: map[string]int{}, Group: map[string]int{},
-		State: map[string]int{}, Todo: map[string]int{}, PaneSource: map[string]int{},
+		State: map[string]int{}, Todo: map[string]int{},
 	}
 	for _, row := range rows {
 		if !set[row.Provider] { // deliberately independent, exact and case-sensitive

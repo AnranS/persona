@@ -8,7 +8,7 @@ import (
 
 func providerORParse(t *testing.T, values url.Values) Options {
 	t.Helper()
-	o, err := Parse(values)
+	o, err := ParseProviderSets(values)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestProviderORRejectsInvalidValueSets(t *testing.T) {
 			if !Enabled(values) {
 				t.Error("the invalid provider set fell back to the legacy route")
 			}
-			_, err := Parse(values)
+			_, err := ParseProviderSets(values)
 			requireCode(t, err, "invalid_query")
 		})
 	}
@@ -132,7 +132,7 @@ func TestProviderORRejectsInvalidValueSets(t *testing.T) {
 		sixtyFour[n] = "provider-a"
 	}
 	providerORParse(t, url.Values{"summary": {"1"}, "provider": sixtyFour})
-	legacy, err := Parse(url.Values{"summary": {"1"}, "provider": {""}})
+	legacy, err := ParseProviderSets(url.Values{"summary": {"1"}, "provider": {""}})
 	if err != nil || legacy.Provider != "" {
 		t.Fatalf("legacy single-empty provider: %+v, %v", legacy, err)
 	}
