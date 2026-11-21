@@ -321,7 +321,12 @@ func (svc *Service) applyArchives(ctx context.Context, machine string, list []pr
 // archivedInventory is machine's whole list with the archive applied (archivedSessions), its children folded under
 // their parents among the rows left listed (foldInventory).
 func (svc *Service) archivedInventory(ctx context.Context, machine string) ([]proto.Session, bool, error) {
-	mark := svc.archiveMark()
+	return svc.archivedInventoryAtMark(ctx, machine, svc.archiveMark())
+}
+
+// archivedInventoryAtMark applies only activity visible at mark, so a publisher cannot undo an archive written after
+// the operation whose publication it is finishing.
+func (svc *Service) archivedInventoryAtMark(ctx context.Context, machine string, mark uint64) ([]proto.Session, bool, error) {
 	list, changed, err := svc.archivedSessions(ctx, machine, svc.decoratedUnarchived(machine), mark)
 	svc.foldInventory(machine, list)
 	return list, changed, err

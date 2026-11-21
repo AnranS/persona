@@ -1991,7 +1991,7 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 ## Archive generations outlive close RPCs (2026-11-21, #7789)
 
 - `time.Now` alone is not an archive version: it can tie or move backwards, and deleting a provisional record loses the high-water mark a later archive needs after a restart. Allocate the next marker from the persisted one under the archive gate. An applicable force-close rollback leaves a restored generation; a stale rollback is a no-op, not another write that could fence out a newer close.
-- A close RPC runs outside the archive gate. Carry the generation captured by the archive write into completion, and check it under the gate before writing `ClosedAt` or requesting native archiving. Skip the completion's inventory publish when it is stale too: publishing a cached blocked row can automatically restore the newer re-archive even when its record was left untouched.
+- A close RPC runs outside the archive gate. Carry the generation captured by the archive write into completion, and check it under the gate before writing `ClosedAt` or requesting native archiving. Skip a stale completion's publish; an applicable completion publishes with the archive read marker captured under that gate, so a re-archive between check and publish is not visible as activity to the old close. Publishing a cached blocked row without that fence can automatically restore the newer re-archive even when its record was left untouched. Metadata-write errors are different: preserve the committed archive's normal publish and immediate native retry.
 
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 

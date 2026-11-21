@@ -81,12 +81,12 @@ func (s *Service) forceArchiveConfirmation(ctx context.Context, mid, sid string)
 			s.logf("force archive %s: cancel confirmation %s after close: %v", short(sid), ix.ID, err)
 		}
 	}
-	completed, err := s.noteAgentArchiveClosed(ctx, row, closedAt, true)
+	publishMark, err := s.noteAgentArchiveClosed(ctx, row, closedAt, true)
 	if err != nil {
 		return err
 	}
-	if completed {
-		s.publishList(row.MachineID)
+	if publishMark != 0 {
+		s.publishListAtArchiveMark(row.MachineID, publishMark)
 	}
 	return nil
 }

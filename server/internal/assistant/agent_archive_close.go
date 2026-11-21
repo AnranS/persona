@@ -73,6 +73,8 @@ func (svc *Service) archiveAndCloseAgentSession(ctx context.Context, mid, sid st
 		// What the agent wrote while it was closed must not bring the session back (agentArchive.activeAfter).
 		if _, err := svc.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), true); err != nil {
 			svc.logf("agent archive %s/%s: note close: %v", row.MachineID, row.SessionID, err)
+			// The terminal is gone even when its secondary metadata could not be saved: keep the immediate native retry.
+			svc.nativeArchiveWanted(row, true)
 		}
 	}
 	return res, nil
@@ -134,36 +136,36 @@ func retireRefusalKey(why string) string {
 	return "hub-agent_archives.close_refused"
 }
 
-// noteAgentArchiveClosed marks the generation that started a close closed at `at` and reports whether it applied. A
-// restore or re-archive written while the node call was out wins: its marker, ClosedAt and native intent are left
-// untouched. When retryNative is set, the native retry is emitted under the archive gate only after this generation's
-// close metadata is saved.
-func (svc *Service) noteAgentArchiveClosed(ctx context.Context, s proto.Session, at time.Time, retryNative bool) (bool, error) {
+// noteAgentArchiveClosed marks the generation that started a close closed at `at`. It returns the archive read marker
+// for the completion's publish, or zero when a restore/re-archive won and there is nothing to publish. When
+// retryNative is set, the native retry is emitted under the archive gate only after this generation's close metadata
+// is saved.
+func (svc *Service) noteAgentArchiveClosed(ctx context.Context, s proto.Session, at time.Time, retryNative bool) (uint64, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
 	defer cancel()
 	b := &svc.agentArchives
 	if err := b.lock(ctx); err != nil {
-		return false, err
+		return 0, err
 	}
 	defer b.unlock()
 	if err := svc.loadAgentArchivesLocked(ctx); err != nil {
-		return false, err
+		return 0, err
 	}
 	key := runtimeListID(s.MachineID, s.SessionID)
 	rec, ok := b.records[key]
 	if !ok || !rec.Archived || s.ArchiveChangedAt == nil || !rec.ChangedAt.Equal(*s.ArchiveChangedAt) {
-		return false, nil
+		return 0, nil
 	}
 	rec.ClosedAt = at
 	next := maps.Clone(b.records)
 	next[key] = rec
 	if err := svc.saveAgentArchivesLocked(ctx, next); err != nil {
-		return false, err
+		return 0, err
 	}
 	if retryNative {
 		svc.nativeArchiveWanted(s, true) // its terminal is gone: the tool's archive goes through now
 	}
-	return true, nil
+	return b.writes.Load(), nil
 }
 
 // archiveAndCloseHTTP is POST /api/v1/sessions/{mid}/{sid}/archive?close=1: 200 once archived, with what the close

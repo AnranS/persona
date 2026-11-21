@@ -382,12 +382,12 @@ func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session s
 		return
 	}
 	row.ArchiveChangedAt = archiveChangedAt(changedAt)
-	completed, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
+	publishMark, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
 	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-	}
-	if completed {
-		s.publishList(row.MachineID)
+		s.publishList(row.MachineID) // the archive itself committed; secondary metadata failure must not hide it
+	} else if publishMark != 0 {
+		s.publishListAtArchiveMark(row.MachineID, publishMark)
 	}
 	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
 }

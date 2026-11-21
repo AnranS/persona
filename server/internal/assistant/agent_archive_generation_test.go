@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -46,6 +47,22 @@ func (s *archiveGenerationStore) history() []archiveGenerationWrite {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]archiveGenerationWrite(nil), s.writes...)
+}
+
+// archiveGenerationCloseFailureStore fails only the close metadata write after the archive itself is durable.
+type archiveGenerationCloseFailureStore struct {
+	*fleetMem
+	archiveWrites int
+}
+
+func (s *archiveGenerationCloseFailureStore) PutSetting(ctx context.Context, key string, value any) error {
+	if key == agentArchivesKey {
+		s.archiveWrites++
+		if s.archiveWrites == 2 {
+			return errors.New("close metadata write failed")
+		}
+	}
+	return s.fleetMem.PutSetting(ctx, key, value)
 }
 
 func archiveGenerationDrainNative(s *Service, sid string) {
@@ -480,5 +497,116 @@ func TestAgentArchiveGenerationCloseCompletionFencingRestart(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAgentArchiveGenerationForcePublishUsesCompletionMark(t *testing.T) {
+	row := proto.Session{MachineID: "mac", SessionID: "force-publish-after-completion", Agent: "codex", Status: proto.StatusBlocked,
+		State: proto.StateNeedsYou, UpdatedAt: time.Now().Add(-time.Hour).UTC()}
+	ft, database, _ := archiveGenerationFixture(t, row)
+	playNativeNode(ft, "mac")
+	closeStarted := make(chan struct{})
+	finishClose := make(chan struct{})
+	ft.d.mu.Lock()
+	ft.d.machines["mac"].call = func(method string, _ json.RawMessage) (any, error) {
+		if method == "session.close" {
+			close(closeStarted)
+			<-finishClose
+		}
+		return map[string]any{"native": nativeArchiveDone}, nil
+	}
+	ft.d.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- ft.s.forceArchiveConfirmation(t.Context(), "mac", row.SessionID) }()
+	<-closeStarted
+	started, ok := archiveGenerationStored(t, database, row.SessionID)
+	if !ok || !started.Archived {
+		t.Fatalf("missing provisional archive: %+v present=%v", started, ok)
+	}
+
+	// Let close completion save its metadata, then hold its publish while a newer re-archive commits.
+	ft.s.fleet.sentMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			ft.s.fleet.sentMu.Unlock()
+		}
+	}()
+	close(finishClose)
+	waitUntil(t, func() bool {
+		rec, present := archiveGenerationStored(t, database, row.SessionID)
+		return present && rec.ChangedAt.Equal(started.ChangedAt) && !rec.ClosedAt.IsZero()
+	})
+	if err := ft.s.noteAgentArchive(t.Context(), row, true); err != nil {
+		t.Fatal(err)
+	}
+	newer, ok := archiveGenerationStored(t, database, row.SessionID)
+	if !ok || !newer.Archived || !newer.ClosedAt.IsZero() {
+		t.Fatalf("newer re-archive: %+v present=%v", newer, ok)
+	}
+	archiveGenerationAfter(t, "re-archive after close completion", started.ChangedAt, newer.ChangedAt)
+	ft.s.fleet.sentMu.Unlock()
+	locked = false
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	final, ok := archiveGenerationStored(t, database, row.SessionID)
+	if !ok || !final.Archived || !final.ChangedAt.Equal(newer.ChangedAt) || !final.ClosedAt.Equal(newer.ClosedAt) {
+		t.Fatalf("stale close publish restored the newer archive: final=%+v present=%v newer=%+v", final, ok, newer)
+	}
+	_, loaded, ok := archiveGenerationRestart(t, database, row)
+	if !ok || !loaded.Archived || !loaded.ChangedAt.Equal(newer.ChangedAt) || !loaded.ClosedAt.Equal(newer.ClosedAt) {
+		t.Fatalf("restart lost the re-archive after stale publish: loaded=%+v present=%v newer=%+v", loaded, ok, newer)
+	}
+}
+
+func TestAgentArchiveGenerationOrdinaryCloseRetriesNativeAfterMetadataFailure(t *testing.T) {
+	ft, row := closeTestService(t, func(s *proto.Session) { s.Agent = "codex" })
+	store := &archiveGenerationCloseFailureStore{fleetMem: ft.st}
+	ft.s.store = func() Store { return store }
+	t.Cleanup(func() { archiveGenerationDrainNative(ft.s, row.SessionID) })
+	native := playNativeNode(ft, "mac")
+	terminalClosed := make(chan struct{})
+	native.set(func(string) (any, error) {
+		select {
+		case <-terminalClosed:
+			return map[string]any{"native": nativeArchiveDone}, nil
+		default:
+			return nil, errors.New("terminal still open")
+		}
+	})
+	initialPending := false
+	ft.f.answerNode(deviceSessionRetire, func(_ string, _ json.RawMessage) (any, error) {
+		intent := ft.s.nativeArchiveAwaited(context.Background(), "mac", row.SessionID)
+		initialPending = intent != nil && intent.State == nativeArchivePending
+		close(terminalClosed)
+		return map[string]any{"closed": true}, nil
+	})
+	res, err := ft.s.archiveAndCloseAgentSession(t.Context(), "mac", row.SessionID)
+	if err != nil || !res.Closed || !initialPending {
+		t.Fatalf("close=%+v err=%v initial native pending=%v", res, err, initialPending)
+	}
+	intent := ft.s.nativeArchiveAwaited(t.Context(), "mac", row.SessionID)
+	if calls := native.calls(); len(calls) != 2 {
+		t.Fatalf("native calls after close metadata failure = %v, want the initial try and immediate retry", calls)
+	}
+	if intent == nil || intent.State != nativeArchiveDone || !intent.Archived {
+		t.Fatalf("native archive was not retried after close metadata failure: %+v", intent)
+	}
+}
+
+func TestAgentArchiveGenerationCancelledTaskPublishesAfterMetadataFailure(t *testing.T) {
+	ft, row := closeTestService(t, func(s *proto.Session) { s.Status, s.State = proto.StatusOffline, proto.StateOffline })
+	store := &archiveGenerationCloseFailureStore{fleetMem: ft.st}
+	ft.s.store = func() Store { return store }
+	t.Cleanup(func() { archiveGenerationDrainNative(ft.s, row.SessionID) })
+	before := len(ft.toldOf(assistantwire.EventFleetSessions))
+	ft.s.stopCancelledAgent(context.Background(), "todo-close-metadata", "mac", row.SessionID)
+	after := len(ft.toldOf(assistantwire.EventFleetSessions))
+	if after != before+1 {
+		t.Fatalf("fleet publishes after committed archive = %d, want %d (metadata error must not suppress publish)", after-before, 1)
+	}
+	if !archivedIDs(t, ft.s)[row.SessionID] {
+		t.Fatal("cancelled task's archive was not committed")
 	}
 }
