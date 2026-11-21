@@ -307,13 +307,17 @@ class AssistantSettingsShotsTest {
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
         rule.waitForIdle()
-        // The current assistant's profile, with no assistant picker of its own (the sidebar's switcher picks).
-        assertTrue(rule.onAllNodesWithText(title).fetchSemanticsNodes().isEmpty())
+        // The current assistant's profile names that manager and offers the shared manager rename interaction.
+        val rename = when (language) { "zh" -> "改名"; "ja" -> "名前を変更"; else -> "Rename" }
+        rule.onNodeWithText(title).assertExists()
+        rule.onNodeWithText(rename).assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) { style = s; dark = d; capture("home") }
         style = AppStyle.Glass
-        for (p in listOf("notes", "memory", "memory-file", "memory-edit", "memory-delete", "machine", "timezone", "move")) {
+        for (p in listOf("rename", "notes", "memory", "memory-file", "memory-edit", "memory-delete", "machine", "timezone", "move")) {
             AssistantSettingsPreview.open = p
             part = p
+            rule.waitForIdle()
+            if (p == "rename") rule.onNode(isDialog()).assertExists()
             for (d in listOf(false, true)) { dark = d; capture(p) }
         }
         // Saved Places (#9293): three styles × light / dark, as the issue asks.
