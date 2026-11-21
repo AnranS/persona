@@ -274,6 +274,8 @@ Apple has no shadow tokens. Shadows are inline literals:
 
 The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
 
+The built-in Mochi face on Android uses `Tokens.Mochi.DarkOffline` for the body gradient on the dark offline disc (#12090). It keeps the online dark outline and uses a lighter shadow, while the eyes, cheek and all other appearance and state combinations keep their colors. See `docs/apple/persona.md`.
+
 ### 2.7 Motion
 
 `Theme.Motion` (`apple/Shared/Design/Theme.swift:612-722`).
@@ -2048,6 +2050,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   state and keeps its own "Sending" line in the card's answer row. A manager work card (`persona_triage`) has no line:
   its local defer and dismiss still work there. Web: `answerBlock` (`web/src/lib/format.ts`); the line and Live link
   load in their own chunk, off the first screen (`web/src/views/chat/CardBlockedLine.tsx`).
+- **A question the assistant sees first** (`delegating`, then the same `id` with `delegate`): while the assistant decides, the question stays answerable but makes no arrival sound, haptic or notification; the handover replaces it by `id` and announces once. The card shows what the assistant filled in (`what`, `why_now`, `recommend`, `cost`, `reason`, `deadline`, in that order). A recommendation in an option's own words tags that option **Assistant's pick** without selecting it; another recommendation stays in the context. iOS `DelegateNotes`, web `QuestionCard`, Android `DelegateNotes` in `feature/chat`.
 - **A question the assistant answered** (iOS `DelegatedCard`, web `Delegated.tsx`, Android on Glass): no longer a pending request, so it is counted nowhere and has no Needs you row. The newest one for the Agent is a card over its chat's composer, after the Agent's own cards, until its × puts it away: "Answered by the assistant", each question with the answer as it is now, "Why: …", and Change Answer while the chat takes messages. Change Answer's sheet starts from the answers so far and sends only what changed, as a message to the Agent. Session Info lists every one with the same body and Change Answer.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 
