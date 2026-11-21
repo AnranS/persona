@@ -101,6 +101,8 @@ type Node struct {
 	doctorAt func() DoctorOptions
 	// machineProcs replaces OS process/port hooks in tests (machine_procs.go).
 	machineProcs *machineProcsOps
+	// networkDiagAt replaces machine.network dependencies in tests (machine_network.go).
+	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
 
@@ -832,6 +834,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodMachineNetwork: // on-demand read-only network & proxy diagnostics (machine_network.go)
+		return n.machineNetwork(ctx, params)
 	case proto.MethodRoutineCheck:
 		return routineCheck(ctx, params)
 	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
