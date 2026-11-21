@@ -595,6 +595,36 @@ func TestAgentArchiveGenerationOrdinaryCloseRetriesNativeAfterMetadataFailure(t 
 	}
 }
 
+func TestAgentArchiveGenerationOrdinaryCloseReadErrorDoesNotReplaceRestore(t *testing.T) {
+	ft, row := closeTestService(t, func(s *proto.Session) { s.Agent = "codex" })
+	native := playNativeNode(ft, "mac")
+	t.Cleanup(func() { archiveGenerationDrainNative(ft.s, row.SessionID) })
+	var restoreErr error
+	ft.f.answerNode(deviceSessionRetire, func(_ string, _ json.RawMessage) (any, error) {
+		restoreErr = ft.s.noteAgentArchive(context.Background(), row, false)
+		ft.s.nativeArchiveAwaited(context.Background(), "mac", row.SessionID)
+		store := &archiveFailStore{fleetMem: ft.st, failRead: true}
+		ft.s.store = func() Store { return store }
+		ft.s.agentArchives.loaded = false // force close completion to fail before it can inspect the newer restore
+		return map[string]any{"closed": true}, nil
+	})
+	res, err := ft.s.archiveAndCloseAgentSession(t.Context(), "mac", row.SessionID)
+	if err != nil || !res.Closed || restoreErr != nil {
+		t.Fatalf("close=%+v err=%v restore=%v", res, err, restoreErr)
+	}
+	calls := native.calls()
+	if len(calls) == 0 || calls[len(calls)-1] != deviceSessionUnarchive+" "+row.SessionID {
+		t.Fatalf("restore was not the last native request before close completion: %v", calls)
+	}
+	intent := ft.s.nativeArchiveAwaited(t.Context(), "mac", row.SessionID)
+	if after := native.calls(); len(after) != len(calls) {
+		t.Fatalf("close completion retried without reading the newer generation: before=%v after=%v", calls, after)
+	}
+	if intent == nil || intent.State != nativeArchiveDone || intent.Archived {
+		t.Fatalf("close metadata read error replaced the newer restore: %+v", intent)
+	}
+}
+
 func TestAgentArchiveGenerationCancelledTaskPublishesAfterMetadataFailure(t *testing.T) {
 	ft, row := closeTestService(t, func(s *proto.Session) { s.Status, s.State = proto.StatusOffline, proto.StateOffline })
 	store := &archiveGenerationCloseFailureStore{fleetMem: ft.st}

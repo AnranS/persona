@@ -73,8 +73,9 @@ func (svc *Service) archiveAndCloseAgentSession(ctx context.Context, mid, sid st
 		// What the agent wrote while it was closed must not bring the session back (agentArchive.activeAfter).
 		if _, err := svc.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), true); err != nil {
 			svc.logf("agent archive %s/%s: note close: %v", row.MachineID, row.SessionID, err)
-			// The terminal is gone even when its secondary metadata could not be saved: keep the immediate native retry.
-			svc.nativeArchiveWanted(row, true)
+			// The terminal is gone even when its secondary metadata could not be saved. Recheck the generation before
+			// preserving the immediate retry, so a newer restore cannot be overwritten after a read/lock failure too.
+			svc.retryNativeArchiveClosed(ctx, row)
 		}
 	}
 	return res, nil
@@ -166,6 +167,26 @@ func (svc *Service) noteAgentArchiveClosed(ctx context.Context, s proto.Session,
 		svc.nativeArchiveWanted(s, true) // its terminal is gone: the tool's archive goes through now
 	}
 	return b.writes.Load(), nil
+}
+
+// retryNativeArchiveClosed preserves the immediate retry after a close metadata error only if the close's generation
+// is still current. In particular, a read failure after a newer restore must not put back the old native archive wish.
+func (svc *Service) retryNativeArchiveClosed(ctx context.Context, s proto.Session) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
+	defer cancel()
+	b := &svc.agentArchives
+	if err := b.lock(ctx); err != nil {
+		return
+	}
+	defer b.unlock()
+	if err := svc.loadAgentArchivesLocked(ctx); err != nil {
+		return
+	}
+	rec, ok := b.records[runtimeListID(s.MachineID, s.SessionID)]
+	if !ok || !rec.Archived || s.ArchiveChangedAt == nil || !rec.ChangedAt.Equal(*s.ArchiveChangedAt) {
+		return
+	}
+	svc.nativeArchiveWanted(s, true)
 }
 
 // archiveAndCloseHTTP is POST /api/v1/sessions/{mid}/{sid}/archive?close=1: 200 once archived, with what the close
