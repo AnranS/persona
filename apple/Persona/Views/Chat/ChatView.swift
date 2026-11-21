@@ -7782,6 +7782,10 @@ struct ChatLine: Identifiable {
     var hidesPrompt = false
     /// Friendly names computed by the model-change factory, never by a row's body.
     var modelNames: (from: String, to: String)?
+    /// The first visible line of a photo-only or wake exchange (`ChatLines.flatLines`).
+    var startsExchange = false
+    /// A child revealed from a folded supervision/background round; still not a visible reply for model comparison.
+    var inFoldedRound = false
 
     indirect enum Content {
         /// One compact header for the entire quiet round; children are flattened only when it is opened. `source`: the

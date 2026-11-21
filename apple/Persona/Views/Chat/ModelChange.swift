@@ -27,7 +27,9 @@ struct ModelChanges {
     }
 
     private struct Mark {
-        let after: Int
+        let index: Int
+        let before: Bool
+        let id: String
         let from: Reply
         let to: Reply
     }
@@ -36,15 +38,17 @@ struct ModelChanges {
         var previous: Reply?
         var marks: [Mark] = []
         var start = 0
-        var user: Int?
+        var boundary: Int?
+        var before = false
 
         func finish(_ end: Int) {
             defer { start = end }
             guard end > start else { return }
             var latest: Item?
             for line in lines[start..<end] {
-                // Quiet supervision/background rounds and recaps are not visible replies. Everything in a work line,
+                // Open or closed, quiet rounds and recaps are not visible replies. Everything in a work line,
                 // including a fallback's later tool call, counts beside the final answer.
+                if line.inFoldedRound { continue }
                 switch line.content {
                 case .supervision, .recaps, .row(.recap): continue
                 default: break
@@ -59,14 +63,26 @@ struct ModelChanges {
             }
             guard let latest, let current = Reply(latest.model) else { return }
             defer { previous = current }
-            guard let previous, !previous.equals(current), let user else { return }
-            marks.append(Mark(after: user, from: previous, to: current))
+            guard let previous, !previous.equals(current), let boundary else { return }
+            marks.append(Mark(index: boundary, before: before, id: "mc-" + lines[boundary].id, from: previous, to: current))
         }
 
-        for index in 0...lines.count {
-            if index < lines.count, case .row(.user) = lines[index].content {
+        for index in lines.indices {
+            let line = lines[index]
+            if line.inFoldedRound { continue }
+            var opening = false
+            if case .row(.user) = line.content { opening = true }
+            if opening || line.startsExchange {
                 finish(index)
-                user = index
+                boundary = index
+                if opening {
+                    before = false
+                } else {
+                    switch line.content {
+                    case .userImages, .row(.notice): before = false // photos / a visible wake, then the divider
+                    default: before = true // a wake with no visible notice: before its first work or reply
+                    }
+                }
             }
         }
         finish(lines.count)
@@ -77,9 +93,13 @@ struct ModelChanges {
         var next = marks.makeIterator()
         var mark = next.next()
         for (index, line) in lines.enumerated() {
+            if let change = mark, change.before, change.index == index {
+                out.append(.modelChange(id: change.id, from: change.from.id, to: change.to.id))
+                mark = next.next()
+            }
             out.append(line)
-            if mark?.after == index, let change = mark {
-                out.append(.modelChange(id: "mc-" + line.id, from: change.from.id, to: change.to.id))
+            if let change = mark, !change.before, change.index == index {
+                out.append(.modelChange(id: change.id, from: change.from.id, to: change.to.id))
                 mark = next.next()
             }
         }
@@ -122,12 +142,14 @@ struct ModelChangeDivider: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: Theme.Space.m) {
-                rule
-                chip(wrapped: false)
-                rule
+            MeasuredOnce {
+                HStack(spacing: Theme.Space.m) {
+                    rule
+                    chip(wrapped: false)
+                    rule
+                }
             }
-            chip(wrapped: true)
+            MeasuredOnce { chip(wrapped: true) }
         }
         .padding(.vertical, Theme.Space.s)
         .accessibilityElement(children: .ignore)

@@ -41,9 +41,10 @@ struct ModelChangeTests {
         return value
     }
 
-    private func marked(_ items: [Item], folded: Bool = false) -> [ChatLine] {
+    private func marked(_ items: [Item], folded: Bool = false, openFolded: Bool = false) -> [ChatLine] {
         let blocks = ChatStore.rebuild(items, settled: nil).blocks
-        let lines = ChatLines(openWork: [], foldSupervision: folded, foldBackground: folded, main: folded)
+        let lines = ChatLines(openWork: [], foldSupervision: folded, foldBackground: folded, main: folded,
+                              openAllSupervision: openFolded)
             .build(blocks, live: nil)
         return ModelChanges.mark(lines)
     }
@@ -73,6 +74,8 @@ struct ModelChangeTests {
             switch line.content {
             case .row(.user(let item)): "user \(item.id)"
             case .row(.assistant(let item)): "answer \(item.id)"
+            case .row(.notice(let item)): "notice \(item.id)"
+            case .userImages: "photos"
             case .work: "work"
             case .supervision: "folded"
             case .apiError: "error"
@@ -161,6 +164,68 @@ struct ModelChangeTests {
                 "the fixture really folded both hidden rounds")
         #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
         #expect(changeIDs(lines) == ["mc-7#0"], "neither folded model replaces Opus as the previous visible reply")
+    }
+
+    @Test func photoOnlyReplyStartsANewExchangeAfterItsPhotos() {
+        var photo = item(3, role: "user", kind: .image)
+        photo.image = ImagePayload(mime: "image/png", data: "")
+        let lines = marked([
+            user(1, "first"), answer(2, Self.opus), photo,
+            call(4, Self.sonnet), result(5, of: call(4, Self.sonnet)), answer(6, Self.sonnet),
+        ])
+        #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
+        #expect(changeIDs(lines) == ["mc-img-3#0"])
+        #expect(outline(lines) == [
+            "user 1#0", "answer 2#0", "photos", "model \(Self.opus) → \(Self.sonnet)", "work", "answer 6#0",
+        ])
+    }
+
+    @Test func visibleWakeStartsANewExchangeAfterItsNotice() {
+        var wake = item(3, role: "system", kind: .notice, text: "Background work")
+        wake.wake = true
+        let lines = marked([
+            user(1, "first"), answer(2, Self.opus), wake,
+            call(4, Self.sonnet), result(5, of: call(4, Self.sonnet)), answer(6, Self.sonnet),
+        ])
+        #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
+        #expect(changeIDs(lines) == ["mc-w-3#0"])
+        #expect(outline(lines) == [
+            "user 1#0", "answer 2#0", "notice 3#0", "model \(Self.opus) → \(Self.sonnet)", "work", "answer 6#0",
+        ])
+    }
+
+    @Test func subagentWakeWithoutANoticeRowStartsBeforeItsWork() {
+        var wake = item(3, kind: .toolResult, text: "Explore complete")
+        wake.wake = true
+        wake.task = TaskNote(kind: "agent", status: "completed", title: "Explore")
+        let lines = marked([
+            user(1, "first"), answer(2, Self.opus), wake,
+            call(4, Self.sonnet), result(5, of: call(4, Self.sonnet)), answer(6, Self.sonnet),
+        ])
+        #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
+        #expect(changeIDs(lines) == ["mc-w-3#0"])
+        #expect(outline(lines) == [
+            "user 1#0", "answer 2#0", "model \(Self.opus) → \(Self.sonnet)", "work", "answer 6#0",
+        ])
+    }
+
+    @Test func openingFoldedRoundsDoesNotChangeVisibleReplyModels() {
+        var supervise = user(3, "quiet supervision")
+        supervise.injected = Injected(kind: "system", state: "supervise", line: "Synthetic supervision", level: "triage")
+        var hiddenSupervision = answer(4, "claude-haiku-4-5", "hidden supervision reply")
+        hiddenSupervision.narration = true
+        var scheduled = user(5, "quiet scheduled round")
+        scheduled.injected = Injected(kind: "followup", state: "daily", title: "Morning brief", line: "Synthetic one-line notice")
+        var hiddenBackground = answer(6, "glm-hidden", "hidden background reply")
+        hiddenBackground.narration = true
+        let lines = marked([
+            user(1, "first"), answer(2, Self.opus), supervise, hiddenSupervision, scheduled, hiddenBackground,
+            user(7, "second"), answer(8, Self.sonnet),
+        ], folded: true, openFolded: true)
+        #expect(lines.contains { if case .supervisionInput = $0.content { true } else { false } },
+                "the fixture really expands the folded rounds")
+        #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
+        #expect(changeIDs(lines) == ["mc-7#0"], "opened hidden models neither replace Opus nor draw inside the round")
     }
 
     /// Aliases, snapshots, provider wrappers, case and the chat's identical friendly names are all one model.
