@@ -3,6 +3,7 @@ package persona.feature.assistant.settings
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
@@ -274,6 +275,42 @@ class AssistantSettingsShotsTest {
         save("settings-next-suggestions-en-off-glass-light-font-2.png", large)
     }
 
+    @Config(sdk = [35], qualifiers = "zh-xhdpi")
+    @Test fun renameDialogSimplifiedChinese() = renameDialogShots("zh", "助手")
+
+    @Config(sdk = [35], qualifiers = "en-xhdpi")
+    @Test fun renameDialogEnglish() = renameDialogShots("en", "Assistant")
+
+    @Config(sdk = [35], qualifiers = "ja-xhdpi")
+    @Test fun renameDialogJapanese() = renameDialogShots("ja", "アシスタント")
+
+    /** Dialog text fields go idle at Robolectric's own dimensions, not the long page fixture's custom ones. */
+    private fun renameDialogShots(language: String, title: String) {
+        var dark by mutableStateOf(false)
+        val management = FakeManagement("Morning", "Body")
+        AssistantSettingsPreview.open = "rename"
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                val roster = ManagerRoster(listOf(HubManager("assistant", title, online = true, isDefault = true),
+                    HubManager("work", "Work", online = true)), "assistant")
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
+                        AssistantSettingsScreen(management, machines, onBack = {})
+                    }
+                }
+            }
+        }
+        for (d in listOf(false, true)) {
+            dark = d
+            rule.waitForIdle()
+            rule.onNode(isDialog()).assertExists()
+            val bitmap = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+            File(out(), "settings-$language-rename-glass-${if (d) "dark" else "light"}.png").outputStream()
+                .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        AssistantSettingsPreview.open = null
+    }
+
     private val machines = listOf(
         Machine("workstation", name = "workstation", kind = "local", online = true, home = "/home/me"),
         Machine("laptop", name = "laptop", kind = "ssh", icon = "laptop", online = false, home = "/Users/me"),
@@ -313,11 +350,10 @@ class AssistantSettingsShotsTest {
         rule.onNodeWithText(rename).assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) { style = s; dark = d; capture("home") }
         style = AppStyle.Glass
-        for (p in listOf("rename", "notes", "memory", "memory-file", "memory-edit", "memory-delete", "machine", "timezone", "move")) {
+        for (p in listOf("notes", "memory", "memory-file", "memory-edit", "memory-delete", "machine", "timezone", "move")) {
             AssistantSettingsPreview.open = p
             part = p
             rule.waitForIdle()
-            if (p == "rename") rule.onNode(isDialog()).assertExists()
             for (d in listOf(false, true)) { dark = d; capture(p) }
         }
         // Saved Places (#9293): three styles × light / dark, as the issue asks.
