@@ -689,12 +689,6 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
     >
       <div className="flex flex-col gap-2">
         {purpose && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{purpose}</p>}
-        {delivery === "env" && (
-          <p role="alert" className="flex items-start gap-1.5 text-[12.5px] leading-snug font-medium text-orange">
-            <Icon name="warning" size={13} className="mt-px shrink-0" />
-            {t("chat-interactions.secret_run_env_warning")}
-          </p>
-        )}
         {commands.length > 0 ? (
           <div>
             <div className="mb-1 text-[11px] font-medium text-ink-3">{t("chat-interactions.secret_run_commands")}</div>
@@ -705,6 +699,12 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
           </div>
         ) : (
           summary && <pre data-secret-run-summary className={CODE_BOX}>{summary}</pre>
+        )}
+        {delivery === "env" && (
+          <p role="alert" className="flex items-start gap-1.5 text-[12.5px] leading-snug font-medium text-orange">
+            <Icon name="warning" size={13} className="mt-px shrink-0" />
+            {t("chat-interactions.secret_run_env_warning")}
+          </p>
         )}
         <div className="flex flex-col gap-1">
           {/* The user's computer password, not this site's: "one-time-code" keeps Chrome from offering to save it (its
