@@ -1,6 +1,6 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
 import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
-import { answerCard, usePendingLine } from "../../lib/card-answer";
+import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
 import { mergeRefs } from "../../lib/tap-guard";
@@ -43,8 +43,8 @@ import { isChunkError } from "../PageBoundary";
 import { useChatCardTapGuard, useChatTapGuardView } from "./card-tap-guard";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
-export async function resolve(ix: Interaction, body: Record<string, unknown>) {
-  const r = await answerCard(ix, body);
+export async function resolve(ix: Interaction, body: Record<string, unknown>, from: AnswerFrom = {}) {
+  const r = await answerCard(ix, body, from);
   if (!r.ok) toast(r.error, "error");
   else if (r.already) toast(t("chat-interactions.already_answered"), "info");
   return r.ok;
@@ -667,7 +667,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
   const send = async (body: Record<string, unknown>, key: "run" | "decline") => {
     setPassword("");
     setBusy(key);
-    await resolve(ix, body);
+    await resolve(ix, body, { handoffCard: true });
     setBusy(null);
   };
   return (
