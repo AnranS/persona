@@ -1359,9 +1359,10 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                 outcome = "passed_with_findings" if old.get("findings") else "passed"
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  outcome=outcome, retry_reason=None, retry_after=0)
-        # Human-sourced evidence must observe later same-head reviews before resume or merge.
+        # Only human evidence resuming verification or merging follows later same-head reviews.
         if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("format") == FORMAT_VERSION \
-                and old.get("semantic_source") != "human" \
+                and (old.get("semantic_source") != "human" or old.get("outcome") not in
+                     ("passed", "passed_with_base_failures", "passed_with_findings", "retry", "reviewed")) \
                 and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry", "reviewed") \
                 and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure") and old.get("retry_reason") != "verification_repair") \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
