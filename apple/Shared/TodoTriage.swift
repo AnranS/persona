@@ -108,7 +108,7 @@ nonisolated enum TodoTriageLogic {
         if todo.doneAt != nil { return .done }
         let active = todo.activeAgents
         if active.isEmpty { return .notStarted }
-        var interrupted = false, limit = false, unread = false, working = false
+        var interrupted = false, limit = false, unread = false, working = false, waiting = false
         for a in active {
             if let e = a.startError, !e.isEmpty { continue } // a failed start counts as stopped
             let s = lookup?(a.machineID, a.sessionID)
@@ -120,8 +120,9 @@ nonisolated enum TodoTriageLogic {
             else if error, stopped { interrupted = true }
             else if st == .unread { unread = true }
             else if st == .working || s?.starting == true { working = true }
+            else if s?.waitsToBeWoken == true { waiting = true }
         }
-        if interrupted { return .interrupted }
+        if interrupted, !working, !waiting, todo.supervision?.state != "parked" { return .interrupted }
         if limit { return .usageLimit }
         if unread { return .unread }
         if working { return .working }
