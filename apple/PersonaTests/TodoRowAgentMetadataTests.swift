@@ -27,12 +27,12 @@ struct TodoRowAgentMetadataTests {
         #expect(words.contains("Existing progress summary"), "the existing summary stays: \(words)")
     }
 
-    @Test func oneWorkingAgentWinsAndReleasedAgentsDoNotCount() async throws {
+    @Test func oneWorkingAgentWinsAndAllOtherAgentsCount() async throws {
         let idle = try session("idle", model: "claude-sonnet-5-5", effort: "low", updated: 300)
         let working = try session("working", machine: studio.id, state: .working,
                                   model: "claude-opus-5-5", effort: "max", updated: 200)
         let asking = try session("asking", state: .needsYou, model: "claude-haiku-5-5", updated: 400)
-        let released = try session("released", state: .working, model: "claude-fable-5-2", updated: 500)
+        let released = try session("released", state: .idle, model: "claude-fable-5-2", updated: 500)
         let todo = self.todo(agents: [agent("idle"), agent("working", machine: studio.id), agent("asking"),
                                      agent("released", released: true)])
         let effort = try #require(SessionModes.effortLabel("max"))
@@ -41,8 +41,8 @@ struct TodoRowAgentMetadataTests {
 
         #expect(words.contains("Studio · Opus 5.5 · \(effort)"),
                 "the working Agent leads even though others moved later: \(words)")
-        #expect(words.contains("+2"), "the two other unreleased Agents: \(words)")
-        #expect(!words.contains("Fable 5.2"), "a released Agent is not the lead: \(words)")
+        #expect(words.contains("+3"), "all three other linked Agents count: \(words)")
+        #expect(!words.contains("Fable 5.2"), "a released Agent is not working, so it is not the lead: \(words)")
     }
 
     @Test func severalWorkingAgentsChooseTheMostRecentlyMoved() async throws {
@@ -92,14 +92,15 @@ struct TodoRowAgentMetadataTests {
         #expect(!words.contains("acme/orbit-7"), "the raw vendor-qualified model id must not be shown: \(words)")
     }
 
-    @Test func aPartiallyKnownTaskNamesItsKnownLeadAndCountsTheOtherAgent() async throws {
+    @Test func aPartiallyKnownTaskKeepsTheLocalizedAgentCount() async throws {
         let known = try session("known", state: .working, model: "claude-opus-5-5")
         // A deleted row is absent from the authoritative iOS session list, just like a row not read yet.
         let todo = self.todo(agents: [agent("known"), agent("deleted")])
         let words = try await rowWords(todo, sessions: [known])
 
-        #expect(words.contains("MacBook · Opus 5.5"), "one known row is enough to name the lead: \(words)")
-        #expect(words.contains("+1"), "the other unreleased Agent still counts: \(words)")
+        #expect(words.contains("· 2 个 Agent"), "the test host's zh-Hans interface keeps the whole line at today's fallback: \(words)")
+        #expect(!words.contains("MacBook · Opus 5.5"), "no partial computer/model line is shown: \(words)")
+        #expect(!words.contains("+1"), "the fallback has no separate other-Agent count: \(words)")
     }
 
     @Test func noKnownLiveRowsKeepsTheLocalizedAgentCount() async throws {
@@ -111,7 +112,7 @@ struct TodoRowAgentMetadataTests {
         let words = try await rowWords(todo, sessions: [released])
 
         #expect(words.contains(fallback), "missing and deleted rows retain today's fallback: \(words)")
-        #expect(!words.contains("MacBook · Opus 5.5"), "a released row cannot replace the fallback: \(words)")
+        #expect(!words.contains("MacBook · Opus 5.5"), "no complete set of linked session rows is known: \(words)")
         #expect(!words.contains("+1"), "the fallback has no separate other-Agent count: \(words)")
     }
 

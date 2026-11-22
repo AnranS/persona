@@ -99,7 +99,7 @@ class TodoAgentMetadataTest {
     }
 
     @Test
-    fun severalAgentsPreferTheOneWorkingAndCountOtherUnreleasedAgents() {
+    fun severalAgentsPreferTheOneWorkingAndCountAllOtherAgents() {
         val todo = todo("working", listOf(
             TodoAgent("mac", "idle"),
             TodoAgent("Studio", "working"),
@@ -111,12 +111,12 @@ class TodoAgentMetadataTest {
             agent("working", machine = "Studio", state = "working", model = "claude-opus-5-5", effort = "max",
                 updatedAt = "2026-11-19T08:00:00Z"),
             agent("later", model = "claude-haiku-5-5", updatedAt = "2026-11-19T09:30:00Z"),
-            agent("released", state = "working", model = "claude-haiku-5-5", updatedAt = "2026-11-19T09:45:00Z"),
+            agent("released", state = "idle", model = "claude-haiku-5-5", updatedAt = "2026-11-19T09:45:00Z"),
         )
         show(todo, sessions)
 
         assertAgentMetadata("Studio · Opus 5.5 · Max", "3 agents")
-        assertMore(2)
+        assertMore(3)
     }
 
     @Test
@@ -167,12 +167,13 @@ class TodoAgentMetadataTest {
     }
 
     @Test
-    fun oneKnownSessionNamesItsAgentAndCountsTheUnknownOther() {
+    fun oneKnownSessionKeepsTheWholeAgentCountFallback() {
         val todo = todo("partial", listOf(TodoAgent("mac", "known"), TodoAgent("mac", "not-loaded")))
         show(todo, listOf(agent("known", model = "claude-opus-5-5")))
 
-        assertAgentMetadata("mac · Opus 5.5", "2 agents")
-        assertMore(1)
+        rule.onNodeWithText("2 agents", useUnmergedTree = true).assertExists()
+        rule.onAllNodesWithText("mac · Opus 5.5", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithText("+1", substring = true, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test

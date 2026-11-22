@@ -114,8 +114,8 @@ fun mostUrgentAgent(todo: Todo, sessionLookup: (SessionKey) -> Session?): TodoMo
 private fun taskLeadAgent(todo: Todo, sessionLookup: (SessionKey) -> Session?): Session? {
     fun movedAt(session: Session) = listOfNotNull(parseTime(session.updatedAt), parseTime(session.stateSince)).maxOrNull() ?: Instant.EPOCH
     var lead: Session? = null
-    for (agent in todo.currentAgents) {
-        val candidate = sessionLookup(agent.key) ?: continue
+    for (agent in todo.agents) {
+        val candidate = sessionLookup(agent.key) ?: return null
         val current = lead
         if (current == null) {
             lead = candidate
@@ -785,9 +785,9 @@ private fun TodoTriageRow(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false),
                             )
-                            if (agentMetadata != null && todo.currentAgents.size > 1) {
+                            if (agentMetadata != null && todo.agents.size > 1) {
                                 Spacer(Modifier.width(Tokens.Space.xs))
-                                Text(stringResource(R.string.agents_todo_calendar_more, todo.currentAgents.size - 1),
+                                Text(stringResource(R.string.agents_todo_calendar_more, todo.agents.size - 1),
                                     style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                             }
                         }

@@ -793,8 +793,8 @@ struct TodoRow: View {
                 .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if activeAgents.count > 1 {
-                Text(String(localized: "+\(activeAgents.count - 1)"))
+            if todo.agents.count > 1 {
+                Text(String(localized: "+\(todo.agents.count - 1)"))
                     .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
