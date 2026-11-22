@@ -172,7 +172,9 @@ page. The sidebar keeps that page's row lit instead of the Agent's (`sidebarRout
 `useActiveKey`), the Persona row for a Persona conversation's card opened as a page included. An Agent opened from an Agent's
 page that was itself opened from a page carries that first page too (`handoff.page`), so the lit row stays put through the
 chain. An Agent picked in the sidebar, reached by a link (`leaveChat(…, false)`) or opened by ⌘-click in a new tab lights
-its own row as before; a reload keeps the entry, and with it the lit row and the strip.
+its own row as before. Reselecting that open Agent in the sidebar replaces its current history entry without adding one,
+clears the hand-off origin and hides the strip even though the address does not change. A reload keeps the entry, and with
+it the lit row and the strip.
 
 A `brief` card's waiting and later rows open the chat the row names (`machine_id` / `session_id`, #2320) in the app, as iOS
 and Android do: an Agent's where Settings › How Agents open says (the side panel, or its page with the way back), a Persona
