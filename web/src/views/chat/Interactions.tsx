@@ -701,7 +701,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
           summary && <pre data-secret-run-summary className={CODE_BOX}>{summary}</pre>
         )}
         {delivery === "env" && (
-          <p role="alert" className="flex items-start gap-1.5 text-[12.5px] leading-snug font-medium text-orange">
+          <p role="alert" className="flex items-start gap-1.5 text-xs leading-snug font-medium text-orange">
             <Icon name="warning" size={13} className="mt-px shrink-0" />
             {t("chat-interactions.secret_run_env_warning")}
           </p>
