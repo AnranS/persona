@@ -51,6 +51,8 @@ type FeishuBotSettings struct {
 	Features       BotFeatures `json:"features"`
 	Owner          *BotOwner   `json:"owner,omitempty"`
 	Pairing        *botPairing `json:"pairing,omitempty"`
+	// Configure is the sanitized automatic-configuration outcome for these credentials, until paired.
+	Configure *botConfigure `json:"configure,omitempty"`
 	// Registration is an app registration under way (bots_register.go): binding in one authorization.
 	Registration *botRegistration `json:"registration,omitempty"`
 	// RegistrationDeviceEnc and RegistrationSecretEnc are the registration's device code and, once confirmed, the new
@@ -149,18 +151,20 @@ const (
 )
 
 type botHub struct {
-	mu       sync.Mutex
-	loaded   bool
-	set      FeishuBotSettings
-	api      *feishubot.Client
-	conn     *feishubot.Conn
-	stop     context.CancelFunc
-	info     feishubot.BotInfo
-	base     context.Context
-	told     map[string]time.Time // sender -> when the bot last refused them (10-minute window)
-	pairTold map[string]time.Time // sender -> when the pairing path last answered (short redelivery window)
-	names    map[string]string    // open id -> name
-	seen     []string             // the messages taken lately (Feishu delivers some again), memory only
+	mu     sync.Mutex
+	loaded bool
+	// pairLifecycle advances after a committed unpair, including an already-unpaired cancellation.
+	pairLifecycle uint64
+	set           FeishuBotSettings
+	api           *feishubot.Client
+	conn          *feishubot.Conn
+	stop          context.CancelFunc
+	info          feishubot.BotInfo
+	base          context.Context
+	told          map[string]time.Time // sender -> when the bot last refused them (10-minute window)
+	pairTold      map[string]time.Time // sender -> when the pairing path last answered (short redelivery window)
+	names         map[string]string    // open id -> name
+	seen          []string             // the messages taken lately (Feishu delivers some again), memory only
 	// msgChat is the chat of the messages the bot may use, seen or sent lately (message id -> chat id): what a reply's
 	// parent is checked against (checkReplyParent), memory only.
 	msgChat idRing
@@ -206,6 +210,12 @@ func (h *Manager) loadBotsLocked(ctx context.Context) {
 }
 
 func (h *Manager) saveBotSettingsLocked() error {
+	// A committed owner no longer needs setup guidance. Restore it on a rejected write so callers such as
+	// manual redemption can roll back their own owner/code transaction without losing the previous diagnosis.
+	previousConfigure := h.bots.set.Configure
+	if h.bots.set.Owner != nil {
+		h.bots.set.Configure = nil
+	}
 	if h.store == nil {
 		return nil
 	}
@@ -213,6 +223,7 @@ func (h *Manager) saveBotSettingsLocked() error {
 	defer cancel()
 	if err := h.store.PutSetting(ctx, botSettingsKey, h.bots.set); err != nil {
 		h.logf("bots: save settings: %v", err)
+		h.bots.set.Configure = previousConfigure
 		return err
 	}
 	return nil
@@ -337,6 +348,10 @@ func (s FeishuBotSettings) copy() FeishuBotSettings {
 	if s.Pairing != nil {
 		p := *s.Pairing
 		s.Pairing = &p
+	}
+	if s.Configure != nil {
+		r := *s.Configure
+		s.Configure = &r
 	}
 	if s.Registration != nil {
 		r := *s.Registration
@@ -574,14 +589,23 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		b := &h.bots
 		b.mu.Lock()
 		h.loadBotsLocked(r.Context())
+		previous := b.set.Pairing
 		b.set.Pairing = &botPairing{Code: botPairCode(), Expires: b.clock().Add(botPairFor)}
-		h.saveBotSettingsLocked()
+		if err := h.saveBotSettingsLocked(); err != nil {
+			b.set.Pairing = previous
+			b.mu.Unlock()
+			writeErr(w, http.StatusServiceUnavailable, errBotSettingsSave)
+			return
+		}
 		b.mu.Unlock()
 		h.auditBot(r.Context(), botRecord{action: auditBotPairCode})
 		writeJSON(w, h.botView(r.Context()))
 	})
 	api.HandleFunc("DELETE /api/v1/bots/feishu/owner", func(w http.ResponseWriter, r *http.Request) {
-		h.unpairBot(r.Context())
+		if err := h.unpairBot(r.Context()); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, err)
+			return
+		}
 		writeJSON(w, h.botView(r.Context()))
 	})
 	// test: a message to the owner, to see that the bot reaches them.
@@ -607,18 +631,26 @@ func botPairCode() string {
 }
 
 // unpairBot forgets the owner; the assistant forgets the chat's state (feishu.owner).
-func (h *Manager) unpairBot(ctx context.Context) {
+func (h *Manager) unpairBot(ctx context.Context) error {
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
+	previous := b.set.copy()
 	had := b.set.Owner != nil
 	b.set.Owner, b.set.Pairing, b.set.TopicChats, b.set.AISources = nil, nil, nil, nil // the topic chats and the /ai sources were the owner's
-	h.saveBotSettingsLocked()
+	b.set.Configure = nil
+	if err := h.saveBotSettingsLocked(); err != nil {
+		b.set = previous
+		b.mu.Unlock()
+		return errBotSettingsSave
+	}
+	b.pairLifecycle++
 	b.mu.Unlock()
 	if had {
 		h.auditBot(ctx, botRecord{action: auditBotUnpaired})
 	}
 	_ = h.notifyAssistant(assistantwire.EventFeishuOwner, assistantwire.FeishuOwner{})
+	return nil
 }
 
 var errBotOff = i18n.Err("hub-bots.bot_off")
@@ -656,6 +688,13 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 
 // applyBotUpdate requires the bind gate for credential updates. Only registration's own finish preserves its session.
 func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secret, domain *string, features *botFeatureUpdate, preserveRegistration bool) error {
+	_, err := h.applyBotUpdateWithReceipt(ctx, enabled, appID, secret, domain, features, preserveRegistration)
+	return err
+}
+
+// applyBotUpdateWithReceipt returns the exact committed credentials and pairing lifecycle before post-save work.
+// Credential updates require the binding gate; a caller already holding it must not acquire it again.
+func (h *Manager) applyBotUpdateWithReceipt(ctx context.Context, enabled *bool, appID, secret, domain *string, features *botFeatureUpdate, preserveRegistration bool) (botConfigureReceipt, error) {
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
@@ -677,7 +716,7 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 		if next.SecretEnc != "" {
 			var err error
 			if prev, err = h.openKey(next.SecretEnc); err != nil && !newSecret {
-				return err
+				return botConfigureReceipt{}, err
 			}
 		}
 		plain := prev
@@ -690,17 +729,17 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 			next.AppID, next.SecretEnc, next.Domain = "", "", ""
 		} else {
 			if plain == "" {
-				return i18n.Err("hub-bots.needs_secret")
+				return botConfigureReceipt{}, i18n.Err("hub-bots.needs_secret")
 			}
 			vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			_, err := feishubot.New(id, plain, dom).BotInfo(vctx)
 			cancel()
 			if err != nil {
-				return errors.New(i18n.T(h.botLang(ctx), "hub-bots.cannot_reach_app", i18n.Args{"error": err.Error()}))
+				return botConfigureReceipt{}, errors.New(i18n.T(h.botLang(ctx), "hub-bots.cannot_reach_app", i18n.Args{"error": err.Error()}))
 			}
 			sealed, err := h.sealKey(plain)
 			if err != nil {
-				return err
+				return botConfigureReceipt{}, err
 			}
 			next.AppID, next.SecretEnc, next.Domain = id, sealed, dom
 		}
@@ -711,7 +750,7 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 	// have come in.
 	if creds && ctx.Err() != nil {
 		b.mu.Unlock()
-		return ctx.Err()
+		return botConfigureReceipt{}, ctx.Err()
 	}
 	cur := &b.set
 	previous := cur.copy()
@@ -721,7 +760,7 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 		merged, err = features.apply(cur.Features)
 		if err != nil {
 			b.mu.Unlock()
-			return err
+			return botConfigureReceipt{}, err
 		}
 	}
 	var records []botRecord
@@ -745,6 +784,7 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 		if next.AppID != cur.AppID {
 			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources = nil, nil, nil, nil
 		}
+		h.clearBotConfigureOnChangeLocked(next)
 		cur.AppID, cur.SecretEnc, cur.Domain = next.AppID, next.SecretEnc, next.Domain
 	}
 	if enabled != nil && *enabled != cur.Enabled {
@@ -761,8 +801,10 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 	if err := h.saveBotSettingsLocked(); err != nil {
 		b.set = previous
 		b.mu.Unlock()
-		return err
+		return botConfigureReceipt{}, errBotSettingsSave
 	}
+	receipt := h.botConfigureReceiptLocked()
+
 	b.mu.Unlock()
 	h.auditBot(ctx, records...)
 	if reconnect {
@@ -779,5 +821,5 @@ func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secr
 		h.refreshLarkCLIConnector(syncCtx)
 	}
 	h.sendReport()
-	return nil
+	return receipt, nil
 }
