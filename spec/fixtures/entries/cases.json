@@ -3138,6 +3138,83 @@
       }
     },
     {
+      "name": "invalid_conversation_waiting_replacement",
+      "description": "A replacement waiting on external work without background activity keeps an old sealed interruption out of Needs you.",
+      "source": [
+        "issue #10399"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-18T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-invalid",
+            "title": "Fix the build",
+            "origin": "main-chat",
+            "created_at": "2026-11-18T08:00:00Z",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "agents": [
+              {
+                "machine_id": "box",
+                "session_id": "old",
+                "linked_at": "2026-11-18T08:00:00Z"
+              },
+              {
+                "machine_id": "box",
+                "session_id": "new",
+                "linked_at": "2026-11-18T08:30:00Z"
+              }
+            ]
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "box",
+            "session_id": "old",
+            "title": "Previous attempt",
+            "cwd": "/code/app",
+            "status": "done",
+            "state": "unread",
+            "updated_at": "2026-11-18T08:59:00Z",
+            "turn_error": "opaque account transition 7A99",
+            "turn_error_kind": "unrecoverable",
+            "turn_error_code": "compaction_sealed"
+          },
+          {
+            "machine_id": "box",
+            "session_id": "new",
+            "title": "Current attempt",
+            "cwd": "/code/app",
+            "status": "idle",
+            "state": "idle",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "waiting": true,
+            "background_tasks_count": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "external",
+              "wait": "Waiting for deployment"
+            }
+          }
+        ],
+        "interactions": [],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [],
+        "running": [
+          "task:t-invalid"
+        ],
+        "shelved": [],
+        "activity": {
+          "task:t-invalid": null
+        }
+      }
+    },
+    {
       "name": "invalid_conversation_parked",
       "description": "An account-sealed conversation is not a new owner interruption after replacement, parking, or closing.",
       "source": [

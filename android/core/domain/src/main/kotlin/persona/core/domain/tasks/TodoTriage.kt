@@ -55,6 +55,7 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
     var limit = false
     var unread = false
     var working = false
+    var waiting = false
     for (a in active) {
         if (!a.startError.isNullOrEmpty()) continue // a failed start counts as stopped
         val s = lookup(a.key)
@@ -65,10 +66,11 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
             s?.interrupted == true -> interrupted = true
             st == AgentState.Unread -> unread = true
             st == AgentState.Working || s?.starting == true -> working = true
+            s?.waitsWithoutBackground() == true -> waiting = true
         }
     }
     return when {
-        interrupted && !working && supervision?.state != "parked" -> TriageStatus.Interrupted
+        interrupted && !working && !waiting && supervision?.state != "parked" -> TriageStatus.Interrupted
         limit -> TriageStatus.UsageLimit
         unread -> TriageStatus.Unread
         working -> TriageStatus.Working
