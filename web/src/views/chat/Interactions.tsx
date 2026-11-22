@@ -657,7 +657,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
       if (el) el.value = "";
     };
   }, []);
-  const { machine, purpose, commands } = secretRunInput(ix.tool_input);
+  const { machine, purpose, delivery, commands } = secretRunInput(ix.tool_input);
   // without commands in tool_input the hub's summary (the computer, the purpose and every command) stands in for them;
   // with neither, nothing says what would run and Run stays off
   const summary = commands.length ? "" : (ix.summary?.trim() ?? "");
@@ -689,6 +689,12 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
     >
       <div className="flex flex-col gap-2">
         {purpose && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{purpose}</p>}
+        {delivery === "env" && (
+          <p role="alert" className="flex items-start gap-1.5 text-[12.5px] leading-snug font-medium text-orange">
+            <Icon name="warning" size={13} className="mt-px shrink-0" />
+            {t("chat-interactions.secret_run_env_warning")}
+          </p>
+        )}
         {commands.length > 0 ? (
           <div>
             <div className="mb-1 text-[11px] font-medium text-ink-3">{t("chat-interactions.secret_run_commands")}</div>
