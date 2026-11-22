@@ -1,5 +1,6 @@
 package persona.feature.agents
 
+import persona.feature.chat.SessionModes
 import persona.feature.chat.TodoRestores
 import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.HoldStep
@@ -652,9 +653,7 @@ private fun TodoTriageRow(
     val accepted = triage.rule == TriageRule.Accepted || todo.acceptedAtRest(sessionLookup)
     val urgent = mostUrgentAgent(todo, sessionLookup)
     val lead = remember(todo, sessionLookup) { taskLeadAgent(todo, sessionLookup) }
-    val leadEffort = lead?.effort?.takeIf(String::isNotEmpty)?.let { id ->
-        effortLevels.firstOrNull { it.first == id }?.let { stringResource(it.second) } ?: id
-    }
+    val leadEffort = SessionModes.effortLabel(lead?.effort, res)?.takeIf(String::isNotEmpty)
     val agentMetadata = remember(lead, machines, leadEffort) {
         lead?.let { session ->
             listOfNotNull(

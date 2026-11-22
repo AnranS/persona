@@ -175,6 +175,14 @@ class TodoAgentMetadataTest {
         assertMore(1)
     }
 
+    @Test
+    fun minimalEffortUsesTheAgentChatLabel() {
+        val todo = todo("minimal", listOf(TodoAgent("mac", "minimal")))
+        show(todo, listOf(agent("minimal", model = "claude-opus-5-5", effort = "minimal")))
+
+        assertAgentMetadata("mac · Opus 5.5 · Minimal", "1 agent")
+    }
+
     @Config(sdk = [35], qualifiers = "zh-w400dp-h1200dp")
     @Test
     fun noKnownSessionRetainsTheLocalizedAgentCountFallback() {
