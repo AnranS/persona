@@ -30,7 +30,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 		day, _, _ := strings.Cut(g.Key, "|")
 		return string(key), day // replacement parks and wording cannot produce a second summary that day
 	}
-	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
+	if g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent {
 		// Keep every task/PR/head independently, including a head that returns after another one.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
@@ -164,8 +164,8 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			pending = append(pending, id)
 		}
 		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict ||
-			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary}
-		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || keptUntilChange(signals[i]) {
+			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent}
+		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
 		if g := signals[i]; g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
