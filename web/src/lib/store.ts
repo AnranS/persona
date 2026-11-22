@@ -121,6 +121,7 @@ function currentAssistantSnapshot(page: string) {
 const initialAssistantPage = chosenManager() ?? "";
 const initialAssistant = currentAssistantSnapshot(initialAssistantPage);
 let restoredAssistant = initialAssistant ? { page: initialAssistantPage, manager: initialAssistant.manager } : null;
+let defaultAssistantRetry = "";
 
 let state: State = {
   conn: "connecting",
@@ -1720,6 +1721,19 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
+/** A different default owns every no-header answer still on its way. Retire those reads and ask once for the new one. */
+function replaceDefaultAssistant() {
+  const manager = defaultManager();
+  if (defaultAssistantRetry === manager) return;
+  defaultAssistantRetry = manager;
+  assistantAsked.forget();
+  restoredAssistant = null;
+  assistantByManager.delete("");
+  clearAssistantSnapshot("");
+  set({ assistant: null, assistantError: null });
+  void refreshAssistant().catch(() => {});
+}
+
 /** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
  *  manager's page, made old meanwhile). */
 export async function refreshAssistant(): Promise<boolean> {
@@ -1734,11 +1748,17 @@ export async function refreshAssistant(): Promise<boolean> {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return false;
     const assistant = { ...a, conversations: (a.conversations ?? []).filter(availableConversation) };
+    const manager = assistant.manager || from || (defaultKnown() ? defaultManager() : "");
+    if (!from && defaultKnown() && manager && manager !== defaultManager()) {
+      replaceDefaultAssistant();
+      return false;
+    }
+    defaultAssistantRetry = "";
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
     if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
     restoredAssistant = null;
-    writeAssistantSnapshot(from, assistant.manager || from || (defaultKnown() ? defaultManager() : ""), assistant);
+    writeAssistantSnapshot(from, manager, assistant);
     assistantByManager.set(cacheKey(), assistant);
     // its conversations' own requests (feed, stop…) go to it, whichever manager the page shows later
     // (the default's are not noted: with no header the hub finds their manager itself)
@@ -1793,15 +1813,18 @@ onManagerChoice(() => {
 // The default's page read before the roster said which manager that is: it is that one's.
 onDefaultManager((was) => {
   if (!was.settled && drawnPage.page === "") drawnPage = { page: "", manager: defaultManager() };
-  if (restoredAssistant?.page === "" && restoredAssistant.manager && restoredAssistant.manager !== defaultManager()) {
-    // A default restored before the roster arrived is not another default's assistant.
-    restoredAssistant = null;
+  const kept = assistantByManager.get("");
+  const current = pageOf() === "" ? restoredAssistant?.manager || state.assistant?.manager || kept?.manager : undefined;
+  const staleKept = kept?.manager && kept.manager !== defaultManager();
+  if (staleKept) {
     assistantByManager.delete("");
     clearAssistantSnapshot("");
-    set({ assistant: null, assistantError: null });
-    void refreshAssistant().catch(() => {});
   }
-  const kept = assistantByManager.get("");
+  if (current && current !== defaultManager()) {
+    replaceDefaultAssistant();
+    return;
+  }
+  if (staleKept) return;
   if (was.settled || !kept) return;
   assistantByManager.delete("");
   assistantByManager.set(defaultManager(), kept);
@@ -1930,6 +1953,7 @@ export function reset() {
   assistantAsked.forget();
   assistantByManager.clear();
   restoredAssistant = null;
+  defaultAssistantRetry = "";
   // and so do the pins and mutes of a refresh() or a failed save still on its way
   mutesSaves.rev++;
   pinsSaves.rev++;

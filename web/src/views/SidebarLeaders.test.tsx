@@ -35,6 +35,7 @@ const base = [
 ];
 let conversations: Session[];
 let leaders: string[] | undefined;
+let assistantManager: string | undefined;
 let named: unknown;
 let posts: string[] = [];
 
@@ -52,6 +53,7 @@ beforeEach(() => {
   localStorage.clear();
   conversations = base;
   leaders = ["lead-a", "lead-b"];
+  assistantManager = undefined;
   posts = [];
   named = { leaders: [
     // lead-b has a task in the working state whose Agents all stopped: nothing runs under it (#6626)
@@ -71,7 +73,7 @@ beforeEach(() => {
       // `running` only where a case gives it: without it the tree is an older hub's
       return Promise.resolve(new Response(JSON.stringify({ directions: [...list.map((l) => ({ id: l.id, name: l.name, counts: { stuck: 0, review: 0, ...(l.counts as object) }, ...(l.running === undefined ? {} : { running: l.running }), tasks: [] })), { id: "main", name: "", secretary: true, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] }] }), { headers: { "Content-Type": "application/json" } }));
     }
-    const body = path === "/api/v1/assistant" ? { machine_id: "hub", main: "main", leaders, conversations } : path === "/api/v1/assistant/leaders" ? named : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
+    const body = path === "/api/v1/assistant" ? { manager: assistantManager, machine_id: "hub", main: "main", leaders, conversations } : path === "/api/v1/assistant/leaders" ? named : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
   }));
   history.replaceState(null, "", "/overview");
@@ -435,5 +437,78 @@ describe("cold full-page reloads (#12231)", () => {
     await finish();
     expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
     expect(host.textContent).not.toContain("Trip plan");
+  });
+
+  it("retires a pre-roster answer and its read when the roster names another default", async () => {
+    setToken("first-credential");
+    const ordinary = fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input), "http://x").pathname === "/api/v1/managers") return new Promise<Response>(() => {});
+      return ordinary(input, init);
+    }));
+    assistantManager = "first-manager";
+    await renderSidebar();
+    expect(row("newest").textContent).toContain("Trip plan");
+
+    assistantManager = "other-manager";
+    conversations = [
+      conversation("main", "Other main", "2026-11-10T09:00:00Z"),
+      conversation("other-chat", "Other default's chat", "2026-11-10T08:00:00Z"),
+    ];
+    act(() => setRosterDefault("other-manager"));
+    await flush();
+
+    expect(host.textContent).not.toContain("Trip plan");
+    expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
+  });
+
+  it("does not let an older default answer overtake its replacement", async () => {
+    setToken("first-credential");
+    assistantManager = "first-manager";
+    const ordinary = fetch;
+    const pending: (() => void)[] = [];
+    let holdAnswers = false;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://x");
+      if (url.pathname === "/api/v1/managers") return new Promise<Response>(() => {});
+      if (url.pathname === "/api/v1/assistant") {
+        const body = { manager: assistantManager, machine_id: "hub", main: "main", leaders, conversations };
+        if (holdAnswers) return new Promise<Response>((resolve) => pending.push(() => resolve(Response.json(body))));
+        return Promise.resolve(Response.json(body));
+      }
+      return ordinary(input, init);
+    }));
+    await renderSidebar();
+
+    holdAnswers = true;
+    act(() => root.unmount());
+    reset();
+    root = createRoot(host);
+    let loading!: Promise<void>;
+    act(() => {
+      loading = refresh();
+      root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    });
+    await flush();
+    expect(row("newest").textContent).toContain("Trip plan");
+    expect(pending).toHaveLength(1);
+
+    assistantManager = "other-manager";
+    conversations = [
+      conversation("main", "Other main", "2026-11-10T09:00:00Z"),
+      conversation("other-chat", "Other default's chat", "2026-11-10T08:00:00Z"),
+    ];
+    act(() => setRosterDefault("other-manager"));
+    await flush();
+    expect(pending).toHaveLength(2);
+    expect(host.textContent).not.toContain("Trip plan");
+
+    pending[0]();
+    await act(async () => { await loading; });
+    await flush();
+    expect(host.textContent).not.toContain("Trip plan");
+    pending[1]();
+    await flush();
+    expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
   });
 });
