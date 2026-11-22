@@ -156,7 +156,7 @@ func TestSecretRunEnvSummaryWarnsInEveryServerLanguage(t *testing.T) {
 		phrases []string
 	}{
 		{lang: "en", phrases: []string{"every command", "each command", "all commands"}},
-		{lang: "zh-Hans", phrases: []string{"每个命令", "每条命令", "所有命令"}},
+		{lang: "zh-Hans", phrases: []string{"每个命令", "每条命令", "每一条命令", "所有命令"}},
 		{lang: "ja", phrases: []string{"すべてのコマンド", "全てのコマンド", "各コマンド"}},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
@@ -241,7 +241,15 @@ func TestSecretRunEnvRequiresFreshPerRunPasswordAnswer(t *testing.T) {
 			done := r.call(secretRunEnvArgs)
 			ix := secretRunEnvCard(t, r, done)
 			if err := r.s.resolve(ix.ID, tc.resolution); err != nil {
-				t.Fatal(err)
+				// A fieldless approval is already invalid at the interaction boundary. It never reaches the tool;
+				// decline the still-pending card so this case also leaves no work behind.
+				r.post(ix.ID, `{"allow":false}`)
+				if out, text := r.outcome(done); out.Status != secretDeclined {
+					t.Fatalf("cleanup after a fieldless env refusal = %s", text)
+				}
+				r.wantNoRun()
+				r.noLeak(err.Error(), testPassword)
+				return
 			}
 			out, text := r.outcome(done)
 			if out.Status != secretRefused {
