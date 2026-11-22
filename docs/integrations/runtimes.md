@@ -553,6 +553,12 @@ response, tool result or error has been exported). A failed summary read is logg
 with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
+A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the conversation's history-epoch file (mode
+0600). It stores the turn's native input position, branch and reply index with SHA-256 input and reply hashes, never
+message text. After a restart, a `summary_behind` row becomes `done` only while the current export matches that settled
+turn; a missing or mismatched marker, including one followed by later native work, leaves `unknown`. Starting another
+prompt clears the marker. Transcript-only status rules and the step-count coverage check above are unchanged.
+
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.
