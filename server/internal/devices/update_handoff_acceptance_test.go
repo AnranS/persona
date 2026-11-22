@@ -103,7 +103,7 @@ func (n *continuousHeadlessUpdateNode) handle(ctx context.Context, method string
 func continuousHeadlessDeployFixture(t *testing.T, busy bool) (*Machine, *continuousHeadlessUpdateNode, string) {
 	t.Helper()
 	_, m, base, bin := linkedDeployFixture(t, kindLink)
-	m.deployRetry = time.Minute
+	m.deployRetry = time.Second
 	m.info.Protocol = nodeproto.Version
 	m.info.Capabilities = []string{nodeproto.Sessions, nodeproto.NodeUpdate, nodeproto.NodeUpdateIdle}
 	base.sessions = []proto.Session{}
@@ -139,7 +139,7 @@ func TestLinkedDeployHandoffAfterContinuousHeadlessActivity(t *testing.T) {
 			t.Fatal("the handoff canceled the current headless turn instead of letting it finish")
 		}
 		var reply map[string]any
-		err := n.peer.Call(ctx, "assistant.send", map[string]any{"session_id": "chat", "text": "must not execute"}, &reply)
+		err := m.call(ctx, "assistant.send", map[string]any{"session_id": "chat", "text": "must not execute"}, &reply)
 		var coded *rpc.Error
 		if !errors.As(err, &coded) || coded.Code != nodeproto.CodeRestarting {
 			t.Fatalf("a post-grace headless turn was not refused before execution: %v", err)
@@ -166,6 +166,9 @@ func TestLinkedDeployHandoffAfterContinuousHeadlessActivity(t *testing.T) {
 		defer n.mu.Unlock()
 		if n.begin != 1 || n.commits != 1 || n.confirms != 1 {
 			t.Fatalf("update did not complete after the handoff: begin=%d commits=%d confirms=%d", n.begin, n.commits, n.confirms)
+		}
+		if n.handoffGraceSeconds != proto.DefaultNodeUpdateHandoffGraceSeconds {
+			t.Fatalf("commit carried handoff grace %d, want the default %d", n.handoffGraceSeconds, proto.DefaultNodeUpdateHandoffGraceSeconds)
 		}
 	})
 }

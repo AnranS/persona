@@ -119,6 +119,34 @@ func TestResidentReloadHandoffDrainsTurnAndAdmittedRPC(t *testing.T) {
 	})
 }
 
+func TestSessionsListUpdateHandoffControlsHeadlessAdmission(t *testing.T) {
+	n := assistantNode(t)
+	r := &ResidentReload{}
+	n.SetResidentReload(r)
+	if _, err := request(t, n, "sessions.list", map[string]any{"update_handoff": true}); err != nil {
+		t.Fatal(err)
+	}
+	done, err := r.enter()
+	if err != nil {
+		t.Fatalf("headless handoff blocked an unrelated RPC: %v", err)
+	}
+	done()
+	if err := r.enterHeadless(); err == nil {
+		t.Fatal("headless handoff admitted a new turn")
+	} else {
+		var coded *rpc.Error
+		if !errors.As(err, &coded) || coded.Code != nodeproto.CodeRestarting {
+			t.Fatalf("wrong headless refusal: %v", err)
+		}
+	}
+	if _, err := request(t, n, "sessions.list", map[string]any{"update_handoff": false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.enterHeadless(); err != nil {
+		t.Fatalf("clearing handoff did not restore headless admission: %v", err)
+	}
+}
+
 func TestResidentReloadNaturalIdleSkipsHandoffWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := &ResidentReload{}
