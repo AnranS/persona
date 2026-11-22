@@ -1,14 +1,15 @@
 // Synthetic real-browser regression for #12231: a warm profile must paint kept sidebar rows during full reloads.
-// node web/e2e/sidebar-refresh-loading.mjs <loopback URL> <artifact directory> [before]
+// node web/e2e/sidebar-refresh-loading.mjs <loopback URL> <artifact directory> [before] [large]
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 
-const [base, artifacts, mode = "default"] = process.argv.slice(2);
+const [base, artifacts, mode = "default", textSize = "standard"] = process.argv.slice(2);
 assert.match(base ?? "", /^http:\/\/127\.0\.0\.1:\d+$/);
 assert(artifacts, "Provide an artifact directory");
 assert(["default", "before"].includes(mode), "Mode must be default or before");
+assert(["standard", "large"].includes(textSize), "Text size must be standard or large");
 const before = mode === "before";
 mkdirSync(artifacts, { recursive: true });
 
@@ -66,7 +67,7 @@ const WATCH = () => {
     if (seen.weekend === null && visible("Weekend plans")) seen.weekend = performance.now();
     if (seen.agentOne === null && visible("Agent one")) seen.agentOne = performance.now();
     if (seen.agentTwo === null && visible("Agent two")) seen.agentTwo = performance.now();
-    if (seen.assistantAnswer === null) seen.assistantAnswer = responseEnd("/api/v1/assistant");
+    if (seen.assistantAnswer === null) seen.assistantAnswer = responseEnd("/api/v1/assistant", (q) => !q.has("view"));
     if (seen.agentFirstAnswer === null) seen.agentFirstAnswer = responseEnd("/api/v1/sessions", (q) =>
       q.get("summary") === "0" && !q.has("cursor") && !q.has("since") && !q.has("counts") && !q.has("session_id"));
     if (seen.agentCursorAnswer === null) seen.agentCursorAnswer = responseEnd("/api/v1/sessions", (q) =>
@@ -93,11 +94,12 @@ try {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 960 }, colorScheme: theme, locale: "en-US", reducedMotion: "reduce", serviceWorkers: "block",
     });
-    await context.addInitScript((scheme) => {
+    await context.addInitScript(({ scheme, size }) => {
       localStorage.setItem("persona.token", "synthetic-sidebar-refresh-token");
       localStorage.setItem("persona.language", "en");
       localStorage.setItem("persona.theme", scheme);
-    }, theme);
+      localStorage.setItem("persona.text-size", size);
+    }, { scheme: theme, size: textSize });
     await context.addInitScript(WATCH);
 
     const requests = [];
@@ -185,7 +187,11 @@ try {
       else await page.goto(base, { waitUntil: "commit" });
       let loadingAt = null;
       if (reload) {
-        await page.waitForFunction(() => performance.now() >= 600);
+        if (before) await page.waitForFunction(() => performance.now() >= 600);
+        else await page.waitForFunction(() => {
+          const seen = window.__sidebarSeen;
+          return seen && ((seen.weekend !== null && seen.agentOne !== null) || seen.agentTwo !== null);
+        });
         loadingAt = await page.evaluate(() => performance.now());
         await page.screenshot({ path: join(artifacts, `${mode}-${theme}-${name}-loading.png`) });
       }
@@ -209,7 +215,8 @@ try {
         const q = new URLSearchParams(r.query);
         return q.get("summary") === summary && (cursor ? q.get("cursor") === "complete-next" : !q.has("cursor") && !q.has("since") && !q.has("counts") && !q.has("session_id"));
       });
-      const timing = { ...seen, loadingAt, settledAt, rowCounts, completeFirstRequested: requested("0", false), completeCursorRequested: requested("0", true) };
+      const assistantResources = await page.evaluate(() => performance.getEntriesByType("resource").filter((entry) => new URL(entry.name).pathname === "/api/v1/assistant").map((entry) => ({ name: entry.name, startTime: entry.startTime, responseEnd: entry.responseEnd, duration: entry.duration })));
+      const timing = { ...seen, assistantResources, loadingAt, settledAt, rowCounts, completeFirstRequested: requested("0", false), completeCursorRequested: requested("0", true) };
       timings[theme][name] = timing;
       console.log(`${theme} ${name} ${JSON.stringify(timing)}`);
       check(`${theme} ${name}: complete fallback read both pages`, timing.completeFirstRequested && timing.completeCursorRequested, timing);
@@ -235,7 +242,7 @@ try {
   clearTimeout(watchdog);
 }
 
-writeFileSync(join(artifacts, "results.json"), JSON.stringify({ issue: 12231, mode, base, viewport: { width: 1440, height: 960 }, delays: DELAYS, timings, checks, pageErrors, error: thrown }, null, 2) + "\n");
+writeFileSync(join(artifacts, "results.json"), JSON.stringify({ issue: 12231, mode, textSize, base, viewport: { width: 1440, height: 960 }, delays: DELAYS, timings, checks, pageErrors, error: thrown }, null, 2) + "\n");
 const bad = thrown !== null || checks.some((entry) => !entry.ok) || pageErrors.length > 0;
 console.log(`RESULT: sidebar-refresh-loading ${bad ? "failed" : "passed"} (${checks.filter((entry) => entry.ok).length}/${checks.length} checks)`);
 process.exit(bad ? 1 : 0);
