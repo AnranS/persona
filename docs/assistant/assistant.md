@@ -1251,7 +1251,7 @@ space as before. The task records the physical directory used, so a changed syml
 A node must announce `task_execution`; unsupported nodes refuse the new execution request with `node_outdated`.
 For a scheduled run this is a definite pre-delivery refusal, so the same marshaled request waits for the update instead of
 repeating model preparation or conversation bookkeeping. The default bound is 600 seconds, configurable as
-`assistant.task_execution_wait_seconds` (1–3600) in `manager.json`. A successful update releases exactly one send with
+`assistant.task_execution_wait_seconds` (0–3600) in `manager.json`. Zero records the refusal immediately. A successful update releases exactly one send with
 every required option unchanged. If the bound expires, the run records `task_execution_wait_timeout` as a definite
 not-sent deadline and does not arm the ordinary one-off retry; there is no late queued attempt. Uncertain delivery keeps
 its existing no-replay classification.

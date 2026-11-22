@@ -29,7 +29,7 @@ type taskExecutionPolicy struct {
 
 func taskExecutionPolicyOf(h Hello) taskExecutionPolicy {
 	policy := taskExecutionPolicy{wait: defaultTaskExecutionWaitSeconds * time.Second, legacyFallback: true}
-	if seconds := h.Assistant.TaskExecutionWaitSeconds; seconds != nil && *seconds >= 1 && *seconds <= maxTaskExecutionWaitSeconds {
+	if seconds := h.Assistant.TaskExecutionWaitSeconds; seconds != nil && *seconds >= 0 && *seconds <= maxTaskExecutionWaitSeconds {
 		policy.wait = time.Duration(*seconds) * time.Second
 	}
 	if h.Assistant.TaskExecutionLegacyFallback != nil {

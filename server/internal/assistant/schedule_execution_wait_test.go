@@ -268,26 +268,34 @@ func runTaskExecutionTimeout(t *testing.T, fx *taskExecutionWaitFixture, wait ti
 	synctest.Test(t, func(t *testing.T) {
 		done := taskExecutionRunResult(t, fx.s, fx.task)
 		synctest.Wait()
-		select {
-		case got := <-done:
-			settleTaskExecutionBubble(t, fx, got)
-			t.Fatalf("run did not wait for a compatible node: session=%q err=%v sends=%d", got.session.SessionID, got.err, fx.f.sent())
-		default:
-		}
-		<-time.After(wait - time.Second)
-		synctest.Wait()
-		select {
-		case got := <-done:
-			t.Fatalf("run timed out before %s: %+v", wait, got)
-		default:
-		}
-		<-time.After(2 * time.Second)
-		synctest.Wait()
 		var result taskExecutionResult
-		select {
-		case result = <-done:
-		default:
-			t.Fatalf("run remained queued past its %s bound", wait)
+		if wait == 0 {
+			select {
+			case result = <-done:
+			default:
+				t.Fatal("zero-second compatibility policy did not refuse immediately")
+			}
+		} else {
+			select {
+			case got := <-done:
+				settleTaskExecutionBubble(t, fx, got)
+				t.Fatalf("run did not wait for a compatible node: session=%q err=%v sends=%d", got.session.SessionID, got.err, fx.f.sent())
+			default:
+			}
+			<-time.After(wait - time.Second)
+			synctest.Wait()
+			select {
+			case got := <-done:
+				t.Fatalf("run timed out before %s: %+v", wait, got)
+			default:
+			}
+			<-time.After(2 * time.Second)
+			synctest.Wait()
+			select {
+			case result = <-done:
+			default:
+				t.Fatalf("run remained queued past its %s bound", wait)
+			}
 		}
 		if result.err == nil || !errors.Is(result.err, context.DeadlineExceeded) || !errors.Is(result.err, rpc.ErrNotSent) ||
 			!strings.Contains(result.err.Error(), "task_execution_wait_timeout") {
@@ -320,6 +328,7 @@ func TestTaskExecutionCompatibilityWaitTimeout(t *testing.T) {
 	}{
 		{name: "documented default", wait: 600 * time.Second},
 		{name: "configured bound", config: `{"task_execution_wait_seconds":2}`, wait: 2 * time.Second},
+		{name: "configured zero", config: `{"task_execution_wait_seconds":0}`, wait: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runTaskExecutionTimeout(t, newTaskExecutionWaitFixture(t, "new", tc.config), tc.wait)
@@ -480,8 +489,8 @@ func TestTaskExecutionCompatibilityManagerConfig(t *testing.T) {
 		}
 	})
 
-	// The configuration contract is 1–3600 seconds, default 600; legacy fallback defaults on and is a boolean.
-	for _, value := range []string{"-1", "0", "3601", "1.5", `"45"`} {
+	// The configuration contract is 0–3600 seconds, default 600; zero refuses immediately. Legacy fallback defaults on and is a boolean.
+	for _, value := range []string{"-1", "3601", "1.5", `"45"`} {
 		t.Run("invalid wait "+value, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), ManagerFile)
 			raw := `{"assistant":{"task_execution_wait_seconds":` + value + `}}`

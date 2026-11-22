@@ -82,8 +82,8 @@ func readOwnConfig(file string) (ownConfig, error) {
 				return c, fmt.Errorf("assistant.supervision_batch_minutes must be between 0 and %d", maxSupervisionBatchMinutes)
 			}
 		}
-		if a.TaskExecutionWaitSeconds != nil && (*a.TaskExecutionWaitSeconds < 1 || *a.TaskExecutionWaitSeconds > 3600) {
-			return c, fmt.Errorf("assistant.task_execution_wait_seconds must be between 1 and 3600")
+		if a.TaskExecutionWaitSeconds != nil && (*a.TaskExecutionWaitSeconds < 0 || *a.TaskExecutionWaitSeconds > 3600) {
+			return c, fmt.Errorf("assistant.task_execution_wait_seconds must be between 0 and 3600")
 		}
 		if a.NodeUpdateHandoffGraceSeconds != nil && (*a.NodeUpdateHandoffGraceSeconds < 0 || *a.NodeUpdateHandoffGraceSeconds > proto.MaxNodeUpdateHandoffGraceSeconds) {
 			return c, fmt.Errorf("assistant.node_update_handoff_grace_seconds must be between 0 and %d", proto.MaxNodeUpdateHandoffGraceSeconds)
