@@ -115,6 +115,19 @@ struct TodoRowAgentMetadataTests {
         #expect(!words.contains("+1"), "the fallback has no separate other-Agent count: \(words)")
     }
 
+    @Test func heldDeliveryStaysBeforeAgentMetadata() async throws {
+        let lead = try session("lead", state: .working, model: "claude-opus-5-5", effort: "high")
+        var item = self.todo(agents: [agent("lead")])
+        item.prURL = "https://example.com/pull/7"
+
+        let words = try await rowWords(item, sessions: [lead],
+                                       triage: TodoTriage(section: .pr, rule: .prOpen, last: Date(timeIntervalSince1970: 200)))
+
+        let delivery = try #require(words.range(of: "PR #7"))
+        let agent = try #require(words.range(of: "MacBook · Opus 5.5"))
+        #expect(delivery.lowerBound < agent.lowerBound, "delivery must precede Agent metadata: \(words)")
+    }
+
     private func agent(_ id: String, machine: String? = nil, released: Bool = false) -> TodoItem.Agent {
         TodoItem.Agent(machineID: machine ?? mac.id, sessionID: id,
                        releasedAt: released ? Date(timeIntervalSince1970: 1_000) : nil)
@@ -142,7 +155,7 @@ struct TodoRowAgentMetadataTests {
 
     /// Host the production row unchanged. Its lookup currently reads AppModel.shared, so install only these synthetic
     /// machine/session rows and restore what the test host held before returning.
-    private func rowWords(_ todo: TodoItem, sessions: [Session]) async throws -> String {
+    private func rowWords(_ todo: TodoItem, sessions: [Session], triage: TodoTriage? = nil) async throws -> String {
         let model = AppModel.shared
         let previousMachines = model.machines(inFront: false).filter { $0.group.isEmpty }
         let fixtureMachines = [mac, studio]
@@ -166,7 +179,7 @@ struct TodoRowAgentMetadataTests {
         }
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 300)
         window.windowLevel = .alert + 1
-        let triage = TodoTriage(section: .working, rule: .agentRunning, last: Date(timeIntervalSince1970: 200))
+        let triage = triage ?? TodoTriage(section: .working, rule: .agentRunning, last: Date(timeIntervalSince1970: 200))
         let row = TodoRow(todo: todo, triage: triage, onToggleDone: {})
             .environment(model)
             .environment(\.tabIsActive, true)

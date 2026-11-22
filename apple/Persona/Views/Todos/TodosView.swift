@@ -653,7 +653,9 @@ struct TodoRow: View {
                     }
                 }
 
-                statusLine(status: status, urgent: urgent, activeAgents: activeAgents, lead: lead, onSeen: onSeen)
+                statusLine(status: status, urgent: urgent,
+                           activeAgents: triage?.section == .pr ? [] : activeAgents,
+                           lead: triage?.section == .pr ? nil : lead, onSeen: onSeen)
 
                 // Nobody is working on it (#3618): under its state, where its supervision shows.
                 OrphanedLine(todo: todo, state: status)
@@ -678,6 +680,10 @@ struct TodoRow: View {
                                 .lineLimit(1)
                         }
                     }
+                }
+                // A held delivery stays before the Agent it names (#10904); every other row keeps the original order.
+                if triage?.section == .pr {
+                    HStack(spacing: Theme.Space.sm) { agentWords(activeAgents: activeAgents, lead: lead) }
                 }
 
                 if let onRestore {
@@ -776,6 +782,12 @@ struct TodoRow: View {
         Text(todo.statusLabel(status))
             .font(Theme.Font.labelStrong)
             .foregroundStyle(todo.shownState(status).todoTone.text)
+        agentWords(activeAgents: activeAgents, lead: lead)
+        // An accepted open concern waits for its report in its open state, without an Accepted tag (#3582).
+        if !todo.isDone && !(todo.isConcern && todo.reviewState == .accepted) { ReviewChip(todo: todo, compact: true) }
+    }
+
+    @ViewBuilder private func agentWords(activeAgents: [TodoItem.Agent], lead: Session?) -> some View {
         if let lead {
             Text(verbatim: "· \(agentMetadata(lead))")
                 .font(Theme.Font.caption)
@@ -794,8 +806,6 @@ struct TodoRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        // An accepted open concern waits for its report in its open state, without an Accepted tag (#3582).
-        if !todo.isDone && !(todo.isConcern && todo.reviewState == .accepted) { ReviewChip(todo: todo, compact: true) }
     }
 
     /// The lead Agent's computer and model as the existing machine and model pickers name them; no list read is started.
