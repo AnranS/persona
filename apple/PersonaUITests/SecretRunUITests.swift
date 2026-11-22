@@ -87,6 +87,13 @@ final class SecretRunUITests: XCTestCase {
         for command in expectedCommands {
             XCTAssertTrue(commands.label.contains(command), "the env card dropped or rewrote: \(command)\n\(commands.label)")
         }
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let iconAlert = NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")
+        for _ in 0..<3 {
+            acceptIconAlert(timeout: 1)
+            if !springboard.alerts.containing(iconAlert).firstMatch.exists { break }
+        }
+        XCTAssertFalse(springboard.alerts.containing(iconAlert).firstMatch.exists, "an icon-change alert covers the env card")
         shot(app, appearance: appearance, largest: largest)
 
         let run = app.buttons["secret-run.run"]
