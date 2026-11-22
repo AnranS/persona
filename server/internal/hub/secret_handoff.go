@@ -136,7 +136,7 @@ func humanStartOf(ctx context.Context) bool {
 }
 
 // handoffApprover is the device r comes from when it may approve a hand-off card, else why not.
-func (h *Hub) handoffApprover(r *http.Request, feature string) (assistantwire.HandoffApprover, string) {
+func (h *Hub) handoffApprover(r *http.Request, features ...string) (assistantwire.HandoffApprover, string) {
 	p := principalOf(r.Context())
 	switch {
 	case p.Role == roleAnswer:
@@ -147,10 +147,13 @@ func (h *Hub) handoffApprover(r *http.Request, feature string) (assistantwire.Ha
 		return assistantwire.HandoffApprover{}, handoffRole
 	case p.ID == "":
 		return assistantwire.HandoffApprover{}, handoffHubToken
-	case !requestDeclares(r, feature):
-		return assistantwire.HandoffApprover{}, handoffClient
 	}
-	return assistantwire.HandoffApprover{DeviceID: p.ID, DeviceName: p.Name}, ""
+	for _, feature := range features {
+		if requestDeclares(r, feature) {
+			return assistantwire.HandoffApprover{DeviceID: p.ID, DeviceName: p.Name}, ""
+		}
+	}
+	return assistantwire.HandoffApprover{}, handoffClient
 }
 
 // handoffGate checks answer res to card id before it is relayed: r to relay (carrying the approver when the manager
@@ -173,7 +176,13 @@ func (h *Hub) handoffGate(w http.ResponseWriter, r *http.Request, id string, res
 	if known && ix.ToolName != proto.SecretHandoffTool {
 		return r, true
 	}
-	a, why := h.handoffApprover(r, featureSecretHandoff)
+	features := []string{featureSecretHandoff}
+	if !known {
+		// The hub cannot tell which special card the manager still owns after a restart. Carry either proof;
+		// the manager checks it against the actual card instead of dropping every env approver.
+		features = append(features, featureSecretRunEnv)
+	}
+	a, why := h.handoffApprover(r, features...)
 	if why == "" {
 		return r.WithContext(context.WithValue(r.Context(), handoffApproverKey{}, a)), true
 	}
