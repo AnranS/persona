@@ -109,7 +109,7 @@ struct SecretRunForm: View {
         Keyboard.dismiss()
         password = ""
         Task {
-            await model.resolve(interaction, resolution)
+            await model.resolve(interaction, resolution, handoffCard: true)
             sending = false
         }
     }
