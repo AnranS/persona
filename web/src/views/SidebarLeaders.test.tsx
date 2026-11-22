@@ -13,7 +13,9 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { t } from "../i18n";
+import { setToken } from "../lib/api";
 import { resetDirectionNames } from "../lib/direction-names";
+import { chooseManager, resetManagerChoice } from "../lib/manager-choice";
 import { setRecentCount } from "../lib/sidebar-recent";
 import { connect, refresh, reset } from "../lib/store";
 import type { Session } from "../lib/types";
@@ -83,6 +85,7 @@ afterEach(() => {
   host.remove();
   reset();
   resetDirectionNames();
+  resetManagerChoice();
   vi.unstubAllGlobals();
 });
 
@@ -353,5 +356,81 @@ describe("the leader conversations in the sidebar", () => {
     await flush();
     // the ended ones leave 常驻 and are back among 最近 by their time
     expect(rowIds()).toEqual(["mine", "newest", "lead-a", "lead-b"]);
+  });
+});
+
+describe("cold full-page reloads (#12231)", () => {
+  /** A warm answer may have persisted a snapshot; a query-shaped lightweight read is also allowed to answer early. */
+  async function coldReload(early: unknown, authoritative: unknown, beforeRead?: () => void) {
+    const ordinary = fetch;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    act(() => root.unmount());
+    reset();
+    resetDirectionNames();
+    root = createRoot(host);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://x");
+      if (url.pathname === "/api/v1/assistant") {
+        if (url.search) return Promise.resolve(Response.json(early));
+        return held.then(() => Response.json(authoritative));
+      }
+      return ordinary(input, init);
+    }));
+    act(() => beforeRead?.());
+    let loading!: Promise<void>;
+    act(() => {
+      loading = refresh();
+      root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    });
+    await flush();
+    return async () => {
+      release();
+      await act(async () => { await loading; });
+      await flush();
+    };
+  }
+
+  it("draws directions, recent chats and All chats before the full assistant answer, then reconciles them", async () => {
+    await renderSidebar();
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
+    const early = { machine_id: "hub", main: "main", leaders, conversations: base };
+    const fresh = conversation("fresh", "Fresh authoritative chat", "2026-11-11T09:00:00Z");
+    const full = { ...early, conversations: [...base, fresh] };
+    const finish = await coldReload(early, full);
+
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
+    expect(headings()).toEqual([t("sidebar.directions"), t("sidebar.recent_chats")]);
+    const allChats = host.querySelector<HTMLAnchorElement>('a[href="/history"]')!;
+    expect(allChats).not.toBeNull();
+    expect(allChats.textContent).toContain(String(base.length));
+
+    await finish();
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "fresh", "newest", "mine"]);
+    expect(row("fresh").getAttribute("href")).toBe("/persona/fresh");
+    expect(row("lead-a").getAttribute("href")).toBe("/persona/lead-a");
+    expect(host.querySelector<HTMLAnchorElement>('a[href="/history"]')!.textContent).toContain(String(base.length + 1));
+  });
+
+  it.each(["credential", "manager"])("never draws the warm sidebar for a different %s", async (change) => {
+    setToken("first-credential");
+    await renderSidebar();
+    expect(row("newest").textContent).toContain("Trip plan");
+    const other = {
+      machine_id: "hub", main: "main", leaders: [], conversations: [
+        conversation("main", "Other main", "2026-11-10T09:00:00Z"),
+        conversation("other-chat", "Other owner's chat", "2026-11-10T08:00:00Z"),
+      ],
+    };
+    const finish = await coldReload(other, other, () => {
+      if (change === "credential") setToken("second-credential");
+      else chooseManager("other-manager");
+    });
+
+    expect(host.textContent).not.toContain("Trip plan");
+    expect(host.textContent).not.toContain("Release notes");
+    await finish();
+    expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
+    expect(host.textContent).not.toContain("Trip plan");
   });
 });
