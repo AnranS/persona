@@ -85,7 +85,7 @@ class FormatTests(unittest.TestCase):
     def test_the_committed_lists_read_cleanly(self):
         paths = sorted(LISTS.glob("*.txt"))
         self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "node_handle_method.txt",
-                                                   "prompts_assistant.txt"])
+                                                   "prompts_assistant.txt", "proto_features.txt"])
         for path in paths:
             with self.subTest(path=path.name):
                 text = path.read_text()
@@ -204,7 +204,9 @@ class GoNamesTests(unittest.TestCase):
             ("prompts_assistant", "server/internal/prompts/assistant.go",
              "server/internal/archguard/testdata/central_lists/prompts_assistant.txt"),
             ("node_handle_method", "server/internal/node/node.go",
-             "server/internal/archguard/testdata/central_lists/node_handle_method.txt")])
+             "server/internal/archguard/testdata/central_lists/node_handle_method.txt"),
+            ("proto_features", "server/internal/proto/proto.go",
+             "server/internal/archguard/testdata/central_lists/proto_features.txt")])
         # A session-bound label stays in the switch, so only the other one is a name.
         self.assertEqual(names[("node_handle_method", "planted")] - names[("node_handle_method", "now")],
                          {'"machine.planted"'})
