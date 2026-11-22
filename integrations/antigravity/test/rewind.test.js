@@ -53,8 +53,9 @@ async function fixture(t, extra = {}) {
   await until('rewind inventory', () => node.last('runtime.sessions')?.sessions.length)
   const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
   const rewind = (extra = {}) => node.peer.call('session.rewind', { session_id: SESSION, prompt: 'Repeat', occurrence: 1, prompts_after: 0, restore: 'conversation', ...extra })
-  const restart = async () => {
+  const restart = async (update) => {
     await runtime.stop()
+    await update?.()
     const before = node.all('runtime.sessions').length
     runtime = createAgyRuntime(options)
     runtime.start()
@@ -253,6 +254,40 @@ test('a restart changes the history only when projected steps were outstanding (
   assert.deepEqual(texts(restarted), records.map((step) => step.content))
   await restart()
   assert.equal((await items()).history, restarted.history, 'nothing was outstanding')
+})
+
+test('a companion restart preserves a settled Persona-owned ACP turn while the native summary lags (#12003)', async (t) => {
+  const { node, runtime, transcript, db, calls, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  const prompts = () => calls().filter((call) => call.method === 'session/prompt').length
+  assert.equal(prompts(), 1)
+  const exported = readFileSync(transcript, 'utf8').trim().split('\n').map(JSON.parse)
+  assert.deepEqual(exported.slice(-2).map((step) => step.content), ['Third', 'Third answer'])
+  const summary = db.prepare('SELECT status, step_count FROM conversation_summaries WHERE conversation_id = ?').get(RAW)
+  assert.equal(summary.status, 'CASCADE_RUN_STATUS_IDLE')
+  assert.ok(summary.step_count <= exported.at(-1).step_index, 'the native summary still lags the export')
+
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(prompts(), 1, 'the restart does not send the settled prompt again')
+  assert.equal(row.status, 'done')
+})
+
+test('a companion restart leaves a lagging native summary unknown without settled ACP evidence (#12003)', async (t) => {
+  const { node, transcript, calls, restart } = await fixture(t)
+  await restart(() => {
+    const turn = [
+      { step_index: 4, type: 'USER_INPUT', content: 'Third' },
+      { step_index: 5, type: 'PLANNER_RESPONSE', content: 'Third answer' },
+    ].map((step) => ({ ...step, status: 'DONE', created_at: later }))
+    appendFileSync(transcript, turn.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  })
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'unknown', 'trailing response text is not terminal evidence')
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 0)
 })
 
 test('a restart with an unreadable history epoch does not reuse the history of projected steps (#12014)', {
