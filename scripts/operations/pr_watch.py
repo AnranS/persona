@@ -146,8 +146,9 @@ class State:
             if item.get("head") != head or (evidence_key and item.get("evidence_key") != evidence_key):
                 item.clear()
                 item["head"] = head
-            # Omitted diagnostics retain prior evidence; None explicitly clears it.
-            for field in ("failure", "repair_exhausted", "published_failure"):
+            # Omitted fields retain prior evidence; these fields use None as removal.
+            for field in ("failure", "repair_exhausted", "published_failure",
+                          "semantic_source", "human_review"):
                 if field in fields and fields[field] is None:
                     fields.pop(field, None)
                     item.pop(field, None)
@@ -1095,12 +1096,24 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         current = self.state.get(repo, number)
         if (current.get("head") == head and current.get("evidence_key") == evidence_key
                 and current.get("format") == FORMAT_VERSION
+                and current.get("semantic_source") != "human"
                 and current.get("semantic") in ("passed", "findings")):
             # Valid exact-head watcher evidence already exists; never override it.
+            # Human evidence instead tracks later reviews on the same head.
             return False
         decision = self.human_review_decision(repo, number, head)
         kind = decision["decision"]
         if kind == pr_watch_human.DECISION_NONE:
+            if (current.get("head") == head and current.get("evidence_key") == evidence_key
+                    and current.get("format") == FORMAT_VERSION
+                    and current.get("semantic_source") == "human"):
+                # A dismissal or superseding neutral state removes the human pass.
+                # Keep exact-head verification, but require the normal AI review.
+                self.state.put(repo, number, head, evidence_key=evidence_key,
+                               base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing",
+                               semantic=None, findings=[], semantic_source=None, human_review=None,
+                               review_fingerprint=None, review_posted=False, success_posted=False,
+                               published_findings=[], published_fingerprint=None, retry_reason=None)
             return False
         record = decision["review"]
         if kind == pr_watch_human.DECISION_APPROVED:
@@ -1123,7 +1136,9 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
             return True
         self.state.put(repo, number, head, evidence_key=evidence_key,
                        base=pr["baseRefOid"], format=FORMAT_VERSION, outcome=outcome,
-                       semantic_source="human", human_review=record)
+                       semantic=None, findings=[], semantic_source="human", human_review=record,
+                       review_fingerprint=None, review_posted=False, success_posted=False,
+                       published_findings=[], published_fingerprint=None, retry_reason=None)
         self.log("%s#%s parked on human %s review %s on %s; no watcher semantic review or merge" %
                  (repo, number, record["state"], record["id"], head[:9]))
         return True
@@ -1344,7 +1359,9 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                 outcome = "passed_with_findings" if old.get("findings") else "passed"
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  outcome=outcome, retry_reason=None, retry_after=0)
+        # Human-sourced evidence must observe later same-head reviews before resume or merge.
         if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("format") == FORMAT_VERSION \
+                and old.get("semantic_source") != "human" \
                 and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry", "reviewed") \
                 and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure") and old.get("retry_reason") != "verification_repair") \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
@@ -1508,7 +1525,8 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                     self.remove_worktree(repo, worktree)
             return
         phase = "merge"
-        if old.get("head") == head and old.get("outcome") == "merge_failed":
+        if old.get("head") == head and old.get("outcome") == "merge_failed" \
+                and old.get("semantic_source") != "human":
             if old.get("retry_after", 0) > time.time():
                 return
             if old.get("blocking"):
