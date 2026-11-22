@@ -131,6 +131,21 @@ struct TodoTriageTests {
         #expect(t.section == .other && t.rule == .rest)
     }
 
+    /// #10399: legacy sessions have no structured error kind/code, so the raw sealed-compaction error must win over
+    /// stale transient work left behind by the interrupted turn.
+    @Test func legacyAccountSealedCompactionWithoutErrorMetadataIsInterrupted() {
+        let sealed = session(
+            "sealed",
+            state: .idle,
+            turnError: "This conversation was compacted natively by <account>: the compaction is sealed (encrypted) to that account and can't go to it now",
+            workOn: "transient"
+        )
+        let item = todo("sealed", agents: ["sealed"])
+        let lookup = TodosLogic.makeSessionLookup([sealed])
+        #expect(TodoTriageLogic.agentsStatus(item, lookup: lookup) == .interrupted)
+        #expect(TodoTriageLogic.triage(item, lookup: lookup, now: now).section == .waiting)
+    }
+
     @Test func parkedOrClosedTaskDoesNotReviveOldInterruption() {
         let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
         let lookup = TodosLogic.makeSessionLookup([old])

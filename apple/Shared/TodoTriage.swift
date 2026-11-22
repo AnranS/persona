@@ -91,6 +91,12 @@ nonisolated struct TodoTriageResult: Sendable {
 }
 
 nonisolated enum TodoTriageLogic {
+    /// Legacy raw sealed-compaction detection shared with the app and watch, which do not link PersonaKit.
+    private static func unrecoverableLegacy(_ text: String?) -> Bool {
+        let s = (text ?? "").lowercased()
+        return s.contains("compacted natively") && s.contains("compaction is sealed") && s.contains("to that account")
+    }
+
     /// No activity for this long, nothing of it running: shelved.
     static let shelveAfter: TimeInterval = 48 * 3600
     /// Finished this recently, and not seen since: Just finished; earlier, Done. Seeing it (Got It, or opening it,
@@ -117,7 +123,8 @@ nonisolated enum TodoTriageLogic {
             let stopped = st == .unread || st == .idle
             let error = !(s?.turnError ?? "").isEmpty
             if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
-            else if error, stopped, (s?.turnErrorKind == "unrecoverable" || s?.turnErrorCode == "compaction_sealed") {
+            else if error, stopped, (s?.turnErrorKind == "unrecoverable" || s?.turnErrorCode == "compaction_sealed" ||
+                unrecoverableLegacy(s?.turnError)) {
                 interrupted = true
             }
             else if st == .working || s?.starting == true { working = true }
