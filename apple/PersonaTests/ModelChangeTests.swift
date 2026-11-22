@@ -41,11 +41,15 @@ struct ModelChangeTests {
         return value
     }
 
-    private func marked(_ items: [Item], folded: Bool = false, openFolded: Bool = false) -> [ChatLine] {
+    private func marked(_ items: [Item], folded: Bool = false, openFolded: Bool = false,
+                        places: [ChildSessions.Place] = [], sessions: [String: Session] = [:]) -> [ChatLine] {
         let blocks = ChatStore.rebuild(items, settled: nil).blocks
-        let lines = ChatLines(openWork: [], foldSupervision: folded, foldBackground: folded, main: folded,
-                              openAllSupervision: openFolded)
-            .build(blocks, live: nil)
+        var builder = ChatLines(openWork: [], foldSupervision: folded, foldBackground: folded, main: folded,
+                                openAllSupervision: openFolded)
+        builder.childPlaces = places
+        builder.childSessions = sessions
+        builder.historyComplete = true
+        let lines = builder.build(blocks, live: nil)
         return ModelChanges.mark(lines)
     }
 
@@ -202,6 +206,30 @@ struct ModelChangeTests {
             user(1, "first"), answer(2, Self.opus), wake,
             call(4, Self.sonnet), result(5, of: call(4, Self.sonnet)), answer(6, Self.sonnet),
         ])
+        #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
+        #expect(changeIDs(lines) == ["mc-w-3#0"])
+        #expect(outline(lines) == [
+            "user 1#0", "answer 2#0", "model \(Self.opus) → \(Self.sonnet)", "work", "answer 6#0",
+        ])
+    }
+
+    @Test func wakeWithAChildCardKeepsItsModelChangeBoundary() throws {
+        var wake = item(3, kind: .toolResult, text: "Explore complete")
+        wake.wake = true
+        wake.task = TaskNote(kind: "agent", status: "completed", title: "Explore")
+        let child = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"box","session_id":"child","title":"Child","cwd":"/code/app","status":"idle","state":"idle","folded_under":"parent"}"#.utf8))
+        let lines = marked([
+            user(1, "first"), answer(2, Self.opus), wake,
+            call(4, Self.sonnet), result(5, of: call(4, Self.sonnet)), answer(6, Self.sonnet),
+        ], places: [ChildSessions.Place(sessionID: "child", time: nil)], sessions: ["child": child])
+        let hasChildCard = lines.contains { line in
+            guard case .work(_, let items, _, _, _) = line.content else { return false }
+            return items.contains { item in
+                if case .step(.call(let call)) = item { return call.use.toolName == "Child" }
+                return false
+            }
+        }
+        #expect(hasChildCard, "the wake's work line really receives a child-session card")
         #expect(changes(lines) == ["\(Self.opus) → \(Self.sonnet)"])
         #expect(changeIDs(lines) == ["mc-w-3#0"])
         #expect(outline(lines) == [
