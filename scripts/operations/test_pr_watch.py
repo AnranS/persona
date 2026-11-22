@@ -3399,6 +3399,28 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "human_commented")
         self.assertEqual(record["human_review"]["id"], 306)
 
+    def test_failed_or_repairing_human_evidence_does_not_restart_verification(self):
+        self.enable_human_reviews()
+        decision = self.human_decision("approved", review_id=307)
+        for number, outcome in ((7, "failed"), (8, "repairing")):
+            with self.subTest(outcome=outcome):
+                evidence_key = "example/one#" + str(number) + "@" + SHA_BASE + ".." + SHA_A
+                self.watcher.state.put("example/one", number, SHA_A, evidence_key=evidence_key,
+                                       base=SHA_BASE, format=1, outcome=outcome,
+                                       semantic="passed", findings=[], semantic_source="human",
+                                       human_review=decision["review"], review_posted=True,
+                                       verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                                       success_posted=True, retry_after=0)
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr(number=number)), \
+                        patch.object(self.watcher, "human_review_decision", return_value=decision) as human, \
+                        patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                        patch.object(self.watcher, "merge", return_value=False) as merge:
+                    self.watcher.process("example/one", number)
+                human.assert_not_called()
+                verify.assert_not_called()
+                merge.assert_not_called()
+                self.assertEqual(self.watcher.state.get("example/one", number)["outcome"], outcome)
+
     def test_human_comment_only_parks_without_approval_or_merge(self):
         self.enable_human_reviews()
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
