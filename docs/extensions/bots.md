@@ -19,6 +19,48 @@ Code: `server/internal/feishubot` (long connection, REST, events and message con
 `server/internal/assistant/feishu*.go` (targets, commands, sending into chats, cards, pushes, sync: Lark's side of the shared pipeline);
 prompt `server/internal/prompts/bot/message.md`; the App page `apple/Persona/Views/Settings/FeishuBotView.swift` (**Settings › Connectors › Lark Bot**). On web Settings › Connectors, the lark-cli status appears in this Lark group.
 
+## Recovering saved settings
+
+The manager treats a missing `bots.feishu` record as a fresh, disabled bot with the existing feature defaults.
+A failed storage read or JSON decode leaves the settings unknown: Settings GET/PUT and pairing requests fail,
+channel binding does not start registration, and `feishu.status` returns an error rather than an empty owner.
+The assistant therefore does not reconcile an unread pairing as an unpairing. Writes are blocked until a complete read succeeds.
+
+Later status, settings and transport lookups retry the read, at most once every five seconds per manager while it fails.
+Each storage read has a five-second deadline, shortened by the caller's earlier cancellation. Only one read runs at a time;
+it releases the bot settings mutex during storage I/O, and concurrent lookups return temporarily unavailable instead of
+waiting behind the read. A timeout starts the same cooldown, and the next eligible lookup can recover.
+There is no additional polling loop. A successful read restores the saved credentials, owner, pending pairing and switches
+and starts the enabled bot's connection under the manager's existing context; the owner does not pair again.
+Successful reads, including a genuinely missing record, are cached as before. JSON `null` and `{}` retain the existing
+defaulted-decode behavior; only an actual read/decode error leaves settings unknown. A disabled bot, a member hub or a manager
+whose context has ended keeps the connection closed. Persistently invalid records remain protected and log one failure
+per attempted read; correcting the stored record lets the next eligible lookup recover it. This does not add a reset or
+migration of invalid data, change chat permissions, or change the card-nudge defaults or timing.
+
+The lark-cli connector is registered before connector switches and options are restored, even while its profile is
+unknown. Every CLI execution, including Inbox polling and login, is gated on a known identity. A manager.json profile
+override is already authoritative during a storage outage; a genuinely empty saved configuration still selects the CLI
+default after a successful read. A saved manual profile applies even when the bot itself is disabled.
+On recovery the existing connector refresh path synchronizes the managed profile when needed and replaces the placeholder
+outside the bot settings lock, after startup has restored connector settings. Replacement preserves the connector's own
+enabled/feed switches and current options; retained old connectors refuse calls rather than reuse their Inbox caches
+for a different profile. Publication stays quarantined until the new instance has its disabled mark; only then is the
+identity gate released and an enabled connector started. Retired instances refuse process execution even when the selected
+profile name is unchanged. Assistant configuration and extension host CLI requests also fail closed while identity is unread.
+
+The connector's `connectors.settings` record is independent of `bots.feishu`: a failed read quarantines the placeholder
+with its connector and Inbox feed off, and rejects preference writes until that record can be read completely. Recovery
+reads its durable options, feed and enabled choices before starting the replacement; a missing record keeps the existing
+defaults. A manager.json profile override still works when only bot settings are unavailable, with known connector choices.
+An unavailable preferences record also gates that override until its enabled/feed policy is known.
+
+A failed managed-profile synchronization remains pending after bot settings have loaded. Ordinary bot status/transport
+lookups, connector listings and tool/CLI calls can request one recovery attempt after the shared five-second failure
+cooldown. Concurrent requests coalesce into one worker; synchronization runs outside the bot lock under the manager's
+lifetime. There is no recovery timer loop. A later successful synchronization releases the identity gate, restores the
+connector preferences and resumes its normal lifecycle.
+
 ## How it differs from Lark `/agent`
 
 | | Lark bot (this page) | Lark `/agent` (`docs/extensions/lark-agent.md`) |
@@ -216,12 +258,12 @@ A group message never changes where the owner's pushes go: the DM's chat id (`ow
 - Only the owner counts. What anyone else writes in the group is never handed over, whatever it says; people in the group cannot drive the owner's Persona.
 - Nothing others said is read in: a quoted message and a merged forward are not expanded for a topic message (the owner may quote someone else's text, which would carry it in).
 - A card button pressed in a group counts only from the owner (the same check as in the DM) and only when the press names a chat that is the DM or on the list: a card left in a group that was switched off is dead (the toast says the chat is not turned on). The Stop button of a topic's progress card works the same way.
-
-The progress card's **Stop** acts only while its actual message is the current watched Feishu run's progress card for that exact machine and conversation. An older card left behind by a refused final edit, or a card whose run is finishing, awaiting answer delivery, recalled or replaced, returns the existing expired-card notice without interrupting later work. Concurrent redeliveries of a successfully stopped current card send one interrupt; a failed interrupt can be retried. A restored current run regains this control after its watcher resumes. Typed `/stop` keeps its conversation-level behavior described below. These are assistant-side ownership checks; the node interrupt RPC still targets a conversation and does not atomically compare a turn generation.
-- A recall in the DM is passed to the assistant; in an opted-in group only a recall of a message the hub handed to the assistant is (the event does not say whose message it was).
+- A recall cancels an owner's message still queued at the hub before it reaches the assistant. After handoff begins, the recall is passed to the assistant. In an opted-in group, the hub requires a known owner message in that exact chat and bot identity, because the event does not say whose message it was; current topic receive policies still apply. Pending redeliveries keep their original cancellation even when recent-id history rolls over; completed messages use bounded recent history, with locally canceled sources kept distinct from handed messages so a wrong-chat recall cannot use the unknown-DM fallback. Events from a replaced connection, or with a conflicting envelope App ID, are ignored.
 - The bot sends into the DM and the opted-in groups only (see "Sending" above), and, in a group that is not opted in, one text reply under a message the owner's `/ai` was taken from ("Asking from any group"), or the answer under a message the owner's `/read` was taken from ("Reading a group with /read").
 - `/read` reads what others said in a group into the main chat, as the owner and only on the owner's own request; it is handed over as other people's words, not instructions.
 - The group should still be one the owner trusts: anyone in it sees what the bot posts there (answers, progress, cards).
+
+The progress card's **Stop** acts only while its actual message is the current watched Feishu run's progress card for that exact machine and conversation. An older card left behind by a refused final edit, or a card whose run is finishing, awaiting answer delivery, recalled or replaced, returns the existing expired-card notice without interrupting later work. Concurrent redeliveries of a successfully stopped current card send one interrupt; a failed interrupt can be retried. A restored current run regains this control after its watcher resumes. Typed `/stop` keeps its conversation-level behavior described below. These are assistant-side ownership checks; the node interrupt RPC still targets a conversation and does not atomically compare a turn generation.
 
 **Open Platform permissions.** Receiving a group's messages needs one of two permissions; the code does not tell them apart:
 
@@ -307,7 +349,7 @@ Nothing, when the app is created in one authorization ("Pairing and permissions"
 
 ## Not implemented yet / limitations
 
-- Recall: only handles messages not yet sent into the chat (queued, attachments downloading); once sent into the chat, an ongoing turn finishes answering as usual (whether to interrupt is the owner's decision, #4880). The bot can't obtain the new content of an edited message (the Open Platform provides no edit event to bots).
+- Recall: a message recalled while queued at the hub or before it enters its conversation is not sent. After acceptance, a turn answering only that message stops; a merged turn removes only the recalled message, and completed answers remain unchanged. The bot can't obtain the new content of an edited message (the Open Platform provides no edit event to bots).
 - Agent messages show tool-call titles and outputs, not arguments (tested), so describe the action in the title; progress cards show only steps and text being written.
 - Each step is one line, "verb + object" (`stepOf` in `feishu_steps.go`): commands use their description when available ("Run · Run server tests"), background commands say "Run in background"; file reads include the line range, while edits / creates / writes are separate; searches include their scope ("in src (*.go)"); subtasks include their type; to-dos show the item currently being worked on; Codex calls are already mapped to the same tools in the transcript (command → Bash, file change → Edit, create / delete separate), so they use the same wording; Persona's own MCP tools (calendar, contacts, reminders, mail, knowledge base) have their own verbs, while other tools show the tool name and the first useful argument.
 - Agents (Claude Code / Codex in herdr) have no "text being written", so progress cards show only steps.
