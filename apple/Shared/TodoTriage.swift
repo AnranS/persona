@@ -128,7 +128,7 @@ nonisolated enum TodoTriageLogic {
                 interrupted = true
             }
             else if st == .working || s?.starting == true { working = true }
-            else if st != .working, s?.waitsToBeWoken == true { waiting = true }
+            else if active.count > 1, st != .working, s?.waitsToBeWoken == true { waiting = true }
             else if error, stopped { interrupted = true }
             else if st == .unread { unread = true }
         }

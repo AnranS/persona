@@ -67,7 +67,7 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
             s?.interrupted == true && (s.turnErrorKind == "unrecoverable" || s.turnErrorCode == "compaction_sealed" ||
                 ApiErrorInfo.unrecoverable(s.turnError)) -> interrupted = true
             st == AgentState.Working || s?.starting == true -> working = true
-            s?.waitsWithoutBackground() == true -> waiting = true
+            active.size > 1 && s?.waitsWithoutBackground() == true -> waiting = true
             s?.interrupted == true -> interrupted = true
             st == AgentState.Unread -> unread = true
         }
