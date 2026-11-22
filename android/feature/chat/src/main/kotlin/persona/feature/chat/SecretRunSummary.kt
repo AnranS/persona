@@ -19,7 +19,7 @@ import persona.core.designsystem.JSecretField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
-import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 
 /**
  * A password card's body (#1137), in the chat and in the Agents tab: why the password is needed and every command
@@ -40,7 +40,7 @@ fun SecretRunSummary(request: Interaction) {
             run.commands.forEach { JCodeBlock(it) }
         }
         if (run.delivery == "env") {
-            JNotice(stringResource(R.string.chat_request_secret_run_env_warning), status = Status.NeedsYou, icon = PhIcons.Warning)
+            JNotice(stringResource(R.string.chat_request_secret_run_env_warning), status = Status.NeedsYou, icon = PersonaIcons.error)
         }
     }
 }
