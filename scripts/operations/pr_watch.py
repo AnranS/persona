@@ -1717,7 +1717,11 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
             # Infrastructure failures remain retryable with capped backoff;
             # verification failures and semantic findings stay terminal for
             # this exact base/head until the PR changes.
-            retry = phase in ("preparing", "semantic") and old.get("verification") != "passed"
+            human_review_retry = (phase == "semantic" and config.get("respect_human_reviews")
+                                  and old.get("head") == head and old.get("evidence_key") == evidence_key
+                                  and old.get("semantic_source") == "human")
+            # Re-reading stored human evidence stays retryable even after verification passed.
+            retry = (phase in ("preparing", "semantic") and old.get("verification") != "passed") or human_review_retry
             exhausted_review = (phase == "semantic" and
                                 int(self.state.get(repo, number).get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
             if phase == "publication":
