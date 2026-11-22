@@ -117,10 +117,13 @@ nonisolated enum TodoTriageLogic {
             let stopped = st == .unread || st == .idle
             let error = !(s?.turnError ?? "").isEmpty
             if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
+            else if error, stopped, (s?.turnErrorKind == "unrecoverable" || s?.turnErrorCode == "compaction_sealed") {
+                interrupted = true
+            }
+            else if st == .working || s?.starting == true { working = true }
+            else if st != .working, s?.waitsToBeWoken == true { waiting = true }
             else if error, stopped { interrupted = true }
             else if st == .unread { unread = true }
-            else if st == .working || s?.starting == true { working = true }
-            else if s?.waitsToBeWoken == true { waiting = true }
         }
         if interrupted, !working, !waiting, todo.supervision?.state != "parked" { return .interrupted }
         if limit { return .usageLimit }

@@ -645,7 +645,9 @@ class TasksStore(
 
     fun stateOf(todo: Todo, sessions: List<Session>): TaskState =
         agentsOf(todo, sessions).let { a ->
-            TaskState.of(todo, a.map { it.agentState }, a.any { it.interrupted }, a.any { it.waitsWithoutBackground() })
+            val waiting = a.any { it.waitsWithoutBackground() && Interruption.of(it)?.invalid != true }
+            val interrupted = a.any { it.interrupted && (Interruption.of(it)?.invalid == true || !it.waitsWithoutBackground()) }
+            TaskState.of(todo, a.map { it.agentState }, interrupted, waiting)
         }
 
     /** The agent to open first: the one waiting for the user, then one cut off (#1516), then working, then the latest. */

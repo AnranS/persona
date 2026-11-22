@@ -112,6 +112,25 @@ struct TodoTriageTests {
         #expect(t.section == .other && t.rule == .rest)
     }
 
+    @Test func oldInterruptionDoesNotOutrankTransientWaitingReplacementWithTurnError() {
+        var staleInvalid = session("stale", state: .idle, turnError: "Context unavailable", workOn: "transient")
+        staleInvalid.turnErrorKind = "unrecoverable"
+        let staleItem = todo("stale", agents: ["stale"])
+        let staleLookup = TodosLogic.makeSessionLookup([staleInvalid])
+        #expect(TodoTriageLogic.agentsStatus(staleItem, lookup: staleLookup) == .interrupted)
+
+        let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
+        var replacement = session("replacement", state: .idle, updatedHoursAgo: 0.5,
+                                  turnError: "API Error: 503 Service Unavailable", workOn: "transient")
+        replacement.turnErrorKind = "transient"
+        #expect(replacement.waitsToBeWoken && !replacement.backgroundWorking && !replacement.backgroundWaiting)
+        let lookup = TodosLogic.makeSessionLookup([old, replacement])
+        let item = todo("t", updated: 0.25, agents: ["cut", "replacement"])
+        #expect(TodoTriageLogic.agentsStatus(item, lookup: lookup) == .followUp)
+        let t = TodoTriageLogic.triage(item, lookup: lookup, now: now)
+        #expect(t.section == .other && t.rule == .rest)
+    }
+
     @Test func parkedOrClosedTaskDoesNotReviveOldInterruption() {
         let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
         let lookup = TodosLogic.makeSessionLookup([old])

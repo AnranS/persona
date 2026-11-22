@@ -40,4 +40,24 @@ class ConversationInvalidTest {
             assertTrue(on, (entries.running.single() as RunningEntry.Task).waiting)
         }
     }
+
+    @Test fun transientWaitingReplacementWithTurnErrorOutranksOldInterruption() {
+        val old = Session(machineId = "box", sessionId = "old", state = "idle", turnError = "opaque account transition 7A99",
+            turnErrorKind = "unrecoverable", turnErrorCode = "compaction_sealed")
+        val replacement = Session(machineId = "box", sessionId = "new", state = "idle",
+            turnError = "API Error: 503 Service Unavailable", turnErrorKind = "transient",
+            work = WorkState(phase = "blocked", on = "transient"))
+        val todo = Todo("t", "Fix the build", origin = "main", agents = listOf(
+            TodoAgent(machineId = "box", sessionId = "old"),
+            TodoAgent(machineId = "box", sessionId = "new"),
+        ))
+        assertTrue(replacement.waitsWithoutBackground())
+        val staleInvalid = old.copy(work = WorkState(phase = "blocked", on = "transient"))
+        val invalidOnly = todo.copy(agents = todo.agents.take(1))
+        val staleByKey = mapOf(old.key to staleInvalid)
+        assertTrue(Interruption.of(staleInvalid)?.invalid == true)
+        assertEquals(TriageStatus.Interrupted, invalidOnly.triageStatus({ staleByKey[it] }))
+        val byKey = listOf(old, replacement).associateBy { it.key }
+        assertEquals(TriageStatus.FollowUp, todo.triageStatus({ byKey[it] }))
+    }
 }

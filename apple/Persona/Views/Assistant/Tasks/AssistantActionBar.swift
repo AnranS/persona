@@ -123,6 +123,8 @@ nonisolated enum AssistantEntries {
             let stopped = st == .unread || st == .idle
             let error = !(s?.turnError ?? "").isEmpty
             if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
+            else if error, stopped, TurnErrorReason.invalid(s) { interrupted = true }
+            else if st != .working, s?.waitsToBeWoken == true { waiting = true }
             else if error, stopped { interrupted = true }
             else if st == .unread { unread = true }
             else if s?.waitsToBeWoken == true { waiting = true }

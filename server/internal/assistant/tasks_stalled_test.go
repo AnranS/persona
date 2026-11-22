@@ -217,9 +217,11 @@ func TestTaskStalledInvalidConversationRejectsManualContinue(t *testing.T) {
 		name string
 		text string
 		kind string
+		code string
 	}{
-		{"wire unrecoverable with unrecognized text", "provider-specific terminal context failure", proto.TurnErrorUnrecoverable},
-		{"raw sealed compaction marker", sealedCompaction, proto.TurnErrorTransient},
+		{"wire unrecoverable with unrecognized text", "provider-specific terminal context failure", proto.TurnErrorUnrecoverable, ""},
+		{"wire compaction-sealed code with unrecognized text", "provider-specific terminal context failure", "", proto.TurnErrorCompactionSealed},
+		{"raw sealed compaction marker", sealedCompaction, proto.TurnErrorTransient, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f, todo, agent, base := stalledTaskFixture(t, 0)
@@ -234,7 +236,7 @@ func TestTaskStalledInvalidConversationRejectsManualContinue(t *testing.T) {
 			stopped.Status, stopped.State = proto.StatusOffline, proto.StateIdle
 			stopped.Capabilities = &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: proto.StopUser}
 			stopped.ReadOnlyReason = "stopped"
-			stopped.TurnError, stopped.TurnErrorKind = tc.text, tc.kind
+			stopped.TurnError, stopped.TurnErrorKind, stopped.TurnErrorCode = tc.text, tc.kind, tc.code
 			f.setSessions("box", stopped)
 			resumingNode(f)
 			startsBefore, sendsBefore := len(startCalls(f)), sessionSends(f)

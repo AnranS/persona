@@ -7,6 +7,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.parseTime
+import persona.core.domain.lines.ApiErrorInfo
 
 // The To-dos page's sections (#3156, #3206, docs/assistant/todo-status-sop.md): each to-do's place comes from real signals
 // only — its agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it
@@ -63,10 +64,12 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
         if (st == AgentState.NeedsYou) return TriageStatus.NeedsYou
         when {
             s?.isUsageLimited(now) == true -> limit = true
-            s?.interrupted == true -> interrupted = true
-            st == AgentState.Unread -> unread = true
+            s?.interrupted == true && (s.turnErrorKind == "unrecoverable" || s.turnErrorCode == "compaction_sealed" ||
+                ApiErrorInfo.unrecoverable(s.turnError)) -> interrupted = true
             st == AgentState.Working || s?.starting == true -> working = true
             s?.waitsWithoutBackground() == true -> waiting = true
+            s?.interrupted == true -> interrupted = true
+            st == AgentState.Unread -> unread = true
         }
     }
     return when {

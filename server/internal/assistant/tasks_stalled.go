@@ -244,7 +244,8 @@ func (s *Service) continueTimedOut(ctx context.Context, task Todo) (json.RawMess
 	agents := s.taskAgents(ctx, current)
 	byID := map[[2]string]proto.Session{}
 	for _, c := range agents {
-		if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable ||
+			c.TurnErrorCode == proto.TurnErrorCompactionSealed {
 			return nil, i18n.Err("assistant-agents_work.conversation_invalid")
 		}
 		byID[[2]string{c.MachineID, c.SessionID}] = c
