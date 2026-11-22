@@ -604,6 +604,7 @@ struct TodoRow: View {
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
         let activeAgents = todo.agents.filter { $0.releasedAt == nil }
+        let lead = TodosLogic.taskLeadAgent(todo, lookup: lookup)
         let ultracode = Ultracode.todoShown(todo, lookup: lookup)
         // a failed start waiting on the owner reads open, not done, and says why in red (#3713, DESIGN_SYSTEM 5.6)
         let shownDone = !TodoTriageLogic.checksAsOpen(todo, triage)
@@ -652,7 +653,7 @@ struct TodoRow: View {
                     }
                 }
 
-                statusLine(status: status, urgent: urgent, activeAgents: activeAgents, onSeen: onSeen)
+                statusLine(status: status, urgent: urgent, activeAgents: activeAgents, lead: lead, onSeen: onSeen)
 
                 // Nobody is working on it (#3618): under its state, where its supervision shows.
                 OrphanedLine(todo: todo, state: status)
@@ -742,9 +743,9 @@ struct TodoRow: View {
     /// Got It ends the status line when the words and chip fit whole. Otherwise only Got It moves to the trailing end
     /// of the next line; the status keeps the wrapping it has without the button. MeasuredOnce avoids remeasuring the
     /// candidates whenever the row moves on screen (#7148, docs/apple/performance.md P7).
-    @ViewBuilder private func statusLine(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent],
+    @ViewBuilder private func statusLine(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent], lead: Session?,
                                         onSeen: (() -> Void)?) -> some View {
-        let words = statusWords(status: status, urgent: urgent, activeAgents: activeAgents)
+        let words = statusWords(status: status, urgent: urgent, activeAgents: activeAgents, lead: lead)
         if let onSeen {
             ViewThatFits(in: .horizontal) {
                 MeasuredOnce {
@@ -769,13 +770,25 @@ struct TodoRow: View {
         }
     }
 
-    /// The status line's words: the state, its agents, the review.
-    @ViewBuilder private func statusWords(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent]) -> some View {
+    /// The status line's words: the state, its lead Agent, the review. Unknown rows keep the Agent count (#10904).
+    @ViewBuilder private func statusWords(status: TaskState, urgent: TodoMostUrgent?, activeAgents: [TodoItem.Agent], lead: Session?) -> some View {
         StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
         Text(todo.statusLabel(status))
             .font(Theme.Font.labelStrong)
             .foregroundStyle(todo.shownState(status).todoTone.text)
-        if !activeAgents.isEmpty {
+        if let lead {
+            Text(verbatim: "· \(agentMetadata(lead))")
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if activeAgents.count > 1 {
+                Text(String(localized: "+\(activeAgents.count - 1)"))
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        } else if !activeAgents.isEmpty {
             Text("· \(activeAgents.count) agents")
                 .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
@@ -783,6 +796,19 @@ struct TodoRow: View {
         }
         // An accepted open concern waits for its report in its open state, without an Accepted tag (#3582).
         if !todo.isDone && !(todo.isConcern && todo.reviewState == .accepted) { ReviewChip(todo: todo, compact: true) }
+    }
+
+    /// The lead Agent's computer and model as the existing machine and model pickers name them; no list read is started.
+    private func agentMetadata(_ lead: Session) -> String {
+        let computer = model.namedMachine(lead.machineRef)?.name ?? lead.machineID
+        var modelName: String?
+        if lead.model?.isEmpty == false, let list = RunningModelLists.shared.models(lead.key, lead), !list.isEmpty {
+            let id = PromptItems.runningModelID(lead.model, list: list)
+            modelName = list.first { $0.id == id }.map(PromptItems.menuName)
+        }
+        modelName = modelName ?? SessionModes.modelName(lead.model)
+        let effort = SessionModes.effortLabel(lead.effort).flatMap { $0.isEmpty ? nil : $0 }
+        return [computer, modelName, effort].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// Got It (#5707) at the end of the status line, under the time (#6578): a compact accent chip, as the minutes' time
