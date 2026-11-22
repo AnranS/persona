@@ -15,7 +15,7 @@ vi.hoisted(() => {
 import { t } from "../i18n";
 import { setToken } from "../lib/api";
 import { resetDirectionNames } from "../lib/direction-names";
-import { chooseManager, resetManagerChoice } from "../lib/manager-choice";
+import { chooseManager, resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 import { setRecentCount } from "../lib/sidebar-recent";
 import { connect, refresh, reset } from "../lib/store";
 import type { Session } from "../lib/types";
@@ -392,6 +392,7 @@ describe("cold full-page reloads (#12231)", () => {
   }
 
   it("draws directions, recent chats and All chats before the full assistant answer, then reconciles them", async () => {
+    setToken("first-credential");
     await renderSidebar();
     expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
     const early = { machine_id: "hub", main: "main", leaders, conversations: base };
@@ -412,8 +413,9 @@ describe("cold full-page reloads (#12231)", () => {
     expect(host.querySelector<HTMLAnchorElement>('a[href="/history"]')!.textContent).toContain(String(base.length + 1));
   });
 
-  it.each(["credential", "manager"])("never draws the warm sidebar for a different %s", async (change) => {
+  it.each(["credential", "manager", "default manager"])("never draws the warm sidebar for a different %s", async (change) => {
     setToken("first-credential");
+    setRosterDefault("first-manager");
     await renderSidebar();
     expect(row("newest").textContent).toContain("Trip plan");
     const other = {
@@ -424,7 +426,8 @@ describe("cold full-page reloads (#12231)", () => {
     };
     const finish = await coldReload(other, other, () => {
       if (change === "credential") setToken("second-credential");
-      else chooseManager("other-manager");
+      else if (change === "manager") chooseManager("other-manager");
+      else setRosterDefault("other-manager");
     });
 
     expect(host.textContent).not.toContain("Trip plan");

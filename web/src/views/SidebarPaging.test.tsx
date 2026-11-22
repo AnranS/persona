@@ -236,7 +236,7 @@ it("shows useful complete-list Agents before the delayed last page without settl
   expect(rows(first)).toHaveLength(1);
   if (rows(tail).length === 0) {
     expect(block().textContent).toContain("加载中…");
-    expect(block().querySelector('[data-tree-branch="todo:none"]')?.textContent).not.toContain("2 个 Agent");
+    expect(block().querySelector('[data-tree-branch="todo:none"]')).toBeNull();
   }
 
   await act(async () => { answerTail(); });

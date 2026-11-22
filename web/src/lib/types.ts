@@ -1016,6 +1016,8 @@ export interface LauncherHealth {
 }
 
 export interface AssistantInfo {
+  /** The manager that answered, including the default whose request carried no manager header. */
+  manager?: string;
   machine_id: string;
   main_machine_id?: string;
   launcher?: string;
