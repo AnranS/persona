@@ -326,6 +326,15 @@ test('a settled ACP turn does not complete later native work after a restart (#1
   assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 1)
 })
 
+test('an empty export cannot crash settled ACP recovery (#12003)', async (t) => {
+  const { node, runtime, transcript, db } = await fixture(t, { promptPlan: [{ reply: 'Third answer' }] })
+  writeFileSync(transcript, '')
+  db.exec('UPDATE conversation_summaries SET step_count = 0')
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await until('empty-export inventory', () => node.last('runtime.sessions')?.sessions[0]?.status === 'unknown')
+})
+
 test('a restart with an unreadable history epoch does not reuse the history of projected steps (#12014)', {
   skip: process.platform === 'win32' || process.getuid?.() === 0,
 }, async (t) => {
