@@ -112,7 +112,7 @@ func TestFitSharesRemoteImageDecodeSlots(t *testing.T) {
 	done := make(chan result, 1)
 	go func() {
 		close(started)
-		img, err := Fit(src, 1<<20)
+		img, err := f.Fit(t.Context(), src, 1<<20)
 		done <- result{img, err}
 	}()
 	<-started
