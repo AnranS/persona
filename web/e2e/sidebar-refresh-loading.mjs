@@ -103,6 +103,7 @@ try {
     await context.addInitScript(WATCH);
 
     const requests = [];
+    let failComplete = false;
     await context.route("**/*", async (route) => {
       const request = route.request();
       const url = new URL(request.url());
@@ -112,6 +113,7 @@ try {
       requests.push({ load: activeLoad, method: request.method(), path, query: url.search });
       let body = {};
       let delay = 0;
+      let status = 200;
       if (path === "/assistant") {
         delay = DELAYS.assistant;
         body = { manager: "assistant", machine_id: "demo", main: main.session_id, conversations: [main, weekend], tasks: [], memory: [] };
@@ -123,7 +125,11 @@ try {
         body = { sessions: [], spaces: ["demo/Synthetic pinned space"] };
       } else if (path === "/sessions") {
         const q = url.searchParams;
-        if (q.has("counts")) {
+        if (failComplete && q.get("summary") === "0" && !q.has("cursor")) {
+          delay = DELAYS.complete;
+          status = 503;
+          body = { error: "Synthetic complete-list failure", code: "internal" };
+        } else if (q.has("counts")) {
           delay = DELAYS.summary;
           body = counts;
         } else if (q.has("session_id")) {
@@ -163,7 +169,7 @@ try {
         else if (path === "/extensions") body = { extensions: [] };
       }
       if (delay) await sleep(delay);
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+      return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     });
     await context.routeWebSocket("**/api/v1/ws**", (ws) => {
       const hello = setTimeout(() => ws.send(JSON.stringify({ type: "hello", server_version: "synthetic", hub_name: "Synthetic hub", features })), DELAYS.websocketHello);
@@ -231,6 +237,43 @@ try {
     await load("warm", false);
     await load("reload-1", true);
     await load("reload-2", true);
+
+    // The complete list's existing failure and Retry path, photographed before the retry succeeds.
+    activeLoad = `${theme}-error`;
+    requests.length = 0;
+    failComplete = true;
+    await page.reload({ waitUntil: "commit" });
+    const agents = page.locator("[data-sidebar-agents]");
+    const alert = agents.getByRole("alert");
+    await alert.waitFor();
+    const retry = agents.getByRole("button", { name: "Retry", exact: true });
+    await retry.waitFor();
+    const failedFirstReads = requests.filter((r) => {
+      if (r.path !== "/sessions") return false;
+      const q = new URLSearchParams(r.query);
+      return q.get("summary") === "0" && !q.has("cursor") && !q.has("since") && !q.has("counts") && !q.has("session_id");
+    }).length;
+    check(`${theme}: failed complete read shows its error and Retry`, failedFirstReads === 1 && await alert.isVisible() && await retry.isVisible(), { failedFirstReads, alert: await alert.textContent() });
+    await page.screenshot({ path: join(artifacts, `${mode}-${theme}-error.png`) });
+
+    failComplete = false;
+    await retry.click();
+    await page.waitForFunction(() => window.__sidebarSeen?.agentTwo !== null);
+    const retriedFirstReads = requests.filter((r) => {
+      if (r.path !== "/sessions") return false;
+      const q = new URLSearchParams(r.query);
+      return q.get("summary") === "0" && !q.has("cursor") && !q.has("since") && !q.has("counts") && !q.has("session_id");
+    }).length;
+    const errorRowCounts = await page.locator('[data-sidebar-column] a[title]').evaluateAll((anchors) => {
+      const result = { "Agent one": 0, "Agent two": 0 };
+      for (const anchor of anchors) {
+        const title = anchor.title.split("\n")[0];
+        if (title in result && !anchor.closest("[inert]") && anchor.getClientRects().length) result[title]++;
+      }
+      return result;
+    });
+    timings[theme].error = { failedFirstReads, retriedFirstReads, rowCounts: errorRowCounts };
+    check(`${theme}: Retry rereads the complete list and settles every row once`, retriedFirstReads === 2 && errorRowCounts["Agent one"] === 1 && errorRowCounts["Agent two"] === 1, timings[theme].error);
     check(`${theme}: no page errors`, !pageErrors.some((entry) => entry.theme === theme), pageErrors.filter((entry) => entry.theme === theme));
     await context.close();
   }
