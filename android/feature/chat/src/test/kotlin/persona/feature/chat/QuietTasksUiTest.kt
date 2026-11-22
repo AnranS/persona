@@ -131,14 +131,19 @@ class QuietTasksUiTest {
     }
 
     @Test fun unrecoverableWireKindUsesTheLocalizedInvalidConversationOutcome() {
-        showInvalidConversationOutcome(cut.copy(turnErrorKind = "unrecoverable"))
+        showInvalidConversationOutcome(cut.copy(turnErrorKind = "unrecoverable"), shots = "default")
+    }
+
+    @Config(fontScale = 2f)
+    @Test fun unrecoverableWireKindUsesTheLocalizedInvalidConversationOutcomeAtLargestText() {
+        showInvalidConversationOutcome(cut.copy(turnErrorKind = "unrecoverable"), shots = "large")
     }
 
     @Test fun compactionSealedWireCodeUsesTheLocalizedInvalidConversationOutcome() {
         showInvalidConversationOutcome(cut.copy(turnErrorCode = "compaction_sealed"))
     }
 
-    private fun showInvalidConversationOutcome(session: Session) {
+    private fun showInvalidConversationOutcome(session: Session, shots: String? = null) {
         val raw = "opaque account transition 7A99"
         val sealed = session.copy(turnError = raw)
         val api = Api(listOf(interrupted), emptyList())
@@ -149,11 +154,13 @@ class QuietTasksUiTest {
         val tray = AssistantTrayState().also { it.expanded = AssistantTray.NeedsYou }
         val explanation = "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue."
         rule.setContent {
-            PersonaTheme(reduceMotion = true) {
+            PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                 Text(explanation, Modifier.testTag("invalid-two-line-control").width(200.dp),
                     style = PersonaTheme.type.caption, maxLines = 2)
-                AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), { 900.dp }, busy = false, enabled = true,
-                    onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
+                Column(Modifier.testTag("invalid-shot").background(PersonaTheme.palette.background)) {
+                    AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), { 900.dp }, busy = false, enabled = true,
+                        onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
+                }
             }
         }
         val inOutcome = hasAnyAncestor(hasTestTag("assistant-tray-interrupted"))
@@ -171,6 +178,17 @@ class QuietTasksUiTest {
         assertTrue("The invalid-conversation explanation must not be clipped to two lines: $subtitleHeight vs $twoLines",
             subtitleHeight > twoLines)
         rule.runOnIdle { assertTrue(api.retried.isEmpty()) }
+        if (shots != null) {
+            val output = File("build/invalid-conversation-shots").also { it.mkdirs() }
+            for (s in listOf(AppStyle.Glass, AppStyle.Brief, AppStyle.Board)) for (d in listOf(false, true)) {
+                style = s; dark = d
+                Snapshot.sendApplyNotifications()
+                rule.waitForIdle()
+                val bitmap = rule.onNodeWithTag("invalid-shot").captureToImage().asAndroidBitmap()
+                File(output, "invalid-${s.name.lowercase()}-${if (d) "dark" else "light"}-$shots.png").outputStream()
+                    .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+        }
     }
 
     @Test fun theRowsActOnTheirOwnAndFinishedKeepsWhatWasOpened() {
