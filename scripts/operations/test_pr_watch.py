@@ -3399,6 +3399,36 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "human_commented")
         self.assertEqual(record["human_review"]["id"], 306)
 
+    def test_human_review_read_failure_during_merge_retry_stays_retryable(self):
+        self.enable_human_reviews()
+        approval = self.human_decision("approved", review_id=308)
+        comment = self.human_decision("commented", review_id=309)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="merge_failed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=approval["review"], verification="passed",
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                               checks=[{"name": "privacy", "ok": True}], review_posted=True,
+                               success_posted=True, retry_after=0, blocking=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision",
+                             side_effect=[pr_watch_common.WatchError("reviews unavailable"), comment]) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
+            self.watcher.state.annotate("example/one", 7, retry_after=0)
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_not_called()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["outcome"], "human_commented")
+        self.assertEqual(record["human_review"]["id"], 309)
+
     def test_failed_or_repairing_human_evidence_does_not_restart_verification(self):
         self.enable_human_reviews()
         decision = self.human_decision("approved", review_id=307)
