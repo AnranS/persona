@@ -101,3 +101,19 @@ func TestSecretRunEnvWatchCanOnlyDecline(t *testing.T) {
 		})
 	}
 }
+
+// After a hub restart, before the manager re-reports the card, its proof still reaches the manager: an unknown
+// env card's approval keeps the vouched device instead of being validated only as secret_handoff.
+func TestSecretRunEnvUnknownCardKeepsItsApprover(t *testing.T) {
+	h, m := handoffBusHub(t)
+	mux := h.routes()
+	_, phone := call(t, mux, http.MethodPost, "/api/v1/auth/tokens", h.cfg.Token, `{"name":"iPhone","kind":"phone"}`)
+	code, body := secretRunWatchResolve(t, mux, phone["token"].(string), "ix_env_after_restart", `{"allow":true}`, "secret_run_env")
+	if code != http.StatusOK {
+		t.Fatalf("an approval after the hub forgot the env card: %d %v", code, body)
+	}
+	relayed, _, _ := m.took()
+	if len(relayed) != 1 || relayed[0].HandoffApprover == nil || relayed[0].HandoffApprover.DeviceID != phone["id"] {
+		t.Fatalf("the manager got approver %+v, want device %s", relayed, phone["id"])
+	}
+}
