@@ -137,7 +137,7 @@ final class TodosListTests: XCTestCase {
                                    "-ui.scheme", scheme, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"] + size
             app.launchPinned()
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-            for label in ["OK", "好"] where springboard.alerts.buttons[label].waitForExistence(timeout: 3) {
+            for label in ["OK", "好", "Don't Allow", "Don’t Allow", "不允许"] where springboard.alerts.buttons[label].waitForExistence(timeout: 3) {
                 springboard.alerts.buttons[label].tap()
             }
             let row = reveal("tl_widget", wait: 60)
