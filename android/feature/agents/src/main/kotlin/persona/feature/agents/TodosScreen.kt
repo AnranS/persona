@@ -787,6 +787,7 @@ private fun TodoTriageRow(
                                 modifier = Modifier.weight(1f, fill = false),
                             )
                             if (agentMetadata != null && todo.currentAgents.size > 1) {
+                                Spacer(Modifier.width(Tokens.Space.xs))
                                 Text(stringResource(R.string.agents_todo_calendar_more, todo.currentAgents.size - 1),
                                     style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                             }
