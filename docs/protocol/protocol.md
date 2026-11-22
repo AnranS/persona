@@ -2679,6 +2679,8 @@ is not an answer. Lark and plugin channels can only decline such a card. The ass
 `docs/assistant/assistant.md` "Password card") is one of these: the iPhone, Mac, Vision Pro, Android and web apps fill it in on the card itself, and the watch (an answer-only device) offers only Decline. Only the assistant's tool
 makes it: a card with `tool_name: "secret_run"` from a node (`interaction.create`, a Codex list) or from `fleet.ask` is refused.
 
+With explicit `delivery: "env"`, an approval of that card must carry `X-Persona-Features: secret_run_env` on the resolve request itself (a connection's `client_hello` does not count). This proves the client rendered the new env warning. Without it the hub answers 403 `secret_run_env_elsewhere` before anything runs, and the manager repeats the check for cards it owns after a restart or replay. Older specialized clients ignore `delivery` and suppress the summary when commands exist, so they fail closed rather than approving an ordinary-looking env card. A plain decline, dismissal or cancel needs no feature and keeps its existing path; stdin cards need no feature either.
+
 ### Secret hand-off cards (`secret_handoff`, #3962)
 
 A `permission` interaction with `tool_name: "secret_handoff"` asks to hand secret values to one Agent run as environment variables

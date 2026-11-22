@@ -28,6 +28,9 @@ import (
 // secretRunCardWait is how long the card waits to be filled in (a variable so tests shorten it).
 var secretRunCardWait = 10 * time.Minute
 
+// errSecretRunEnv refuses an approval whose client did not prove it rendered the env warning.
+var errSecretRunEnv = i18n.Err("assistant-secret_run.env_elsewhere")
+
 const (
 	secretRunDefaultTimeout = 300 * time.Second
 	secretRunCheckTimeout   = 30 * time.Second
@@ -232,7 +235,8 @@ func secretRunMachineLabel(m Device, all []Device) string {
 
 // secretRunSummary is the card's text, for a client that does not know secret_run: the computer, the purpose and
 // every command verbatim, one per line after "$ ". Explicit environment delivery also carries its warning here, so
-// Watch and older clients show the same risk instead of presenting an ordinary sudo card.
+// Watch and generic fallback views show the same risk. Older specialized clients suppress this text and are refused
+// by the hub/manager instead of approving an ordinary-looking env card.
 func secretRunSummary(l i18n.Lang, machine, purpose, delivery string, commands []string) string {
 	var b strings.Builder
 	b.WriteString(i18n.T(l, "assistant-secret_run.summary", i18n.Args{"machine": machine, "purpose": purpose}))

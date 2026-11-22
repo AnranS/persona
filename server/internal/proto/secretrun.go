@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -38,6 +39,23 @@ const (
 	SecretRunDeliveryEnv   = "env"
 	SecretRunEnvironment   = "PERSONA_SECRET"
 )
+
+// CodeSecretRunEnvElsewhere refuses an env approval from a client that did not prove it rendered the env warning.
+const CodeSecretRunEnvElsewhere = "secret_run_env_elsewhere"
+
+// SecretRunEnvInteraction reports whether ix explicitly requests environment delivery. Older specialized clients
+// ignore the field and suppress Summary when commands exist, so the hub and manager must not let them approve it
+// blindly (their ordinary sudo-looking card cannot give informed consent).
+func SecretRunEnvInteraction(ix Interaction) bool {
+	if ix.ToolName != SecretRunTool {
+		return false
+	}
+	var input struct {
+		Delivery string `json:"delivery"`
+	}
+	_ = json.Unmarshal(ix.ToolInput, &input)
+	return input.Delivery == SecretRunDeliveryEnv
+}
 
 // SecretRunParams are secret.run's params. Check alone asks whether the node can run one at all (nothing runs).
 type SecretRunParams struct {

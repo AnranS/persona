@@ -28994,7 +28994,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "the hub could not take this answer"}, 400)
             if RESOLVE_MODE[0] == "slow":
                 time.sleep(6)
-            RESOLVED.append({"id": p.split("/")[4], "resolution": json.loads(self.last_body or b"{}")})
+            _resolution = json.loads(self.last_body or b"{}")
+            if os.environ.get("MOCK_SECRET_RUN") == "env" and p.split("/")[4] == "ix_secret_run" and \
+                    _resolution.get("allow") is True and \
+                    "secret_run_env" not in [feature.strip() for feature in self.headers.get("X-Persona-Features", "").split(",")]:
+                return self.send_json({"error": "update the app to approve environment delivery", "code": "secret_run_env_elsewhere"}, 403)
+            RESOLVED.append({"id": p.split("/")[4], "resolution": _resolution})
             if os.environ.get("MOCK_CODEX") and p.split("/")[4] == "cxa_orders_curl" and \
                     sum(r["id"] == "cxa_orders_curl" for r in RESOLVED) == 1:
                 return self.send_json({"error": "电脑上 Codex 的输入框里有没发出去的内容：「先看下慢查询日志」。这次什么都没输入，免得和它拼在一起：在电脑上发出去或清空后再答。",
