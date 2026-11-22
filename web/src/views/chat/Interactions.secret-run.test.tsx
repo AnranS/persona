@@ -11,10 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-const calls = vi.hoisted(() => [] as { path: string; body: Record<string, unknown> }[]);
+const calls = vi.hoisted(() => [] as { path: string; body: Record<string, unknown>; headers?: Record<string, string> }[]);
 vi.mock("../../lib/ops", () => ({
-  apiOp: vi.fn(async (path: string, init: { json: Record<string, unknown> }) => {
-    calls.push({ path, body: init.json });
+  apiOp: vi.fn(async (path: string, init: { json: Record<string, unknown>; headers?: Record<string, string> }) => {
+    calls.push({ path, body: init.json, ...(init.headers ? { headers: init.headers } : {}) });
     return {};
   }),
 }));
@@ -331,7 +331,7 @@ describe("密码卡片（secret_run）", () => {
     expect(field().value).toBe("");
     await act(async () => button("运行")!.click());
     await flush();
-    expect(calls).toEqual([{ path: "/interactions/ix_secret/resolve", body: { allow: true, values: { password: PW } } }]);
+    expect(calls).toEqual([{ path: "/interactions/ix_secret/resolve", body: { allow: true, values: { password: PW } }, headers: { "X-Persona-Features": "secret_run_env" } }]);
     expect(getState().answered.ix_secret?.resolution).toEqual({ allow: true, values: { password: "<redacted>" } });
 
     render(card({ delivery: "env", commands: ENV_COMMANDS }, { id: "ix_secret_env_fresh" }));
@@ -381,5 +381,17 @@ describe("密码卡片（secret_run）", () => {
     await flush();
     expect(calls).toEqual([]);
     expect(field().value).toBe(PW);
+  });
+
+  it("env 的直接批准必须来自显示警告的卡片，并只在该请求声明 secret_run_env", async () => {
+    const ix = card({ delivery: "env", commands: ENV_COMMANDS });
+    expect(await answerCard(ix, { allow: true, values: { password: PW } })).toEqual({ ok: false, error: REFUSED });
+    expect(calls).toEqual([]);
+    expect(await answerCard(ix, { allow: true, values: { password: PW } }, { handoffCard: true })).toEqual({ ok: true, already: false });
+    expect(calls).toEqual([{
+      path: "/interactions/ix_secret/resolve",
+      body: { allow: true, values: { password: PW } },
+      headers: { "X-Persona-Features": "secret_run_env" },
+    }]);
   });
 });
