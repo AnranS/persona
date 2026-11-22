@@ -4,7 +4,7 @@ import XCTest
 /// (and only Run, not Return), the answer carrying exactly that password, and iOS never offering to save it.
 ///   PORT=18937 MOCK_SECRET_RUN=pending python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_SECRET_RUN_HUB=http://127.0.0.1:18937 xcodebuild test … -only-testing:PersonaUITests/SecretRunUITests
-/// The future env fixture runs separately: MOCK_SECRET_RUN=env and TEST_RUNNER_PERSONA_SECRET_RUN_ENV_HUB=<its URL>.
+/// The env fixture runs separately: MOCK_SECRET_RUN=env and TEST_RUNNER_PERSONA_SECRET_RUN_ENV_HUB=<its URL>.
 /// PERSONA_SHOTS_APPEARANCE=light|dark, PERSONA_SHOTS_LARGE=1 and TEST_RUNNER_PERSONA_SHOTS=/tmp/<dir> capture its
 /// default/largest-text card in either appearance; no image is written by an ordinary test run.
 final class SecretRunUITests: XCTestCase {
@@ -51,8 +51,8 @@ final class SecretRunUITests: XCTestCase {
         PasswordPrompt.assertNone(app, "the password card's field")
     }
 
-    /// A separate fixture run: every command comes from the fixture's raw tool_input, so this test needs no production
-    /// fixture change now and cannot silently pass against the stdin card. No XCTSkip: its absence is a visible test gap.
+    /// A separate fixture run: every command comes from the fixture's raw tool_input, so this test cannot silently
+    /// pass against the stdin card. No XCTSkip when the fixture is configured; its ordinary absence skips as other mock suites do.
     @MainActor func testEnvRunWarnsAndSendsTheTypedPasswordOnlyFromThisCard() throws {
         let env = ProcessInfo.processInfo.environment
         guard let hub = env["PERSONA_SECRET_RUN_ENV_HUB"] else {
@@ -74,6 +74,7 @@ final class SecretRunUITests: XCTestCase {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
         app.launchPinned()
+        acceptIconAlert()
 
         let field = app.secureTextFields["interaction.field.password"]
         XCTAssertTrue(field.waitForExistence(timeout: 20), app.debugDescription)
@@ -113,7 +114,7 @@ final class SecretRunUITests: XCTestCase {
         PasswordPrompt.assertNone(app, "the env password card's field")
     }
 
-    /// The future env fixture's pending card, straight from GET /api/v1/interactions.
+    /// The env fixture's pending card, straight from GET /api/v1/interactions.
     private func pendingSecretRunInput(_ hub: String) -> [String: Any]? {
         guard let data = try? Data(contentsOf: URL(string: hub + "/api/v1/interactions")!),
               let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

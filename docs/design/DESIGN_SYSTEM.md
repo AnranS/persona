@@ -2119,6 +2119,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   card is the terminal's question as before); the rules in `apple/Shared/CommandAsk.swift`, `web/src/lib/command-ask.ts`
   and `web/src/lib/command-ask-lines.ts`.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Password-card environment delivery (#11945)**: the default password card stays unchanged and delivers only to `sudo -S` stdin. An explicit `delivery: "env"` card adds the existing caution notice after its verbatim commands, saying every listed command receives the typed password as `PERSONA_SECRET` and encoded output may evade redaction. Apple uses `NoticeBanner`, Android `JNotice`, and the web the terminal command card's warning line; Watch and older clients carry the same warning in the hub summary. The notice never adds a quick approval: every env run needs a freshly typed password and Run on this card, and Watch still offers only Decline.
 - **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
   approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
   item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
