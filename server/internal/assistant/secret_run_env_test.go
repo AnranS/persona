@@ -3,10 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -39,6 +42,22 @@ func secretRunEnvCard(t *testing.T, r *secretRig, done chan proto.ToolResult) pr
 	}
 	waitAnnounced(t, r.f, ix.ID)
 	return ix
+}
+
+// secretRunEnvPost answers through the manager route with the vouched full-device approval by default. Passing nil
+// simulates an older client that cannot prove it rendered the env card.
+func secretRunEnvPost(t *testing.T, r *secretRig, id, body string, proof ...*assistantwire.HandoffApprover) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/interactions/"+id+"/resolve", strings.NewReader(body))
+	if len(proof) == 0 {
+		proof = append(proof, &assistantwire.HandoffApprover{DeviceID: "device-env", DeviceName: "Phone"})
+	}
+	if proof[0] != nil {
+		req = req.WithContext(assistantwire.WithHandoffApprover(req.Context(), *proof[0]))
+	}
+	w := httptest.NewRecorder()
+	r.s.fleetHandler(http.NotFoundHandler()).ServeHTTP(w, req)
+	return w
 }
 
 func secretRunEnvSummaryWarns(summary string, phrases []string) bool {
@@ -85,7 +104,7 @@ func TestSecretRunEnvRunsOnlyAfterFreshWarningAndApproval(t *testing.T) {
 	checks := append([]string(nil), checkDeliveries...)
 	r.mu.Unlock()
 	if len(checks) != 1 || checks[0] != "env" {
-		r.post(ix.ID, `{"allow":false}`)
+		secretRunEnvPost(t, r, ix.ID, `{"allow":false}`)
 		t.Fatalf("preflight deliveries before typing = %v, want exactly [env]", checks)
 	}
 	var input struct {
@@ -106,7 +125,17 @@ func TestSecretRunEnvRunsOnlyAfterFreshWarningAndApproval(t *testing.T) {
 			t.Fatalf("env summary %q omits approved command %q", ix.Summary, command)
 		}
 	}
-	if w := r.post(ix.ID, `{"allow":true,"values":{"password":"`+testPassword+`"}}`); w.Code != 200 {
+	if w := secretRunEnvPost(t, r, ix.ID, `{"allow":true,"values":{"password":"`+testPassword+`"}}`, nil); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), "secret_run_env_elsewhere") {
+		t.Fatalf("an older client's unfeatured env approval: %d %s", w.Code, w.Body)
+	}
+	if _, pending := r.s.pendingIx(ix.ID); !pending {
+		t.Fatal("an unfeatured env approval consumed the card")
+	}
+	if checks, runs, _ := r.counts(); checks != 1 || runs != 0 {
+		t.Fatalf("an unfeatured env approval reached execution: checks %d, runs %d", checks, runs)
+	}
+	if w := secretRunEnvPost(t, r, ix.ID, `{"allow":true,"values":{"password":"`+testPassword+`"}}`); w.Code != 200 {
 		t.Fatalf("answer: %d %s", w.Code, w.Body)
 	}
 	out, text := r.outcome(done)
@@ -130,7 +159,7 @@ func TestSecretRunEnvRunsOnlyAfterFreshWarningAndApproval(t *testing.T) {
 		t.Fatalf("node run = %+v, delivery fields %v", run, runs)
 	}
 
-	if w := r.post(ix.ID, `{"allow":true,"values":{"password":"another-SECRET-pw"}}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"already":true`) {
+	if w := secretRunEnvPost(t, r, ix.ID, `{"allow":true,"values":{"password":"another-SECRET-pw"}}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"already":true`) {
 		t.Fatalf("second env answer: %d %s", w.Code, w.Body)
 	}
 	if checks, runs, _ := r.counts(); checks != 1 || runs != 1 {
@@ -169,7 +198,7 @@ func TestSecretRunEnvSummaryWarnsInEveryServerLanguage(t *testing.T) {
 			if !secretRunEnvSummaryWarns(ix.Summary, tc.phrases) {
 				t.Errorf("%s env summary %q does not warn that every listed command receives PERSONA_SECRET", tc.lang, ix.Summary)
 			}
-			r.post(ix.ID, `{"allow":false}`)
+			secretRunEnvPost(t, r, ix.ID, `{"allow":false}`)
 			if out, text := r.outcome(done); out.Status != secretDeclined {
 				t.Fatalf("decline after reading the summary = %s", text)
 			}
@@ -190,7 +219,7 @@ func TestSecretRunStdinSummaryHasNoEnvWarning(t *testing.T) {
 		if strings.Contains(ix.Summary, "PERSONA_SECRET") {
 			t.Errorf("stdin summary %q unexpectedly warns about PERSONA_SECRET", ix.Summary)
 		}
-		r.post(ix.ID, `{"allow":false}`)
+		secretRunEnvPost(t, r, ix.ID, `{"allow":false}`)
 		if out, text := r.outcome(done); out.Status != secretDeclined {
 			t.Fatalf("stdin decline = %s", text)
 		}
@@ -240,10 +269,10 @@ func TestSecretRunEnvRequiresFreshPerRunPasswordAnswer(t *testing.T) {
 			r := newSecretRig(t, nil)
 			done := r.call(secretRunEnvArgs)
 			ix := secretRunEnvCard(t, r, done)
-			if err := r.s.resolve(ix.ID, tc.resolution); err != nil {
+			if err := r.s.resolveApproved(context.Background(), ix.ID, tc.resolution, &assistantwire.HandoffApprover{DeviceID: "device-env", DeviceName: "Phone"}); err != nil {
 				// A fieldless approval is already invalid at the interaction boundary. It never reaches the tool;
 				// decline the still-pending card so this case also leaves no work behind.
-				r.post(ix.ID, `{"allow":false}`)
+				secretRunEnvPost(t, r, ix.ID, `{"allow":false}`)
 				if out, text := r.outcome(done); out.Status != secretDeclined {
 					t.Fatalf("cleanup after a fieldless env refusal = %s", text)
 				}
@@ -291,7 +320,7 @@ func TestSecretRunEnvDeclined(t *testing.T) {
 	r := newSecretRig(t, nil)
 	done := r.call(secretRunEnvArgs)
 	ix := secretRunEnvCard(t, r, done)
-	r.post(ix.ID, `{"allow":false}`)
+	secretRunEnvPost(t, r, ix.ID, `{"allow":false}`)
 	if out, text := r.outcome(done); out.Status != secretDeclined {
 		t.Fatalf("env decline = %s", text)
 	}
