@@ -716,6 +716,8 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 			assistantOnly = append(assistantOnly, mcpTool(larkImageTool))
 		}
 		assistantOnly = append(assistantOnly, h.connectors.ToolsFor(ctx, false)...)
+		// A memory extension's read tools reach the assistant's conversations around the hub's filter (memory_sources.go).
+		agents, assistantOnly = h.withoutMemoryReads(agents), h.withoutMemoryReads(assistantOnly)
 	}
 	for _, list := range [][]proto.Tool{agents, assistantOnly} {
 		for i, t := range list {
@@ -733,6 +735,8 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 		return proto.ToolResult{}, false
 	}
 	switch {
+	case assistant && h.memoryWithheld(name): // memory_sources.go
+		return memoryWithheldResult(name), true
 	case h.connectors.Offers(name) && (assistant || h.connectors.ForAgents(name)):
 		return h.callConnector(ctx, asker{machine, session}, name, args), true
 	case assistant && name == larkImageTool:
