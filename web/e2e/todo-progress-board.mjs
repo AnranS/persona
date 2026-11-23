@@ -159,6 +159,10 @@ try {
 
       const threshold = page.getByRole("spinbutton", { name: "Stale after (hours)" });
       check(await threshold.inputValue() === "72", `${label}: fresh storage defaults to 72 hours`);
+      if (width < 600) {
+        const box = await threshold.boundingBox();
+        check(Boolean(box && box.height >= 44), `${label}: the threshold control is at least 44 px tall on touch`);
+      }
       await threshold.fill("96");
       await threshold.press("Tab");
       await page.waitForFunction(() => localStorage.getItem("persona.todos.board.staleHours") === "96");

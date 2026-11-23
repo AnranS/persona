@@ -155,7 +155,7 @@ export function TodoBoard({
             aria-label={t("todos.board_stale_hours")}
             aria-invalid={invalid || undefined}
             aria-describedby={invalid ? "todo-board-hours-error" : undefined}
-            className={cx(fieldClass, "w-24")}
+            className={cx(fieldClass, "w-24 max-md:h-11")}
             value={draft}
             onChange={(event) => changeHours(event.target.value)}
           />
