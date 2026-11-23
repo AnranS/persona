@@ -3521,8 +3521,9 @@ accepted the input. None of these alone proves that the model has begun answerin
 
 Apple integration uses the same event and boundaries; no Apple code changes are included in #5258. The iOS app reads
 both events from #10465 on, each only under its current socket's hello marker
-([ios.md](../apple/ios.md) "To-dos (V1, #10465)", its "Send receipts"); its chats still show Processing after the HTTP
-answer. A new main conversation started through a creation endpoint has no target session subscription yet: keep
+([ios.md](../apple/ios.md) "To-dos (V1, #10465)", its "Send receipts"); iOS chats move `ChatSendFeedback` to Processing
+on a trusted `message_send_state` receipt for their `client_msg_id` and keep the HTTP answer as the fallback on older
+hubs or dropped sockets (#12773). A new main conversation started through a creation endpoint has no target session subscription yet: keep
 local Sending/Preparing until that endpoint's existing result binds it, then use the ordinary session flow.
 
 **To-do writes (#10465).** A message to a to-do (`POST /api/v1/assistant/conversations/{id}/route {todo_id, text}`) and
