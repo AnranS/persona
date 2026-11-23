@@ -356,6 +356,9 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 					prs = append(prs, u)
 				}
 			case "issue":
+				if l.Role == repository.LinkRoleReference {
+					continue
+				}
 				key := strings.ToLower(u)
 				if !seenIssue[key] {
 					seenIssue[key] = true
