@@ -95,7 +95,7 @@ const writes = () => api.mock.calls.filter(([, init]) => {
   return method !== undefined && method.toUpperCase() !== "GET";
 });
 
-const render = async (todos: Todo[] = [todo("plain", "Plain open to-do", { project: "apollo" })]) => {
+const render = async (todos: Todo[] = [todo("plain", "Plain open to-do", { project: "apollo" })], sessions: Session[] = [worker]) => {
   hub = todos;
   seed({
     todos,
@@ -103,7 +103,7 @@ const render = async (todos: Todo[] = [todo("plain", "Plain open to-do", { proje
     todosError: null,
     todosSupported: true,
     machines: [{ id: "mac", name: "Mac", online: true }],
-    sessions: { mac: [worker] },
+    sessions: { mac: sessions },
     taskRows: {},
     interactions: [],
     answered: {},
@@ -205,6 +205,25 @@ describe("the read-only To-dos board (#12713)", () => {
     expect(row("linked")?.querySelector("time")?.getAttribute("datetime")).toBe(progressAt);
     expect(row("unassigned")?.textContent).toContain(t("todos.board_unassigned"));
     expect(row("unassigned")?.textContent).toContain(t("todos.board_no_progress"));
+  });
+
+  it("uses an external responsible party's stored update and note when no other progress exists", async () => {
+    const updatedAt = iso(10 * HOUR);
+    const external = todo("external-note", "Work tracked outside Persona", {
+      project: "apollo",
+      created_at: iso(100 * HOUR),
+      updated_at: updatedAt,
+      responsible: { kind: "session", name: "Outside supervisor" },
+      notes: "Recorded an external checkpoint\nImplementation detail, not the one-line summary",
+    });
+    await render([external]);
+    await openBoard();
+
+    expect(row("external-note")?.textContent).toContain("Outside supervisor");
+    expect(row("external-note")?.textContent).toContain("Recorded an external checkpoint");
+    expect(row("external-note")?.textContent).not.toContain("Implementation detail");
+    expect(row("external-note")?.querySelector("time")?.getAttribute("datetime")).toBe(updatedAt);
+    expect(row("external-note")?.textContent).not.toContain(t("todos.board_stale"));
   });
 
   it("marks Waiting on you exactly when the existing owner-decision projection applies", async () => {
@@ -335,6 +354,42 @@ describe("the read-only To-dos board (#12713)", () => {
     expect(writes()).toEqual([]);
     const actions = api.mock.calls.filter(([path]) => /(?:model|agent|session).*(?:call|start|launch)|\/todos\/[^/]+\/(?:retry|follow|check)/i.test(path));
     expect(actions).toEqual([]);
+  });
+
+  it("does not mark a finished to-do seen when Board detail navigation closes", async () => {
+    const finishedWorker: Session = { ...worker, state: "unread", status: "idle", last_text: "Finished the turn" };
+    const finished = todo("finished", "Unsupervised finished turn", { project: "apollo", agents: [link("worker-1")] });
+    await render([finished], [finishedWorker]);
+    await openBoard();
+    seed({ features: ["todo_seen"] });
+    api.mockClear();
+
+    await act(async () => root.render(<TodosView view="board" selectedId="finished" />));
+    await flush();
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todo-detail] input[type=text]")?.value).toBe("Unsupervised finished turn");
+    await act(async () => root.render(<TodosView view="board" />));
+    await flush();
+    expect(writes()).toEqual([]);
+  });
+
+  it("uses a stopped worker step's own activity time for progress and staleness", async () => {
+    const activityAt = iso(100 * HOUR);
+    const stoppedWorker: Session = {
+      ...worker,
+      state: "idle",
+      status: "idle",
+      activity: "running tests",
+      activity_at: activityAt,
+      last_text: undefined,
+      updated_at: iso(HOUR),
+    };
+    const stopped = todo("stopped", "Stopped test worker", { project: "apollo", created_at: iso(120 * HOUR), agents: [link("worker-1")] });
+    await render([stopped], [stoppedWorker]);
+    await openBoard();
+
+    expect(row("stopped")?.textContent).toContain("running tests");
+    expect(row("stopped")?.querySelector("time")?.getAttribute("datetime")).toBe(activityAt);
+    expect(row("stopped")?.textContent).toContain(t("todos.board_stale"));
   });
 
   it("keeps the existing To-dos list completion write unchanged", async () => {

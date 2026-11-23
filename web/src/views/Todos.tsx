@@ -506,11 +506,15 @@ export function TodosView({
     setTodoSeen(id, true, after).catch(failed);
     toast(t("todos.seen_moved"), "ok", { label: t("lib-agents.undo"), run: () => void setTodoSeen(id, false).catch(failed) });
   }, []);
-  const opened = seenOn && selectedId !== undefined ? todos.find((td) => td.id === selectedId) : undefined;
+  const opened = seenOn && !boardOn && selectedId !== undefined ? todos.find((td) => td.id === selectedId) : undefined;
   const openedJustDone = opened !== undefined && triage(opened, lookup, Date.now(), restored.get(opened.id) ?? 0, superseded.has(opened.id)).section === "just_done";
   useEffect(() => {
     if (openedJustDone && !decided.current.has(selectedId!)) seenOnLeave.current = selectedId;
   }, [openedJustDone, selectedId]);
+  useEffect(() => {
+    // Board is read-only: opening or closing its detail never files an unsupervised finished turn as seen.
+    if (boardOn) seenOnLeave.current = undefined;
+  }, [boardOn]);
   useEffect(() => {
     const id = selectedId;
     return () => {

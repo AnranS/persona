@@ -25,6 +25,11 @@ function oneLine(value: string | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function firstNoteLine(value: string): string {
+  const line = value.split(/\r?\n/).find((part) => part.trim()) ?? "";
+  return oneLine(plainMarkdown(line));
+}
+
 /** The latest report and its own moment, never a summary paired with an unrelated status change. */
 function latestProgress(todo: Todo, lookup: SessionLookup): Progress | undefined {
   const candidates: Progress[] = [];
@@ -38,7 +43,7 @@ function latestProgress(todo: Todo, lookup: SessionLookup): Progress | undefined
     const current = taskNow(session, session ? foldedState(session) === "working" : false);
     if (!session || !current) continue;
     const text = oneLine(current.kind === "words" ? plainMarkdown(current.text) : current.text);
-    const at = timestamp(current.kind === "step" ? current.since : undefined) ?? timestamp(session.updated_at) ?? timestamp(session.state_since);
+    const at = timestamp(current.kind === "step" ? current.since : undefined) ?? timestamp(session.activity_at) ?? timestamp(session.updated_at) ?? timestamp(session.state_since);
     if (at && text) {
       candidates.push({ at, text });
       linkedProgress = true;
@@ -47,8 +52,8 @@ function latestProgress(todo: Todo, lookup: SessionLookup): Progress | undefined
   // #12712: with no linked-Agent report, an external responsible party's notes are its progress note.
   const external = responsibleOf(todo);
   const externalAt = timestamp(todo.updated_at);
-  const externalNote = oneLine(plainMarkdown(todo.notes ?? ""));
-  if (external && !linkedProgress && !report && externalAt && externalNote) candidates.push({ at: externalAt, text: externalNote });
+  const externalNote = firstNoteLine(todo.notes ?? "");
+  if (external && !linkedProgress && !(reportAt && report) && externalAt && externalNote) candidates.push({ at: externalAt, text: externalNote });
   return candidates.reduce<Progress | undefined>((latest, candidate) => !latest || Date.parse(candidate.at) > Date.parse(latest.at) ? candidate : latest, undefined);
 }
 
