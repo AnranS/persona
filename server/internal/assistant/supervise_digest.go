@@ -575,6 +575,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		if s.queueDigest(to, msg, kept, now, prev) {
 			accepted = true
 			s.publish(ctx)
+			if !msg.LookAfter.IsZero() {
+				s.drainAfter(here.MachineID, to, max(time.Until(msg.LookAfter), 0))
+			}
 		}
 		return accepted
 	}
@@ -688,12 +691,12 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 	previousPending := maps.Clone(b.st.SupervisePending)
 	q := slices.Clone(previousQueue[to])
 	for i := range q {
-		// A withdrawn or doubtful head still owns the outcome of its original send. Let drainRelays check its durable
-		// doubt and remove it before a replacement can replay any of the same signals under a new message id (#5732).
-		if q[i].Tool == superviseTool && (q[i].Withdrawn || !q[i].DoubtedAt.IsZero()) {
+		// A withdrawn, tried, or doubtful head still owns the outcome of its original send. Let drainRelays check its
+		// durable state and remove it before a replacement can replay any of the same signals under a new message id (#5732).
+		if q[i].Tool == superviseTool && (q[i].Withdrawn || !q[i].DoubtedAt.IsZero() || !q[i].TriedAt.IsZero()) {
 			return false
 		}
-		if q[i].Tool == superviseTool && !q[i].Withdrawn && q[i].DoubtedAt.IsZero() && (i > 0 || !b.draining[to]) {
+		if q[i].Tool == superviseTool && !q[i].Withdrawn && q[i].DoubtedAt.IsZero() && q[i].TriedAt.IsZero() && (i > 0 || !b.draining[to]) {
 			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			if signals, structured := decodeDigestSignals(msg.Signals); structured {
 				ackSupervisePendingLocked(b.st.SupervisePending, signals)
