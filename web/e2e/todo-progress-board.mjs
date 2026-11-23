@@ -128,7 +128,6 @@ try {
     const { context, page, writes, socketCommands, errors } = await open(browser, theme, width, textSize);
     try {
       writes.length = 0;
-      socketCommands.length = 0;
       await page.getByRole("radio", { name: "Board", exact: true }).click();
       const board = page.locator('[data-testid="todos-board"]');
       await board.waitFor();
@@ -165,7 +164,6 @@ try {
       await page.waitForFunction(() => localStorage.getItem("persona.todos.board.staleHours") === "96");
       await page.reload();
       await page.locator('[data-testid="todos-board"]').waitFor();
-      socketCommands.length = 0;
       check(await page.getByRole("spinbutton", { name: "Stale after (hours)" }).inputValue() === "96", `${label}: a valid threshold survives reload`);
       await page.getByRole("spinbutton", { name: "Stale after (hours)" }).fill("0");
       await page.getByRole("spinbutton", { name: "Stale after (hours)" }).press("Tab");
@@ -187,7 +185,10 @@ try {
       if (textSize === "large") check(await page.locator("html").getAttribute("data-text-size") === "large", `${label}: the real Large text setting is active`);
       if (shots) await page.screenshot({ path: join(shots, `todos-board-${width}-${theme}-${textSize}.png`), fullPage: true, animations: "disabled" });
       assert.deepEqual(writes, [], `${label}: board reads and navigation issued no writes`);
-      assert.deepEqual(socketCommands, [], `${label}: opening and using Board started no socket work`);
+      for (const command of socketCommands) {
+        const body = JSON.parse(command);
+        assert.equal(body.type, "client_hello", `${label}: only the read-only socket hello is allowed, got ${body.type}`);
+      }
       assert.deepEqual(errors, [], `${label}: no browser errors`);
       console.log(`ok   ${label}: zero writes / model calls / Agent starts and no browser errors`);
     } finally {
