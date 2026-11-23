@@ -49,6 +49,9 @@ const (
 	sigPRMerged = "pr_merged"
 	// sigParentCloseout: an open parent to-do with no active Agent has all part_of children done (todo_parent_closeout.go, #13100).
 	sigParentCloseout = "parent_closeout"
+	// sigOutageRecovery: coalesced per-task recovery digest emitted once a provider-wide outage recovers after holding
+	// outage-caused interrupted and unjudged signals (supervise_outage.go, #13158).
+	sigOutageRecovery = "outage_recovery"
 )
 
 // sigCheck's kinds of news (superviseSignal.Report).
@@ -144,6 +147,8 @@ type superviseSignal struct {
 	BreakerNote string `json:"breaker_note,omitempty"`
 	// ExternalSource names the source of external information arriving during reviewNeedsUser (#13112).
 	ExternalSource string `json:"external_source,omitempty"`
+	// Outage carries coalesced provider-outage hold state for sigOutageRecovery (#13158).
+	Outage *superviseOutage `json:"outage,omitempty"`
 }
 
 // breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
@@ -217,7 +222,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -261,6 +266,7 @@ type superviseBook struct {
 	told             map[string]time.Time // conversation → last accepted supervision message
 	timer            *time.Timer
 	timerAt          time.Time
+	lastOutageSince  time.Time // monotonic outage-episode anchor for distinct recovery digest keys (#13158)
 
 	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
 
@@ -944,12 +950,15 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 	// This early cache is not an unhandled source's delivery receipt: an owner wait
 	// can discard the entry before dispatch. Its durable fingerprint deduplicates delivery.
 	unhandled := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
-	if b.sent[g.id()] == g.Key && !unhandled {
+	if b.sent[g.id()] == g.Key && !unhandled && g.Key != "" {
 		b.mu.Unlock()
 		return
 	}
+	var absorbedIDs []string
 	if cur, ok := b.pending[g.id()]; ok {
-		if g.Kind == sigFailed {
+		if g.Kind == sigOutageRecovery && g.Outage != nil {
+			g = joinOutageRecovery(cur, g)
+		} else if g.Kind == sigFailed {
 			if cur.Key != g.Key && newerFailedSignal(cur, g) {
 				b.mu.Unlock()
 				return // a restored or delayed old attempt cannot replace the newer pending one
@@ -983,6 +992,22 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 			}
 		}
 		g.batchTo, g.batchUntil = cur.batchTo, cur.batchUntil
+	} else if g.Kind == sigOutageRecovery && g.Outage != nil {
+		meta := g.Outage.clone()
+		since := meta.Since
+		if since.IsZero() {
+			since = g.At.UTC()
+		}
+		if !since.After(b.lastOutageSince) {
+			since = b.lastOutageSince.Add(time.Nanosecond)
+		}
+		b.lastOutageSince = since
+		meta.Since = since
+		g.Outage = meta
+		if g.Key == "" {
+			g.Key = outageSignalKey(meta.Provider, since)
+		}
+		g, absorbedIDs = absorbPendingOutageSiblingLocked(b, g)
 	}
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
 		// sendDigest may already have taken the older stretch out of b.pending. Its durable outbox entry remains until
@@ -997,6 +1022,9 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 			if cur, ok := pending[old.id()]; ok && cur.Key == old.Key {
 				delete(pending, old.id())
 			}
+		}
+		for _, id := range absorbedIDs {
+			delete(pending, id)
 		}
 		pending[g.id()] = g
 	})
@@ -1171,6 +1199,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
 	s.sessionReviewTick(ctx, now)
+	s.recheckOutageHolds(ctx, now)
 	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
 	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)
 	routed := s.routedSessions()
