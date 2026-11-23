@@ -55,6 +55,7 @@ import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentRowLeading
 import persona.core.domain.sort.AgentRowStyle
 import persona.core.domain.sort.rowParts
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -84,6 +85,21 @@ data class RowPlace(val words: String = "", val model: String? = null, val todo:
  */
 @Immutable
 data class RowNote(val fields: List<CoreText>, val icon: PhIcon)
+
+/**
+ * A side session folded under a parent row that keeps it Unread (#13524): the [PersonaIcons.sideSessions] mark,
+ * [label] (the most recent unread side's title, or a count line before side rows are read), optional [more] ("+N"
+ * for other unread sides), accessibility description [spoken], and [onClick] to open that side directly in one tap
+ * (null when only a count is known).
+ */
+@Immutable
+data class RowSideUnread(
+    val label: String,
+    val more: String? = null,
+    val spoken: String = label,
+    val clickLabel: String? = null,
+    val onClick: (() -> Unit)? = null,
+)
 
 // ------------------------------------------------------------------ measures
 
@@ -487,6 +503,8 @@ fun AgentRow(
     style: AgentRowStyle = AgentRowStyle.Avatar,
     /** A folded child's request must stay visible even when Board's metadata normally takes the preview's line. */
     showPreviewWithMetadata: Boolean = false,
+    /** An unread side session keeping this parent row Unread (#13524); null leaves the row unchanged. */
+    sideUnread: RowSideUnread? = null,
     end: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -518,12 +536,12 @@ fun AgentRow(
     val click = Modifier.selectedRow(selected).then(press)
     if (glass && parts.leading == AgentRowLeading.Dot) {
         TwoLineRow(title, shown, strong, muted, waiting, depth, position, preview, time, statusText, label, launcher, flags, note, facts,
-            source, agentMark, place, branch, modifier.then(click), end)
+            source, agentMark, place, branch, sideUnread, modifier.then(click), end)
         return
     }
     if (glass && parts.card) {
         StateCardRow(title, shown, strong, muted, waiting, depth, preview, time, statusText, label, launcher, flags, note, facts, source,
-            agentMark, place, selected, modifier, press, end)
+            agentMark, place, selected, sideUnread, modifier, press, end)
         return
     }
     val text: @Composable ColumnScope.() -> Unit = {
@@ -564,6 +582,7 @@ fun AgentRow(
                 } else if (line.isNotEmpty()) lineText()
             }
         }
+        if (sideUnread != null) SideUnreadLine(sideUnread, tone)
     }
     // a branch hangs off its initiator one step up: a hairline down from under that row's mark
     val guide = if (!branch) Modifier else Modifier.drawBehind {
@@ -689,7 +708,7 @@ private fun TwoLineRow(
     title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, position: GroupPosition,
     preview: String?, time: String?, statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>,
     note: RowNote?, facts: List<RowFact>, source: RowSource?, agentMark: AgentMarkSpec?, place: RowPlace?, branch: Boolean,
-    modifier: Modifier, end: (@Composable () -> Unit)?,
+    sideUnread: RowSideUnread?, modifier: Modifier, end: (@Composable () -> Unit)?,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -727,6 +746,7 @@ private fun TwoLineRow(
                     }
                     source?.let { Spacer(Modifier.width(Tokens.Space.s)); SourceTag(it) }
                 }
+                if (sideUnread != null) SideUnreadLine(sideUnread, tone, Modifier.padding(start = Caret + TwoLineGap))
             }
             end?.let { Box { it() } }
         }
@@ -745,7 +765,7 @@ private fun TwoLineRow(
 private fun StateCardRow(
     title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, preview: String?, time: String?,
     statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>, note: RowNote?, facts: List<RowFact>, source: RowSource?,
-    agentMark: AgentMarkSpec?, place: RowPlace?, selected: Boolean, modifier: Modifier, press: Modifier, end: (@Composable () -> Unit)?,
+    agentMark: AgentMarkSpec?, place: RowPlace?, selected: Boolean, sideUnread: RowSideUnread?, modifier: Modifier, press: Modifier, end: (@Composable () -> Unit)?,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -773,6 +793,7 @@ private fun StateCardRow(
         preview?.takeIf { it.isNotBlank() }?.let {
             Text(it.replace('\n', ' '), style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
+        if (sideUnread != null) SideUnreadLine(sideUnread, tone)
         if (note != null || facts.isNotEmpty()) RowMetadata(note, facts, None, Modifier.padding(top = None))
         if (statusText != null || place != null || source != null) Row(verticalAlignment = Alignment.CenterVertically) {
             statusText?.let {
@@ -780,6 +801,55 @@ private fun StateCardRow(
                 Spacer(Modifier.width(Tokens.Space.s))
             }
             PlaceLine(place ?: RowPlace(), source, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * Unread side-session indicator under a parent row's title (#13524): the [PersonaIcons.sideSessions] mark, the most
+ * recent unread side's label, and an optional "+N" count in the unread tint. When [RowSideUnread.onClick] is set,
+ * tapping it opens that side session directly without triggering the parent row.
+ */
+@Composable
+private fun SideUnreadLine(sideUnread: RowSideUnread, tone: StatusColors, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(PersonaTheme.shapes.chip)
+    val interactive = sideUnread.onClick != null
+    val tap = sideUnread.onClick?.let {
+        Modifier.clickable(role = Role.Button, onClickLabel = sideUnread.clickLabel, onClick = it)
+    } ?: Modifier
+    Row(
+        modifier
+            .then(if (interactive) Modifier.minimumInteractiveComponentSize() else Modifier.padding(top = Tokens.Space.xxs))
+            .clip(shape)
+            .then(if (interactive) Modifier.background(tone.tint) else Modifier)
+            .then(tap)
+            .semantics(mergeDescendants = true) { contentDescription = sideUnread.spoken }
+            .then(if (interactive) Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        JIcon(PersonaIcons.sideSessions, null, size = Caret, tint = tone.text, decorative = true)
+        Spacer(Modifier.width(Tokens.Space.xs))
+        Text(
+            sideUnread.label,
+            Modifier.weight(1f, fill = false),
+            style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Medium),
+            color = tone.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        sideUnread.more?.let { extra ->
+            Spacer(Modifier.width(Tokens.Space.xs))
+            Text(
+                extra,
+                style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold),
+                color = tone.text,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        if (interactive) {
+            Spacer(Modifier.width(Tokens.Space.xxs))
+            JIcon(PhIcons.CaretRight, null, size = Caret, tint = tone.text, decorative = true)
         }
     }
 }
