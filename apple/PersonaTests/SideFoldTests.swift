@@ -244,4 +244,215 @@ import PersonaWire
         #expect(model.allSessions.first?.state == .idle)
         #expect(model.sides(of: key("p")).rollup.unread == 0)
     }
+
+    @Test func markingAPagedSideSeenAndLandingAnotherPageKeepsRawStateAndClearsUnreadCounts() async throws {
+        let model = try model()
+        defer { model.link("")?.received(HubHello(features: ["sessions_list"])) }
+        model.link("")?.received(HubHello(features: ["sessions_list", SideFold.feature]))
+
+        let p = try row("p", state: "idle", extra: [
+            "children": ["total": 1, "sides": 1, "sides_unread": 1],
+        ])
+        let other = try row("q", state: "idle")
+        let side = try row("s", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:05:00Z")
+
+        let counts = SessionListCounts(total: 2, machine: ["box": 2], project: [:], group: [:], state: ["unread": 1], revision: "r1")
+        let list = SessionListModel<Session>(
+            id: { $0.id },
+            removalID: { $0 },
+            fetch: { _, _, _ in
+                SessionListPage(sessions: [p, other], remove: nil, hasMore: false, nextCursor: nil, revision: "r1", total: 2)
+            },
+            counts: { _ in counts }
+        )
+        await list.select(SessionListQuery())
+        model.sessionLists.bind(model)
+        model.sessionLists.setForTests(list, group: "")
+
+        // Landing a paged summary, then another page without `p`, must never corrupt `p`'s own raw state with folded Unread.
+        model.landSessionSummaries([p], group: "")
+        #expect(model.allSessions.first(where: { $0.sessionID == "p" })?.state == .unread)
+        #expect(model.session(key("p"))?.state == .idle)
+        model.landSessionSummaries([other], group: "")
+        #expect(model.session(key("p"))?.state == .idle, "landing another page must keep the parent's own raw state idle")
+
+        // Hold the side in childIndex (as on a paged hub) and mark it seen locally.
+        model.childIndex.hold(side)
+        model.refoldSides()
+        model.markSeen(key("s"))
+        #expect(model.sides(of: key("p")).rollup.unread == 0, "marking a childIndex-held side seen must update the parent rollup immediately")
+        #expect(model.allSessions.first(where: { $0.sessionID == "p" })?.state == .idle, "parent leaves Unread once its held side is seen")
+        #expect(model.sessionLists.stateCounts?[.unread] == 0, "paged Unread count drops at once once the held side is seen")
+    }
+
+    // MARK: Unread side summaries and counts (#13524)
+
+    @Test func unreadSideSummaryOrdersNewestFirstTracksExtraCountAndReplacesPreviewOnlyWhenParentIsSeen() throws {
+        let older = try row("btw", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:03:00Z", extra: ["title": "btw question"])
+        let newer = try row("chat", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:05:00Z", extra: ["title": "Side chat"])
+        let seen = try row("done", state: "idle", under: "p", as: "side", updated: "2026-11-15T10:06:00Z", extra: ["title": "Seen side"])
+        let child = try row("child", state: "unread", under: "p", side: "chat", updated: "2026-11-15T10:09:00Z", extra: ["title": "Side child"])
+        let seenParent = try row("p", state: "idle", extra: ["title": "Review PR", "last_text": "Parent summary"])
+
+        // unreadSides picks only unread sides, newest first.
+        #expect(ids(SideFold.unreadSides([older, newer, seen, child])) == ["chat", "btw"])
+
+        // Multiple unread sides under a seen parent: names newest, +1, otherTitles, replacesPreview = true.
+        let multiFold = SideFold.fold([seenParent, older, newer, seen, child], groups: Self.on)
+        let multi = try #require(multiFold.unreadSummaries[key("p")])
+        #expect(multi.latestKey == key("chat"))
+        #expect(multi.latestTitle == "Side chat")
+        #expect(multi.count == 2)
+        #expect(multi.extraCount == 1)
+        #expect(multi.otherTitles == ["btw question"])
+        #expect(multi.replacesPreview == true)
+
+        // SlotRow omits parent's already-seen preview when replacesPreview is true, and keeps it otherwise.
+        let foldedParent = try #require(multiFold.listed.first)
+        #expect(SlotRow(session: foldedParent, sideUnread: multi).rowPreview == nil)
+        #expect(SlotRow(session: foldedParent, sideUnread: nil).rowPreview == "Parent summary")
+
+        // Single unread side: extraCount is 0.
+        let singleFold = SideFold.fold([seenParent, newer, seen], groups: Self.on)
+        let single = try #require(singleFold.unreadSummaries[key("p")])
+        #expect(single.latestKey == key("chat") && single.count == 1 && single.extraCount == 0 && single.otherTitles.isEmpty && single.replacesPreview)
+
+        // Both parent and side unread: replacesPreview is false so both lines show.
+        let unreadParent = try row("p", state: "unread", extra: ["title": "Review PR", "last_text": "Parent summary"])
+        let bothFold = SideFold.fold([unreadParent, newer], groups: Self.on)
+        let both = try #require(bothFold.unreadSummaries[key("p")])
+        #expect(both.replacesPreview == false)
+        #expect(SlotRow(session: try #require(bothFold.listed.first), sideUnread: both).rowPreview == "Parent summary")
+
+        // No unread sides / plain unread parent with seen side / Working / Needs You / Assistant -> nil.
+        #expect(SideFold.fold([seenParent, seen], groups: Self.on).unreadSummaries[key("p")] == nil)
+        #expect(SideFold.fold([unreadParent, seen], groups: Self.on).unreadSummaries[key("p")] == nil)
+        let workingParent = try row("p", state: "working")
+        #expect(SideFold.fold([workingParent, newer], groups: Self.on).unreadSummaries[key("p")] == nil)
+        let needsYouSide = try row("ask", state: "needs_you", under: "p", as: "side")
+        #expect(SideFold.fold([seenParent, newer, needsYouSide], groups: Self.on).unreadSummaries[key("p")] == nil)
+        let assistantParent = try row("a", state: "unread", extra: ["assistant": true, "children": ["sides": 1, "sides_unread": 1]])
+        #expect(SideFold.unreadSummary(parent: assistantParent, ownState: .unread, sides: nil) == nil)
+
+        // Paged parent without held sides: count-only summary (latestKey nil, count from hub rollup).
+        let pagedParent = try row("p", state: "idle", extra: ["children": ["total": 2, "sides": 2, "sides_unread": 2]])
+        let pagedFold = SideFold.fold([pagedParent], groups: Self.on)
+        let pagedSummary = try #require(pagedFold.unreadSummaries[key("p")])
+        #expect(pagedSummary.latestKey == nil && pagedSummary.latestTitle == nil && pagedSummary.count == 2 && pagedSummary.extraCount == 0 && pagedSummary.replacesPreview)
+    }
+
+    @Test func unreadClearedBySeenKeepsParentUnreadWhileAnySideIsUnreadAndDropsOnceSidesAreSeen() throws {
+        let rawParent = try row("p", state: "unread", extra: ["children": ["total": 2, "sides": 2, "sides_unread": 2]])
+        let seenParent = try row("p", state: "idle", extra: ["children": ["total": 2, "sides": 2, "sides_unread": 2]])
+        let sideA = try row("a", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:03:00Z")
+        let sideB = try row("b", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:05:00Z")
+        let sideASeen = try row("a", state: "idle", under: "p", as: "side", updated: "2026-11-15T10:03:00Z")
+        let sideBSeen = try row("b", state: "idle", under: "p", as: "side", updated: "2026-11-15T10:05:00Z")
+        let hub = [rawParent, sideA, sideB]
+
+        #expect(SideFold.unreadClearedBySeen(hub: hub, visible: [seenParent, sideA, sideB], groups: Self.on) == 0)
+        #expect(SideFold.unreadClearedBySeen(hub: hub, visible: [seenParent, sideASeen, sideB], groups: Self.on) == 0)
+        #expect(SideFold.unreadClearedBySeen(hub: hub, visible: [seenParent, sideASeen, sideBSeen], groups: Self.on) == 1)
+
+        // Parent idle on hub, only one side unread -> seeing that side clears 1.
+        let hubOnlySide = [try row("p", state: "idle", extra: ["children": ["total": 1, "sides": 1, "sides_unread": 1]]), sideA]
+        #expect(SideFold.unreadClearedBySeen(hub: hubOnlySide, visible: [hubOnlySide[0], sideASeen], groups: Self.on) == 1)
+
+        // Paged parent (no held sides) marked seen while hub rollup says sides_unread = 2 -> stays Unread (0 cleared).
+        #expect(SideFold.unreadClearedBySeen(hub: [rawParent], visible: [seenParent], groups: Self.on) == 0)
+
+        // Plain unread session marked seen -> clears 1.
+        let plain = try row("plain", state: "unread")
+        let plainSeen = try row("plain", state: "idle")
+        #expect(SideFold.unreadClearedBySeen(hub: [plain], visible: [plainSeen], groups: Self.on) == 1)
+    }
+
+    @Test func markingParentSeenKeepsItUnreadUntilAllHeldSidesAreSeenAndProjectionCountsFollow() throws {
+        let model = try model()
+        defer { model.link("")?.received(HubHello(features: ["sessions_list"])) }
+        model.link("")?.received(HubHello(features: ["sessions_list", SideFold.feature]))
+
+        let ref = MachineRef(group: "", id: "box")
+        let p = try row("p", state: "unread", extra: ["title": "Review PR", "last_text": "Parent reply"])
+        let older = try row("btw", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:03:00Z", extra: ["title": "btw question"])
+        let newer = try row("chat", state: "unread", under: "p", as: "side", updated: "2026-11-15T10:05:00Z", extra: ["title": "Side chat"])
+        model.applySessions([ref: [p, older, newer]])
+
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "recent"
+        settings.sideFold = Self.on
+        func unreadCount() -> Int {
+            AgentListProjection.build(.init(sessions: model.allSessions, machines: [], settings: settings)).filterCounts[.unread] ?? 0
+        }
+
+        // Initially both parent and sides are unread: replacesPreview is false, latest is newer ("Side chat", +1).
+        let before = try #require(model.sides(of: key("p")).unreadSummary)
+        #expect(before.latestKey == key("chat") && before.extraCount == 1 && !before.replacesPreview)
+        #expect(unreadCount() == 1)
+
+        // Marking only the parent seen keeps the parent Unread, switches replacesPreview to true, keeps Unread count = 1.
+        model.markSeen(key("p"))
+        #expect(model.session(key("p"))?.state == .idle)
+        #expect(model.allSessions.first?.state == .unread)
+        let afterParent = try #require(model.sides(of: key("p")).unreadSummary)
+        #expect(afterParent.latestKey == key("chat") && afterParent.extraCount == 1 && afterParent.replacesPreview)
+        #expect(unreadCount() == 1)
+
+        // Marking the newest side seen moves the line to the remaining unread side ("btw question", no +1), count still 1.
+        model.markSeen(key("chat"))
+        let afterFirstSide = try #require(model.sides(of: key("p")).unreadSummary)
+        #expect(afterFirstSide.latestKey == key("btw") && afterFirstSide.extraCount == 0 && afterFirstSide.replacesPreview)
+        #expect(unreadCount() == 1)
+
+        // Marking the last unread side seen clears the parent out of Unread and drops the summary.
+        model.markSeen(key("btw"))
+        #expect(model.allSessions.first?.state == .idle)
+        #expect(model.sides(of: key("p")).unreadSummary == nil)
+        #expect(unreadCount() == 0)
+    }
+
+    @Test func refreshUnreadSidesUpgradesPagedCountOnlyToNamedSideAndRespectsLocalSeenMarks() async throws {
+        let fake = FakeHub()
+        let sideJSON = """
+        {"sessions":[
+          {"machine_id":"box","session_id":"btw","title":"btw question","cwd":"/code/app","status":"idle","state":"unread",
+           "updated_at":"2026-11-15T10:03:00Z","folded_under":"p","folded_as":"side","parent_agent_id":"p"},
+          {"machine_id":"box","session_id":"chat","title":"Side chat","cwd":"/code/app","status":"idle","state":"unread",
+           "updated_at":"2026-11-15T10:05:00Z","folded_under":"p","folded_as":"side","parent_agent_id":"p"}
+        ],"has_more":false,"revision":"r2"}
+        """
+        fake.on("GET", "/api/v1/sessions") { _ in Data(sideJSON.utf8) }
+
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "side-fold-paged-" + UUID().uuidString))
+        let socket = SyncSocket()
+        model.linkHooksForTests = (transport: try #require(fake.client.transport), socket: { socket })
+        model.connectOnly(.demo)
+        defer { model.link("")?.received(HubHello(features: ["sessions_list"])) }
+        socket.deliver?(Data(#"{"type":"hello","features":["sessions_list","sessions_hierarchy","sessions_side_fold"]}"#.utf8))
+
+        let p = try row("p", state: "idle", extra: ["children": ["total": 2, "sides": 2, "sides_unread": 2]])
+        let list = SessionListModel<Session>(
+            id: { $0.id }, removalID: { $0 },
+            fetch: { _, _, _ in SessionListPage(sessions: [p], remove: nil, hasMore: false, nextCursor: nil, revision: "r1", total: 1) },
+            counts: { _ in SessionListCounts(total: 1, machine: ["box": 1], project: [:], group: [:], state: ["unread": 1], revision: "r1") }
+        )
+        await list.select(SessionListQuery())
+        model.sessionLists.bind(model)
+        model.sessionLists.setForTests(list, group: "")
+        model.landSessionSummaries([p], group: "")
+
+        // Before side rows load: count-only summary.
+        let initial = try #require(model.sides(of: key("p")).unreadSummary)
+        #expect(initial.latestKey == nil && initial.count == 2)
+
+        // Fetching unread sides upgrades to the named newest side ("Side chat", +1).
+        await model.refreshUnreadSides(key("p"))
+        let loaded = try #require(model.sides(of: key("p")).unreadSummary)
+        #expect(loaded.latestKey == key("chat") && loaded.latestTitle == "Side chat" && loaded.extraCount == 1)
+
+        // Tapping the unread side sets sideLanding and opens parent with that side.
+        model.openChat = loaded.latestKey
+        #expect(model.openChat == key("p"))
+        #expect(model.sideLanding == SideLanding(parent: key("p"), side: key("chat")))
+    }
 }

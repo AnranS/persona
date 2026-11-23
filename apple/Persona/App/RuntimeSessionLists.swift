@@ -128,7 +128,11 @@ import Observation
                 return model.allSessions.filter { $0.group == link.group }
             }
             var seen = Set<SessionKey>()
-            let rows = list.rows + sections.filter { $0.key.hub == link.group }.values.flatMap(\.rows)
+            var rows = list.rows + sections.filter { $0.key.hub == link.group }.values.flatMap(\.rows)
+            if link.foldsSides {
+                // Include held side rows so paged projections and rows fold live side states instead of stale rollups (#13524).
+                rows += model.childIndex.held.values.flatMap { $0 }.filter { $0.group == link.group && SideFold.isSideRow($0) }
+            }
             return rows.filter { seen.insert($0.key).inserted }
         })
     }
@@ -185,12 +189,33 @@ import Observation
 
     var stateCounts: [AgentFilter: Int]? {
         guard paged, let model else { return nil }
+        let _ = model.seenRevision
+        let heldChildren = model.childIndex.held
         var result: [AgentFilter: Int] = [.all: 0]
         for link in model.links where hubFilter == nil || link.group == hubFilter {
             if let list = lists[link.group], list.paged {
                 result[.all, default: 0] += list.counts?.total ?? list.total
                 for filter in [AgentFilter.needsYou, .working, .unread] {
                     if let counts = list.counts { result[filter, default: 0] += counts.state[filter.state!.rawValue] ?? 0 }
+                }
+                // Adjust hub Unread counts for locally seen rows and held side sessions (#13524, web `heldCounts`):
+                // a parent marked seen locally stays counted Unread while any side is unread, and leaves Unread counts
+                // immediately once its held sides are seen.
+                if list.counts != nil {
+                    let folds = link.foldsSides
+                    let heldSides = folds
+                        ? heldChildren.values.flatMap { $0 }.filter { $0.group == link.group && SideFold.isSideRow($0) }
+                        : []
+                    let hubRows = list.rows.map { row -> Session in
+                        var copy = row
+                        if copy.state != .unread, model.seenMark(row.key)?.wasUnread == true { copy.state = .unread }
+                        return copy
+                    }
+                    let cleared = SideFold.unreadClearedBySeen(hub: hubRows, visible: list.rows + heldSides,
+                                                               groups: folds ? [link.group] : [])
+                    if cleared > 0 {
+                        result[.unread] = max(0, (result[.unread] ?? 0) - cleared)
+                    }
                 }
             } else {
                 let rows = legacyBase(link.group)
@@ -317,7 +342,9 @@ extension AppModel {
     /// Rows keep their places and new ones go at the end: a read that brings the same rows again leaves every list
     /// equal, so nothing that reads the sessions redraws (#4683).
     func landSessionSummaries(_ rows: [Session], group: String) {
-        let old = allSessions.filter { $0.group == group }
+        // Merge against the raw unfolded rows in `sessionsByMachine`, not folded `allSessions`: otherwise a folded
+        // `.unread` state from a side session would overwrite the parent's own raw state on a later page landing (#13524).
+        let old = sessionsByMachine.values.flatMap { $0 }.filter { $0.group == group }
         let index = Dictionary(old.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         let incoming = rows.map { $0.preservingDetails(from: index[$0.key]) }
         if heldRetryRestoration != nil || !heldRetryReceipts.isEmpty {

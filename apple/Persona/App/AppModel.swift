@@ -2259,7 +2259,10 @@ final class AppModel {
                 return
             }
             childHints[key] = gate
-            await childIndex.refresh(parent: key, api: api)
+            await childIndex.refresh(parent: key, api: api) { [weak self] rows in
+                guard let self else { return rows }
+                return self.seenOutbox.landRows(rows, at: Date())
+            }
             childRowsRead(key)
             gate = childHints[key] ?? FetchHint()
             switch gate.finish() {
@@ -2273,6 +2276,33 @@ final class AppModel {
                 if let queued, childIndex.checkpoint(key) == queued { return }
             }
         }
+    }
+
+    /// Reads a paged parent's folded side sessions while the Agents list names an unread side (#13524, web `HoldSides`):
+    /// shares `childIndex` and `childHints` with `refreshOpenChildren`, no timer, no-op on complete-list hubs.
+    func refreshUnreadSides(_ key: SessionKey) async {
+        guard sideFoldGroups.contains(key.group),
+              features(key.group).contains(ChildSessions.feature),
+              sessionLists.isPaged(key.group),
+              let api = api(key.group),
+              socket(key.group)?.state == .connected else { return }
+        let parent = sessionsByMachine[key.machineRef]?.first { $0.sessionID == key.sessionID } ?? session(key)
+        guard (parent?.children?.sidesUnread ?? 0) > 0 else { return }
+        if childIndex.isLoaded(key), childIndex.knownNow(key).contains(where: SideFold.isSideRow) { return }
+        var gate = childHints[key] ?? FetchHint()
+        guard gate.start(nil) else {
+            childHints[key] = gate
+            return
+        }
+        childHints[key] = gate
+        await childIndex.refresh(parent: key, api: api) { [weak self] rows in
+            guard let self else { return rows }
+            return self.seenOutbox.landRows(rows, at: Date())
+        }
+        childRowsRead(key)
+        gate = childHints[key] ?? FetchHint()
+        _ = gate.finish()
+        childHints[key] = gate
     }
 
     /// `row` where the list has its session (any other copy of it dropped), or at the end when it has none: an unchanged
@@ -2942,7 +2972,9 @@ final class AppModel {
     /// replaces its inside, docs/apple/ios-state.md).
     func applySessions(_ byMachine: [MachineRef: [Session]], complete: Bool = true) {
         if complete { reconcileHeldRetries(byMachine) }
-        let byMachine = seenOutbox.land(byMachine, at: Date())
+        let marksBefore = seenOutbox.marks.count
+        let byMachine = seenOutbox.land(byMachine, at: Date(), dropMissing: complete)
+        if seenOutbox.marks.count != marksBefore { seenRevision &+= 1 }
         var lists = sessionsByMachine
         var olds: [(old: [Session], new: [Session])] = []
         for (machineID, list) in byMachine {
@@ -3953,10 +3985,16 @@ final class AppModel {
         }
     }
 
+    /// Bumped whenever local seen marks change so paged Unread counts update immediately (#13524).
+    private(set) var seenRevision: UInt64 = 0
+
+    func seenMark(_ key: SessionKey) -> SeenOutbox.Mark? { seenOutbox.marks[key] }
+
     /// The user looked at this session: finished work stops being "unread" (docs/protocol/agent-states.md).
     func markSeen(_ key: SessionKey) {
         sendSeen(key)
-        // Optimistic: flip the local copy right away.
+        // Optimistic: flip the local copy right away (in `sessionsByMachine`, `childIndex`, or both on paged hubs).
+        var machineChanged = false
         if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
            list[i].needsSeen() {
             if key == visibleSession && (list[i].state == .unread || list[i].showsJustFinished(muted: isMuted(list[i]))) {
@@ -3965,6 +4003,12 @@ final class AppModel {
             }
             list[i].markLocallySeen()
             sessionsByMachine[key.machineRef] = list
+            machineChanged = true
+        }
+        let childChanged = childIndex.markLocallySeen([key])
+        if childChanged && !machineChanged { sessionsChanged() }
+        if machineChanged || childChanged {
+            seenRevision &+= 1
             sessionLists.markSeen([key], model: self)
         }
     }
@@ -3977,6 +4021,7 @@ final class AppModel {
     /// Retire marks and their held row when their pairing is forgotten. Reconnecting keeps both.
     func forgetSeen(in groups: Set<String>? = nil) {
         seenOutbox.forget(groups: groups)
+        seenRevision &+= 1
         if let heldInList, groups?.contains(heldInList.group) ?? true {
             self.heldInList = nil
             heldJustFinished = false
@@ -4025,16 +4070,23 @@ final class AppModel {
         guard !unread.isEmpty else { return }
         for key in unread { sendSeen(key) }
         var lists = sessionsByMachine
+        var machinesChanged = false
         for (machine, keys) in Dictionary(grouping: unread, by: \.machineRef) {
             guard var list = lists[machine] else { continue }
             var remaining = Set(keys.map(\.sessionID))
             for i in list.indices {
                 if remaining.isEmpty { break }
-                if remaining.remove(list[i].sessionID) != nil { list[i].markLocallySeen() }
+                if remaining.remove(list[i].sessionID) != nil {
+                    list[i].markLocallySeen()
+                    machinesChanged = true
+                }
             }
             lists[machine] = list
         }
-        sessionsByMachine = lists
+        if machinesChanged { sessionsByMachine = lists }
+        let childrenChanged = childIndex.markLocallySeen(Set(unread))
+        if childrenChanged && !machinesChanged { sessionsChanged() }
+        seenRevision &+= 1
         sessionLists.markSeen(unread, model: self)
         Haptics.success()
     }

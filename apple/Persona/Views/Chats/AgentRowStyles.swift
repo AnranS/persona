@@ -191,7 +191,7 @@ extension SlotRow {
                 } time: {
                     timeText
                 }
-                if let words = session.listPreview(muted: muted) {
+                if let words = rowPreview {
                     HStack(alignment: .top, spacing: Theme.Space.s) {
                         Text(words)
                             .font(dense ? Theme.Font.caption : Theme.Font.secondary)
@@ -203,6 +203,7 @@ extension SlotRow {
                 } else if needsYouPill {
                     needsYouChip
                 }
+                if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                 if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                 RunningChildrenCaption(session: session)
                 if hasPlaceLine { placeLine().padding(.top, Theme.Space.xxs) }
@@ -226,19 +227,22 @@ extension SlotRow {
                 } time: {
                     timeText
                 }
-                HStack(spacing: Theme.Space.xs) {
-                    if needsYouPill { needsYouChip }
-                    let words = Text(session.listPreview(muted: muted) ?? placeString)
-                    (stateWords.map { $0 + Text(verbatim: " · ") + words } ?? words)
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if muted {
-                        ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
+                if sideUnread?.replacesPreview != true || needsYouPill || stateWords != nil || muted || rowSource != nil {
+                    HStack(spacing: Theme.Space.xs) {
+                        if needsYouPill { needsYouChip }
+                        let words = Text(rowPreview ?? placeString)
+                        (stateWords.map { $0 + Text(verbatim: " · ") + words } ?? words)
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if muted {
+                            ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
+                        }
+                        sourceLabel
                     }
-                    sourceLabel
                 }
+                if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                 if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                 RunningChildrenCaption(session: session)
             }
@@ -263,10 +267,11 @@ extension SlotRow {
             } time: {
                 timeText
             }
-            if let words = session.listPreview(muted: muted) {
+            if let words = rowPreview {
                 Text(words).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
             if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
             RunningChildrenCaption(session: session)
             HStack(spacing: Theme.Space.s) {

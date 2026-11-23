@@ -967,6 +967,8 @@ private struct AgentsList: View {
     @State private var answering: Interaction?
     /// The long-press menu's actions on a row (not observed: see `AgentRowMenu`).
     @State private var rowActions = AgentMenuHandlers()
+    /// Opens an unread folded side session in one tap (`\.openUnreadSide`): the same object for the list's life (#13524).
+    @State private var sideOpener = SideSessionOpener()
     @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
@@ -1606,6 +1608,7 @@ private struct AgentsList: View {
             }
         }
         .environment(feed) // a quiet space's line reads its agents' times from the rows (`SpaceGroup.updatedAt(_:)`)
+        .environment(\.openUnreadSide, sideOpener.set { parent, side in openUnreadSide(parent: parent, side: side) })
     }
 
     /// The quick filter bar. Equal while the counts are: the bar is not drawn again for pushes that change none of
@@ -1902,22 +1905,41 @@ private struct AgentsList: View {
         }
     }
 
+    /// Opens an unread folded side session in its parent's chat in one tap (#13524).
+    private func openUnreadSide(parent: SessionKey, side: SessionKey) {
+        model.sideLanding = SideLanding(parent: parent, side: side)
+        if searching {
+            openFromSearch(parent)
+        } else {
+            openFromList(parent)
+        }
+    }
+
+    /// Reads the unread-side summary for a row kept Unread by folded sides (#13524). Rows with no unread side return
+    /// nil immediately without touching `model.sides(of:)`, keeping observation narrow (P5).
+    private func unreadSideSummary(for s: Session) -> SideFold.UnreadSummary? {
+        guard s.state == .unread, !s.assistant, (s.children?.sidesUnread ?? 0) > 0 else { return nil }
+        if let summary = model.sides(of: s.key).unreadSummary { return summary }
+        return SideFold.unreadSummary(parent: s, ownState: model.session(s.key)?.state, sides: nil)
+    }
+
     @ViewBuilder private func slotRowDrawn(_ s: Session, time: AgentTime?, context: Bool, inStateSection: Bool, cardLast: Bool?, showHost: Bool = false,
                                            pane: TabPanes.Role? = nil, open: Bool = false) -> some View {
         // herdr is where most agents run: only the others name their host
         let host = showHost ? s.hostKind.flatMap { $0 == "herdr" ? nil : $0 } : nil
+        let sideUnread = unreadSideSummary(for: s)
         if grouping == .repo && !repoTree {
             // The Mac's and Apple Vision Pro's repository cards keep their rows. On iOS By Repository draws the same
             // rows as every other grouping (#3753).
-            WorkspaceAgentRow(session: s, time: time, muted: model.isMuted(s))
+            WorkspaceAgentRow(session: s, time: time, muted: model.isMuted(s), sideUnread: sideUnread)
         } else if compact {
-            CompactSlotRow(session: s, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane)
+            CompactSlotRow(session: s, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, sideUnread: sideUnread)
                 .equatable()
         } else {
             SlotRow(session: s, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
                     machine: rowMachine(s, context: context), host: host,
                     hideState: inStateSection, surface: cardLast.map { .cardRow(last: $0) } ?? .capsule, time: time, pane: pane,
-                    rowStyle: listRowStyle, dense: !ownsTop)
+                    rowStyle: listRowStyle, dense: !ownsTop, sideUnread: sideUnread)
                 .equatable()
         }
     }
@@ -3715,7 +3737,8 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
     /// The row shows the folded copy: a waiting child makes the parent Needs You, and says what that child asks.
     /// The stored list stays the hub's own rows, so the chat page and the structure's equality are unchanged.
     private func applyFoldedRows(_ s: [Session]) {
-        let folded = Dictionary(ChildSessions.fold(s, asks: ChildSessions.asks(interactions)).map { ($0.id, $0) },
+        let sideFolded = SideFold.fold(s, groups: model?.sideFoldGroups ?? []).listed
+        let folded = Dictionary(ChildSessions.fold(sideFolded, asks: ChildSessions.asks(interactions)).map { ($0.id, $0) },
                                 uniquingKeysWith: { a, _ in a })
         for x in s {
             let display = folded[x.id] ?? x
@@ -4259,6 +4282,8 @@ nonisolated struct SlotRow: View, Equatable {
     var rowStyle: AgentRowStyle? = nil
     /// In a regular-width sidebar (an open iPhone Duo, an iPad): style A's latest words take one line.
     var dense = false
+    /// Unread folded side session(s) keeping this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
 
     enum Surface: Equatable {
         /// Bare: a List's row that has its own background and chevron.
@@ -4278,7 +4303,10 @@ nonisolated struct SlotRow: View, Equatable {
     }
 
     /// The tag under the time: where it was opened, for an agent (Persona's own conversations carry none).
-    private var rowSource: SessionSource? { session.assistant ? nil : session.source }
+    var rowSource: SessionSource? { session.assistant ? nil : session.source }
+
+    /// The parent's own preview line, omitted when only folded side sessions are unread so the side line stands in its place (#13524).
+    @MainActor var rowPreview: String? { sideUnread?.replacesPreview == true ? nil : session.listPreview(muted: muted) }
 
     private var indented: Bool { if case .cardRow = surface { true } else { false } }
 
@@ -4292,9 +4320,9 @@ nonisolated struct SlotRow: View, Equatable {
         Group {
             if AppStyle.current.usesBeautifulUI {
                 TaskRow(TaskItem(id: session.key.sessionID, title: session.displayTitle,
-                                 subtitle: session.listPreview(muted: muted), footnote: meta,
+                                 subtitle: rowPreview, footnote: meta,
                                  status: .pending(step: 0)),
-                        shape: taskShape(), isOpen: session.leadWorkflow != nil,
+                        shape: taskShape(), isOpen: session.leadWorkflow != nil || sideUnread != nil,
                         accessory: surface == .none || Self.endsInTime ? .none : .disclosure, titleLines: 2, subtitleLines: 1) {
                     // The badge's column is 24 pt: only the badge goes there (#3004); the source tag is under the time (#3043).
                     if dot { AgentStateBadge(state: session.state, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)).padding(.leading, indented ? Theme.Space.l : 0) }
@@ -4318,6 +4346,7 @@ nonisolated struct SlotRow: View, Equatable {
                         }
                     }
                 } detail: {
+                    if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                     if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                     RunningChildrenCaption(session: session)
                 }
@@ -4356,9 +4385,10 @@ nonisolated struct SlotRow: View, Equatable {
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .animation(UltracodeMark.motion, value: ultracodeMark)
-                            if let last = session.listPreview(muted: muted) {
+                            if let last = rowPreview {
                                 Text(last).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
                             }
+                            if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                             // A workflow running in the background (#2935): its name, phase and progress.
                             if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                             RunningChildrenCaption(session: session)
@@ -4582,12 +4612,29 @@ nonisolated struct CompactSlotRow: View, Equatable {
     var time: AgentTime? = nil
     /// As SlotRow's `pane`.
     var pane: TabPanes.Role? = nil
+    /// Unread folded side session(s) keeping this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
 
     @MainActor
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("CompactSlotRow")
         #endif
+        Group {
+            if let sideUnread {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    mainLine
+                    SideUnreadLine(parent: session.key, summary: sideUnread)
+                }
+            } else {
+                mainLine
+            }
+        }
+        .opacity(muted ? 0.8 : 1)
+    }
+
+    @MainActor
+    private var mainLine: some View {
         HStack(spacing: CompactList.gap) {
             // The agent's mark before its state (#6390).
             if !session.assistant { AgentMark(session) }
@@ -4628,7 +4675,6 @@ nonisolated struct CompactSlotRow: View, Equatable {
             if muted { ThemedIcon(Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
             AgentTimeText(time: time, fallback: session.updatedAt, font: CompactList.meta.monospacedDigit())
         }
-        .opacity(muted ? 0.8 : 1)
     }
 
     private var pendingCount: Bool {
