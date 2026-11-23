@@ -407,7 +407,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// have some), follow the assignment; they remain user context, never framework policy. Direction notes are prompt
 	// context, separate from the main supervision ledger (#10623, #5732).
 	direction := s.taskDirectionOf(ctx, t)
-	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
+	var background string
+	if !t.SkipProjectMemory {
+		background = s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
+	}
 	var repoPaths []string
 	if t.backendWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {
@@ -415,8 +418,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				continue
 			}
 			repoPaths = append(repoPaths, repo.AbsolutePath)
-			if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, direction); info != "" {
-				background = strings.TrimSpace(background + "\n\n" + repo.AbsolutePath + "\n" + info)
+			if !t.SkipProjectMemory {
+				if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, direction); info != "" {
+					background = strings.TrimSpace(background + "\n\n" + repo.AbsolutePath + "\n" + info)
+				}
 			}
 		}
 	}
