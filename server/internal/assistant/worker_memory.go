@@ -8,11 +8,13 @@ import (
 	"hash/fnv"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -222,6 +224,9 @@ func (s *Service) goRecordWorkerDoneForTodo(ctx context.Context, t Todo, cwd str
 // recordWorkerOutcome writes one worker outcome to the todo's explicit project, or to the projects its directory
 // belongs to. A successful model extraction may add a decision and reason; a failure keeps exactly the original short
 // conclusion and links. No in-memory claim is made: memory.jsonl alone decides whether a replay is already recorded.
+// Nothing of a to-do whose history holds a health or sensitive space's words or forbids shared KB writes goes to
+// memory.jsonl (todoVerdicts' todoHidden and sceneKBWrite, Refs #12216); one whose verdict cannot be told yet
+// (todoUntold) waits (holdWorkerOutcome) without calling the outcome model, and writes only once told shown.
 // Live callers pin the outcome text; direct callers may omit it and use the session's listed last text instead.
 func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, session, cwd string, turn, itemIndex int,
 	itemKey string, allowLegacy bool, conclusion string, links []string, pinnedText ...string) {
@@ -237,8 +242,31 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 	if len(projects) == 0 {
 		return
 	}
-	legacyID := workerMemoryID(t.ID, machine, session, turn, itemIndex)
-	id := workerMemoryItemID(t.ID, machine, session, turn, itemIndex, itemKey)
+	if len(workerPendingProjects(e, projects, t.ID, machine, session, turn, itemIndex, itemKey, allowLegacy)) == 0 {
+		return
+	}
+	if s.workerOutcomeNoKBWrite(ctx, t, cwd) {
+		return
+	}
+	switch s.todoVerdicts(ctx, []string{t.ID}, map[string]Todo{t.ID: t}, nil)[t.ID] {
+	case todoHidden:
+		return
+	case todoUntold:
+		s.holdWorkerOutcome(heldWorkerOutcome{
+			t: t, machine: machine, session: session, cwd: cwd,
+			turn: turn, itemIndex: itemIndex, itemKey: itemKey, allowLegacy: allowLegacy,
+			conclusion: conclusion, links: slices.Clone(links),
+			modelText: s.workerOutcomeModelText(ctx, machine, session, conclusion, pinnedText...),
+		})
+		return
+	}
+	modelText := s.workerOutcomeModelText(ctx, machine, session, conclusion, pinnedText...)
+	s.writeWorkerOutcome(ctx, e, projects, t, machine, session, cwd, turn, itemIndex, itemKey, allowLegacy, conclusion, links, modelText)
+}
+
+func workerPendingProjects(e *kb.Engine, projects []*kb.Project, todoID, machine, session string, turn, itemIndex int, itemKey string, allowLegacy bool) []*kb.Project {
+	legacyID := workerMemoryID(todoID, machine, session, turn, itemIndex)
+	id := workerMemoryItemID(todoID, machine, session, turn, itemIndex, itemKey)
 	pending := make([]*kb.Project, 0, len(projects))
 	for _, p := range projects {
 		// An unambiguous record written before item keys were added still owns this outcome. A legacy prefix shared by
@@ -248,18 +276,79 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 			pending = append(pending, p)
 		}
 	}
+	return pending
+}
+
+func (s *Service) workerOutcomeModelText(ctx context.Context, machine, session, conclusion string, pinnedText ...string) string {
+	if len(pinnedText) > 0 {
+		if strings.TrimSpace(pinnedText[0]) != "" {
+			return pinnedText[0]
+		}
+		return conclusion
+	}
+	if c, ok := s.session(ctx, machine, session); ok && strings.TrimSpace(c.LastText) != "" {
+		return c.LastText
+	}
+	return conclusion
+}
+
+// workerOutcomeNoKBWrite reports whether the worker's directory or any conversation or run on t belongs to a track
+// whose policy forbids writing to the shared knowledge base (sceneKBWrite). Sensitive tracks also set
+// HideFromExtensions and are caught by todoVerdicts; this also covers a worker cwd outside t.Agents and custom tracks
+// that tighten only kb_write.
+func (s *Service) workerOutcomeNoKBWrite(ctx context.Context, t Todo, cwd string) bool {
+	if s.trackPolicy(ctx, identity.SpaceAt(cwd)).NoKBWrite {
+		return true
+	}
+	for _, a := range t.Agents {
+		if s.trackPolicy(ctx, identity.SpaceAt(a.Cwd)).NoKBWrite {
+			return true
+		}
+	}
+	if !s.hasKBWriteOnlyTrack(ctx) {
+		return false
+	}
+	var convs []string
+	if t.Origin != "" {
+		convs = append(convs, t.Origin)
+	}
+	if t.Supervision != nil && t.Supervision.Supervisor != "" {
+		convs = append(convs, t.Supervision.Supervisor)
+	}
+	if feed, err := s.todoFeedConversations(ctx, []string{t.ID}); err == nil {
+		convs = append(convs, feed[t.ID]...)
+	}
+	if len(convs) == 0 {
+		return false
+	}
+	for _, sp := range s.conversationSpaces(ctx, convs) {
+		if sp.known && s.trackPolicy(ctx, sp.space).NoKBWrite {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKBWriteOnlyTrack reports whether any registered track forbids shared KB writes without also hiding from
+// extensions (a custom track tightening only sceneKBWrite).
+func (s *Service) hasKBWriteOnlyTrack(ctx context.Context) bool {
+	for _, e := range s.tracks(ctx) {
+		p := s.trackPolicy(ctx, e.Slug)
+		if p.NoKBWrite && !p.HideFromExtensions {
+			return true
+		}
+	}
+	return false
+}
+
+// writeWorkerOutcome writes one worker outcome whose to-do verdict is told shown.
+func (s *Service) writeWorkerOutcome(ctx context.Context, e *kb.Engine, projects []*kb.Project, t Todo, machine, session, cwd string,
+	turn, itemIndex int, itemKey string, allowLegacy bool, conclusion string, links []string, modelText string) {
+	pending := workerPendingProjects(e, projects, t.ID, machine, session, turn, itemIndex, itemKey, allowLegacy)
 	if len(pending) == 0 {
 		return
 	}
-
-	modelText := conclusion
-	if len(pinnedText) > 0 {
-		if strings.TrimSpace(pinnedText[0]) != "" {
-			modelText = pinnedText[0]
-		}
-	} else if c, ok := s.session(ctx, machine, session); ok && strings.TrimSpace(c.LastText) != "" {
-		modelText = c.LastText
-	}
+	id := workerMemoryItemID(t.ID, machine, session, turn, itemIndex, itemKey)
 	agents := []outcomeAgent{{MachineID: machine, SessionID: session, Cwd: cwd, Text: modelText}}
 	mctx, cancel := context.WithTimeout(ctx, outcomeModelTimeout)
 	defer cancel()
@@ -306,6 +395,131 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 		if err := e.AppendProjectMemoryBatch(p.Slug, records); err != nil {
 			s.logf("WARN worker memory todo %s: append project %s: %v", t.ID, p.Slug, err)
 		}
+	}
+}
+
+// heldWorkerOutcome is a worker outcome whose to-do's verdict could not be told when the worker finished.
+type heldWorkerOutcome struct {
+	t           Todo
+	machine     string
+	session     string
+	cwd         string
+	turn        int
+	itemIndex   int
+	itemKey     string
+	allowLegacy bool
+	conclusion  string
+	links       []string
+	modelText   string
+}
+
+// workerOutcomes holds worker outcomes waiting for their to-do's verdict (holdWorkerOutcome), mirroring outcomeLines.
+// In memory only: a manager that starts again has none.
+type workerOutcomes struct {
+	mu    sync.Mutex
+	held  []heldWorkerOutcome
+	armed bool
+	tries int
+	after func(d time.Duration, f func()) // tests replace the timer
+}
+
+// holdWorkerOutcome keeps l, whose to-do's verdict could not be told, to be judged again after todoRetryDelay: written
+// once its verdict is told shown, dropped once hidden. Past todoEventLimit the oldest held is dropped.
+func (s *Service) holdWorkerOutcome(l heldWorkerOutcome) {
+	h := &s.workerOutcomes
+	h.mu.Lock()
+	if len(h.held) >= todoEventLimit {
+		h.held = h.held[1:]
+		s.logf("task %s: %d worker outcomes wait for their to-do's verdict: the oldest is dropped", l.t.ID, todoEventLimit)
+	}
+	h.held = append(h.held, l)
+	arm := !h.armed
+	h.armed = true
+	delay := todoRetryDelay(h.tries)
+	after := h.after
+	h.mu.Unlock()
+	if !arm {
+		return
+	}
+	if after == nil {
+		after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
+	}
+	after(delay, s.retryWorkerOutcomes)
+}
+
+// retryWorkerOutcomes judges held worker outcomes again, each to-do as it is kept now (falling back to its pinned
+// snapshot if deleted): one told shown runs its model extraction and append off the timer goroutine, one hidden is
+// dropped, and one still untold is held again.
+func (s *Service) retryWorkerOutcomes() {
+	h := &s.workerOutcomes
+	h.mu.Lock()
+	h.armed = false
+	held := h.held
+	h.held = nil
+	h.mu.Unlock()
+	if len(held) == 0 || s.runCtx().Err() != nil {
+		return
+	}
+	ids := make([]string, 0, len(held))
+	gone := make(map[string]Todo, len(held))
+	for _, l := range held {
+		if _, seen := gone[l.t.ID]; !seen {
+			ids = append(ids, l.t.ID)
+			gone[l.t.ID] = l.t
+		}
+	}
+	ctx, cancel := context.WithTimeout(s.runCtx(), todoNoticeTimeout)
+	verdicts := s.todoVerdicts(ctx, ids, gone, nil)
+	cancel()
+	var shown, again []heldWorkerOutcome
+	for _, l := range held {
+		switch verdicts[l.t.ID] {
+		case todoShown:
+			shown = append(shown, l)
+		case todoUntold:
+			again = append(again, l)
+		}
+	}
+	h.mu.Lock()
+	if len(again) == 0 {
+		h.tries = 0
+	} else {
+		h.tries++
+	}
+	h.held = append(again, h.held...)
+	arm := len(h.held) > 0 && !h.armed
+	h.armed = h.armed || arm
+	delay := todoRetryDelay(h.tries)
+	after := h.after
+	h.mu.Unlock()
+	if arm {
+		if after == nil {
+			after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
+		}
+		after(delay, s.retryWorkerOutcomes)
+	}
+	for _, l := range shown {
+		s.goWorkerOutcome(func() {
+			wctx, wcancel := context.WithTimeout(s.runCtx(), outcomeModelTimeout+outcomeWriteTimeout)
+			defer wcancel()
+			if !s.kbWritable(wctx) || s.workerOutcomeNoKBWrite(wctx, l.t, l.cwd) {
+				return
+			}
+			if cur, ok := s.todoNow(l.t.ID); ok && s.workerOutcomeNoKBWrite(wctx, cur, l.cwd) {
+				return
+			}
+			e, err := s.kbGet(wctx)
+			if err != nil || e == nil {
+				s.logf("WARN worker memory todo %s: knowledge base unavailable: %v", l.t.ID, err)
+				return
+			}
+			projects := s.projectsForTask(wctx, e, l.t, l.machine, l.cwd)
+			if len(projects) == 0 {
+				return
+			}
+			s.writeWorkerOutcome(wctx, e, projects, l.t, l.machine, l.session, l.cwd,
+				l.turn, l.itemIndex, l.itemKey, l.allowLegacy, l.conclusion, l.links, l.modelText)
+		})
 	}
 }
 
