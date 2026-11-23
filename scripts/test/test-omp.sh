@@ -15,6 +15,8 @@ for tool in herdr omp go python3; do
 done
 
 SESSION="persona-test-$$"
+export HERDR_SESSION="$SESSION" # never inherit the pane or server the caller was using
+unset PI_CODING_AGENT_DIR HERDR_CONFIG_PATH # omp and herdr must use only the fresh directories below
 # Go's caches stay the user's: the temp HOME below would otherwise download and build everything again.
 export GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" GOPATH="$(go env GOPATH)"
 WORK=$(mktemp -d /tmp/persona-omp-XXXX) || { echo "RESULT fail: no temp directory"; exit 1; }
@@ -23,6 +25,7 @@ export PERSONA_RUNTIME_SOCKET="$WORK/runtime.sock"
 SOCK="$XDG_CONFIG_HOME/herdr/sessions/$SESSION/herdr.sock"
 pid=""
 watchdog=""
+serverPID=""
 cleanup() {
   if [ -n "$watchdog" ]; then
     kill "$watchdog" >/dev/null 2>&1 || true
@@ -33,6 +36,10 @@ cleanup() {
     wait "$pid" >/dev/null 2>&1 || true
   fi
   herdr --session "$SESSION" server stop >/dev/null 2>&1 || true # by name: never the session you work in
+  if [ -n "$serverPID" ]; then
+    kill "$serverPID" >/dev/null 2>&1 || true # also covers a startup that never opened its socket
+    wait "$serverPID" >/dev/null 2>&1 || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -43,6 +50,7 @@ if ! mkdir -p "$HOME" "$WORK/work" "$PERSONA_HOME"; then
 fi
 
 ( exec herdr --session "$SESSION" server ) >"$WORK/server.log" 2>&1 </dev/null &
+serverPID=$!
 for _ in $(seq 1 40); do [ -S "$SOCK" ] && break; sleep 0.25; done
 if [ ! -S "$SOCK" ]; then
   echo "RESULT fail: the herdr test session did not start"

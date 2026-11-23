@@ -190,11 +190,12 @@ entries (calls outside the conversation), orchestration tokens included, under t
   the terminal receives for default, short and provider-qualified model IDs.
 - End-to-end node: `cd server && go test ./internal/node -run '^TestOmpEndToEnd' -count=1` drives `session.start` through
   fake herdr, joins the extension's row, sends through the node, exits to the on-disk row and resumes the exact session file
-  into a replacement runtime. The refusal cases cover a missing extension and a session file deleted after the scan.
+  into a replacement runtime. The refusal cases cover a missing extension, a session file deleted after the scan and an
+  existing file outside the trusted sessions root.
 - Opt-in live smoke: `./scripts/test/test-omp.sh` needs herdr, omp, Go and Python 3, builds `TestOmpLiveAttachesToHerdrAndRuntime`
   with the `omplive` tag and checks that a real omp with only Persona's extension joins its isolated herdr pane. It uses a fresh
-  HOME, config and persona directory and a named disposable herdr session, sends no message (so makes no model request), and
-  cleans up its own processes and files. A missing tool prints `RESULT skip` and exits 0; success and failure print `RESULT ok`
+  HOME, config and persona directory and a named disposable herdr session, clears inherited agent-directory and herdr-config
+  overrides, sends no message (so makes no model request), and cleans up its own processes and files. A missing tool prints `RESULT skip` and exits 0; success and failure print `RESULT ok`
   or `RESULT fail`.
 - iOS: `apple/PersonaTests/OmpNewAgentTests.swift` covers telling an omp launcher, no modes or efforts and no attachments;
   against `MOCK_OMP=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` (which lists an `omp` launcher and refuses an omp

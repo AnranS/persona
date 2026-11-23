@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -164,5 +165,35 @@ func TestOmpEndToEndRefusesResumeWhoseFileDisappeared(t *testing.T) {
 	}
 	if got := f.trace("tab.create"); len(got) != 0 {
 		t.Fatalf("a missing session file opened a tab: %v", got)
+	}
+}
+
+// An existing, valid session file is still untrusted when the cached stopped row names it outside omp's sessions root.
+// The real send route must refuse it before opening a replacement tab, not merely reject it in the path helper.
+func TestOmpEndToEndRefusesResumeOutsideAgentSessions(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, f, home, _ := piHerdrNode(t)
+	cwd := t.TempDir()
+	const id = "01d10000-0000-7000-8000-000000000003"
+	outside := writeOmpSession(t, t.TempDir(), "-w-outside", id, "outside the trusted root", cwd, time.Now())
+	d := n.omps()
+	d.mu.Lock()
+	d.dir = filepath.Join(ompAgentDir(home), "sessions")
+	d.at = time.Now()
+	d.order = []ompDiskSession{{ID: id, Path: outside, Cwd: cwd, Title: "outside the trusted root", Modified: time.Now()}}
+	d.mu.Unlock()
+
+	// If the path guard were bypassed, the fixture could open this tab; the bounded context keeps that mutant finite.
+	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": filepath.Base(cwd)}}})
+	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t11"}, "root_pane": map[string]any{"pane_id": "w1:p11"}})
+	f.reset()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := requestCtx(t, ctx, n, "session.send", map[string]any{"session_id": id, "text": "must not run outside the trusted root", "client_msg_id": "omp-e2e-outside-file"})
+	if !isRefusal(err, "omp_resume_unknown") {
+		t.Fatalf("send with an existing untrusted session file: %v", err)
+	}
+	if got := f.trace("tab.create"); len(got) != 0 {
+		t.Fatalf("an existing untrusted session file opened a tab: %v", got)
 	}
 }
