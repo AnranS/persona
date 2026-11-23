@@ -349,8 +349,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 	b.sortQueued(queued)
 	type job struct {
 		it      *InboxItem
+		todoID  string
 		chat    string
-		prompt  func(*prompts.KBContext) string
+		prompt  func(*prompts.KBContext, []prompts.InboxHandoffTarget) string
 		carried int // the agent's told count when the first message was made: it carries the notes queued up to it
 	}
 	var jobs []job
@@ -375,12 +376,14 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		}
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
-		a := b.inboxAgentForIn(it, owner, linked[it.Agent.TodoID], larkDefault, loc, language)
+		todoID := it.Agent.TodoID
+		a := b.inboxAgentForIn(it, owner, linked[todoID], larkDefault, loc, language)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
 		turn := rand.Text()
 		it.Agent.ProcessingTurn = turn
-		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string {
+		jobs = append(jobs, job{it, todoID, b.kbChatOf(it), func(kbc *prompts.KBContext, targets []prompts.InboxHandoffTarget) string {
 			a.KB = kbc
+			a.HandoffTargets = targets
 			return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(a))
 		},
 			it.Agent.told})
@@ -398,8 +401,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		if j.chat != "" {
 			kbc = s.kbChatContext(ctx, j.chat)
 		}
+		targets := s.inboxPromptHandoffTargets(ctx, j.todoID)
 		cctx, cancel := context.WithTimeout(ctx, inboxAgentStartWait)
-		machineID, sessionID, err := s.startInboxAgent(cctx, cfg, j.it, j.prompt(kbc))
+		machineID, sessionID, err := s.startInboxAgent(cctx, cfg, j.it, j.prompt(kbc, targets))
 		cancel()
 		b.mu.Lock()
 		a := j.it.Agent

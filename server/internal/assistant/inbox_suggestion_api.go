@@ -72,6 +72,8 @@ func (s *Service) inboxSuggestionRoutes() {
 			apierr.Write(w, http.StatusForbidden, err)
 		case errors.Is(err, errMailReplyTargetChanged):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(l, "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none", "item": it})
+		case errors.As(err, new(errSuggestion)):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "handoff_target_unavailable", "error": err.Error(), "retryable": false, "delivered": "none", "item": it})
 		case err != nil && s.writeInboxSendError(w, r, "suggestion", r.PathValue("id"), err, it):
 			// in doubt (delivered unknown), or why nothing was sent (#9125)
 		case err != nil:
@@ -115,7 +117,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	if in.Text != nil && strings.TrimSpace(*in.Text) != "" {
 		text = strings.TrimSpace(*in.Text)
 	}
-	if !full && (g == nil || in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Kind == SuggestTodo || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
+	if !full && (g == nil || in.Action != suggestConfirm || g.Kind == SuggestAgent || g.Kind == SuggestTodo || g.Kind == SuggestHandoff || g.Handback || len(g.Changes) > 0 || assistantwire.AsksAgent(text)) {
 		b.mu.Unlock()
 		return InboxItem{}, errAnswerOnly
 	}
@@ -188,6 +190,9 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	}
 	if g.Kind == SuggestAgent {
 		return s.confirmAgent(ctx, it, g, text, edited)
+	}
+	if g.Kind == SuggestHandoff {
+		return s.confirmHandoff(ctx, it, g, text, in.ClientID)
 	}
 	if g.Kind == SuggestTodo {
 		due := g.Due
