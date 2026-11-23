@@ -335,6 +335,56 @@ test('an empty export cannot crash settled ACP recovery (#12003)', async (t) => 
   await until('empty-export inventory', () => node.last('runtime.sessions')?.sessions[0]?.status === 'unknown')
 })
 
+test('a companion restart uses the settled reply index after tool calls (#12003)', async (t) => {
+  const { node, runtime, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', toolStart: true, tool: true, export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'done')
+})
+
+test('a native rewind clears settled-turn recovery evidence (#12003)', async (t) => {
+  const { node, runtime, restart, rewind } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await rewind()
+  await restart()
+  const stale = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  if (stale.last_text === 'Third answer') assert.notEqual(stale.status, 'done', 'an abandoned reply cannot be restored as done')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(page), records.slice(0, 2).map((step) => step.content), 'native cut reconciliation removes the abandoned tail')
+})
+
+test('a companion restart recovers a truncated settled reply (#12003)', async (t) => {
+  const reply = '## Report\n' + 'A detailed report row.\n'.repeat(200) + '\nEnd of report.'
+  const { node, runtime, restart } = await fixture(t, {
+    promptPlan: [{ reply, export: true, truncateReply: { head: '## Report\n', tail: '\nEnd of report.' } }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'done')
+})
+
+test('a failed follow-up cannot restore the previous settled reply (#12003)', async (t) => {
+  const { node, runtime, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }, { error: 'Synthetic failure' }],
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Fourth' })
+  await until('the follow-up fails', () => runtime.idle())
+  await restart()
+  const row = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  assert.equal(row.status, 'unknown')
+})
+
 test('a restart with an unreadable history epoch does not reuse the history of projected steps (#12014)', {
   skip: process.platform === 'win32' || process.getuid?.() === 0,
 }, async (t) => {

@@ -120,17 +120,21 @@ input.on('line', (line) => {
     const plan = snapshot.promptPlan[prompts++] || {}
     const sessionId = req.params.sessionId
     const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } })
-    if (plan.reply) update({ sessionUpdate: 'agent_message_chunk', content: { text: plan.reply } })
     const tool = { sessionUpdate: 'tool_call_update', toolCallId: 'test-tool', status: 'completed' }
-    if (plan.tool) update(tool)
+    if (plan.toolStart) {
+      update({ sessionUpdate: 'tool_call', toolCallId: 'test-tool', name: 'run_command', status: 'in_progress' })
+      update(tool)
+    }
+    if (plan.reply) update({ sessionUpdate: 'agent_message_chunk', content: { text: plan.reply } })
+    if (plan.tool && !plan.toolStart) update(tool)
     if (plan.lateTool) setTimeout(() => update(tool), plan.lateTool)
     if (plan.export || plan.flushReply) {
       const transcript = `${directory}/config/brain/${sessionId}/.system_generated/logs/transcript_full.jsonl`
       let index = readFileSync(transcript, 'utf8').trim().split('\n').length
       const now = new Date().toISOString()
       const created_at = plan.wholeSeconds ? now.replace(/\.\d{3}Z$/, 'Z') : now
-      const append = (type, content) => appendFileSync(transcript,
-        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at }) + '\n')
+      const append = (type, content, fields = {}) => appendFileSync(transcript,
+        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at, ...fields }) + '\n')
       if (plan.flushReply) {
         append('USER_INPUT', plan.flushReply.prompt)
         append('PLANNER_RESPONSE', plan.flushReply.reply)
@@ -140,7 +144,17 @@ input.on('line', (line) => {
         if (plan.undatedStep) appendFileSync(transcript,
           JSON.stringify({ type: 'SYSTEM_MESSAGE', content: 'System notice.', step_index: index++, status: 'DONE' }) + '\n')
         if (plan.error) append('ERROR_MESSAGE', plan.error)
-        if (plan.reply) append('PLANNER_RESPONSE', plan.reply)
+        if (plan.reply) {
+          let content = plan.reply
+          const fields = {}
+          if (plan.truncateReply) {
+            const { head, tail } = plan.truncateReply
+            const omitted = Buffer.byteLength(plan.reply) - Buffer.byteLength(head) - Buffer.byteLength(tail)
+            content = `${head}<truncated ${omitted} bytes>${tail}`
+            fields.truncated_fields = ['content']
+          }
+          append('PLANNER_RESPONSE', content, fields)
+        }
       }
     }
     if (plan.error && !plan.export) return send({ id: req.id, error: { code: -32000, message: plan.error } })

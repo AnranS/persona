@@ -554,10 +554,12 @@ with SQLite's result-code text only, and once more when reads recover, with the 
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
 A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the conversation's history-epoch file (mode
-0600). It stores a SHA-256 fingerprint of the branch, settled reply index and reply, never message text. After a restart,
-a `summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
-marker, including one followed by later native work, leaves `unknown`. Starting another prompt clears the marker.
-Transcript-only status rules and the step-count coverage check above are unchanged.
+0600). It stores SHA-256 fingerprints of the branch and actual settled reply index: one for the full reply and one for
+its byte length and first/last eight characters so truncated exports can match, never message text. After a restart, a
+`summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
+marker, including one followed by later native work, leaves `unknown`. Starting another prompt or a native rewind clears
+the marker, and a known or pending native-cut check suppresses recovery. Transcript-only status rules and the step-count
+coverage check above are unchanged.
 
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
