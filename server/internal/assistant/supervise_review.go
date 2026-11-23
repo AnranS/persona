@@ -199,12 +199,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 	}
 	// A bare accept must not hide a result that does not settle the task from the owner's Needs-you list (#12026): a
-	// non-done closeout, a blocker only the owner can clear, or an inconclusive / partial result. user_check (the owner
-	// passes the result themselves) and a "cannot be done" outcome are deliberate closures the guard lets through.
+	// non-done closeout, a blocker only the owner can clear, an inconclusive / partial result, or uncovered scope in a
+	// multi-scope brief (#13169). user_check (the owner passes the result themselves) and a "cannot be done" outcome
+	// are deliberate closures the guards let through.
 	if verdict == reviewAccepted && !a.UserCheck && a.Outcome != outcomeCannot {
 		evidence := s.acceptGuardEvidence(ctx, t, note, strings.TrimSpace(a.Reason), checks)
 		if matched, _ := acceptGuardBlock(evidence); matched != "" {
 			return "", errors.New(acceptGuardRefusal(matched))
+		}
+		if uncovered := s.acceptGuardUncoveredScopes(ctx, t, note, strings.TrimSpace(a.Reason), checks, a.AlsoDone); len(uncovered) > 0 {
+			return "", errors.New(acceptScopeGuardRefusal(uncovered))
 		}
 	}
 	// An explicit main acceptance records its verdict even for a legacy task without a ledger: accepted prerequisites
