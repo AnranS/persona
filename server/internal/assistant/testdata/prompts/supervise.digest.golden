@@ -12,7 +12,7 @@
    它说：
    要不要先停写？
    停写约 2 分钟
-Evidence:
+证据：
    - https://github.com/o/r/pull/902
 
 3. 任务「部署 hub」（todo_2，signal=idle）：Agent 停下了，但没做完（要用户决定：两种走法选一个）；在 box；已返工 1 轮
@@ -23,7 +23,7 @@ Evidence:
    - 产物：pr https://github.com/o/r/pull/902
    - 验证：untested
    - 还缺：选 A 还是 B
-Last:
+回复：
    A 先灰度，B 直接全量。选哪个？
 
 4. 任务「修崩溃」（todo_7，signal=failed）：Agent 没开起来，它的启动标签在电脑上保留到 10:12：新标签里的 shell 停在一个提问上「[oh-my-zsh] Would you like to update? [Y/n]」；在 box
@@ -41,12 +41,12 @@ Last:
 
 7. 任务「升级依赖」（todo_10，signal=orphaned）：没有 Agent 在做了：它的 Agent 被模型服务报错打断，之后标签被关掉，hub 不会自己重试（API Error: 400 prompt is too long）；在 box session_id=c3d4e5f6；next=resume
    验收标准：CI 通过
-Last:
+回复：
    API Error: 400 prompt is too long
 
 8. 任务「清理旧分支」（todo_11，signal=orphaned）：没有 Agent 在做了：它的 Agent 的标签已经关闭（用户关的，或闲置太久被关），也没有排定的唤醒；在 box session_id=d4e5f6a7；next=resume
    验收标准：未记录
-Last:
+回复：
    删了 12 个，还剩 3 个要确认
 
 9. 任务「跑回归」（todo_12，signal=orphaned）：没有 Agent 在做了：它的 Agent 所在的电脑离线了；在 laptop；next=resume
@@ -54,7 +54,7 @@ Last:
 
 10. 任务「修登录崩溃」（todo_1，signal=review，链接 https://hub.example.com/todos?id=todo_1）：待逐项复核，不代表完成（PR 已合并）；在 box session_id=a1b2c3d4；next=verify
    验收标准：PR 合并到 master；浅色 / 深色截图贴进 PR
-Last:
+回复：
    修好了，PR https://github.com/o/r/pull/901 已合并
    独立评审（评审员只看了任务要求和改动，看不到 Agent 的推理）：没有阻断问题，1 条非阻断发现
    1. P2 login/view.swift:12 变量名可以更清楚

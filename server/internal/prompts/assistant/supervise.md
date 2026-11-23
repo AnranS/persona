@@ -12,9 +12,9 @@
    - {{.Title}}（{{.ID}}，{{if eq .Reason "pr_merged"}}PR 已合并{{else}}已完成{{end}}{{with .MergedPRs}}：{{join . "、"}}{{end}}）{{end}}{{end}}{{with .Notes}}
    待办备注 / 启动说明：
 {{chomp (indent "   " .)}}{{end}}{{end}}{{if not $e.OmitRequest}}{{with $e.Asked}}
-Original ({{$e.AskedAt}}): {{.}}{{end}}{{with $e.Started}}
+原话（{{$e.AskedAt}}）：{{.}}{{end}}{{with $e.Started}}
    这件事的由来（不是用户直接要的）：{{if eq . "leader"}}主管对话{{else if eq . "routine"}}定时任务{{else if eq . "hub"}}Persona 自己{{else}}助手{{end}}发起{{with $e.StartedWhy}}，理由：{{.}}{{end}}{{end}}{{with $e.Dropped}}
-Dropped: {{range $j, $c := .}}{{if $j}}；{{end}}{{$c}}{{end}}{{end}}{{end}}{{if $.Fresh}}{{with $e.LastReview}}
+去掉的标准：{{range $j, $c := .}}{{if $j}}；{{end}}{{$c}}{{end}}{{end}}{{end}}{{if $.Fresh}}{{with $e.LastReview}}
    上次结论（{{.At}}）：{{.Verdict}}{{with .Note}}，{{.}}{{end}}{{end}}{{end}}{{with $e.Inbox}}
    收件箱事件 {{.Item}}「{{.Title}}」{{with .Sender}}，最新一条是 {{.}} 发的{{end}}{{with .Preview}}：「{{.}}」{{end}}{{with .URL}}（{{.}}）{{end}}{{if .AfterAcceptance}}。待办已验收，PR 尚未关闭。请查看这条反馈，保留原验收记录{{end}}{{if eq .ToAgent "sent"}}；hub 已经把要点和链接直接发给它的 Agent（它收到了），这里是副本{{end}}{{end}}{{with $e.Recommend}}
    {{if $e.Background}}后台督办对话{{else}}leader {{end}}推荐：{{.}}{{end}}{{with $e.Decision}}
@@ -31,7 +31,7 @@ Dropped: {{range $j, $c := .}}{{if $j}}；{{end}}{{$c}}{{end}}{{end}}{{end}}{{if
 {{chomp (indent "   " .)}}{{end}}{{with $e.Said}}
    它说：
 {{chomp (indent "   " .)}}{{end}}{{with $e.Evidence}}
-Evidence:{{range .}}
+证据：{{range .}}
    - {{.}}{{end}}{{end}}{{with $e.Files}}
    它交回的文件（已经放到你这台电脑上，直接读；不要让它贴内容）：{{range .}}
    - {{.Name}}{{if .Error}}（没取回：{{.Error}}；在原电脑 {{.Path}}）{{else}}：{{.Path}}{{end}}{{end}}{{end}}{{with $e.Closeout}}
@@ -41,7 +41,7 @@ Evidence:{{range .}}
    - 产物：{{.}}{{end}}{{with .Verified}}
    - 验证：{{.}}{{end}}{{with .Missing}}
    - 还缺：{{.}}{{end}}{{end}}{{if not $e.OmitLast}}{{with $e.Last}}
-Last:
+回复：
 {{chomp (indent "   " .)}}{{end}}{{end}}{{if $e.KeptUntil}}{{with $e.Screen}}
    启动标签最后几行：
 {{chomp (indent "   | " .)}}{{end}}
