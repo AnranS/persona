@@ -13,6 +13,7 @@ import (
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -1467,6 +1468,23 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 	}
 	for _, id := range cancelled {
 		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
+	}
+	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
+		for _, id := range cancelled {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			rec, err := func() (rec *db.InteractionRecord, err error) {
+				defer guard(&err)
+				return recStore.InteractionRecord(readCtx, id)
+			}()
+			cancel()
+			if err != nil {
+				s.logf("read invalidated interaction %s: %v", id, err)
+				continue
+			}
+			if rec != nil {
+				s.recordRestartInvalidation(ctx, rec.Interaction)
+			}
+		}
 	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()
