@@ -105,6 +105,12 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
+- Supervision payload deltas must not change whole-signal fingerprints or disappear during queue revalidation (#5665).
+  Reserve recipient/task content hashes from the full entry, carry the repeat hashes with the persisted signal, and apply
+  them only at final render. A changed hash or a new recipient includes full facts again; rollback and a lost queue must
+  not mark undelivered prose as seen. Keep `todo_get` and `agent_read` authoritative so omission never relies on the
+  model remembering an earlier event or on a cached first copy.
+
 
 - Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
   drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.

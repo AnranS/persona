@@ -141,6 +141,8 @@ Custom assistant runtimes expose user-message context only unless they explicitl
 
 Supervision event bodies contain facts only, including the signal kind and any question-routing timeout/mode. Direction/background role context and the background startup notice likewise contain role facts, not another supervision manual. All fixed and kind-conditioned handling lives in the static fragment, not in each event. `TestSupervisionInstructionsDispatchIsolation`, `TestSupervisionInstructionsFirstStartAndWarm`, `TestAssistantSupervisionStartupResumeIsolation`, `TestCodexSupervisionDeveloperInstructionsStartResume`, `TestSupervisionWarmSpareIsolation`, `TestSupervisionCapableRuntimePolicyLifecycleAndFailClosed`, `TestCapableRuntimeSideChatSupervisesOwnTasks`, `TestCapableRuntimeLeaderAndBackgroundSupervisor` and `TestCapableRuntimeFailClosedRefusalStopsRelay` exercise dispatch, startup/resume, and capable vs. non-capable runtime isolation. The instruction and event goldens pin the bytes; the size ratchet measures the fragment once along with shared instructions and event payloads.
 
+A recipient's first event for a task carries its current brief, report, evidence and Agent-last prose. Later events keep the new state, reason and `next=` hint but omit content hashes already delivered to that recipient/task. The reservation lives beside the whole-signal deduplication history, so restart and fresh rounds use the same deltas; queue revalidation compares the current hash and includes changed content, and a new recipient gets full facts. Whole-signal fingerprints still use the full entry. `todo_get` returns the authoritative request, scope history and current criterion evidence, while `agent_read` returns the Agent's actual text. The static policy blocks acceptance or authorization when a required retrieval fails.
+
 ## Per-criterion acceptance progress (#3635)
 
 `todo_supervision.done_when` remains the ordered list of criterion text. The additive
@@ -169,7 +171,7 @@ resets the entry. Out-of-range or duplicate numbers, invalid states, and missing
 evidence reject the whole batch. Omitted entries keep their state. The ledger is
 persisted before the tool succeeds and the normal to-do change event refreshes
 the web count immediately. A progress report still does not wake the assistant;
-the recorded states and evidence accompany the next supervision event. A
+new evidence accompanies the next supervision event. Later events omit unchanged evidence entries, and `todo_get` retains the complete current ledger. A
 question, blocker or completion report follows its existing delivery rules.
 
 The supervisor's `task_review.checks` writes each matching `done_when` entry back

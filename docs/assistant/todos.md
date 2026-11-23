@@ -1312,7 +1312,7 @@ An approved start is remembered across manager restarts and rechecked by the tas
 | Tool | What it does | Confirmed on the phone |
 | --- | --- | --- |
 | `todo_list` | Open to-dos and failed starts by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, project, words | — |
-| `todo_get` | One in full: notes, agents, the task it is, decisions in force | — |
+| `todo_get` | One in full: notes, agents, decisions in force, the authoritative original request and scope history, current criteria and their evidence | — |
 | `todo_create` | `title`, `notes`, `due` (a day, a moment in the user's time zone or RFC 3339, `2h` / `3d`), `remind` (a moment, not past), `priority`, `project`, `part_of`, `after` ("Requests in pieces"); an open to-do with the same title and due date is returned instead of made twice | No |
 | `todo_update` | Title, notes, due, remind, priority, project, `part_of`, `after`; `""` / `[]` clears | No |
 | `todo_complete` / `todo_reopen` | Mark done / open again | Only for a task, or a to-do agents work on (completing closes its agents) |

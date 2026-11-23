@@ -11,5 +11,5 @@ Question routing: timeout_minutes=5, low_distraction=false.
      允许运行 Bash：git push
    这个任务已经定下的事：
    - 用哪个分支？→ feat/x（用户在卡片上选的）
-   Agent 最后说的：
+Last:
    改好了，要推到远端

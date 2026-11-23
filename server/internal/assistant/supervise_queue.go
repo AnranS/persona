@@ -28,6 +28,44 @@ func decodeDigestSignals(raw string) ([]superviseSignal, bool) {
 	return list, true
 }
 
+// renderSupervisionDelivery applies the reservation's content deltas immediately before rendering. Revalidation
+// rebuilds the full entry; a matching hash suppresses only the version actually repeated, never newer facts.
+func (s *Service) renderSupervisionDelivery(ctx context.Context, to string, list []prompts.SuperviseEntry, signals []superviseSignal, originalFresh ...bool) string {
+	list = slices.Clone(list)
+	for i := range list {
+		if i >= len(signals) {
+			break
+		}
+		g, current := signals[i], currentSuperviseEventPayload(list[i])
+		if g.RepeatCriteria != "" && g.RepeatCriteria == current.Criteria {
+			list[i].OmitCriteria = true
+		}
+		if g.RepeatRequest != "" && g.RepeatRequest == current.Request {
+			list[i].OmitRequest = true
+		}
+		if g.RepeatLast != "" && g.RepeatLast == current.Last {
+			list[i].OmitLast = true
+		}
+		if g.RepeatSaid != "" && g.RepeatSaid == current.Said {
+			list[i].Said = ""
+		}
+		if len(g.RepeatEvidence) > 0 {
+			repeated := make(map[string]bool, len(g.RepeatEvidence))
+			for _, hash := range g.RepeatEvidence {
+				repeated[hash] = true
+			}
+			filtered := make([]string, 0, len(list[i].Evidence))
+			for _, evidence := range list[i].Evidence {
+				if !repeated[superviseContentHash(evidence)] {
+					filtered = append(filtered, evidence)
+				}
+			}
+			list[i].Evidence = filtered
+		}
+	}
+	return s.renderQueuedDigest(ctx, to, list, originalFresh...)
+}
+
 // Keep the same rendering for initial dispatch and a queue that has waited while tasks changed.
 func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prompts.SuperviseEntry, originalFresh ...bool) string {
 	here := s.settings(ctx)
@@ -144,6 +182,11 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			if target == "" {
 				return msg, false, true
 			}
+			if target != g.Recipient {
+				// A new recipient has not seen the old one's payload. Include every current fact there.
+				g.Recipient = target
+				g.RepeatCriteria, g.RepeatRequest, g.RepeatSaid, g.RepeatLast, g.RepeatEvidence = "", "", "", "", nil
+			}
 			groups[target] = append(groups[target], g)
 			entries[target] = append(entries[target], e)
 		}
@@ -155,7 +198,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	next.OnceID = relayMsgID(to, msg)
 	next.Signals = encodeDigestSignals(groups[to])
 	if len(groups[to]) > 0 {
-		next.Text = s.renderQueuedDigest(ctx, to, entries[to], prompts.IsSuperviseRound(msg.Text))
+		next.Text = s.renderSupervisionDelivery(ctx, to, entries[to], groups[to], prompts.IsSuperviseRound(msg.Text))
 		next.Urgent = anyDecision(groups[to])
 	}
 	// Render before taking the queue lock: rendering may read other service state.
@@ -166,7 +209,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		}
 		m := msg
 		m.OnceID = "" // another destination is a separate delivery
-		m.Text = s.renderQueuedDigest(ctx, target, entries[target])
+		m.Text = s.renderSupervisionDelivery(ctx, target, entries[target], list)
 		m.Signals, m.Urgent = encodeDigestSignals(list), anyDecision(list)
 		moved[target] = m
 	}

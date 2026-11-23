@@ -25,6 +25,57 @@ type superviseFingerprint struct {
 	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
+	// Payload is the last task prose reserved for one recipient. It lives under a separate event-payload key;
+	// ordinary whole-signal fingerprints never depend on it.
+	Payload *superviseEventPayload `json:"payload,omitempty"`
+}
+
+type superviseEventPayload struct {
+	Criteria, Request, Said, Last string
+	Evidence                      []string
+}
+
+func superviseEventPayloadKey(g superviseSignal) string {
+	key, _ := json.Marshal([]string{"event-payload", g.Recipient, g.Todo})
+	return string(key)
+}
+
+func superviseContentHash(v any) string {
+	raw, _ := json.Marshal(v)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func currentSuperviseEventPayload(e prompts.SuperviseEntry) superviseEventPayload {
+	p := superviseEventPayload{
+		Criteria: superviseContentHash(e.DoneWhen),
+		Request:  superviseContentHash([]any{e.Asked, e.AskedAt, e.Started, e.StartedWhy, e.Dropped}),
+		Last:     superviseContentHash([]string{e.AgentID, e.Last}),
+	}
+	if e.Said != "" {
+		p.Said = superviseContentHash(e.Said)
+	}
+	for _, evidence := range e.Evidence {
+		p.Evidence = append(p.Evidence, superviseContentHash(evidence))
+	}
+	return p
+}
+
+func repeatedEvidence(previous, current []string) []string {
+	if len(previous) == 0 || len(current) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(previous))
+	for _, hash := range previous {
+		seen[hash] = true
+	}
+	var repeated []string
+	for _, hash := range current {
+		if seen[hash] {
+			repeated = append(repeated, hash)
+		}
+	}
+	return repeated
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
@@ -200,7 +251,30 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
-		out, kept = append(out, entry), append(kept, signals[i])
+
+		// Reserve task prose separately from whole-signal deduplication. The full entry above decides whether the
+		// signal is news; these hashes only let its final rendering omit what this recipient already has.
+		g := &signals[i]
+		g.RepeatCriteria, g.RepeatRequest, g.RepeatSaid, g.RepeatLast, g.RepeatEvidence = "", "", "", "", nil
+		payload := currentSuperviseEventPayload(entry)
+		payloadKey := superviseEventPayloadKey(*g)
+		if previous := next[payloadKey].Payload; previous != nil {
+			if previous.Criteria == payload.Criteria {
+				g.RepeatCriteria = payload.Criteria
+			}
+			if previous.Request == payload.Request {
+				g.RepeatRequest = payload.Request
+			}
+			if payload.Said != "" && previous.Said == payload.Said {
+				g.RepeatSaid = payload.Said
+			}
+			if entry.Last != "" && previous.Last == payload.Last {
+				g.RepeatLast = payload.Last
+			}
+			g.RepeatEvidence = repeatedEvidence(previous.Evidence, payload.Evidence)
+		}
+		next[payloadKey] = superviseFingerprint{At: now.UTC(), Key: g.Key, Todo: g.Todo, Payload: &payload}
+		out, kept = append(out, entry), append(kept, *g)
 	}
 	if resuming {
 		return out, kept, func() {
@@ -285,6 +359,10 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 	}
 	next := maps.Clone(history)
 	for _, g := range signals {
+		payloadKey := superviseEventPayloadKey(g)
+		if seen := next[payloadKey]; seen.Key == g.Key {
+			delete(next, payloadKey) // a lost queue must not make its first later delivery look repeated
+		}
 		if g.Kind == sigAllStopped {
 			key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
 			delete(next, key) // a lost queue releases its key even while the participants cannot be read

@@ -101,8 +101,12 @@ type superviseSignal struct {
 	// destination, and NotBefore holds a repeated failure until its persistent deduplication window expires.
 	Launcher  string
 	Recipient string
-	NotBefore time.Time
-	Remedying bool
+	// Repeat* names the content hashes already delivered to Recipient for this task. They affect only the final
+	// rendering: a queued revalidation still applies one when its current content matches, and includes changed facts.
+	RepeatCriteria, RepeatRequest, RepeatSaid, RepeatLast string   `json:",omitempty"`
+	RepeatEvidence                                        []string `json:",omitempty"`
+	NotBefore                                             time.Time
+	Remedying                                             bool
 	// Generation identifies a failed-start event independently of its queue position. failedClaim is the local
 	// manager's delivery claim; Claims in the durable batch document carries it between managers.
 	Generation  time.Time `json:"generation,omitzero"`

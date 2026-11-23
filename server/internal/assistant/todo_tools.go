@@ -163,6 +163,34 @@ func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args js
 	fmt.Fprintf(&b, "created %s, updated %s\n", t.CreatedAt.In(loc).Format(toolTimeLayout), t.UpdatedAt.In(loc).Format(toolTimeLayout))
 	if brief, ok := s.briefOfTodo(t.ID); ok {
 		fmt.Fprintf(&b, "scope_revision: %s\n", brief.scopeRevision().Format(time.RFC3339Nano))
+		if req := brief.Request; req != nil {
+			fmt.Fprintf(&b, "request (owner words at %s", req.At.In(loc).Format(toolTimeLayout))
+			if req.Truncated {
+				b.WriteString(", truncated")
+			}
+			b.WriteString("):\n" + req.Text + "\n")
+			if req.Conversation != "" || req.MessageID != "" {
+				fmt.Fprintf(&b, "request_source: conversation=%s message_id=%s\n", req.Conversation, req.MessageID)
+			}
+		} else if brief.StartedBy != "" && brief.StartedBy != briefByOwner && brief.StartedBy != briefByUnknown {
+			fmt.Fprintf(&b, "started_by: %s; reason: %s\n", brief.StartedBy, firstNonEmpty(brief.Reason, brief.TriggerTitle))
+		}
+		for _, event := range brief.Log {
+			if event.Kind != briefEventScope {
+				continue
+			}
+			fmt.Fprintf(&b, "scope change at %s: %s", event.At.In(loc).Format(toolTimeLayout), clip(oneLine(event.Change), 400))
+			if event.Why != "" {
+				fmt.Fprintf(&b, "; why: %s", clip(oneLine(event.Why), 400))
+			}
+			if len(event.Added) > 0 {
+				fmt.Fprintf(&b, "; added: %s", strings.Join(event.Added, "; "))
+			}
+			if len(event.Dropped) > 0 {
+				fmt.Fprintf(&b, "; dropped: %s", strings.Join(event.Dropped, "; "))
+			}
+			b.WriteString("\n")
+		}
 	}
 	if t.failedStart() {
 		// Stored done (#1077), but nothing was done: it is open and waits on the owner, as the app shows it (#10365).

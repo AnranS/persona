@@ -921,25 +921,28 @@ type Supervise struct {
 // started, escalated, ask, inbox…).
 type SuperviseEntry struct {
 	ID, Title, Kind string
-	AgentReply      *DecisionAgentReply // decision_reply: a pending decision's owner message, not an inferred choice
-	Detail          string              // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
-	Minutes         int                 // how long it has waited (needs_you), not moved (stalled) or not progressed (no_progress)
-	Calls, Waits    int                 // no_progress: the tool calls the hub saw since the last progress, and how many were waits or repeats
-	Ask             string              // needs_you: what it asks
-	Recommend       string              // escalated: the option the leader recommends
-	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
-	Background      bool                // escalated: by the background supervisor, not a leader conversation (#4927)
-	DoneWhen        []string            // what done means
-	Round           int                 // reworks so far
-	Machine         string              // where its agent runs (a name)
-	Session         string              // its agent's session id (short)
-	AgentID         string              // full id for durable deduplication; not rendered
-	Last            string              // what its agent said last
-	Closeout        *SuperviseCloseout  // the closeout its agent ended the turn with (#3612), nil when it wrote none
-	Link            string              // the task's page ("" when the hub has no public_url)
-	Quiet           bool                // the user was not pushed about it
-	Orphan          string              // orphaned: why nobody works on it (error, closed, offline)
-	Review          *SuperviseReviewed  // review: what the independent reviewer found (#2173), nil when none ran
+	// Omit* is a render-only delta marker set by the manager after fingerprinting the full entry. The authoritative
+	// brief and Agent text remain available through todo_get and agent_read; these are never dedup-fingerprint inputs.
+	OmitCriteria, OmitRequest, OmitLast bool
+	AgentReply                          *DecisionAgentReply // decision_reply: a pending decision's owner message, not an inferred choice
+	Detail                              string              // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
+	Minutes                             int                 // how long it has waited (needs_you), not moved (stalled) or not progressed (no_progress)
+	Calls, Waits                        int                 // no_progress: the tool calls the hub saw since the last progress, and how many were waits or repeats
+	Ask                                 string              // needs_you: what it asks
+	Recommend                           string              // escalated: the option the leader recommends
+	LeaderGone                          bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	Background                          bool                // escalated: by the background supervisor, not a leader conversation (#4927)
+	DoneWhen                            []string            // what done means
+	Round                               int                 // reworks so far
+	Machine                             string              // where its agent runs (a name)
+	Session                             string              // its agent's session id (short)
+	AgentID                             string              // full id for durable deduplication; not rendered
+	Last                                string              // what its agent said last
+	Closeout                            *SuperviseCloseout  // the closeout its agent ended the turn with (#3612), nil when it wrote none
+	Link                                string              // the task's page ("" when the hub has no public_url)
+	Quiet                               bool                // the user was not pushed about it
+	Orphan                              string              // orphaned: why nobody works on it (error, closed, offline)
+	Review                              *SuperviseReviewed  // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
 	Report      string
 	Said        string

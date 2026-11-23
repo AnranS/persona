@@ -388,6 +388,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	for i := range kept {
+		kept[i].Recipient = to
 		if s.noMainOriginFallback(here, to, kept[i]) {
 			kept[i].OriginOnly = true // persist the route's lack of acceptance authority with the signal itself
 		}
@@ -489,7 +490,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.restoreDigest(kept, now, prev)
 		return false
 	}
-	render := func(list []prompts.SuperviseEntry) string { return s.renderQueuedDigest(ctx, to, list) }
+	render := func(list []prompts.SuperviseEntry, signals []superviseSignal) string {
+		return s.renderSupervisionDelivery(ctx, to, list, signals)
+	}
 	queued := s.queuedDigestSignals(to)
 	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
 	if len(queued) > 0 && !slices.ContainsFunc(kept, func(g superviseSignal) bool {
@@ -504,7 +507,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 				allEntries = append(allEntries, e)
 			}
 		}
-		msg.Text, msg.Urgent = render(allEntries), anyDecision(all)
+		msg.Text, msg.Urgent = render(allEntries, all), anyDecision(all)
 		msg.Signals = encodeDigestSignals(all)
 		if s.replaceQueuedSupervise(to, msg) {
 			delivered = all
@@ -516,7 +519,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			return true
 		}
 	}
-	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
+	msg.Text, msg.Urgent = render(entries, kept), anyDecision(kept)
 	msg.Signals = encodeDigestSignals(kept)
 	msg.Interject = slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
 	if background {
