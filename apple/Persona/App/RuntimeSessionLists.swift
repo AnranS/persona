@@ -113,6 +113,10 @@ import Observation
             // Whether the list is a window or the whole collection decides where the switcher's counts come from.
             if group == model.hub?.group { model.followNeedsYou() }
         }
+        list.published = { [weak model, weak list] in
+            guard let model, let list else { return }
+            model.keepSeen(in: list)
+        }
         list.outside = { [weak model] rows in model?.landSessionSummaries(rows, group: group) }
         lists[group] = list
         return list
@@ -239,6 +243,10 @@ import Observation
         page.changed = { [weak model, weak page] rows in
             guard let model, let page else { return }
             model.landSessionSummaries(rows, group: scope.hub)
+            model.keepSeen(in: page)
+        }
+        page.published = { [weak model, weak page] in
+            guard let model, let page else { return }
             model.keepSeen(in: page)
         }
         page.outside = { [weak model] rows in model?.landSessionSummaries(rows, group: scope.hub) }

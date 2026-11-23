@@ -58,6 +58,8 @@ import PersonaWire
         _ = o.land([machine: [recorded]], at: t0 + 5)
         #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 15.999)) == .idle)
         #expect(o.marks[key] != nil)
+        #expect(o.holds(session(state: "unread"), at: t0 + 15.999))
+        #expect(!o.holds(session(state: "unread"), at: t0 + 16.001))
         #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 16.001)) == .unread)
         #expect(o.marks.isEmpty)
     }

@@ -3973,7 +3973,8 @@ final class AppModel {
 
     func keepSeen(in list: SessionListModel<Session>) {
         guard !seenOutbox.marks.isEmpty else { return }
-        list.keepSeen { seenOutbox.marks[$0] != nil }
+        let now = Date()
+        list.keepSeen { seenOutbox.holds($0, at: now) }
     }
 
     /// Retire marks and their held row when their pairing is forgotten. Reconnecting keeps both.
