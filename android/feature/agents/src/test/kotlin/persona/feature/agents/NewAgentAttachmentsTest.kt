@@ -488,7 +488,7 @@ class NewAgentAttachmentsTest {
         } finally { model.viewModelScope.cancel() }
     }
 
-    @Test fun theModelRefusesAFifthPhotoEvenWhenPickerResultsOverlap() = test {
+    @Test fun theModelSpillsPastHubPhotoLimitAndRefusesOnceFilesAreFullEvenWhenPickerResultsOverlap() = test {
         val discarded = mutableListOf<String>()
         val model = NewAgentViewModel(Service(), MemoryStore(), machines, Sender(),
             uploads = uploads(Source(Composer()), discarded))
@@ -496,13 +496,15 @@ class NewAgentAttachmentsTest {
         val collecting = launch { model.notices.collect { notices += it } }
         try {
             advanceUntilIdle()
-            model.attach(List(3) { photo("p$it") })
+            model.attach(List(10) { file("f$it") })
             advanceUntilIdle()
-            model.attach(List(2) { photo("p${it + 3}") })
+            model.attach(List(19) { photo("p$it") })
             advanceUntilIdle()
-            assertEquals(4, model.state.value.attachments.count { it.media })
-            assertEquals(listOf("p4"), discarded)
-            assertEquals(AgentText(R.string.agents_attach_photo_limit), notices.single())
+            model.attach(List(2) { photo("p${it + 19}") })
+            advanceUntilIdle()
+            assertEquals(20, model.state.value.attachments.count { it.image })
+            assertEquals(listOf("p20"), discarded)
+            assertEquals(AgentText(R.string.agents_attach_photo_limit, 20), notices.single())
         } finally { collecting.cancel(); model.viewModelScope.cancel() }
     }
 

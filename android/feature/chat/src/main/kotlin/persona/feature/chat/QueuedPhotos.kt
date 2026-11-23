@@ -5,6 +5,7 @@ import android.content.res.Resources
 import android.net.Uri
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.ImagePayload
 import java.io.File
 import java.util.Base64
@@ -67,20 +68,30 @@ internal suspend fun forwardedPhotos(context: Context, paths: List<String>, read
 }
 
 /**
- * Adds forwarded photos to the target's existing draft, up to its free media places. Returns the attachments rejected by
- * the target cap; rejected captures are deleted rather than left in the cache.
+ * Adds forwarded photos to the target's existing draft under [limits], spilling overflow pictures into file attachments
+ * when [canSpill] and file slots remain. Returns the attachments that could not fit; rejected captures are deleted
+ * rather than left in the cache.
  */
-suspend fun attachForwardedPhotos(context: Context, composer: ChatComposerState, handoffs: List<RestoredPhotos>): List<ComposerAttachment> {
+suspend fun attachForwardedPhotos(
+    context: Context,
+    composer: ChatComposerState,
+    handoffs: List<RestoredPhotos>,
+    limits: ImageLimits = ImageLimits.Standard,
+    canSpill: Boolean = true,
+    onNotice: (String) -> Unit = {},
+): List<ComposerAttachment> {
     val photos = handoffs.flatMap(RestoredPhotos::attachments)
-    val room = (MAX_COMPOSER_MEDIA - composer.attachments.count { it.media }).coerceAtLeast(0)
-    val accepted = photos.take(room)
-    val rejected = photos.drop(room)
-    if (accepted.isNotEmpty()) {
+    val candidates = photos.map { PhotoCandidate(it, it.size ?: 0L) }
+    val plan = planComposerPhotos(composer.attachments, candidates, limits, canSpill = canSpill)
+    if (plan.added.isNotEmpty()) {
         composer.beginEdit()
-        composer.attachments = composer.attachments + accepted
+        composer.attachments = composer.attachments + plan.added
     }
-    withContext(Dispatchers.IO) { rejected.forEach { deleteCapture(context, it.uri) } }
-    return rejected
+    if (plan.spilledByCount > 0 || plan.spilledByBytes > 0) {
+        plan.notices(context.resources, limits).forEach(onNotice)
+    }
+    withContext(Dispatchers.IO) { plan.refused.forEach { deleteCapture(context, it.uri) } }
+    return plan.refused
 }
 
 /** Drops a duplicate handoff without adding its photos twice. */

@@ -505,7 +505,8 @@ private fun ChatPage(
     var reportedSeen by pageReader.reportedSeen
     val readThrough = pageReader.readThrough
     val context = pageReader.context
-    LaunchedEffect(placedForwards, readOnly, canSend) {
+    val imageLimits = rememberSessionImageLimits(chrome.connection, session?.agent)
+    LaunchedEffect(placedForwards, readOnly, canSend, imageLimits) {
         if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
         val fresh = mutableListOf<ForwardPlacement>()
         val duplicates = mutableListOf<RestoredPhotos>()
@@ -518,7 +519,9 @@ private fun ChatPage(
             }
         }
         duplicates.forEach { discardForwardedPhotos(context, it) }
-        val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos))
+        val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos),
+            limits = imageLimits, canSpill = composerService != null,
+            onNotice = { message -> if (feedback?.notice(message) != true) notice = message })
         val lost = fresh.sumOf { it.photos.lost } + rejected.size
         if (lost > 0) {
             val message = forwardedPhotoNotice(res, lost)
@@ -1277,7 +1280,8 @@ private fun ChatPage(
                                     // web's `canPickPermissions`: Claude's sessions and Persona's while they can change it (#6513)
                                     onPermissions = if (SessionModes.offersPermissions(session, glass, modeSheet)) ({ openPermissions = true }) else null,
                                     // (on Glass /model opens the pill's panel, where the model is picked)
-                                    loop = claudeCommands)
+                                    loop = claudeCommands,
+                                    imageLimits = imageLimits)
                             }
                         }
                     },
@@ -1320,7 +1324,8 @@ private fun ChatPage(
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
                 } }, viewerState, chatList, backgroundActions = chrome.actions,
-                backgroundConnection = chrome.connection, backgroundFiles = chrome.files)
+                backgroundConnection = chrome.connection, backgroundFiles = chrome.files,
+                imageLimits = imageLimits, canUploadPhotos = composerService != null)
         }
     }
 }

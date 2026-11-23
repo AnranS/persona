@@ -30,12 +30,9 @@ data class ComposerAttachment(
     /** A video's length in seconds, when the phone could read it. */
     val duration: Double? = null,
 ) {
-    /** A photo or a video: the two share the picker's four places (iOS). */
+    /** A photo or a video (videos keep their own cap of 4 while pictures follow the hub's image limits). */
     val media: Boolean get() = image || video
 }
-
-/** The most photos and videos a message carries together (iOS `mediaPicker`'s `maxSelectionCount`). */
-internal const val MAX_COMPOSER_MEDIA = 4
 
 data class ChatComposerDraft(
     val text: String = "", val attachments: List<ComposerAttachment> = emptyList(),

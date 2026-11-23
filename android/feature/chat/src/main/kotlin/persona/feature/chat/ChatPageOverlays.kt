@@ -10,6 +10,8 @@ import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.SessionFiles
 import persona.core.designsystem.LocalHubFeatures
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.Item
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
@@ -72,6 +74,8 @@ internal fun ChatPageOverlays(
     backgroundActions: ChatActions?,
     backgroundConnection: HubConnection?,
     backgroundFiles: SessionFiles?,
+    imageLimits: ImageLimits = persona.core.designsystem.LocalHubImageLimits.current.forAgent(session?.agent),
+    canUploadPhotos: Boolean = true,
 ) {
     pushedDetail?.let { open ->
         val host = taskHost ?: return@let
@@ -104,10 +108,22 @@ internal fun ChatPageOverlays(
     sheetPlan.value?.takeIf { planSheet.value }?.let { PlanSheet(it, onDismiss = { planSheet.value = false }) }
     ChatMessageActions(key, session, machine, renderStyle, repository, readOnly, composer, messageMenu,
         quoteTarget = quoteTarget, onContext = onContext, onNotice = onNotice, onFork = onFork, rewindMenu = rewindMenu,
-        onDelete = onDelete)
+        onDelete = onDelete, imageLimits = imageLimits)
+    val resources = LocalResources.current
     viewer.value?.let { request ->
+        val canSpill = canSend && canUploadPhotos
         ChatImageViewer(request.images, request.index, onDismiss = { viewer.value = null },
-            onEdited = if (readOnly) null else ({ attachment -> composer.beginEdit(); composer.attachments += attachment }),
-            photoLimitReached = composer.attachments.count { it.media } >= MAX_COMPOSER_MEDIA)
+            onEdited = if (readOnly) null else ({ attachment ->
+                val plan = planComposerPhotos(composer.attachments, listOf(PhotoCandidate(attachment, attachment.size ?: 0L)),
+                    imageLimits, canSpill = canSpill)
+                if (plan.added.isNotEmpty()) {
+                    composer.beginEdit()
+                    composer.attachments += plan.added
+                }
+                plan.notices(resources, imageLimits).forEach(onNotice)
+            }),
+            photoLimitReached = !composerCanAddPhoto(composer.attachments, imageLimits, canSpill = canSpill),
+            maxPhotos = imageLimits.perMessage,
+            maxSide = imageLimits.maxSide)
     }
 }

@@ -89,11 +89,11 @@ object MediaShare {
     }
 
     /**
-     * A marked-up picture as a photo for the composer: long side [EditedMaxSide], JPEG [EditedQuality], written to
+     * A marked-up picture as a photo for the composer: long side [maxSide], JPEG [EditedQuality], written to
      * `cache/chat-captures/` and handed out through the chat's FileProvider, which the composer reads without a grant.
      */
-    suspend fun writeEditedPhoto(context: Context, picture: Bitmap): ComposerAttachment = withContext(Dispatchers.IO) {
-        val bytes = picture.jpegBytes(EditedMaxSide, EditedQuality)
+    suspend fun writeEditedPhoto(context: Context, picture: Bitmap, maxSide: Int = EditedMaxSide): ComposerAttachment = withContext(Dispatchers.IO) {
+        val bytes = picture.jpegBytes(maxSide, EditedQuality)
         val folder = File(context.cacheDir, "chat-captures").apply { mkdirs() }
         val file = File.createTempFile("edited-", ".jpg", folder)
         try {

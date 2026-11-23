@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import persona.core.contracts.ImageLimits
 import persona.core.designsystem.ImageEditor
 import persona.core.designsystem.ImageViewer
 import persona.core.designsystem.LocalAppFeedback
@@ -29,10 +30,10 @@ import kotlinx.coroutines.withContext
 /**
  * The image viewer of a conversation: [ImageViewer] with "Save", "Edit" (only with [onEdited]), "Share" and "Copy".
  *
- * "Edit" opens the markup editor on the current picture; "Done" makes it a photo for the composer (long side 1600, JPEG
- * 75, in `cache/chat-captures/`), hands it to [onEdited], says "Added to the composer, add a line to send" and closes the viewer
- * through [onDismiss]. With [photoLimitReached] (the composer already holds 4 photos) "Edit" says "Up to 4 photos at a time"
- * instead. Results of "Save" / "Share" / "Copy" show inside the viewer, which stays open.
+ * "Edit" opens the markup editor on the current picture; "Done" makes it a photo for the composer (long side [maxSide],
+ * JPEG 75, in `cache/chat-captures/`), hands it to [onEdited], says "Added to the composer, add a line to send" and
+ * closes the viewer through [onDismiss]. With [photoLimitReached] "Edit" says [R.string.chat_viewer_photo_limit] with
+ * [maxPhotos] instead. Results of "Save" / "Share" / "Copy" show inside the viewer, which stays open.
  */
 @Composable
 fun ChatImageViewer(
@@ -41,8 +42,12 @@ fun ChatImageViewer(
     onDismiss: () -> Unit,
     /** null: no "Edit" button. Gets the marked-up photo as a composer attachment; the viewer closes after. */
     onEdited: ((ComposerAttachment) -> Unit)? = null,
-    /** The composer already holds 4 photos: "Edit" says "Up to 4 photos at a time" instead of opening the editor. */
+    /** No room remains in the composer for another photo: "Edit" reports the limit instead of opening the editor. */
     photoLimitReached: Boolean = false,
+    /** The hub's per-message photo limit shown when [photoLimitReached] is true. */
+    maxPhotos: Int = ImageLimits.DEFAULT_PER_MESSAGE,
+    /** The hub's max long side for scaling the edited photo. */
+    maxSide: Int = ImageLimits.DEFAULT_MAX_SIDE,
 ) {
     val context = LocalContext.current
     val res = LocalResources.current
@@ -52,11 +57,13 @@ fun ChatImageViewer(
     val edited by rememberUpdatedState(onEdited)
     val dismiss by rememberUpdatedState(onDismiss)
     val limitReached by rememberUpdatedState(photoLimitReached)
+    val currentMaxPhotos by rememberUpdatedState(maxPhotos)
+    val currentMaxSide by rememberUpdatedState(maxSide)
 
     // Runs as the "Edit" action: the action stays busy while the editor is open, and what it returns shows in the viewer.
     suspend fun edit(bytes: ByteArray): String? {
         val source = try {
-            withContext(Dispatchers.Default) { decodePicture(bytes, MediaShare.EditedMaxSide, atMost = false, software = true) }
+            withContext(Dispatchers.Default) { decodePicture(bytes, currentMaxSide, atMost = false, software = true) }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Throwable) {
@@ -67,9 +74,9 @@ fun ChatImageViewer(
         try {
             val result = request.result.await() ?: return null
             // The composer may have filled up while the editor was open.
-            if (limitReached) return res.getString(R.string.chat_viewer_photo_limit, MAX_PHOTOS)
+            if (limitReached) return res.getString(R.string.chat_viewer_photo_limit, currentMaxPhotos)
             val attachment = try {
-                media.writeEdited(result)
+                media.writeEdited(result, currentMaxSide)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
@@ -86,7 +93,7 @@ fun ChatImageViewer(
     }
 
     val editAction: suspend (ByteArray) -> String? = { bytes -> edit(bytes) }
-    val actions = chatViewerActions(res, media, { limitReached }, editAction.takeIf { onEdited != null })
+    val actions = chatViewerActions(res, media, { limitReached }, editAction.takeIf { onEdited != null }, maxPhotos = currentMaxPhotos)
     ImageViewer(images, initialIndex, onDismiss, actions)
     editing?.let { request ->
         key(request) {
@@ -111,11 +118,9 @@ internal class AndroidChatMedia(private val context: Context) : ChatMedia {
     override suspend fun save(bytes: ByteArray) = MediaShare.saveImage(context, bytes)
     override suspend fun share(bytes: ByteArray) = MediaShare.shareImage(context, bytes)
     override suspend fun copy(bytes: ByteArray) = MediaShare.copyImage(context, bytes)
-    suspend fun writeEdited(picture: Bitmap): ComposerAttachment = MediaShare.writeEditedPhoto(context, picture)
+    suspend fun writeEdited(picture: Bitmap, maxSide: Int = MediaShare.EditedMaxSide): ComposerAttachment =
+        MediaShare.writeEditedPhoto(context, picture, maxSide)
 }
-
-/** The most photos the composer takes at once. */
-private const val MAX_PHOTOS = 4
 
 /**
  * The viewer's actions in order: "Save", "Edit" (when [edit] is given), "Share", "Copy". Each returns the notice the viewer
@@ -126,13 +131,14 @@ internal fun chatViewerActions(
     media: ChatMedia,
     limitReached: () -> Boolean,
     edit: (suspend (ByteArray) -> String?)?,
+    maxPhotos: Int = ImageLimits.DEFAULT_PER_MESSAGE,
 ): List<ViewerAction> = buildList {
     fun text(id: Int) = res.getString(id)
     add(ViewerAction(text(R.string.chat_viewer_save), PhIcons.ArrowDown) { _, bytes ->
         text(if (media.save(bytes)) R.string.chat_viewer_saved else R.string.chat_viewer_save_failed)
     })
     if (edit != null) add(ViewerAction(text(R.string.chat_viewer_edit), PhIcons.PencilSimple) { _, bytes ->
-        if (limitReached()) res.getString(R.string.chat_viewer_photo_limit, MAX_PHOTOS) else edit(bytes)
+        if (limitReached()) res.getString(R.string.chat_viewer_photo_limit, maxPhotos) else edit(bytes)
     })
     add(ViewerAction(text(R.string.chat_viewer_share), PhIcons.ShareNetwork) { _, bytes ->
         if (media.share(bytes)) null else text(R.string.chat_viewer_share_failed)
