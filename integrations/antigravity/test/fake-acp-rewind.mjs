@@ -46,6 +46,13 @@ const server = createServer(async (req, res) => {
       }
     }
     if (!snapshot.trajectory.steps?.length) delete snapshot.trajectory.steps
+    if (snapshot.afterRevertBadLength) {
+      delete snapshot.afterRevertBadLength
+      const response = { ...snapshot, trajectory: { ...snapshot.trajectory, steps: [...(snapshot.trajectory.steps || []), { type: 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE' }] } }
+      writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
+      res.end(JSON.stringify(response))
+      return
+    }
     if (hold) {
       res.end(JSON.stringify(snapshot), () => writeFileSync(`${directory}/trajectory-response-sent`, ''))
       return
@@ -94,6 +101,7 @@ const server = createServer(async (req, res) => {
     }
     snapshot.trajectory.steps = (snapshot.trajectory.steps || []).slice(0, params.stepIndex + 1)
     if (snapshot.holdAfterRevertOnce) snapshot.afterRevertArmed = true
+    if (snapshot.badAfterRevertLength) snapshot.afterRevertBadLength = true
     writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
     const db = new DatabaseSync(`${directory}/config/conversation_summaries.db`)
     db.prepare('UPDATE conversation_summaries SET step_count = ?, last_modified_time = ? WHERE conversation_id = ?')

@@ -360,6 +360,18 @@ test('a native rewind clears settled-turn recovery evidence (#12003)', async (t)
   assert.deepEqual(texts(page), records.slice(0, 2).map((step) => step.content), 'native cut reconciliation removes the abandoned tail')
 })
 
+test('a failed validation after native rewind cannot restore abandoned evidence (#12003)', async (t) => {
+  const { node, runtime, restart, rewind } = await fixture(t, {
+    promptPlan: [{ reply: 'Third answer', export: true }], badAfterRevertLength: true,
+  })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Third' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+  await assert.rejects(rewind(), /Reload its history/)
+  await restart()
+  const stale = node.last('runtime.sessions').sessions.find((session) => session.session_id === SESSION)
+  if (stale.last_text === 'Third answer') assert.notEqual(stale.status, 'done', 'a mutated native rewind cannot revive its abandoned reply')
+})
+
 test('a companion restart recovers a truncated settled reply (#12003)', async (t) => {
   const reply = '## Report\n' + 'A detailed report row.\n'.repeat(200) + '\nEnd of report.'
   const { node, runtime, restart } = await fixture(t, {

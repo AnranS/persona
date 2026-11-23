@@ -557,7 +557,7 @@ A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the c
 0600). It stores SHA-256 fingerprints of the branch and actual settled reply index: one for the full reply and one for
 its byte length and first/last eight characters so truncated exports can match, never message text. After a restart, a
 `summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
-marker, including one followed by later native work, leaves `unknown`. Starting another prompt or a native rewind clears
+marker, including one followed by later native work, leaves `unknown`. Starting another prompt or issuing a native rewind clears
 the marker, and a known or pending native-cut check suppresses recovery. Transcript-only status rules and the step-count
 coverage check above are unchanged.
 
