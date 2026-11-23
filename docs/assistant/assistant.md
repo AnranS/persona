@@ -2318,7 +2318,10 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
     from the queue. If the last check fails or still finds no match, the manager retries with the same `once_id`.
     Direct and queued supervision sends apply the same transcript-confirmation boundary even when `assistant.send`
     returns success: if the rendered supervision user item is not visible or the transcript cannot be read, the
-    relay is persisted with its attempt state under the same `once_id` for bounded reconciliation and retry.
+    relay (including tried PR, decision-reply, and unhandled-inbox digests) is persisted with its exact rendered
+    payload and attempt state under the same `once_id` for bounded reconciliation and retry. Untried special digests
+    continue to restore for revalidation, and an unresolved supervision relay (tried, durable-doubt, or withdrawn)
+    keeps decision-reply interjections pending until that relay is reconciled.
     An uncertain supervision digest stays queued if rechecking its tasks would change the text or destination.
     The node keeps that id for ten minutes or until it restarts. When there is no owner to ask, a possible duplicate
     is preferable to silently losing the relay.

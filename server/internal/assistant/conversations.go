@@ -1146,7 +1146,10 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			var err error
 			var retry time.Duration
 			landed := false
-			if !stale && !keep && !msg.TriedAt.IsZero() {
+			if !stale && !keep && (!msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()) {
+				if msg.TriedAt.IsZero() {
+					msg.TriedAt = msg.DoubtedAt
+				}
 				landed = s.lookForRelay(machine, id, &msg)
 				if !landed && msg.Looks < relayLookLimit {
 					keep, retry = true, relayLookGap

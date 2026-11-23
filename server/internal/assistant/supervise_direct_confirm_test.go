@@ -164,39 +164,206 @@ func TestDirectSupervisionSendSuccessWithoutTranscriptItemQueuesAndRetriesUnderS
 	}
 }
 
-func TestDirectSupervisionNonQueueableUnconfirmedReleasesDedupReservation(t *testing.T) {
-	store := &memStore{}
-	s, f, task := newPRConflictTask(t, store)
-	ctx := context.Background()
-	if err := s.applyPRStatus(ctx, task, TodoPRStatus{
-		URL: task.PRURL, State: "open", HeadOID: "head-direct-unconfirmed", Conflicts: true, CheckedAt: time.Now(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	g, ok := pendingPRConflict(s, task.ID)
-	if !ok {
-		t.Fatal("no pending PR conflict signal")
-	}
-	f.mu.Lock()
-	f.omitSentItems = true
-	f.mu.Unlock()
+func TestDirectSpecialDigestUnconfirmedStaysQueued(t *testing.T) {
+	t.Run("pr_conflict_late_transcript_settles_without_duplicate", func(t *testing.T) {
+		store := &memStore{}
+		s, f, task := newPRConflictTask(t, store)
+		t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+		ctx := context.Background()
+		idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+		if err := s.applyPRStatus(ctx, task, TodoPRStatus{
+			URL: task.PRURL, State: "open", HeadOID: "head-direct-unconfirmed-late", Conflicts: true, CheckedAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		g, ok := pendingPRConflict(s, task.ID)
+		if !ok {
+			t.Fatal("no pending PR conflict signal")
+		}
+		tries := relayTries(f, "conv1")
+		var sentText string
+		f.mu.Lock()
+		prevSend := f.onAssistantSend
+		f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+			if prevSend != nil {
+				prevSend(f, p)
+			}
+			sentText, _ = p["text"].(string)
+		}
+		f.omitSentItems = true
+		f.mu.Unlock()
 
-	if s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{}) {
-		t.Fatal("unconfirmed non-queueable direct supervision was accepted by deduplication")
+		if !s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{}) {
+			t.Fatal("unconfirmed special digest was not retained in durable queue")
+		}
+		stopRelayTimer(s, "conv1")
+
+		queued := queuedRelays(s, "conv1")
+		if len(queued) != 1 {
+			t.Fatalf("unconfirmed special digest did not retain its attempt: %+v", queued)
+		}
+		got := triesOf(f, tries)
+		msg := savedRelay(t, store, "conv1")
+		if len(got) != 1 || msg.OnceID != got[0] || msg.TriedAt.IsZero() || msg.DoubtedAt.IsZero() || msg.Looks != 1 || msg.LookAfter.IsZero() || msg.Text == "" || !strings.Contains(sentText, msg.Text) || relayWords(msg.Text) != relayWords(sentText) {
+			t.Fatalf("persisted special digest = %+v, tries=%q, sentText=%q", msg, got, sentText)
+		}
+
+		// Late transcript write settles the retained attempt without sending a second copy under a new identity.
+		f.mu.Lock()
+		f.items = append(f.items, proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: sentText, TS: time.Now()})
+		f.omitSentItems = false
+		f.mu.Unlock()
+		advanceRelayLook(t, s, "conv1", 1)
+		drainRelayTest(t, s, idle)
+		stopRelayTimer(s, "conv1")
+		if len(triesOf(f, tries)) != 1 || s.queuedFor("conv1") != 0 {
+			t.Fatalf("late transcript item did not settle without duplicate: tries=%q queued=%d", triesOf(f, tries), s.queuedFor("conv1"))
+		}
+	})
+
+	t.Run("decision_reply_unconfirmed_retries_under_same_once_id", func(t *testing.T) {
+		s, f, todo := decisionAgentReplyService(t)
+		t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+		g := pendingDecisionReply(t, s, todo)
+		idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+		f.setSessions("server", idle)
+		tries := relayTries(f, "conv1")
+		f.mu.Lock()
+		f.omitSentItems = true
+		f.mu.Unlock()
+
+		dispatchSupervisionNow(t, s, g)
+		stopRelayTimer(s, "conv1")
+
+		queued := queuedRelays(s, "conv1")
+		if len(queued) != 1 {
+			t.Fatalf("unconfirmed special digest did not retain its attempt: %+v", queued)
+		}
+		got := triesOf(f, tries)
+		if len(got) != 1 || queued[0].OnceID != got[0] || queued[0].TriedAt.IsZero() || queued[0].DoubtedAt.IsZero() || queued[0].Interject {
+			t.Fatalf("retained decision reply = %+v, tries=%q", queued[0], got)
+		}
+
+		// Second look still misses without resending early.
+		advanceRelayLook(t, s, "conv1", 1)
+		drainRelayTest(t, s, idle)
+		stopRelayTimer(s, "conv1")
+		if len(triesOf(f, tries)) != 1 || s.queuedFor("conv1") != 1 {
+			t.Fatalf("decision reply retried early: tries=%q queued=%d", triesOf(f, tries), s.queuedFor("conv1"))
+		}
+
+		// Final look retries under the exact same once_id and confirms once the transcript write succeeds.
+		f.mu.Lock()
+		f.omitSentItems = false
+		f.mu.Unlock()
+		advanceRelayLook(t, s, "conv1", 2)
+		drainRelayTest(t, s, idle)
+		stopRelayTimer(s, "conv1")
+		got = triesOf(f, tries)
+		if len(got) != 2 || got[0] != got[1] || s.queuedFor("conv1") != 0 {
+			t.Fatalf("decision reply retry after look budget: tries=%q queued=%d", got, s.queuedFor("conv1"))
+		}
+	})
+
+	t.Run("untried_special_digest_still_restores_for_revalidation", func(t *testing.T) {
+		store := &memStore{}
+		s, f, task := newPRConflictTask(t, store)
+		ctx := context.Background()
+		f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking})
+		if err := s.applyPRStatus(ctx, task, TodoPRStatus{
+			URL: task.PRURL, State: "open", HeadOID: "head-untried-reval", Conflicts: true, CheckedAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		g, ok := pendingPRConflict(s, task.ID)
+		if !ok {
+			t.Fatal("no pending PR conflict signal")
+		}
+		if s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{}) {
+			t.Fatal("untried special digest should stay pending for revalidation, not queue")
+		}
+		if q := s.queuedFor("conv1"); q != 0 {
+			t.Fatalf("untried special digest was queued: %d", q)
+		}
+		if _, pending := pendingPRConflict(s, task.ID); !pending {
+			t.Fatal("untried special digest was not restored to pending")
+		}
+		var history map[string]superviseFingerprint
+		if _, err := store.Setting(ctx, superviseDedupKey, &history); err != nil {
+			t.Fatal(err)
+		}
+		if len(history) != 0 {
+			t.Fatalf("untried special digest retained dedup reservation: %+v", history)
+		}
+	})
+}
+
+func TestDirectDecisionReplyUnresolvedLegacyRelayBlocksInterjection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		durableDoubt bool
+		withdrawn    bool
+	}{
+		{name: "durable_doubt", durableDoubt: true},
+		{name: "withdrawn", withdrawn: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := decisionAgentReplyService(t)
+			t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+			g := pendingDecisionReply(t, s, todo)
+			setSupervisorWorking(f)
+
+			head := relayMsg{
+				From:      superviseTool,
+				FromTitle: "督办",
+				Tool:      superviseTool,
+				Text:      "older unresolved supervision",
+				At:        time.Now().Add(-time.Minute).UTC(),
+				Withdrawn: tc.withdrawn,
+			}
+			if tc.durableDoubt {
+				head.DoubtedAt = time.Now().Add(-30 * time.Second).UTC()
+			}
+			if s.queueRelay("conv1", head) != 1 {
+				t.Fatal("failed to queue unresolved legacy supervision relay")
+			}
+
+			before := f.sent()
+			dispatchSupervisionNow(t, s, g)
+			if got := f.sent() - before; got != 0 {
+				t.Fatalf("decision interjection bypassed the unresolved relay with %d direct send(s)", got)
+			}
+			if !strings.Contains(strings.Join(pendingKinds(s, todo.ID), ","), sigDecisionReply) {
+				t.Fatalf("blocked decision reply did not remain pending: %v", pendingKinds(s, todo.ID))
+			}
+			if a := askOf(s, todo.ID); a == nil || a.AgentReply == nil || !a.AgentReply.ToldAt.IsZero() {
+				t.Fatalf("blocked decision reply was marked told: %+v", a)
+			}
+			if queued := queuedRelays(s, "conv1"); len(queued) != 1 || queued[0].Text != head.Text {
+				t.Fatalf("unresolved legacy relay was disturbed: %+v", queued)
+			}
+
+			// Once the unresolved legacy relay is confirmed in the transcript and reconciled, the pending decision reply can send.
+			idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+			f.mu.Lock()
+			f.items = append(f.items, proto.Item{Seq: 1, Role: "user", Kind: proto.KindText, Text: head.Text, TS: time.Now()})
+			f.mu.Unlock()
+			f.setSessions("server", idle)
+			drainRelayTest(t, s, idle)
+			stopRelayTimer(s, "conv1")
+			if q := s.queuedFor("conv1"); q != 0 {
+				t.Fatalf("reconciled legacy relay stayed queued: %d", q)
+			}
+
+			dispatchSupervisionNow(t, s, g)
+			if got := f.sent() - before; got != 1 {
+				t.Fatalf("decision reply sends after legacy relay reconciliation = %d, want 1", got)
+			}
+			if a := askOf(s, todo.ID); a == nil || a.AgentReply == nil || a.AgentReply.ToldAt.IsZero() {
+				t.Fatalf("reconciled decision reply was not marked told: %+v", a)
+			}
+		})
 	}
-	var history map[string]superviseFingerprint
-	if _, err := store.Setting(ctx, superviseDedupKey, &history); err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 0 {
-		t.Fatalf("unconfirmed non-queueable direct supervision retained dedup reservation: %+v", history)
-	}
-	f.mu.Lock()
-	f.omitSentItems = false
-	f.mu.Unlock()
-	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
-	s.sendDigest(ctx)
-	waitFor(t, "recovered PR conflict after transcript writes succeed", func() bool { return f.sentTo("conv1") == 2 })
 }
 
 func TestDirectSupervisionSendRestartRecoversThroughDurableQueue(t *testing.T) {
