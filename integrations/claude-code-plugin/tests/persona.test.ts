@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import { applyStepOverride, homeDir, mergeOverride, nextBackoff, readPoll, socketPath, verdict } from '../hooks/bridge'
+import { register } from '../hooks/register'
 
 const SESSION = '11111111-2222-3333-4444-555555555555'
 
@@ -69,6 +70,12 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
 const start = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
 
 describe('persona plugin', () => {
+  test('loads the module and registers its hooks', () => {
+    const events: string[] = []
+    register(((event: string) => { events.push(event) }) as unknown as On)
+    expect(events).toEqual(['turn.start', 'turn.complete', 'turn.step', 'session.start'])
+  })
+
   test('submits the node’s message as the person’s words and says so', async ($, on) => {
     const w = world(on, [{ status: 200, body: { messages: [{ id: 'm1', text: 'go ahead and merge', deadline_ms: 9_000 }] } }])
     await $.session.start(start)
