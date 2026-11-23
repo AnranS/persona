@@ -87,7 +87,11 @@ import Observation
         let list = SessionListModel<Session>(id: { $0.id }, removalID: { SessionListIdentity.runtime($0, group: group)?.path },
             fetch: { [weak link] query, cursor, since in
                 guard let link else { throw CancellationError() }
-                return try await link.api.sessionListPage(query, cursor: cursor, since: since)
+                var api = link.api
+                // A filtered root still needs every quick-filter count, not only the selected state's membership.
+                // Its separate counts read clears state below; an unfiltered root can use counts with the page.
+                api.sessionsPageCounts = api.sessionsPageCounts && query.state.isEmpty
+                return try await api.sessionListPage(query, cursor: cursor, since: since)
             }, counts: { [weak link] query in
                 guard let link else { throw CancellationError() }
                 var query = query

@@ -31,14 +31,17 @@ import PersonaWire
     private var standaloneCountsJSON: String {
         #"{"total":4,"machine":{"m":4},"project":{},"group":{},"state":{"unread":2,"idle":2},"just_finished":1,"revision":"standalone-r0"}"#
     }
-    private func staleSeenPageJSON(withCounts: Bool, malformedCounts: Bool = false) -> String {
+    private var filteredEmbeddedCountsJSON: String {
+        #"{"total":2,"machine":{"m":2},"project":{},"group":{},"state":{"unread":2},"just_finished":0,"revision":"filtered-r0"}"#
+    }
+    private func staleSeenPageJSON(withCounts: Bool, malformedCounts: Bool = false, countsJSON: String? = nil) -> String {
         let first = #"{"machine_id":"m","session_id":"s1","status":"done","state":"unread","seen_at":"1970-01-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z"}"#
         let second = #"{"machine_id":"m","session_id":"s2","status":"done","state":"unread","seen_at":"1970-01-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z"}"#
         let finished = #"{"machine_id":"m","session_id":"s3","status":"done","state":"idle","seen_at":"1970-01-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z","work":{"phase":"done","line":"Merged","just_finished":true}}"#
         let seen = #"{"machine_id":"m","session_id":"s4","status":"done","state":"idle","seen_at":"2026-03-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z"}"#
         let embedded: String
         if malformedCounts { embedded = #","counts":"invalid""# }
-        else { embedded = withCounts ? #","counts":\#(embeddedCountsJSON)"# : "" }
+        else { embedded = withCounts ? #","counts":\#(countsJSON ?? embeddedCountsJSON)"# : "" }
         return #"{"sessions":[\#(first),\#(second),\#(finished),\#(seen)],"remove":[],"has_more":true,"next_cursor":"next","revision":"r0","total":4\#(embedded)}"#
     }
 
@@ -52,7 +55,9 @@ import PersonaWire
         hub.on("GET", "/api/v1/sessions") { request in
             if request.query["counts"] == "1" { return Data(self.standaloneCountsJSON.utf8) }
             if request.query["cursor"] == "next" { return Data(self.emptyNextPageJSON.utf8) }
-            return Data(self.staleSeenPageJSON(withCounts: embeddedCounts, malformedCounts: malformedCounts).utf8)
+            let counts = request.query["state"] == "unread" ? self.filteredEmbeddedCountsJSON : nil
+            let withCounts = embeddedCounts && request.query["with_counts"] == "1"
+            return Data(self.staleSeenPageJSON(withCounts: withCounts, malformedCounts: malformedCounts, countsJSON: counts).utf8)
         }
         hub.on("POST", "/api/v1/sessions/m/s1/seen", json: "{}")
         hub.on("POST", "/api/v1/sessions/m/s3/seen", json: "{}")
@@ -209,6 +214,23 @@ import PersonaWire
         #expect(requests.filter { $0.query["counts"] == "1" }.count == 2)
         let rowReads = requests.filter { $0.query["counts"] == nil }
         #expect(rowReads.allSatisfy { ($0.query["with_counts"] == "1") == pageCounts })
+    }
+
+    @Test func filteredRootKeepsStandaloneCountScope() async throws {
+        let fixture = try await pagedSeenFixture(pageCounts: true, embeddedCounts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        await fixture.list.select(SessionListQuery(state: "unread"))
+
+        #expect(fixture.list.query.state == "unread")
+        #expect(fixture.list.counts?.revision == "standalone-r0")
+        #expect(fixture.list.counts?.total == 4)
+        #expect(fixture.model.sessionLists.stateCounts?[.all] == 4)
+        #expect(fixture.model.sessionLists.stateCounts?[.unread] == 2)
+        let requests = fixture.hub.sent("GET", "/api/v1/sessions")
+        let filteredRows = requests.filter { $0.query["state"] == "unread" && $0.query["counts"] == nil }
+        #expect(filteredRows.count == 1 && filteredRows[0].query["with_counts"] == nil)
+        let counts = requests.filter { $0.query["counts"] == "1" }
+        #expect(counts.count == 1 && counts[0].query["state"] == nil)
     }
 
     @Test func invalidEmbeddedCountsFallBackToStandalone() async throws {

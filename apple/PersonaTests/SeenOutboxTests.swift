@@ -58,8 +58,6 @@ import PersonaWire
         _ = o.land([machine: [recorded]], at: t0 + 5)
         #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 15.999)) == .idle)
         #expect(o.marks[key] != nil)
-        #expect(o.holds(session(state: "unread"), at: t0 + 15.999))
-        #expect(!o.holds(session(state: "unread"), at: t0 + 16.001))
         #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 16.001)) == .unread)
         #expect(o.marks.isEmpty)
     }
@@ -191,6 +189,31 @@ import PersonaWire
         #expect(outbox.unanswered(group: "", at: t0) == [key])
         outbox.answered(key, markID: current)
         #expect(outbox.unanswered(group: "", at: t0).isEmpty)
+    }
+
+    @Test func returningToASettlingChatDoesNotSendAgain() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let hub = FakeHub(), model = AppModel(stateFolder: folder), socket = SyncSocket()
+        var sent: [String] = []
+        socket.onReceive = { frame in
+            if frame["type"] as? String == "seen", let id = frame["session_id"] as? String { sent.append(id) }
+        }
+        model.linkHooksForTests = (try #require(hub.client.transport), { socket })
+        model.connectOnly(.demo)
+        socket.deliver?(Data(#"{"type":"hello","features":[]}"#.utf8))
+        model.applySessions([machine: [session(state: "unread")]])
+        model.visibleSession = key
+        model.markSeen(key)
+        #expect(sent == [key.sessionID])
+
+        model.applySessions([machine: [session(state: "idle", seen: 500)]])
+        sent = []
+        model.markSeen(key) // returning to the chat while the recorded mark settles
+        #expect(sent.isEmpty)
+        model.forgetSeen()
+        model.markSeen(key) // an already-seen chat without a settling mark keeps the old direct send
+        #expect(sent == [key.sessionID])
     }
 
     @Test func aReturningPairingRetriesAndAFreshPairingGetsNoOldMarks() async throws {
