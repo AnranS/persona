@@ -267,10 +267,11 @@ export function TodosView({
     navigate(next === "calendar" ? calendarRoute(calendarMode, startOfDay(Date.now()), selectedId) : next === "board" ? boardRoute(selectedId) : { name: "todos", ...(selectedId ? { id: selectedId } : {}) });
   };
 
-  // Sync selectedId from URL
+  // Sync selectedId from URL; on Board, browser Back also closes the wide detail beside it.
   useEffect(() => {
     if (selectedId) setActiveId(selectedId);
-  }, [selectedId]);
+    else if (boardOn) setActiveId(undefined);
+  }, [selectedId, boardOn]);
   // A link to a to-do the list doesn't have (deleted, or an old link): said once, and the address loses it, so another
   // to-do is not shown under it (web usability audit item 42). Not while the list can't tell: the current assistant
   // offline (the merged list leaves its to-dos out) or a hub without to-dos (an empty list); the link is kept for later.

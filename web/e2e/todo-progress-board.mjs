@@ -67,24 +67,18 @@ async function open(browser, theme, width, textSize) {
   }, { theme, textSize });
   const writes = [];
   const socketCommands = [];
-  await context.route("**/api/v1/todos", async (route) => {
-    if (route.request().method() !== "GET") writes.push(`${route.request().method()} ${route.request().url()}`);
+  await context.route(/\/api\/v1\/todos(?:\?.*)?$/, async (route) => {
     await route.fulfill({ json: { todos } });
   });
   await context.route("**/api/v1/todos/*", async (route) => {
-    if (route.request().method() !== "GET") writes.push(`${route.request().method()} ${route.request().url()}`);
     const path = new URL(route.request().url()).pathname;
     const id = path.split("/").at(-1);
     const found = todos.find((t) => t.id === id);
     if (found) return route.fulfill({ json: { todo: found } });
     return route.fulfill({ json: {} });
   });
-  await context.route("**/api/v1/sessions", (route) => route.fulfill({ json: { sessions } }));
-  await context.route("**/api/v1/kb/projects", (route) => route.fulfill({ json: { items: projects } }));
-  await context.route("**/api/v1/**", async (route) => {
-    if (!["GET", "OPTIONS"].includes(route.request().method())) writes.push(`${route.request().method()} ${route.request().url()}`);
-    await route.continue();
-  });
+  await context.route(/\/api\/v1\/sessions(?:\?.*)?$/, (route) => route.fulfill({ json: { sessions } }));
+  await context.route(/\/api\/v1\/kb\/projects(?:\?.*)?$/, (route) => route.fulfill({ json: { items: projects } }));
   await context.routeWebSocket(/\/api\/v1\/ws/, (socket) => {
     const server = socket.connectToServer();
     socket.onMessage((message) => {
@@ -102,6 +96,9 @@ async function open(browser, theme, width, textSize) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
+  page.on("request", (request) => {
+    if (!["GET", "OPTIONS"].includes(request.method())) writes.push(`${request.method()} ${request.url()}`);
+  });
   await page.clock.setFixedTime(new Date(NOW));
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -110,7 +107,7 @@ async function open(browser, theme, width, textSize) {
   return { context, page, writes, socketCommands, errors };
 }
 
-const group = (page, slug) => page.locator('[data-testid="todo-board-group"]').filter({ has: page.locator(`[data-project="${slug}"]`) });
+const group = (page, slug) => page.locator(`[data-testid="todo-board-group"][data-project="${slug}"]`);
 const counts = async (page, slug) => {
   const g = group(page, slug);
   return {
@@ -136,7 +133,9 @@ try {
       const board = page.locator('[data-testid="todos-board"]');
       await board.waitFor();
       check(page.url().includes("view=board"), `${label}: Board has its own restorable address`);
-      check(await group(page, "weather").count() === 1 && await group(page, "shop").count() === 1 && await group(page, "").count() === 1, `${label}: stored projects and No project form three groups`);
+      const groupNames = await page.locator('[data-testid="todo-board-group"]').evaluateAll((elements) => elements.map((element) => element.getAttribute("data-project")));
+      assert.deepEqual(groupNames, ["shop", "weather", ""], `${label}: stored projects and No project form three groups`);
+      console.log(`ok   ${label}: stored projects and No project form three groups`);
       assert.deepEqual(await counts(page, "weather"), { open: "2", waiting: "1", stale: "1" });
       assert.deepEqual(await counts(page, "shop"), { open: "3", waiting: "0", stale: "0" });
       assert.deepEqual(await counts(page, ""), { open: "1", waiting: "0", stale: "1" });
@@ -183,6 +182,7 @@ try {
       await page.goBack();
       await page.locator('[data-testid="todos-board"]').waitFor();
       check(!page.url().includes("id="), `${label}: browser Back returns to the board`);
+      check(await page.locator('[data-testid="todos-detail-column"]').isHidden(), `${label}: browser Back closes the detail beside the board`);
       check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${label}: the layout fits the viewport`);
       if (textSize === "large") check(await page.locator("html").getAttribute("data-text-size") === "large", `${label}: the real Large text setting is active`);
       if (shots) await page.screenshot({ path: join(shots, `todos-board-${width}-${theme}-${textSize}.png`), fullPage: true, animations: "disabled" });

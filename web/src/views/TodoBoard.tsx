@@ -7,7 +7,7 @@ import { waitsOnOwner, type Triage } from "../lib/todo-triage";
 import { mostUrgentAgent, responsibleOf, taskNow, type SessionLookup, type Todo } from "../lib/todos";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
-import { inputClass, Tag } from "./assistant/parts";
+import { fieldClass, Tag } from "./assistant/parts";
 
 const HOUR_MS = 3_600_000;
 export const TODO_BOARD_HOURS_KEY = "persona.todos.board.staleHours";
@@ -144,7 +144,7 @@ export function TodoBoard({
     <div data-testid="todos-board" className="flex flex-col gap-3 p-1">
       <div className="flex flex-wrap items-end justify-between gap-2 px-1">
         <p className="max-w-prose text-meta text-ink-3">{t("todos.board_stale_explanation")}</p>
-        <label className="flex items-center gap-2 text-label text-ink-2">
+        <label className="flex items-center gap-2 whitespace-nowrap text-label text-ink-2">
           <span>{t("todos.board_stale_hours")}</span>
           <input
             type="number"
@@ -154,7 +154,7 @@ export function TodoBoard({
             aria-label={t("todos.board_stale_hours")}
             aria-invalid={invalid || undefined}
             aria-describedby={invalid ? "todo-board-hours-error" : undefined}
-            className={cx(inputClass, "w-24")}
+            className={cx(fieldClass, "w-24")}
             value={draft}
             onChange={(event) => changeHours(event.target.value)}
           />
