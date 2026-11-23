@@ -258,8 +258,11 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
   Known exceptions are debt in `testdata/module_services.txt`, which only shrinks (a stale line fails): `<module id>
   <core package>` for any of the module's files, `<module id> (test) <core package>` for its tests only, no wildcards.
-  The only lines are the GitHub connector's tests, which run it through the connector registry and gate, the
-  conformance suite and the subscription service with the module's own fixtures.
+  The lines are the GitHub connector's tests, which run it through the connector registry and gate, the conformance
+  suite and the subscription service with the module's own fixtures, and `recording internal/kb`: the recordings'
+  storage (the `kb.Recording` model with its `Engine` and `Store`) stays in the knowledge base until it offers a
+  recording port. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
+  extension host are never listed.
 - **`TestLibrariesAreLeaves`**: the leaf libraries (`testdata/libraries.txt`) are the core's packages a module may use
   that hold no state and own no feature (localization, the extension SDK, small helpers). Each depends only on the
   standard library, third-party packages, the contracts and the other libraries, so a module that uses one reaches no
@@ -308,6 +311,45 @@ chosen extension or on the phone. The apps' composer dictation is core; the exte
 (`channel.KindVoice`), `assistantwire.PluginsVoice`, the `voice` and `speech` extension points, the extension host's
 glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings; `internal/transcribelive`, a
 measuring tool that also reads the knowledge base, stays where it is.
+
+### Recording
+
+`recording` (`server/internal/modules/recording`, #13407) is meeting recording on the manager: the `/api/v1/recordings`
+routes and the phone's audio socket, meetings attended and transcribed on the hub (live jobs, final passes, the
+fallback), the meeting asks, photos, live view, rooms, Just me and follow-ups, and the push of minutes and day recaps
+with the to-dos made of their action items (docs/assistant/meeting-minutes.md, docs/assistant/day-recap.md). Its
+manifest declares `feature: module.recording`, which the kernel announces while it is loaded.
+
+- **The seam**: the core reaches it through `server/internal/recordinghost`, in the core's own terms (`Layer`: what
+  the core asks of it; `Host`: what it asks of the core). `server/internal/modules/all/recording.go` provides it under
+  `!persona_without_recording && !persona_core_only`; the assistant makes one layer per manager before it registers
+  the knowledge base's routes (`internal/assistant/recording.go`, `loadRecording`), unless the `modules` row switches
+  it off. The routes, room tools and loops stay on this seam rather than the kernel's `hub_routes`, `mcp_tools` and
+  `background_jobs` slots: the routes are registered with the knowledge base's route guard, the room tools are guest
+  tools (not assistant tools) and the loops run on the knowledge base's own schedule, so each moves when the kernel
+  can carry those.
+- **The host is the surface to shrink**: about 75 methods (`recordinghost.Host`: settings rows, conversations and
+  their origins, guests, the computers, pushes and channels, to-dos, models, the transcription choice, tracks). Each
+  group becomes a narrower port as the core serves one.
+- **Shared with the core**: the knowledge base (`recording internal/kb`, above), the transcription job's socket
+  (`server/internal/transcribejob`, a leaf library the core's transcription for extensions uses too) and the meeting
+  transcription choice, which stays in the core (`meeting_transcription_settings.go`, the extension host's
+  `transcription` point).
+- **Times as configuration**: the module's times (its `timings.go`, pinned by `TestDefaultTimings`) and the
+  attending feeder's clock and timer come through `Host.Timings` and `Host.FeedClock` from
+  `assistant.Options.RecordingTimings`, `RecordingTimingLists`, `RecordingFeedNow` and `RecordingFeedAfter`: a test and
+  tuning knob of the code that builds the manager, never a user setting, read from no settings, `hub.json` or route.
+  `Layer.Wait` ends the live hub runs and waits for the module's background work; the manager calls it when it stops
+  (`kbEnd`).
+- **Tests**: the module's own tests run on a fake core (`fakecore_test.go`, with the assistant's fake hub ported as
+  `fakehub_test.go` and a real knowledge base on the test's directory); the core's tests of how the module meets the
+  rest of the manager (day-recap pushes over the channels, the evening facts, `kb_get`, the fleet's attendee facts,
+  meeting turns against tool calls, hub transcription end to end) stay in `internal/assistant` and skip without the
+  module (`needsRecordingModule`).
+- **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
+  answer 404, the audio socket is unknown, the hello names none of the nine meeting and recording capabilities (so
+  the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
+  (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
 
 ### How to add a module
 
