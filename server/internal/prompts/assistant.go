@@ -278,6 +278,10 @@ type SnapshotTask struct {
 	// Plan: its agent's own task list, nil when it keeps none or Reported is newer (a report says more).
 	Plan  *SnapshotAgentPlan
 	Owner SnapshotOwner
+	// Origin conversation attribution for tasks opened outside the main chat (rendered in the main overview, #13657).
+	OriginID, OriginTitle, OriginLink string
+	// SupervisedElsewhere marks a task supervised by another conversation, shown read-only in the main overview.
+	SupervisedElsewhere bool
 }
 
 // SnapshotOwner is whose a task in the snapshot is, never rendered: the conversation that handed it out (its todo's
@@ -940,9 +944,11 @@ type SuperviseEntry struct {
 	Last            string              // what its agent said last
 	Closeout        *SuperviseCloseout  // the closeout its agent ended the turn with (#3612), nil when it wrote none
 	Link            string              // the task's page ("" when the hub has no public_url)
-	Quiet           bool                // the user was not pushed about it
-	Orphan          string              // orphaned: why nobody works on it (error, closed, offline)
-	Review          *SuperviseReviewed  // review: what the independent reviewer found (#2173), nil when none ran
+	// Origin conversation that dispatched the task, preserved across hand-overs (#13657).
+	OriginID, OriginTitle, OriginLink string
+	Quiet                             bool               // the user was not pushed about it
+	Orphan                            string             // orphaned: why nobody works on it (error, closed, offline)
+	Review                            *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
 	Report      string
 	Said        string
