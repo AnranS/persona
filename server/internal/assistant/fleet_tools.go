@@ -121,7 +121,11 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 // state read. Otherwise the failed list is cached until an unrelated link changes.
 func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) (result []proto.Tool, resultErr error) {
 	defer func() { result = localizedMCPTools(result, s.toolLanguage(ctx)) }()
-	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
+	if assistant && !s.assistantDiscovery(ctx, machine, session) {
+		s.logf("mcp tools: assistant discovery denied for machine %s session %s (tool_set=%q); falling back to agent tools", machine, short(session), toolSetOf(ctx))
+		s.noteAssistantDenied(ctx, machine, session, "mcp.tools")
+		assistant = false
+	}
 	allowed, guest, err := s.guestOf(ctx, machine, session)
 	if err != nil {
 		return nil, err
@@ -205,10 +209,14 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.tool_denied"), true)
 	}
 	if assistant && !s.assistantCaller(ctx, machine, session) {
+		s.noteAssistantDenied(ctx, machine, session, name)
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
 	}
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
+	}
+	if name == "secret_store" {
+		return s.toolSecretStore(ctx, machine, session, args)
 	}
 	if assistantwire.IsA2ATool(name) {
 		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
@@ -252,15 +260,20 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
 			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
 		}
-		if name == "phone_notify" && s.inHealth(ctx, session) {
+		if name == "phone_notify" {
+			// Local phone notifications follow the same privacy rule as notify_user: what they say decides.
 			var a map[string]any
-			if err := json.Unmarshal(args, &a); err != nil {
-				return proto.TextResult(err.Error(), true)
-			}
-			if a != nil {
-				// Local phone notifications follow the same privacy rule as notify_user.
-				a["title"], a["body"] = healthNotice(s.lang(ctx))
-				args, _ = json.Marshal(a)
+			decodeErr := json.Unmarshal(args, &a)
+			title, _ := a["title"].(string)
+			body, _ := a["body"].(string)
+			if space, _ := s.selfSpace(ctx, session); s.exitPolicy(ctx, title+"\n"+body, session, space).Redact {
+				if decodeErr != nil {
+					return proto.TextResult(decodeErr.Error(), true)
+				}
+				if a != nil {
+					a["title"], a["body"] = s.redactedNotice(ctx, s.lang(ctx), space)
+					args, _ = json.Marshal(a)
+				}
 			}
 		}
 		var res proto.ToolResult
