@@ -55,7 +55,7 @@ func (p *Pusher) routeOf(d Device) pushRoute {
 	case d.RelayError != "":
 		detail := d.RelayError
 		if d.RelayURL != "" {
-			detail = d.RelayURL + ": " + detail
+			detail += " (relay " + d.RelayURL + ")"
 		}
 		return pushRoute{Route: pushNone, Reason: pushRelayFailed, Detail: detail}
 	case d.RelayURL != "" && d.RelayGrant != "":
@@ -172,8 +172,6 @@ type pushDevice struct {
 	Kind      string    `json:"kind"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Push      pushRoute `json:"push"`
-	// The relay that refused registration, for the doctor's next step; empty for every other route.
-	RelayURL string `json:"relay_url,omitempty"`
 }
 
 // pushRoutes: GET /api/v1/devices/push, every device the hub pushes to and its way, and every browser with Web Push
@@ -188,11 +186,7 @@ func (h *Hub) pushRoutes(api *http.ServeMux) {
 				if settingsOnly(d) {
 					continue // nothing registered
 				}
-				listed := pushDevice{DeviceID: d.DeviceID, Name: d.Name, Kind: d.Kind, UpdatedAt: d.UpdatedAt, Push: h.push.routeOf(d)}
-				if d.RelayError != "" {
-					listed.RelayURL = d.RelayURL
-				}
-				devices = append(devices, listed)
+				devices = append(devices, pushDevice{DeviceID: d.DeviceID, Name: d.Name, Kind: d.Kind, UpdatedAt: d.UpdatedAt, Push: h.push.routeOf(d)})
 			}
 		}
 		writeJSON(w, map[string]any{"direct": direct, "devices": devices, "web": h.webPushList()})

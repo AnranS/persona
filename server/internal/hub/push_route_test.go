@@ -58,6 +58,9 @@ func TestDeviceRegistrationSaysWhichWay(t *testing.T) {
 		t.Fatalf("push routes: %d %v", code, out)
 	}
 	device, _ := devices[0].(map[string]any)
+	if _, ok := device["relay_url"]; ok {
+		t.Fatalf("an additive public field beside push: %v", device)
+	}
 	listed, _ := device["push"].(map[string]any)
 	if listed["route"] != "none" || listed["reason"] != "relay_failed" || listed["detail"] != detail {
 		t.Fatalf("listed relay refusal: %v", listed)
@@ -246,16 +249,21 @@ func TestDoctorListsPushRoutes(t *testing.T) {
 
 	h.push.register(Device{DeviceID: "b", Name: "Work iPhone", Kind: "iphone", APNSToken: "bb",
 		RelayURL: refusedRelayURL, RelayError: "403 app.example not served"})
+	// A redirect and a network failure still name the relay in their route detail, but get no refusal advice.
+	h.push.register(Device{DeviceID: "moved", Name: "Moved iPhone", Kind: "iphone", APNSToken: "cc",
+		RelayURL: refusedRelayURL, RelayError: "301 https://relay.example/new"})
+	h.push.register(Device{DeviceID: "offline", Name: "Offline iPhone", Kind: "iphone", APNSToken: "dd",
+		RelayURL: refusedRelayURL, RelayError: "dial tcp: timeout"})
 	for _, tc := range []struct {
 		lang              i18n.Lang
 		failure, guidance string
 	}{
 		{i18n.En, "Work iPhone (iphone): Can’t get background pushes: registering with the push relay failed",
-			"Check the health of " + refusedRelayURL + " and the topics it serves"},
+			"Check the relay's health and the topics it serves"},
 		{i18n.ZhHans, "Work iPhone（iphone）：收不到后台推送：向推送中继登记失败",
-			"请检查 " + refusedRelayURL + " 的健康状况及其提供服务的 topic"},
+			"请检查该中继的健康状况及其提供服务的 topic"},
 		{i18n.Ja, "Work iPhone（iphone）：バックグラウンドのプッシュ通知を受け取れません：プッシュリレーへの登録に失敗しました",
-			refusedRelayURL + "の稼働状況と対応しているトピックを確認してください"},
+			"リレーの稼働状況と対応しているトピックを確認してください"},
 	} {
 		t.Run(string(tc.lang), func(t *testing.T) {
 			d := &doctorReport{l: tc.lang}
@@ -265,6 +273,9 @@ func TestDoctorListsPushRoutes(t *testing.T) {
 				if !strings.Contains(text, want) {
 					t.Errorf("doctor missing %q:\n%s", want, text)
 				}
+			}
+			if got := strings.Count(text, tc.guidance); got != 1 {
+				t.Errorf("refusal advice appeared %d times, want once (not for a redirect or network error):\n%s", got, text)
 			}
 		})
 	}
