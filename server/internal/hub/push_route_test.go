@@ -255,7 +255,7 @@ func TestDoctorListsPushRoutes(t *testing.T) {
 		{i18n.ZhHans, "Work iPhone（iphone）：收不到后台推送：向推送中继登记失败",
 			"请检查 " + refusedRelayURL + " 的健康状况及其提供服务的 topic"},
 		{i18n.Ja, "Work iPhone（iphone）：バックグラウンドのプッシュ通知を受け取れません：プッシュリレーへの登録に失敗しました",
-			refusedRelayURL + " の稼働状況と対応しているトピックを確認してください"},
+			refusedRelayURL + "の稼働状況と対応しているトピックを確認してください"},
 	} {
 		t.Run(string(tc.lang), func(t *testing.T) {
 			d := &doctorReport{l: tc.lang}

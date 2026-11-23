@@ -475,6 +475,9 @@ func (d *doctorReport) pushRoutes(ctx context.Context, get func(context.Context,
 			name = i18n.T(l, "hub-doctor.device_kind", i18n.Args{"name": name, "kind": dev.Kind})
 		}
 		d.note(i18n.T(l, "hub-doctor.item_detail", i18n.Args{"item": name, "detail": pushRouteLine(l, dev.Push)}))
+		if dev.Push.Reason == pushRelayFailed && dev.RelayURL != "" {
+			d.next = append(d.next, i18n.T(l, "hub-doctor.push_relay_next", i18n.Args{"relay": dev.RelayURL}))
+		}
 	}
 }
 
