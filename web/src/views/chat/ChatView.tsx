@@ -63,7 +63,7 @@ import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
 import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
-import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, snapshotTerminalCompaction, waitForAssistantCompaction, watchTerminalCompaction, type OutgoingPayload } from "../../lib/compact-resend";
+import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
@@ -2000,6 +2000,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
+  const retryEmpty = useCallback(async (user: UserMessage, signal: AbortSignal) => {
+    const captured = user.client_msg_id ? deliveredPayloads.current.get(user.client_msg_id) : undefined;
+    const resolved = await resolveFailedTurnPayload({ user, captured }, mid, sid, undefined, signal);
+    if (signal.aborted || chatNow.current !== `${mid}/${sid}`) return true;
+    if (!resolved.ok) return false;
+    await deliver(resolved.payload, uuid());
+    return true;
+  }, [deliver, mid, sid]);
+  const emptyAction = canCompose && !working && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
@@ -2301,15 +2310,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         toast(t("chat-lines.compact_resend_unrecoverable"), "error");
         return;
       }
+      const { waitForAssistantCompaction, snapshotTerminalCompaction, watchTerminalCompaction } = await import("../../lib/wait-for-compaction");
+      if (ctl.signal.aborted) return;
       if (compactResend.mode === "assistant") {
         const before = getSession(mid, sid)?.compaction;
-        try {
-          await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
-          window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
-        } catch (e) {
-          toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
-          return;
-        }
+        await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
+        window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
         const outcome = await waitForAssistantCompaction(mid, sid, before, ctl.signal);
         if (ctl.signal.aborted || outcome !== "done") return;
       } else {
@@ -2345,6 +2351,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       backToComposer();
       const went = await sendMessageNow.current(resolved.payload);
       if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+    } catch (error) {
+      if (!ctl.signal.aborted) toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(error) }), "error");
     } finally {
       if (compactResendCtl.current === ctl) {
         compactResendCtl.current = null;
@@ -2473,6 +2481,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                         busy={d.line.id === busySegment || undefined}
+                        retryEmpty={d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
                         dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
@@ -2498,6 +2507,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
                   busy={row.line.id === busySegment || undefined}
+                  retryEmpty={row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
                   dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
