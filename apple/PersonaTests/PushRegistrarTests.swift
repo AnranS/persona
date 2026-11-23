@@ -13,6 +13,7 @@ private final class FakeSystem {
     /// The groups' first hubs; nil: the pairings can't be read (before the first unlock).
     var hubs: [PushRegistrar.Hub]? = []
     var grants = PushRegistrar.Grants()
+    var relayURL: URL?
     var now = Date(timeIntervalSince1970: 1_000_000)
     /// Waits for a retry due while the app stays open: none by default (the test moves the clock and comes back).
     var sleep: @MainActor (Duration) async -> Bool = { _ in false }
@@ -32,6 +33,7 @@ private final class FakeSystem {
             register: { self.registrations += 1 },
             hubs: { self.hubs },
             grants: { _, _, _ in self.grants },
+            relayURL: { self.relayURL },
             now: { self.now },
             sleep: { await self.sleep($0) })
     }
@@ -255,11 +257,12 @@ struct PushRegistrarTests {
     /// A refusal names the relay that gave it, so the hub can identify which relay needs fixing (#12988).
     @Test func aRefusedRelayRegistrationSendsTheAttemptedURLAndError() async throws {
         let fake = FakeSystem(), hub = Hub()
+        fake.relayURL = URL(string: "https://relay.example.com/relay")
         fake.grants.relay = .refused(status: 403, message: "topic not served")
         _ = await registered(fake, hub)
 
         let body = try devicePost(hub)
-        let relay = try #require(PushRelay.url)
+        let relay = try #require(fake.relayURL)
         #expect(body.relayError == "403 topic not served")
         #expect(body.relayGrant == nil)
         #expect(body.relayURL == relay.absoluteString)
@@ -268,15 +271,26 @@ struct PushRegistrarTests {
     @Test func aSuccessfulRelayRegistrationSendsTheURLGrantAndPushKey() async throws {
         let fake = FakeSystem(), hub = Hub()
         let key = try #require(PushCrypto.ensureKey())
+        fake.relayURL = URL(string: "https://relay.example.com/relay")
         fake.grants.relay = .registered
         fake.grants.grant = "test-grant"
         _ = await registered(fake, hub)
 
         let body = try devicePost(hub)
-        let relay = try #require(PushRelay.url)
+        let relay = try #require(fake.relayURL)
         #expect(body.relayURL == relay.absoluteString)
         #expect(body.relayGrant == "test-grant")
         #expect(body.pushKey == PushCrypto.publicKey(key))
+        #expect(body.relayError == nil)
+    }
+
+    @Test func aBuildWithoutARelaySendsNoRelayFields() async throws {
+        let fake = FakeSystem(), hub = Hub()
+        _ = await registered(fake, hub)
+
+        let body = try devicePost(hub)
+        #expect(body.relayURL == nil)
+        #expect(body.relayGrant == nil)
         #expect(body.relayError == nil)
     }
 
