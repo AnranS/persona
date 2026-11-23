@@ -63,8 +63,9 @@ forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; ol
   `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
-  error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
-  `work.deferred`), or the triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A turn the triage
+  error, no background work or `/loop`, and either triage found an answerable user wait (not put off on its card:
+  `work.deferred`), or triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A model's
+  summary alone is not a user wait: it must have a grounded question or an authorization link. A turn the triage
   found done does not count (a closing "shall I also…" is an offer).
 - **Lists**: a Seen, not muted agent with `awaits_reply` gets its own rank, Awaiting Reply, after Unread and before Working;
   it and its space stay out of Idle Spaces and the "N more idle" folds, and its row shows what it asks (the triage's line when
@@ -268,7 +269,8 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   Once a list shows it recorded, the mark settles for 15 seconds on the web and Apple clients. It holds only rows that still carry the pre-open `seen_at`, is not sent again (including when the chat returns to the front), and ends at once on a new turn, work or a question. Thus an independently paged list cannot turn its older row Unread again while that list catches up.
   When `sessions_page_counts` brings counts with rows, a held agent leaves Unread / Just finished only against the rows from that same answer; Unread moves to `idle`, Just finished leaves the Seen calculation (`state.idle` less `just_finished`), and `total` is unchanged. A separately read count stays the hub's unadjusted value, even when its rows are held Seen locally. Cursor continuations keep the first answer's counts and send `with_counts` only on first / initial `since` reads.
   Android's shipping Agents screen instead uses a complete per-hub collection, applies its seen override before deriving rows and counts together, and has no independently paged row/count split (`android/feature/agents`, #12770). It needs no settling window there.
-- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's newest timed line, i.e. when the turn ended; Claude Code's untimed trailing metadata does not count, #5967) → `unread`, otherwise `idle`.
+- Rule: herdr `done` and `seen_at` earlier than the session's last conversational activity → `unread`, otherwise `idle`.
+  Claude Code's trailing metadata (#5967) and a Codex command result recorded after its turn closed do not count as a new turn.
   So if it does another turn after you looked, it becomes Unread again.
 
 ### Ordering
