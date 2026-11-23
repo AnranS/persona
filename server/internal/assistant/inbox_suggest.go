@@ -52,6 +52,7 @@ var errStaleInboxTurn = errSuggestion{"this Inbox processing turn has been super
 
 var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn"}
 var errReportedFiled = errSuggestion{"this inbox item is already filed, so the reported step was not recorded; end this turn"}
+var errTodoFromHandoff = errSuggestion{"a to-do is suggested by the conversation that processes the item, not one it was handed to"}
 
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
@@ -94,9 +95,6 @@ func (in *suggestIn) check() error {
 	}
 	in.Due = strings.TrimSpace(in.Due)
 	if in.Kind == SuggestTodo {
-		if in.Item != "" {
-			return errSuggestion{"a to-do is suggested by the conversation that processes the item, not one it was handed to"}
-		}
 		if err := checkSuggestedDue(in.Due); err != nil {
 			return err
 		}
@@ -148,26 +146,36 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	b.mu.Lock()
 	var it *InboxItem
 	var from *SessionRef
-	if item := strings.TrimSpace(in.Item); item != "" {
-		var err error
-		if it, from, err = b.handedItem(item, sessionID); err != nil {
-			b.mu.Unlock()
-			return "", nil, nil, false, err
+	item := strings.TrimSpace(in.Item)
+	lookup := func() (*InboxItem, *SessionRef, bool, error) {
+		if item != "" {
+			got, ref, err := b.handedItem(item, sessionID)
+			return got, ref, err != nil && b.itemAgentStarting(item), err
 		}
-	} else {
-		it = b.itemOfAgent(sessionID)
-		// A conversation that answers before its start returned (an agent runtime already running starts a turn at
-		// once): its item learns the conversation's id a moment later.
-		for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
-			b.mu.Unlock()
-			time.Sleep(100 * time.Millisecond)
-			b.mu.Lock()
-			it = b.itemOfAgent(sessionID)
+		got := b.itemOfAgent(sessionID)
+		if got == nil {
+			return nil, nil, b.agentStarting(), errNotProcessing
 		}
-		if it == nil {
-			b.mu.Unlock()
-			return "", nil, nil, false, errNotProcessing
-		}
+		return got, nil, false, nil
+	}
+	var waitMore bool
+	var err error
+	it, from, waitMore, err = lookup()
+	// A conversation that answers before its start returned (an agent runtime already running starts a turn at
+	// once): its item learns the conversation's id a moment later.
+	for wait := time.Now().Add(inboxDraftWait); waitMore && time.Now().Before(wait); {
+		b.mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		b.mu.Lock()
+		it, from, waitMore, err = lookup()
+	}
+	if err != nil {
+		b.mu.Unlock()
+		return "", nil, nil, false, err
+	}
+	if from != nil && in.Kind == SuggestTodo {
+		b.mu.Unlock()
+		return "", nil, nil, false, errTodoFromHandoff
 	}
 	if from == nil && in.ProcessingTurn != it.Agent.ProcessingTurn {
 		b.mu.Unlock()

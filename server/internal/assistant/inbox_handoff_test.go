@@ -405,6 +405,132 @@ func TestInboxSuggestNamingItsOwnItem(t *testing.T) {
 	}
 }
 
+// A to-do suggestion from the item's own processing conversation still works when it passes its own item id (including
+// with surrounding spaces and processing_turn), while a handed-off or unrelated conversation is refused (#13560).
+func TestInboxSuggestTodoWithItem(t *testing.T) {
+	t.Run("own processing conversation naming its own item", func(t *testing.T) {
+		h, _, it := handledHub(t)
+		h.inbox.mu.Lock()
+		it.Agent.ProcessingTurn = "turn-1"
+		h.inbox.mu.Unlock()
+		// Stale processing_turn is still rejected even when item names the conversation's own item.
+		if _, err := h.runTool(t.Context(), "server", "s1", "inbox_suggest",
+			json.RawMessage(`{"item":"lark:f1:100","kind":"todo","text":"Send the quote","due":"2026-11-15","processing_turn":"stale-turn"}`)); !errors.Is(err, errStaleInboxTurn) {
+			t.Fatalf("stale processing_turn: want errStaleInboxTurn, got %v", err)
+		}
+		// Matching item + current processing_turn succeeds as if item were omitted.
+		if _, err := suggestTool(t, h, `{"item":" lark:f1:100 ","kind":"todo","text":"Send the quote","due":"2026-11-15"}`); err != nil {
+			t.Fatalf("own item todo: %v", err)
+		}
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if it.Suggestion == nil || it.Suggestion.Kind != SuggestTodo || it.Suggestion.Text != "Send the quote" ||
+			it.Suggestion.Due != "2026-11-15" || it.Suggestion.Conversation != nil || it.Handling.State != HandlingDone {
+			t.Fatalf("unexpected item state: suggestion=%+v handling=%+v", it.Suggestion, it.Handling)
+		}
+	})
+
+	t.Run("own processing conversation with whitespace-only item", func(t *testing.T) {
+		h, _, it := handledHub(t)
+		if _, err := suggestTool(t, h, `{"item":"   ","kind":"todo","text":"Follow up"}`); err != nil {
+			t.Fatalf("whitespace-only item todo: %v", err)
+		}
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if it.Suggestion == nil || it.Suggestion.Kind != SuggestTodo || it.Suggestion.Conversation != nil {
+			t.Fatalf("unexpected suggestion: %+v", it.Suggestion)
+		}
+	})
+
+	t.Run("own processing conversation naming its own item while agent is starting", func(t *testing.T) {
+		h, _, it := handledHub(t)
+		h.inbox.mu.Lock()
+		it.Agent.State = AgentRunning
+		it.Agent.SessionID = ""
+		it.Agent.ProcessingTurn = "turn-start"
+		h.inbox.mu.Unlock()
+		timer := time.AfterFunc(30*time.Millisecond, func() {
+			h.inbox.mu.Lock()
+			it.Agent.SessionID = "s1"
+			h.inbox.mu.Unlock()
+		})
+		defer timer.Stop()
+		if _, err := h.runTool(t.Context(), "server", "s1", "inbox_suggest",
+			json.RawMessage(`{"item":"lark:f1:100","kind":"todo","text":"Send the quote","processing_turn":"turn-start"}`)); err != nil {
+			t.Fatalf("own item todo while starting: %v", err)
+		}
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if it.Suggestion == nil || it.Suggestion.Kind != SuggestTodo || it.Suggestion.Conversation != nil {
+			t.Fatalf("unexpected suggestion: %+v", it.Suggestion)
+		}
+	})
+
+	t.Run("own processing conversation naming a filed item is refused", func(t *testing.T) {
+		h, _, it := handledHub(t)
+		h.inbox.mu.Lock()
+		now := time.Now().UTC()
+		it.DoneAt, it.DoneBy = &now, "user"
+		h.inbox.mu.Unlock()
+		if _, err := suggestTool(t, h, `{"item":"lark:f1:100","kind":"todo","text":"Send the quote"}`); !errors.Is(err, errSuggestFiled) {
+			t.Fatalf("filed own item todo: want errSuggestFiled, got %v", err)
+		}
+	})
+
+	t.Run("handed-off conversation still refused for todo", func(t *testing.T) {
+		h, _, it := handoffHub(t)
+		handOff(t, h, it)
+		h.inbox.mu.Lock()
+		chainBefore := len(it.Chain)
+		recapBefore := it.Recap
+		h.inbox.mu.Unlock()
+		_, err := mainSuggest(h, "m1", `{"item":"lark:f1:100","kind":"todo","text":"Send the quote","recap":"should not save","reported":{"text":"checked","by":"assistant"}}`)
+		if err == nil || !strings.Contains(err.Error(), "not one it was handed to") {
+			t.Fatalf("handed-off todo: want hand-off refusal, got %v", err)
+		}
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if it.Suggestion != nil || len(it.Chain) != chainBefore || it.Recap != recapBefore {
+			t.Fatalf("refused handed-off todo mutated item: suggestion=%+v chain=%d->%d recap=%q", it.Suggestion, chainBefore, len(it.Chain), it.Recap)
+		}
+	})
+
+	t.Run("processing conversation naming another item handed to it is refused for todo", func(t *testing.T) {
+		h, _, _ := handledHub(t)
+		now := time.Now()
+		other := &InboxItem{ID: "lark:f2:200", Source: "lark", Kind: KindDM, Account: "feishu", AccountName: "飞书", Title: "李四", Sender: "李四",
+			Last: "200", Count: 1, StartedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute), Tier: TierAction, TriagedAt: "200",
+			Lark: &InboxLark{AccountID: 1, FeedID: "f2", StartPosition: "200"}}
+		h.inbox.mu.Lock()
+		h.inbox.items[other.ID] = other
+		h.inbox.noteHandoff(other, SessionRef{MachineID: "server", SessionID: "s1"}, "op-other", now)
+		chainBefore := len(other.Chain)
+		h.inbox.mu.Unlock()
+		_, err := suggestTool(t, h, `{"item":"lark:f2:200","kind":"todo","text":"Follow up"}`)
+		if err == nil || !strings.Contains(err.Error(), "not one it was handed to") {
+			t.Fatalf("other handed item todo: want hand-off refusal, got %v", err)
+		}
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if other.Suggestion != nil || len(other.Chain) != chainBefore {
+			t.Fatalf("refused other handed item todo mutated item: suggestion=%+v chain=%d->%d", other.Suggestion, chainBefore, len(other.Chain))
+		}
+	})
+
+	t.Run("unrelated conversation naming an item is refused", func(t *testing.T) {
+		h, _, it := handoffHub(t)
+		_, err := mainSuggest(h, "m1", `{"item":"lark:f1:100","kind":"todo","text":"Send the quote"}`)
+		if err == nil || !strings.Contains(err.Error(), "was not handed to this conversation") {
+			t.Fatalf("unrelated conversation todo: want not-handed refusal, got %v", err)
+		}
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if it.Suggestion != nil {
+			t.Fatalf("refused unrelated todo mutated item: %+v", it.Suggestion)
+		}
+	})
+}
+
 // Reject, instruct and handback on a hand-off conversation's suggestion are told there, wrapped to name the item,
 // once each; the item's processing conversation hears nothing and keeps its state.
 func TestInboxHandedSuggestionNotes(t *testing.T) {
