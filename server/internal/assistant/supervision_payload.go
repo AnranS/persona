@@ -54,27 +54,15 @@ func currentSuperviseEventPayload(e prompts.SuperviseEntry) superviseEventPayloa
 
 func mergeSupervisionEventPayload(previous, current superviseEventPayload) superviseEventPayload {
 	// The last entry in the rendered order supplies scalar versions; every evidence item in the message counts as sent.
-	current.Evidence = slices.Clone(current.Evidence)
-	seen := make(map[string]bool, len(previous.Evidence)+len(current.Evidence))
-	for _, hash := range previous.Evidence {
-		seen[hash] = true
-		current.Evidence = append(current.Evidence, hash)
-	}
-	for _, hash := range current.Evidence {
-		seen[hash] = true
-	}
 	out := current
-	out.Evidence = out.Evidence[:0]
-	for _, hash := range previous.Evidence {
-		if seen[hash] {
-			out.Evidence = append(out.Evidence, hash)
-			delete(seen, hash)
-		}
-	}
-	for _, hash := range current.Evidence {
-		if seen[hash] {
-			out.Evidence = append(out.Evidence, hash)
-			delete(seen, hash)
+	out.Evidence = make([]string, 0, len(previous.Evidence)+len(current.Evidence))
+	seen := make(map[string]bool, len(previous.Evidence)+len(current.Evidence))
+	for _, hashes := range [][]string{previous.Evidence, current.Evidence} {
+		for _, hash := range hashes {
+			if !seen[hash] {
+				seen[hash] = true
+				out.Evidence = append(out.Evidence, hash)
+			}
 		}
 	}
 	return out

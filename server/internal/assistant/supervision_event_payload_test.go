@@ -51,6 +51,21 @@ func TestIssue5665PayloadHistoryIsRecipientScoped(t *testing.T) {
 	}
 }
 
+func TestIssue5665MergePayloadKeepsNewEvidence(t *testing.T) {
+	previous := superviseEventPayload{Evidence: []string{"A", "B"}}
+	current := superviseEventPayload{Evidence: []string{"A", "C", "B"}}
+	got := mergeSupervisionEventPayload(previous, current)
+	want := []string{"A", "B", "C"}
+	if len(got.Evidence) != len(want) {
+		t.Fatalf("merged evidence = %v, want %v", got.Evidence, want)
+	}
+	for i := range want {
+		if got.Evidence[i] != want[i] {
+			t.Fatalf("merged evidence = %v, want %v", got.Evidence, want)
+		}
+	}
+}
+
 func TestIssue5665UnsentRenderAndChangedRevalidationFailOpen(t *testing.T) {
 	fx := newIssue5665Fixture(t)
 	ctx := context.Background()
