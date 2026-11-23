@@ -103,7 +103,7 @@ function readSettings(raw: unknown): SettingsUpdate | undefined {
   const m = typeof model === 'string' && model !== '' ? model : undefined
   const ef = isEffortChoice(effort) ? effort : undefined
   if (m === undefined && ef === undefined) return undefined
-  return { id, ...(m !== undefined ? { model: m } : {}), ...(ef !== undefined ? { effort: ef } : {})
+  return { id, ...(m !== undefined ? { model: m } : {}), ...(ef !== undefined ? { effort: ef } : {}) }
 }
 
 /** Reads a poll's answer: status and body as `$.http.fetch` resolved them. */
