@@ -9,6 +9,7 @@ import enTodos from "../i18n/locales/en/todos.json";
 import zhTodos from "../i18n/locales/zh-Hans/todos.json";
 import jaTodos from "../i18n/locales/ja/todos.json";
 import { waitsForOwner, type Todo } from "../lib/todos";
+import { waitName } from "../lib/state-labels";
 import type { Session } from "../lib/types";
 
 vi.hoisted(() => {
@@ -219,9 +220,9 @@ describe("the read-only To-dos board (#12713)", () => {
     await render([waiting, dismissed, unattended]);
     await openBoard();
 
-    expect(row("waiting")?.textContent).toContain(t("todos.board_waiting"));
-    expect(row("dismissed")?.textContent).not.toContain(t("todos.board_waiting"));
-    expect(row("unattended")?.textContent).not.toContain(t("todos.board_waiting"));
+    expect(row("waiting")?.textContent).toContain(waitName("owner"));
+    expect(row("dismissed")?.textContent).not.toContain(waitName("owner"));
+    expect(row("unattended")?.textContent).not.toContain(waitName("owner"));
   });
 
   it("puts open, waiting and stale counts from displayed rows on every project heading", async () => {
@@ -242,7 +243,7 @@ describe("the read-only To-dos board (#12713)", () => {
     for (const [project, open, waiting, stale] of [["apollo", 3, 1, 2], ["beta", 1, 0, 0], ["", 1, 0, 1]] as const) {
       const text = group(project)?.textContent ?? "";
       expect(text).toContain(t("todos.board_open_count", { count: open }));
-      expect(text).toContain(t("todos.board_waiting_count", { count: waiting }));
+      expect(text).toContain(t("todos.board_waiting_count", { count: waiting, state: waitName("owner") }));
       expect(text).toContain(t("todos.board_stale_count", { count: stale }));
     }
   });
@@ -365,13 +366,12 @@ describe("the read-only To-dos board (#12713)", () => {
       "board_no_project",
       "board_unassigned",
       "board_no_progress",
-      "board_waiting",
       "board_stale",
       "board_stale_hours",
     ]) expect(strings[key], `${lang} todos.${key}`).toBeTruthy();
     for (const key of ["board_open_count", "board_waiting_count", "board_stale_count"]) {
       expect(strings[`${key}_other`] ?? strings[key], `${lang} todos.${key}`).toBeTruthy();
-      expect(t(`todos.${key}`, { count: 2 })).not.toBe(`todos.${key}`);
+      expect(t(`todos.${key}`, { count: 2, ...(key === "board_waiting_count" ? { state: waitName("owner") } : {}) })).not.toBe(`todos.${key}`);
     }
   });
 });

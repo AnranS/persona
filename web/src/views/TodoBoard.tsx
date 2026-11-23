@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { formatDate, t } from "../i18n";
 import { foldedState } from "../lib/child-sessions";
 import { plainMarkdown } from "../lib/plain-markdown";
+import { waitName } from "../lib/state-labels";
 import { progressLine } from "../lib/supervision";
 import { waitsOnOwner, type Triage } from "../lib/todo-triage";
 import { mostUrgentAgent, responsibleOf, taskNow, type SessionLookup, type Todo } from "../lib/todos";
@@ -180,7 +181,7 @@ export function TodoBoard({
             </span>
             <span className="flex flex-wrap gap-x-2 text-label text-ink-3 tabular-nums">
               <span>{t("todos.board_open_count", { count: group.rows.length })}</span>
-              <span>{t("todos.board_waiting_count", { count: group.waiting })}</span>
+              <span>{t("todos.board_waiting_count", { count: group.waiting, state: waitName("owner") })}</span>
               <span>{t("todos.board_stale_count", { count: group.stale })}</span>
             </span>
           </header>
@@ -201,7 +202,7 @@ export function TodoBoard({
               >
                 <span className="flex flex-wrap items-center gap-1.5">
                   <span className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{row.todo.title}</span>
-                  {row.waiting && <Tag tone="accent"><span data-testid="board-owner">{t("todos.board_waiting")}</span></Tag>}
+                  {row.waiting && <Tag tone="accent"><span data-testid="board-owner">{waitName("owner")}</span></Tag>}
                   {row.stale && <Tag tone="orange"><span data-testid="board-stale">{t("todos.board_stale")}</span></Tag>}
                 </span>
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-label text-ink-2">
