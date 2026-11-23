@@ -155,6 +155,8 @@
   "codex_waiting": "最初のメッセージ待ち",
   "direction_tasks_expand": "「{name}」の進行中タスクを開く",
   "direction_tasks_collapse": "「{name}」の進行中タスクを閉じる",
+  "spaces": "スペース",
+  "new_space": "新しいスペース",
   "side_unread": "子セッション「{title}」に新しい返信があります",
   "side_unread_kicker": "子セッションに新着",
   "side_unread_more": "+{count}",
