@@ -244,6 +244,7 @@ type superviseBook struct {
 	digestMu    sync.Mutex          // one whole digest, including todo and durable-pending restoration; teardown drains it
 	dedupMu     sync.Mutex          // serializes digest reservations and delivery
 	dedup       map[string]superviseFingerprint
+	payloads    map[string]superviseFingerprint // recipient/task content hashes, separate from whole-signal dedup
 	// failedBatchMu serializes the durable leader-failure cooldown document. failedBatches is its memory-only
 	// fallback when this manager has no store; failedBatchesLoaded says whether deferred members were restored.
 	failedBatchMu       sync.Mutex

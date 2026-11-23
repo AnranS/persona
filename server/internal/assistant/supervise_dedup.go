@@ -15,6 +15,7 @@ import (
 )
 
 const superviseDedupKey = "assistant.supervision_dedup"
+const supervisePayloadsKey = "assistant.supervision_payloads"
 const superviseDedupWindow = 30 * time.Minute
 
 type superviseFingerprint struct {
@@ -25,8 +26,7 @@ type superviseFingerprint struct {
 	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
-	// Payload is the last task prose reserved for one recipient. It lives under a separate event-payload key;
-	// ordinary whole-signal fingerprints never depend on it.
+	// Payload is used only by superviseBook.payloads, never by the whole-signal deduplication map.
 	Payload *superviseEventPayload `json:"payload,omitempty"`
 }
 
@@ -76,6 +76,24 @@ func repeatedEvidence(previous, current []string) []string {
 		}
 	}
 	return repeated
+}
+
+// putSupervisionHistories commits whole-signal deduplication and per-recipient payload history together where the
+// store supports settings batches. Callers restore both snapshots after a sequential fallback's partial failure.
+func (s *Service) putSupervisionHistories(ctx context.Context, dedup, payloads map[string]superviseFingerprint) error {
+	st := s.store()
+	if st == nil {
+		return nil
+	}
+	if batch, ok := st.(interface {
+		PutSettings(context.Context, map[string]any) error
+	}); ok {
+		return batch.PutSettings(ctx, map[string]any{superviseDedupKey: dedup, supervisePayloadsKey: payloads})
+	}
+	if err := st.PutSetting(ctx, superviseDedupKey, dedup); err != nil {
+		return err
+	}
+	return st.PutSetting(ctx, supervisePayloadsKey, payloads)
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
@@ -198,6 +216,17 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}
 	previous := maps.Clone(history)
 	next := maps.Clone(history)
+	payloadHistory := b.payloads
+	if st := s.store(); st != nil {
+		if _, err := st.Setting(ctx, supervisePayloadsKey, &payloadHistory); err != nil {
+			return nil, signals, nil, err
+		}
+	}
+	if payloadHistory == nil {
+		payloadHistory = map[string]superviseFingerprint{}
+	}
+	previousPayloads := maps.Clone(payloadHistory)
+	nextPayloads := maps.Clone(payloadHistory)
 	for key, seen := range next {
 		if !seen.Permanent && seen.Todo == "" && now.Sub(seen.At) >= superviseDedupWindow {
 			delete(next, key)
@@ -258,7 +287,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 		g.RepeatCriteria, g.RepeatRequest, g.RepeatSaid, g.RepeatLast, g.RepeatEvidence = "", "", "", "", nil
 		payload := currentSuperviseEventPayload(entry)
 		payloadKey := superviseEventPayloadKey(*g)
-		if previous := next[payloadKey].Payload; previous != nil {
+		if previous := nextPayloads[payloadKey].Payload; previous != nil {
 			if previous.Criteria == payload.Criteria {
 				g.RepeatCriteria = payload.Criteria
 			}
@@ -273,7 +302,7 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			}
 			g.RepeatEvidence = repeatedEvidence(previous.Evidence, payload.Evidence)
 		}
-		next[payloadKey] = superviseFingerprint{At: now.UTC(), Key: g.Key, Todo: g.Todo, Payload: &payload}
+		nextPayloads[payloadKey] = superviseFingerprint{At: now.UTC(), Key: g.Key, Todo: g.Todo, Payload: &payload}
 		out, kept = append(out, entry), append(kept, *g)
 	}
 	if resuming {
@@ -286,18 +315,21 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	if len(out) == 0 {
 		return nil, nil, func() {}, nil
 	}
-	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
-			return nil, signals, nil, err
+	if err := s.putSupervisionHistories(ctx, next, nextPayloads); err != nil {
+		if s.store() != nil {
+			if restoreErr := s.putSupervisionHistories(ctx, previous, previousPayloads); restoreErr != nil {
+				s.logf("supervise: could not roll back paired deduplication histories: %v", restoreErr)
+			}
 		}
+		return nil, signals, nil, err
 	}
-	b.dedup = next
+	b.dedup, b.payloads = next, nextPayloads
 	return out, kept, func() {
-		b.dedup = previous
-		if st := s.store(); st != nil {
+		b.dedup, b.payloads = previous, previousPayloads
+		if s.store() != nil {
 			cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := st.PutSetting(cctx, superviseDedupKey, previous); err != nil {
+			if err := s.putSupervisionHistories(cctx, previous, previousPayloads); err != nil {
 				s.logf("supervise: could not release deduplication reservation: %v", err)
 			}
 		}
@@ -357,11 +389,21 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 			return
 		}
 	}
+	payloadHistory := b.payloads
+	if st != nil {
+		if _, err := st.Setting(ctx, supervisePayloadsKey, &payloadHistory); err != nil {
+			s.logf("supervise: could not read the payload history: %v", err)
+			return
+		}
+	}
 	next := maps.Clone(history)
+	nextPayloads := maps.Clone(payloadHistory)
+	payloadChanged := false
 	for _, g := range signals {
 		payloadKey := superviseEventPayloadKey(g)
-		if seen := next[payloadKey]; seen.Key == g.Key {
-			delete(next, payloadKey) // a lost queue must not make its first later delivery look repeated
+		if seen := nextPayloads[payloadKey]; seen.Key == g.Key {
+			delete(nextPayloads, payloadKey) // a lost queue must not make its first later delivery look repeated
+			payloadChanged = true
 		}
 		if g.Kind == sigAllStopped {
 			key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
@@ -373,16 +415,16 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 			delete(next, key)
 		}
 	}
-	if len(next) == len(history) {
+	if len(next) == len(history) && !payloadChanged {
 		return
 	}
 	if st != nil {
-		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
+		if err := s.putSupervisionHistories(ctx, next, nextPayloads); err != nil {
 			s.logf("supervise: could not release deduplication entries: %v", err)
 			return
 		}
 	}
-	b.dedup = next
+	b.dedup, b.payloads = next, nextPayloads
 }
 
 // Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once
@@ -401,7 +443,17 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 		}
 		b.dedup = history
 	}
-	var remove []string
+	if b.payloads == nil {
+		history := map[string]superviseFingerprint{}
+		if st := s.store(); st != nil {
+			if _, err := st.Setting(ctx, supervisePayloadsKey, &history); err != nil {
+				s.logf("supervise: cannot load payload history: %v", err)
+				return
+			}
+		}
+		b.payloads = history
+	}
+	var remove, payloadRemove []string
 	s.todos.mu.RLock()
 	for key, seen := range b.dedup {
 		todo := seen.Todo
@@ -416,21 +468,30 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 			remove = append(remove, key)
 		}
 	}
+	for key, seen := range b.payloads {
+		if task := s.todos.todos[seen.Todo]; seen.Todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
+			payloadRemove = append(payloadRemove, key)
+		}
+	}
 	s.todos.mu.RUnlock()
-	if len(remove) == 0 {
+	if len(remove) == 0 && len(payloadRemove) == 0 {
 		return
 	}
 	next := maps.Clone(b.dedup)
 	for _, key := range remove {
 		delete(next, key)
 	}
+	nextPayloads := maps.Clone(b.payloads)
+	for _, key := range payloadRemove {
+		delete(nextPayloads, key)
+	}
 	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
-			s.logf("supervise: cannot prune inactivity fingerprints: %v", err)
+		if err := s.putSupervisionHistories(ctx, next, nextPayloads); err != nil {
+			s.logf("supervise: cannot prune supervision histories: %v", err)
 			return
 		}
 	}
-	b.dedup = next
+	b.dedup, b.payloads = next, nextPayloads
 }
 
 // clearTodoReadyDedup removes the task-bound sigTodoReady deduplication entry for todoID when that to-do is reopened,
