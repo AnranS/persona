@@ -2257,7 +2257,8 @@ private struct AgentsList: View {
         let id = Self.hostFoldID(ref)
         let m = machine(ref)
         let group = SpaceGroup(id: id, machineID: ref.id, spaceID: "-", group: ref.group, name: m?.title ?? ref.id, index: 0, sessions: sessions)
-        return FoldButton(title: group.name, folded: isFolded(id), detail: StateCounts.spoken(group)) { toggleFold(id) } label: {
+        return FoldButton(title: group.name, folded: isFolded(id), detail: StateCounts.spoken(group),
+                          bottomPadding: Theme.Space.xs) { toggleFold(id) } label: {
             HostHeading(symbol: m?.symbol ?? Theme.Icon.machine, title: group.name, group: group)
         }
         .accessibilityIdentifier("agents.host")
@@ -2269,7 +2270,7 @@ private struct AgentsList: View {
     private func hostHeading(_ ref: MachineRef, sessions: [Session]) -> some View {
         Section {
             hostHeadingRow(ref, sessions: sessions)
-                .listRowInsets(Self.hostHeadingInsets)
+                .modifier(ButtonRowInsets(edges: Self.hostHeadingInsets))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
         }
@@ -2711,7 +2712,7 @@ private struct AgentsList: View {
             // As the quick filters count: not a subtask that is a row only because its parent is not drawn.
             let counted = rows.filter { !$0.isNestedSubtask }.count
             if !rows.isEmpty {
-                listSection {
+                listSection(foldable: true) {
                     if isFolded(id) {
                     } else if b.key == "idle" {
                         cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: true) }
@@ -2720,22 +2721,37 @@ private struct AgentsList: View {
                         cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: b.key != "muted") }
                     }
                 } header: {
-                    FoldButton(title: b.title, folded: isFolded(id), detail: String(localized: "\(stateSectionCount(b.key, loaded: counted)) [Chats View cb60bd]")) { toggleFold(id) } label: {
-                        SectionHeader(title: b.title, count: stateSectionCount(b.key, loaded: counted), tone: b.tint,
-                                      symbol: b.key == "background" ? Theme.Icon.backgroundWaiting : nil)
-                    }
-                    .modifier(FoldAnchor(id: id, reader: feed.reader))
-                    .accessibilityIdentifier("agents.section")
-                    .contextMenu {
-                        if b.key == "just_finished", rows.contains(where: { $0.needsSeen() }) {
-                            Button { model.markSeen(rows.map(\.key)) } label: {
-                                Label(StateName.markAllSeen(), systemImage: Theme.Icon.success)
-                            }
-                        }
-                    }
+                    stateSectionHeader(key: b.key, id: id, title: b.title, count: stateSectionCount(b.key, loaded: counted),
+                                       tint: b.tint, rows: rows)
                 }
                 .listSectionSpacing(isFolded(id) ? .custom(0) : .default)
             }
+        }
+    }
+
+    /// A By Status section's folding header; only Just finished attaches a context menu so the other headings keep plain
+    /// button hit-testing without an empty menu wrapper.
+    @ViewBuilder private func stateSectionHeader(key: String, id: String, title: String, count: Int,
+                                                 tint: StatusTone, rows: [Session]) -> some View {
+        let button = FoldButton(title: title, folded: isFolded(id),
+                                detail: String(localized: "\(count) [Chats View cb60bd]"),
+                                topPadding: floating ? Theme.Space.l : Theme.Space.s,
+                                bottomPadding: floating ? Theme.Space.xs : Theme.Space.s) { toggleFold(id) } label: {
+            SectionHeader(title: title, count: count, tone: tint,
+                          symbol: key == "background" ? Theme.Icon.backgroundWaiting : nil)
+        }
+        .modifier(FoldAnchor(id: id, reader: feed.reader))
+        .accessibilityIdentifier("agents.section")
+        if key == "just_finished" {
+            button.contextMenu {
+                if rows.contains(where: { $0.needsSeen() }) {
+                    Button { model.markSeen(rows.map(\.key)) } label: {
+                        Label(StateName.markAllSeen(), systemImage: Theme.Icon.success)
+                    }
+                }
+            }
+        } else {
+            button
         }
     }
 
@@ -2754,7 +2770,7 @@ private struct AgentsList: View {
             let id = g.key
             let folded = g.todoID == nil ? isFolded(id, otherwise: g.folded) : isFolded(id)
             if !g.sessions.isEmpty || g.hint != nil {
-                listSection {
+                listSection(foldable: true) {
                     if !folded {
                         if g.sessions.isEmpty, let hint = g.hint {
                             groupEmptyRow(hint)
@@ -2765,7 +2781,9 @@ private struct AgentsList: View {
                 } header: {
                     // A group says what it holds with its count, for VoiceOver too: its header is one element (#6458).
                     FoldButton(title: g.name, folded: folded, detail: [String(localized: "\(g.sessions.count) [Chats View cb60bd]"), g.hint ?? ""].filter { !$0.isEmpty }
-                        .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))) { toggleFold(id, shown: folded) } label: {
+                        .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")),
+                               topPadding: floating ? Theme.Space.l : Theme.Space.s,
+                               bottomPadding: floating ? Theme.Space.xs : Theme.Space.s) { toggleFold(id, shown: folded) } label: {
                         HStack(spacing: Theme.Space.sm) {
                             if compact {
                                 Text(g.name).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
@@ -2832,7 +2850,7 @@ private struct AgentsList: View {
             ForEach(layout.entries) { e in
                 let folded = isFolded(e.key)
                 let title = model.directionTitle(e.direction)
-                listSection {
+                listSection(foldable: true) {
                     if !folded {
                         ForEach(e.tasks) { t in
                             directionTaskRow(t.task)
@@ -2846,7 +2864,9 @@ private struct AgentsList: View {
                         }
                     }
                 } header: {
-                    FoldButton(title: title, folded: folded, detail: e.direction.counts.label ?? "") { toggleFold(e.key) } label: {
+                    FoldButton(title: title, folded: folded, detail: e.direction.counts.label ?? "",
+                               topPadding: floating ? Theme.Space.l : Theme.Space.s,
+                               bottomPadding: floating ? Theme.Space.xs : Theme.Space.s) { toggleFold(e.key) } label: {
                         HStack(spacing: Theme.Space.sm) {
                             if compact {
                                 Text(title).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
@@ -2934,7 +2954,7 @@ private struct AgentsList: View {
         ForEach(lookup.projection?.apps ?? AppGroups.build(sessions)) { app in
             let machines = Set(app.projects.compactMap(\.machine))
             let group = SpaceGroup(id: app.id, machineID: "", spaceID: "-", name: app.title, index: 0, sessions: app.sessions)
-            listSection {
+            listSection(foldable: true) {
                 if !isFolded(app.id) {
                     if app.showsProjects {
                         // As the desktop apps' sidebars: a project, then its sessions a level in (`AppGroups.projects`).
@@ -2952,7 +2972,9 @@ private struct AgentsList: View {
                     }
                 }
             } header: {
-                FoldButton(title: app.title, folded: isFolded(app.id), detail: Self.appDetail(group)) { toggleFold(app.id) } label: {
+                FoldButton(title: app.title, folded: isFolded(app.id), detail: Self.appDetail(group),
+                           topPadding: floating ? Theme.Space.l : Theme.Space.s,
+                           bottomPadding: floating ? Theme.Space.xs : Theme.Space.s) { toggleFold(app.id) } label: {
                     AppSectionHeader(app: app, counts: group)
                 }
                 .accessibilityIdentifier("agents.section")
@@ -2981,7 +3003,7 @@ private struct AgentsList: View {
             let id = "machine/" + m.ref.path
             let group = SpaceGroup(id: "m-" + m.ref.path, machineID: m.id, spaceID: "-", group: m.group, name: m.title, index: 0, sessions: rows,
                                    aggregate: model.sessionLists.aggregate(machineScope(m)), bounded: model.sessionLists.isPaged(m.group))
-            listSection {
+            listSection(foldable: true) {
                 if !isFolded(id) {
                     if quick == .all {
                         cappedRows(rows.filter(stays), key: id) { s in slotRow(s, context: true) }
@@ -2991,7 +3013,9 @@ private struct AgentsList: View {
                     }
                 }
             } header: {
-                FoldButton(title: m.title, folded: isFolded(id), detail: StateCounts.spoken(group)) { toggleFold(id) } label: {
+                FoldButton(title: m.title, folded: isFolded(id), detail: StateCounts.spoken(group),
+                           topPadding: floating ? Theme.Space.l : Theme.Space.s,
+                           bottomPadding: floating ? Theme.Space.xs : Theme.Space.s) { toggleFold(id) } label: {
                     MachineSectionHeader(machine: m, group: group)
                 }
                 .accessibilityIdentifier("agents.section")
@@ -3200,8 +3224,10 @@ private struct AgentsList: View {
     }
     /// A section. The capsules are a plain list (every row sets its own edges, all on `Theme.Space.page`): its title is
     /// its first row on the page's edge (a plain list's headers stick to the top, and a grouped list pads its first
-    /// section about 35 pt). Elsewhere the grouped list's header.
-    @ViewBuilder private func listSection<Content: View, Header: View>(@ViewBuilder content: () -> Content,
+    /// section about 35 pt). Elsewhere the grouped list's header. When `foldable`, the header's button owns the vertical
+    /// room so a tap near either edge hits it (#3753, #13575).
+    @ViewBuilder private func listSection<Content: View, Header: View>(foldable: Bool = false,
+                                                                      @ViewBuilder content: () -> Content,
                                                                       @ViewBuilder header: () -> Header) -> some View {
         if floating {
             Section {
@@ -3209,13 +3235,21 @@ private struct AgentsList: View {
                     .font(Theme.Font.sectionHeader)
                     .foregroundStyle(.secondary)
                     .textCase(nil)
-                    .listRowInsets(EdgeInsets(top: Theme.Space.l, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page))
+                    .listRowInsets(EdgeInsets(top: foldable ? Theme.Space.flush : Theme.Space.l, leading: Theme.Space.page,
+                                              bottom: foldable ? Theme.Space.flush : Theme.Space.xs, trailing: Theme.Space.page))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 content()
             }
         } else {
-            Section { content() } header: { header() }
+            Section { content() } header: {
+                if foldable {
+                    header()
+                        .modifier(ButtonRowInsets(edges: Self.foldedHeaderInsets))
+                } else {
+                    header()
+                }
+            }
         }
     }
 
@@ -4066,11 +4100,14 @@ struct QuickFilterBar: View, Equatable {
 }
 
 /// A section header that folds its section: the header itself plus a chevron, spoken as "name, expanded / collapsed, …".
-/// A finger's height whatever the header draws (#3753).
+/// A finger's height whatever the header draws (#3753). Optional vertical padding stays inside the plain button's label so
+/// the hit area covers the full height of the header cell (#13575).
 struct FoldButton<Content: View>: View {
     var title: String
     var folded: Bool
     var detail: String
+    var topPadding: CGFloat = Theme.Space.flush
+    var bottomPadding: CGFloat = Theme.Space.flush
     var action: () -> Void
     @ViewBuilder var label: Content
 
@@ -4081,9 +4118,13 @@ struct FoldButton<Content: View>: View {
                 Spacer(minLength: 4)
                 FoldChevron(folded: folded)
             }
-            .contentShape(.rect)
             // The room it gains is above its words: a section's title stays by its card.
             .modifier(TouchHeight(alignment: .bottom))
+            #if os(iOS)
+            .padding(.top, topPadding)
+            .padding(.bottom, bottomPadding)
+            #endif
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
