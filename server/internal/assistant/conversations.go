@@ -218,7 +218,10 @@ type relayMsg struct {
 	OnceID string `json:"once_id,omitempty"`
 	// Signals is the structured JSON content of a queued supervision message. It stays comparable with the relay and lets
 	// /stop remove one task and regather the others after restart; older messages without it use their embedded task ids.
-	Signals   string    `json:"signals,omitempty"`
+	Signals string `json:"signals,omitempty"`
+	// Payloads holds the full content hashes whose delta rendering produced Text. Only a successful DeviceAssistantSend
+	// acknowledges them; queue admission and revalidation do not advance this history.
+	Payloads  string    `json:"payloads,omitempty"`
 	From      string    `json:"from"`
 	FromTitle string    `json:"from_title"`
 	Tool      string    `json:"tool"`
@@ -927,6 +930,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 		handed(err)
 		return err
 	}
+	s.ackSupervisionPayload(ctx, to, msg)
 	if s.isBackground(ctx, to) && res.SessionID != "" && res.SessionID != to {
 		s.registerBackgroundRoundFork(ctx, machine, res.SessionID, to)
 	}

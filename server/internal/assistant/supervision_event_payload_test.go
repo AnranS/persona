@@ -38,69 +38,46 @@ func TestIssue5665TodoGetIncludesAuthoritativeRequestAndScopeHistory(t *testing.
 }
 
 func TestIssue5665PayloadHistoryIsRecipientScoped(t *testing.T) {
-	s, _ := newQuietService(t)
-	ctx, now := context.Background(), time.Now()
-	entry := prompts.SuperviseEntry{ID: "todo_delta", Title: "Synthetic", Kind: sigReport,
+	fx := newIssue5665Fixture(t)
+	entry := prompts.SuperviseEntry{ID: fx.todo.ID, Title: "Synthetic", Kind: sigReport,
 		DoneWhen: []string{"criterion"}, Asked: "owner request", Last: "last", Evidence: []string{"evidence"}}
-	first := superviseSignal{Todo: entry.ID, Kind: sigReport, Report: upReportQuestion, Key: "first", Recipient: "conv1"}
-	if _, kept, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{entry}, []superviseSignal{first}, now); err != nil || len(kept) != 1 {
-		t.Fatalf("first reservation: %v, %+v", err, kept)
-	}
-	second := first
-	second.Key, second.Recipient = "second", "conv2"
-	secondEntry := entry
-	secondEntry.Last = "changed so the signal remains news"
-	_, kept, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{secondEntry}, []superviseSignal{second}, now.Add(time.Minute))
-	if err != nil || len(kept) != 1 {
-		t.Fatalf("second recipient reservation: %v, %+v", err, kept)
-	}
-	g := kept[0]
-	if g.RepeatCriteria != "" || g.RepeatRequest != "" || g.RepeatLast != "" || g.RepeatSaid != "" || len(g.RepeatEvidence) != 0 {
-		t.Fatalf("one recipient's history suppressed another recipient's first facts: %+v", g)
+	fx.s.ackSupervisionPayload(context.Background(), "conv1", relayMsg{Tool: superviseTool,
+		Payloads: encodeSupervisionPayloads([]prompts.SuperviseEntry{entry})})
+	text, _ := fx.s.renderSupervisionDelivery(context.Background(), "conv2", []prompts.SuperviseEntry{entry})
+	for _, want := range []string{"criterion", "owner request", "evidence", "last"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("one recipient's acknowledged history suppressed another's first facts %q:\n%s", want, text)
+		}
 	}
 }
 
-func TestIssue5665RepeatRollbackAndChangedRevalidationFailOpen(t *testing.T) {
-	s, _ := newQuietService(t)
-	ctx, now := context.Background(), time.Now()
-	entry := prompts.SuperviseEntry{ID: "todo_delta", Title: "Synthetic", Kind: sigReport,
+func TestIssue5665UnsentRenderAndChangedRevalidationFailOpen(t *testing.T) {
+	fx := newIssue5665Fixture(t)
+	ctx := context.Background()
+	entry := prompts.SuperviseEntry{ID: fx.todo.ID, Title: "Synthetic", Kind: sigReport,
 		DoneWhen: []string{"criterion"}, Last: "last", Evidence: []string{"old evidence"}}
-	first := superviseSignal{Todo: entry.ID, Kind: sigReport, Report: upReportQuestion, Key: "first", Recipient: "conv1"}
-	if _, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{entry}, []superviseSignal{first}, now); err != nil {
-		t.Fatal(err)
+	for attempt := 0; attempt < 2; attempt++ {
+		text, _ := fx.s.renderSupervisionDelivery(ctx, "conv1", []prompts.SuperviseEntry{entry})
+		for _, want := range []string{"criterion", "old evidence", "last"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("unsent render %d lost %q:\n%s", attempt+1, want, text)
+			}
+		}
 	}
-	second := first
-	second.Key = "second"
-	secondEntry := entry
-	secondEntry.Last = "new last"
-	_, kept, rollback, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{secondEntry}, []superviseSignal{second}, now.Add(time.Minute))
-	if err != nil || len(kept) != 1 || len(kept[0].RepeatEvidence) != 1 {
-		t.Fatalf("second reservation did not mark repeated evidence: %+v, %v", kept, err)
-	}
-	rollback()
-	third := second
-	third.Key = "third"
-	thirdEntry := secondEntry
-	thirdEntry.Evidence = []string{"evidence only seen in the rolled-back attempt"}
-	_, kept, _, err = s.reserveSupervision(ctx, []prompts.SuperviseEntry{thirdEntry}, []superviseSignal{third}, now.Add(2*time.Minute))
-	if err != nil || len(kept) != 1 {
-		t.Fatalf("third reservation: %v, %+v", err, kept)
-	}
-	if len(kept[0].RepeatEvidence) != 0 {
-		t.Fatal("rolled-back evidence became a delivered repeat")
+	if _, ok := fx.s.supervise.payloads[superviseEventPayloadKey("conv1", entry.ID)]; ok {
+		t.Fatal("rendering without a successful send advanced payload history")
 	}
 
-	// A repeat hash from an earlier reservation must not hide content changed while the signal waited.
-	fourth := third
-	fourth.Key = "fourth"
-	fourthEntry := thirdEntry
-	fourthEntry.Last = "another last"
-	_, kept, _, err = s.reserveSupervision(ctx, []prompts.SuperviseEntry{fourthEntry}, []superviseSignal{fourth}, now.Add(3*time.Minute))
-	if err != nil || len(kept) != 1 {
-		t.Fatalf("fourth reservation: %v, %+v", err, kept)
+	fx.s.ackSupervisionPayload(ctx, "conv1", relayMsg{Tool: superviseTool,
+		Payloads: encodeSupervisionPayloads([]prompts.SuperviseEntry{entry})})
+	changed := entry
+	changed.Evidence = []string{"old evidence", "new evidence during revalidation"}
+	text, _ := fx.s.renderSupervisionDelivery(ctx, "conv1", []prompts.SuperviseEntry{changed})
+	if strings.Contains(text, "old evidence") || !strings.Contains(text, "new evidence during revalidation") {
+		t.Fatalf("acknowledged and changed evidence were not distinguished:\n%s", text)
 	}
-	fourthEntry.Evidence = append(fourthEntry.Evidence, "new evidence during revalidation")
-	text := s.renderSupervisionDelivery(ctx, "conv1", []prompts.SuperviseEntry{fourthEntry}, kept)
+	changed.Evidence = []string{"new evidence during revalidation"}
+	text, _ = fx.s.renderSupervisionDelivery(ctx, "conv1", []prompts.SuperviseEntry{changed})
 	if !strings.Contains(text, "new evidence during revalidation") {
 		t.Fatalf("a stale repeat hash hid new evidence:\n%s", text)
 	}

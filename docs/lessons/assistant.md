@@ -106,9 +106,10 @@
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
 - Supervision payload deltas must not change whole-signal fingerprints or disappear during queue revalidation (#5665).
-  Reserve recipient/task content hashes from the full entry, carry the repeat hashes with the persisted signal, and apply
-  them only at final render. A changed hash or a new recipient includes full facts again; rollback and a lost queue must
-  not mark undelivered prose as seen. Keep `todo_get` and `agent_read` authoritative so omission never relies on the
+  Carry the full recipient/task payload record with the queued message and acknowledge it only after
+  `DeviceAssistantSend` succeeds; a reservation, replacement or reroute advances nothing. Rebuild the final batch from
+  acknowledged history so a removed entry cannot leave its sibling as a first-delivery delta. A changed hash or a new
+  recipient includes full facts again. Keep `todo_get` and `agent_read` authoritative so omission never relies on the
   model remembering an earlier event or on a cached first copy.
 
 
