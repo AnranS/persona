@@ -49,14 +49,14 @@ var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRea
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s. Scopes whose authority must be agreed to by name are left out:
-// agents.permission_mode, assistant.start_defaults (which can raise what task Agents spend), decisions.raise (which can
+// agents.permission_mode, push.grading (which changes how pushes are graded),
+// assistant.start_defaults (which can raise what task Agents spend), decisions.raise (which can
 // interrupt the owner with a new decision), dispatch.guard (which changes which conversations may hand work out),
 // machines.pair (which can issue one-time pairing links for new pending computers),
-// browser.run (which runs scripts in a paired computer's browser),
-// push.grading (which provides a push grading layer that can hold or re-grade notifications), and
+// browser.run (which runs scripts in a paired computer's browser), and
 // market.refresh_own (which spends the source marketplace's API quota).
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopePushGrading && s != ScopeMarketRefreshOwn
+	return s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.

@@ -1,11 +1,9 @@
 package extwire
 
-// ScopePushGrading lets an explicitly authorized extension manage its own push grading layer and preview combined
-// push grading decisions without mutating notification state (GET/PUT/DELETE /api/v1/push/grading/layer,
-// POST /api/v1/push/grading/preview). Granted by name only, never included in a legacy every-scope token.
-const ScopePushGrading = "push.grading"
-
 func init() {
+	// Route-to-scope bindings for ScopePushGrading (defined in contract.go):
+	// an explicitly authorized extension manages only its own push grading layer
+	// and previews combined grading decisions without mutating notification state.
 	addRouteScopes(map[string]string{
 		"GET /api/v1/push/grading/layer":    ScopePushGrading,
 		"PUT /api/v1/push/grading/layer":    ScopePushGrading,
