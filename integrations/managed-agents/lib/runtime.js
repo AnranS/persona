@@ -28,11 +28,12 @@ const SYNC_CONCURRENCY = 4
  * Other options go to createRuntime (socketPath, listen, retryMs, answerFirst…).
  */
 export function createManagedAgentsRuntime(o = {}) {
+  const env = o.env ?? process.env
   const rawLog = o.log ?? o.runtimeOptions?.log ?? (() => {})
-  const secrets = createSecrets({ env: o.env ?? process.env, log: rawLog, run: o.run, platform: o.platform })
+  const secrets = createSecrets({ env, log: rawLog, run: o.run, platform: o.platform })
   const say = (m) => rawLog(secrets.redact(m))
-  const configPath = o.configPath ?? (o.config && o.statePath ? undefined : defaultConfigPath(undefined, o.env ?? process.env))
-  const statePath = o.statePath ?? join(dirname(configPath), 'managed-agents-state.json')
+  const configPath = o.configPath ?? (o.config ? undefined : defaultConfigPath(undefined, env))
+  const statePath = o.statePath ?? join(dirname(configPath ?? defaultConfigPath(undefined, env)), 'managed-agents-state.json')
   const pollScale = o.pollScale ?? 1
   const syncConcurrency = Math.max(1, o.syncConcurrency ?? SYNC_CONCURRENCY)
 

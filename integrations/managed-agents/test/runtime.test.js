@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -574,4 +574,56 @@ test('each profile polls at its own poll_seconds without 3s clamp and re-arms on
   const slowBeforeReload = eventsCount(slowMa)
   await writeCfg(1)
   await until('slow profile polls after reload', () => eventsCount(slowMa) - slowBeforeReload >= 2, 2000)
+})
+
+test('inline config without statePath falls back to default state path under PERSONA_HOME and keeps reload a no-op', async (t) => {
+  const ma = await startFakeMA({ list: false })
+  t.after(() => ma.close())
+  const node = await startFakeNode(t, { strict: true })
+  const personaHome = await mkdtemp(join(tmpdir(), 'ma-default-state-'))
+  // Put a different config at $PERSONA_HOME/managed-agents.json to prove reload stays a no-op for inline o.config.
+  await writeFile(join(personaHome, 'managed-agents.json'), JSON.stringify({
+    runtime: 'from-file-ignored',
+    profiles: [],
+  }), { mode: 0o600 })
+
+  const config = parseConfig({
+    profiles: [{
+      id: 'cloud',
+      mode: 'self',
+      base_url: ma.url,
+      api_key: 'env:MA_KEY',
+      start: { agent: 'agent-a', environment_id: 'env-1' },
+      poll_seconds: 1,
+    }],
+  })
+  assert.deepEqual(config.problems, [])
+
+  // Constructing with inline config and no statePath (or env) must not throw TypeError from dirname(undefined).
+  assert.doesNotThrow(() => createManagedAgentsRuntime({ config }))
+
+  const rt = createManagedAgentsRuntime({
+    config,
+    env: { PERSONA_HOME: personaHome, MA_KEY: ma.key },
+    pollScale: 0.05,
+    runtimeOptions: { socketPath: node.path, retryMs: 50, pushDelayMs: 10 },
+  })
+  await rt.start()
+  t.after(() => rt.stop())
+  await node.ready
+
+  await rt.reload()
+  assert.equal(node.hello.runtime, 'managed-agents')
+  assert.equal(rt.profiles.has('cloud'), true)
+
+  const { session } = await node.peer.call('session.start', { launcher: 'ma-cloud', cwd: '/tmp', prompt: 'hello', client_msg_id: 'default-state' })
+  const stateFile = join(personaHome, 'managed-agents-state.json')
+  const saved = await until('default state file persisted', async () => {
+    try {
+      return JSON.parse(await readFile(stateFile, 'utf8'))
+    } catch {
+      return undefined
+    }
+  }, 3000)
+  assert.deepEqual(saved, { started: [{ profile: 'cloud', id: session.session_id.slice('cloud.'.length) }] })
 })
