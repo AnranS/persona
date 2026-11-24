@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.moduleapi.asMenuActions
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
@@ -628,6 +629,9 @@ fun ChatComposer(
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
         SendButton(onClick = { expandedEditor = false; send() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }
+    // The modules' composer actions (#13847), asked only while the menu is open.
+    val moduleActions = if (menu) persona.core.moduleapi.LocalModuleActions.current.actions(persona.core.moduleapi.MenuSlot.ComposerActions,
+        persona.core.moduleapi.ModuleActionTarget(session.machineId, session.sessionId)) else emptyList()
     if (menu) ChatActionsSheet(onDismiss = { menu = false }, title = stringResource(R.string.chat_composer_menu_title), actions = buildList {
         // Photos picks pictures (hub image limits + overflow file room) and videos (up to 4) sized by what is left.
         val mediaRoom = composerMediaPickerRoom(state.attachments, currentImageLimits, canSpill = service != null)
@@ -645,6 +649,7 @@ fun ChatComposer(
             SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
             if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
         } else if (mainClear != null) add(JAction(SlashCommand.mainClearCommand(resources).title) { menu = false; clearMain(mainClear) })
+        addAll(moduleActions.asMenuActions { menu = false })
     })
     if (confirmClear) JDialog(onDismiss = { confirmClear = false }, title = stringResource(R.string.chat_composer_clear_title),
         text = stringResource(R.string.chat_composer_clear_text, agentName),
