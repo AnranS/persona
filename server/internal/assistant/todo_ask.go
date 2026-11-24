@@ -189,9 +189,9 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 		// to-do's row would not answer in place.
 		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
 			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))},
-		// One push a to-do and reason while it waits, not one a round (todoPushOver lets the next one ring). It carries
-		// no card id: the iOS app clears a delivered push whose interaction_id is not in its card list as stale, and a
-		// decision is never in that list, so a card id would take an unanswered decision off the lock screen.
+		// One push a to-do and reason while it waits, not one a round (todoPushOver lets the next one ring). The hub
+		// names its card (TodoAskCardID) as the push's card_id, never interaction_id: the iOS app clears a delivered
+		// push whose interaction_id is not in its card list as stale, and a decision is never in that list.
 		RelatedKey: assistantwire.TodoPushKey(id, reason)}
 	for _, o := range a.Options {
 		n.Todo.Options = append(n.Todo.Options, o.Label)
@@ -220,13 +220,11 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 }
 
 // todoPushOver: to-do id no longer waits on the owner (its decision answered, superseded or withdrawn by its
-// supervisor, its owner wait over, the to-do closed). The hub lets the next push about it ring
-// (assistantwire.TodoPushKey) and recalls delivered pushes keyed by todo_id on iOS via todo-ask:<id> (#13916).
+// supervisor, its owner wait over, the to-do closed). Its card is over (resolveCard): the hub lets the next push about it
+// ring (assistantwire.TodoPushKey) and takes the decision or needs-user push (which carries card_id and todo_id, never
+// interaction_id) off the devices it went to (#13916, #14388). Nothing is pushed.
 func (s *Service) todoPushOver(id string) {
-	if s.hub == nil || id == "" {
-		return
-	}
-	if err := s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: assistantwire.TodoAskCardID(id)}); err != nil {
-		s.logf("task %s: owner push over: %v", id, err)
+	if id != "" {
+		s.resolveCard(assistantwire.TodoAskCardID(id))
 	}
 }

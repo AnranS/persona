@@ -6,9 +6,9 @@ import "strings"
 // what they are about, not by when they were asked: RelatedKey "todo:<id>:<reason>" (TodoPushKey). The hub pushes one
 // such key once and holds every later push with it while the to-do still waits on the owner for that reason; the
 // manager says the to-do no longer does (answered, withdrawn, superseded, closed) with EventFleetResolved naming
-// TodoAskCardID. The pushes carry todo_id (never interaction_id: the iOS app clears a delivered push whose
-// interaction_id is not in its card list as stale, and a to-do's ask is never in that list), so newer iOS apps recall
-// them on todo-ask:<id> while older apps ignore todo_id (#13916).
+// TodoAskCardID. The pushes carry card_id (`todo-ask:<id>`) and todo_id (never interaction_id: the iOS app clears a
+// delivered push whose interaction_id is not in its card list as stale, and a to-do's ask is never in that list), so
+// newer iOS apps recall them on todo-ask:<id> while older apps ignore both fields (#13916, #14388).
 
 // Reasons a to-do's push to the owner is about (TodoPushKey).
 const (

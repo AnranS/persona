@@ -107,6 +107,9 @@ func TestTodoPushOverRingsAgain(t *testing.T) {
 	if p["todo_id"] != "todo_1" {
 		t.Fatalf("decision push payload %v missing todo_id=todo_1", p)
 	}
+	if p["card_id"] != assistantwire.TodoAskCardID("todo_1") {
+		t.Fatalf("decision push payload %v missing card_id=%s", p, assistantwire.TodoAskCardID("todo_1"))
+	}
 	if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Minute), assistantwire.TodoPushDecide)); err != nil {
 		t.Fatal(err)
 	}
@@ -141,17 +144,17 @@ func TestTodoNeedsUserPushCarriesTodoIDAndWithdraws(t *testing.T) {
 		if p["interaction_id"] != nil {
 			t.Fatalf("needs-user push payload %v carries an interaction_id", p)
 		}
-		if p["todo_id"] != "todo_1" {
-			t.Fatalf("needs-user push payload %v missing todo_id=todo_1", p)
+		if p["todo_id"] != "todo_1" || p["card_id"] != assistantwire.TodoAskCardID("todo_1") {
+			t.Fatalf("needs-user push payload %v missing todo_id/card_id for todo_1", p)
 		}
-		// An ordinary notice with a non-TodoPushKey related key carries neither todo_id nor interaction_id.
+		// An ordinary notice with a non-TodoPushKey related key carries none of todo_id, card_id, or interaction_id.
 		plain := gradingNotification(assistantwire.LevelP0, "todo:todo_2", "普通提醒")
 		if _, err := h.deliverPushFrom(assistantwire.AssistantID, plain); err != nil {
 			t.Fatal(err)
 		}
 		plainPayload := open(f.wait(t, 2)[1])
-		if plainPayload["todo_id"] != nil || plainPayload["interaction_id"] != nil {
-			t.Fatalf("plain notice payload %v should not carry todo_id or interaction_id", plainPayload)
+		if plainPayload["todo_id"] != nil || plainPayload["card_id"] != nil || plainPayload["interaction_id"] != nil {
+			t.Fatalf("plain notice payload %v should not carry todo_id, card_id, or interaction_id", plainPayload)
 		}
 		reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
 		bg := f.wait(t, 3)[2]
@@ -194,7 +197,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		now := time.Now()
 		p.now = func() time.Time { return now }
 		todoCard := assistantwire.TodoAskCardID("todo_1")
-		p.cardPushedTo(todoCard, "phone")
+		p.ownerCardPushedTo(todoCard, "phone")
 		p.cardPushedTo("ix_old", "phone")
 		now = now.Add(2 * time.Hour)
 		p.cardPushedTo("ix_fresh", "ipad") // triggers prune

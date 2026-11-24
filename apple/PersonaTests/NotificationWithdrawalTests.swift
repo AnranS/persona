@@ -74,6 +74,17 @@ struct NotificationWithdrawalTests {
         #expect(NotificationWithdrawal.resolved([], group: nil, delivered: pushes).isEmpty)
     }
 
+    @Test func anAssistantCardsPushWaitsForItsWithdrawal() {
+        // A decision's push (card_id): never in the list of pending interactions, so neither a list without it nor a
+        // settled interaction takes it back; the hub's withdrawal push naming it does.
+        var card = delivered("n1", "todo-ask:t1")
+        card.ownerCard = true
+        let pushes = [card, delivered("n2", "ix2")]
+        #expect(NotificationWithdrawal.stale(listedAt: ["": t0.addingTimeInterval(60)], pending: [], delivered: pushes) == ["n2"])
+        #expect(NotificationWithdrawal.settled(gone: ["todo-ask:t1"], pending: [], delivered: pushes).isEmpty)
+        #expect(NotificationWithdrawal.resolved(["todo-ask:t1"], group: "", delivered: pushes) == ["n1"])
+    }
+
     @Test func unansweredTodoDecisionsAreNeverRemovedByStaleOrSettled() {
         // To-do decisions and needs-user pushes never appear in the interactions list (#13916), so a full card-list
         // fetch (`stale`) or interaction removal (`settled`) must never sweep them.
@@ -128,7 +139,35 @@ struct NotificationWithdrawalTests {
             userInfo: ["interaction_id": "ix_1", "machine_id": "m1", "session_id": "s1"]
         )
         #expect(ixRaw?.target == .interaction("ix_1"))
+        #expect(ixRaw?.ownerCard == false)
         #expect(ixRaw?.ref == PushRef(["machine_id": "m1", "session_id": "s1"]))
+
+        // Assistant owner cards (plan waiting for Start, failed start) carry card_id + interaction_id (#14388).
+        let planRaw = NotificationWithdrawal.raw(
+            identifier: "n-plan",
+            date: t0,
+            userInfo: ["card_id": "plan_x", "interaction_id": "plan_x", "machine_id": "m1", "session_id": "s1"]
+        )
+        #expect(planRaw?.target == .interaction("plan_x"))
+        #expect(planRaw?.ownerCard == true)
+
+        let failedRaw = NotificationWithdrawal.raw(
+            identifier: "n-fail",
+            date: t0,
+            userInfo: ["card_id": "task-failed:todo_9", "interaction_id": "task-failed:todo_9",
+                       "machine_id": "m1", "session_id": "s1"]
+        )
+        #expect(failedRaw?.target == .interaction("task-failed:todo_9"))
+        #expect(failedRaw?.ownerCard == true)
+
+        // Decision / needs-user push carrying card_id: todo-ask:<id> (with or without todo_id).
+        let cardTodoRaw = NotificationWithdrawal.raw(
+            identifier: "n-card-todo",
+            date: t0,
+            userInfo: ["card_id": "todo-ask:todo_card", "machine_id": "m1", "session_id": "s1"]
+        )
+        #expect(cardTodoRaw?.target == .todo("todo_card"))
+        #expect(cardTodoRaw?.ownerCard == true)
 
         // Needs-user push: carries todo_id without interaction_id.
         let needsUserRaw = NotificationWithdrawal.raw(
@@ -137,16 +176,19 @@ struct NotificationWithdrawalTests {
             userInfo: ["todo_id": "todo_1", "machine_id": "m1", "session_id": "s1", "hub_id": "hub-a"]
         )
         #expect(needsUserRaw?.target == .todo("todo_1"))
+        #expect(needsUserRaw?.ownerCard == true)
         #expect(needsUserRaw?.hubID == "hub-a")
 
-        // Decision push with both top-level todo_id and nested todo.id (no interaction_id).
+        // Decision push with card_id, top-level todo_id, and nested todo.id (no interaction_id).
         let decideRaw = NotificationWithdrawal.raw(
             identifier: "n-decide",
             date: t0,
-            userInfo: ["todo_id": "todo_2", "todo": ["id": "todo_2", "asked_at": "2026-11-23T00:00:00Z"],
+            userInfo: ["card_id": "todo-ask:todo_2", "todo_id": "todo_2",
+                       "todo": ["id": "todo_2", "asked_at": "2026-11-23T00:00:00Z"],
                        "machine_id": "m1", "session_id": "s1"]
         )
         #expect(decideRaw?.target == .todo("todo_2"))
+        #expect(decideRaw?.ownerCard == true)
 
         // Older hub decision push without top-level todo_id falls back to todo.id.
         let legacyDecideRaw = NotificationWithdrawal.raw(
@@ -155,6 +197,7 @@ struct NotificationWithdrawalTests {
             userInfo: ["todo": ["id": "todo_legacy"], "machine_id": "m1", "session_id": "s1"]
         )
         #expect(legacyDecideRaw?.target == .todo("todo_legacy"))
+        #expect(legacyDecideRaw?.ownerCard == true)
 
         // Standalone to-do push without machine_id/session_id still resolves via hub_id / sealed group.
         let standaloneRaw = NotificationWithdrawal.raw(
@@ -163,6 +206,7 @@ struct NotificationWithdrawalTests {
             userInfo: ["todo_id": "todo_3", "hub_id": "hub-b", PushCrypto.groupKey: "g2"]
         )
         #expect(standaloneRaw?.target == .todo("todo_3"))
+        #expect(standaloneRaw?.ownerCard == true)
         #expect(standaloneRaw?.ref == nil)
         #expect(standaloneRaw?.hubID == "hub-b")
         #expect(standaloneRaw?.sealedGroup == "g2")

@@ -30,9 +30,11 @@ const (
 	// withdrawKept: how long the hub remembers where a card's push went. A card still pending after this is old
 	// news on the lock screen, and the app clears it when it next lists the cards.
 	withdrawKept = 30 * time.Minute
-	// todoWithdrawKept: how long the hub remembers where a to-do decision or needs-user push went (#13916). Those
-	// wait up to 24 hours and are never swept by the app's interaction-list stale check.
-	todoWithdrawKept = 24 * time.Hour
+	// ownerCardKept: as withdrawKept for one of the assistant's own cards (a plan waiting for Start, a decision, a
+	// needs-user ask, a failed start: Notification.CardID / TodoAskCardID). The app never lists those as pending
+	// interactions, so nothing else clears their push: it stays on the lock screen until the card is over, however
+	// late, and the hub remembers it as long.
+	ownerCardKept = 7 * 24 * time.Hour
 	// withdrawGather: cards over within this of the first go in one push ("always allow" settles several at once).
 	withdrawGather = 5 * time.Second
 	// withdrawEvery: at most one withdrawal push per device this often; what comes between waits for the next.
@@ -57,7 +59,11 @@ type withdrawals struct {
 type cardPush struct {
 	devices map[string]bool
 	at      time.Time
+	keep    time.Duration // withdrawKept, or ownerCardKept for an assistant card's push
 }
+
+// kept: whether the hub still remembers where it went at now.
+func (c cardPush) kept(now time.Time) bool { return now.Sub(c.at) <= cmp.Or(c.keep, withdrawKept) }
 
 type withdrawQueue struct {
 	ids   []string
@@ -116,20 +122,19 @@ func cardCollapseID(manager, id string) string {
 // apnsCollapseMax is the longest apns-collapse-id APNs takes, in bytes.
 const apnsCollapseMax = 64
 
-func withdrawTTL(id string) time.Duration {
-	if assistantwire.TodoOfAskCard(id) != "" {
-		return todoWithdrawKept
-	}
-	return withdrawKept
-}
+func (p *Pusher) cardPushedTo(id, device string) { p.cardPushedFor(id, device, withdrawKept) }
 
-func (p *Pusher) cardPushedTo(id, device string) {
+// ownerCardPushedTo is cardPushedTo for one of the assistant's own cards (Notification.CardID / TodoAskCardID):
+// remembered for ownerCardKept.
+func (p *Pusher) ownerCardPushedTo(id, device string) { p.cardPushedFor(id, device, ownerCardKept) }
+
+func (p *Pusher) cardPushedFor(id, device string, keep time.Duration) {
 	w := &p.withdrawals
 	now := p.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for old, c := range w.pushed {
-		if now.Sub(c.at) > withdrawTTL(old) {
+		if !c.kept(now) {
 			delete(w.pushed, old)
 		}
 	}
@@ -143,7 +148,7 @@ func (p *Pusher) cardPushedTo(id, device string) {
 		c = cardPush{devices: map[string]bool{}}
 	}
 	c.devices[device] = true
-	c.at = now
+	c.at, c.keep = now, max(c.keep, keep)
 	w.pushed[id] = c
 }
 
@@ -159,7 +164,7 @@ func (p *Pusher) withdraw(id string) {
 	defer w.mu.Unlock()
 	c, ok := w.pushed[id]
 	delete(w.pushed, id)
-	if !ok || now.Sub(c.at) > withdrawTTL(id) {
+	if !ok || !c.kept(now) {
 		return
 	}
 	for device := range c.devices {
