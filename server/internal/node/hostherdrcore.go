@@ -361,6 +361,7 @@ var hcAgents = map[string]string{
 	"claude-code": "claude",
 	"claude":      "claude",
 	"codex":       "codex",
+	"antigravity": agyAgent,
 	"traex":       traexAgent,
 	"traecli":     traexAgent,
 	"trae-cli":    traexAgent,
@@ -373,9 +374,9 @@ var hcStatus = map[string]string{
 	"idle": proto.StatusIdle, "working": proto.StatusWorking, "blocked": proto.StatusBlocked, "done": proto.StatusDone,
 }
 
-// fromTerminal is a terminal as an agent pane. Its agent is what its status names (claude, codex, or traex), else what
-// runs in it (an agent that has not reported yet) — none when a shell, classic herdr or nothing is in the foreground;
-// its space and slot are the Herdr app's when the app opened it, else its directory.
+// fromTerminal is a terminal as an agent pane. Its agent is what its status names (claude, codex, agy, or traex), else
+// what runs in it (an agent that has not reported yet) — none when a shell, classic herdr or nothing is in the
+// foreground; its space and slot are the Herdr app's when the app opened it, else its directory.
 func fromTerminal(t herdrcore.Terminal) host.Agent {
 	a := host.Agent{
 		Name: t.Name, Cwd: t.Cwd, PaneID: host.PaneRef{Kind: host.HerdrCore, ID: t.Address}.String(),
@@ -427,21 +428,32 @@ func fromTerminal(t herdrcore.Terminal) host.Agent {
 		if a.AgentStatus == "" {
 			a.AgentStatus = proto.StatusUnknown
 		}
-		return a
+		return withAgyPresence(a, t.Foreground)
 	}
 	if fgAgent != "" {
 		a.Agent, a.AgentStatus = fgAgent, proto.StatusUnknown
 	}
+	return withAgyPresence(a, t.Foreground)
+}
+
+// withAgyPresence names an agy terminal's conversation: herdr-core does not report it, the presence lock its agy holds
+// open does (agypresence.go, #13603).
+func withAgyPresence(a host.Agent, fg *herdrcore.Foreground) host.Agent {
+	if a.Agent == agyAgent && fg != nil {
+		a.AgentSession = agyPresenceSession(fg.Pid)
+	}
 	return a
 }
 
-// hcAgentProgram is the agent a program name or path is ("claude", "codex", "traex", also with .exe), else "".
+// hcAgentProgram is the agent a program name or path is ("claude", "codex", "agy", "traex", also with .exe), else "".
 func hcAgentProgram(name string) string {
 	switch strings.ToLower(strings.TrimSuffix(filepath.Base(name), ".exe")) {
 	case "claude":
 		return "claude"
 	case "codex":
 		return "codex"
+	case agyAgent:
+		return agyAgent
 	case "traex", "traecli", "trae-cli", "trae_cli":
 		return traexAgent
 	}
