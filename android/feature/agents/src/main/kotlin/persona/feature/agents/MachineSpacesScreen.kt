@@ -90,7 +90,8 @@ private fun LazyListScope.projectSection(
                     // As iOS: the agent's row, no menu, a tap opens it.
                     SlotRow(line.agent, null, AgentRowMetadata(), now, compact = false, pinned = line.agent.id in preferences.pins.sessions,
                         muted = preferences.mutes.mutes(line.agent), depth = 0, position = GroupPosition.Single, located = false,
-                        onOpen = { onOpenAgent(line.agent) }, menuItems = null)
+                        onOpen = { onOpenAgent(line.agent) }, menuItems = null,
+                        preferHerdrTabName = preferences.prefersHerdrTabName(line.agent.session))
                 }
                 is ProjectLine.Project -> {
                     val project = line.project

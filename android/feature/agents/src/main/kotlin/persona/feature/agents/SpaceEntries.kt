@@ -174,7 +174,8 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
         onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } })
     operationDialog?.let { dialog ->
         val machine = page.machines.firstOrNull { it.id == dialog.session.machineId }
-        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine) { operationDialog = null }
+        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine,
+            preferHerdrTabName = page.preferences.prefersHerdrTabName(dialog.session)) { operationDialog = null }
     }
     confirmRead?.let { rows -> MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) } }
     if (newAgent) {

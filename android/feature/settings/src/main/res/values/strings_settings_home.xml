@@ -32,4 +32,8 @@
     <string name="settings_inbox_sources">Inbox Sources</string>
     <string name="settings_inbox_sources_detail">What brings new things into your Inbox</string>
     <string name="settings_search_inbox_sources_aliases">inbox sources subscriptions recommended mail muted</string>
+    <string name="settings_use_herdr_tab_name">Use the herdr tab name as the session name</string>
+    <string name="settings_use_herdr_tab_name_hint">Shows the tab name first and syncs this preference across devices on this hub.</string>
+    <string name="settings_herdr_tab_name_saving">Saving session naming preference…</string>
+    <string name="settings_herdr_tab_name_retry">Retry</string>
 </resources>

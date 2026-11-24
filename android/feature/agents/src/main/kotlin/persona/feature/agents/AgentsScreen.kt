@@ -839,7 +839,8 @@ internal fun AgentsScreen(
                                 onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
                                 launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
                                 requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key],
-                                mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle)
+                                mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle,
+                                preferHerdrTabName = page.preferences.prefersHerdrTabName(row.session))
                             }
                         }
                     }
@@ -857,7 +858,8 @@ internal fun AgentsScreen(
                     is TreeTabEntry -> item(entry.key, contentType = "tab") {
                         CompositionLocalProvider(LocalDetailKey provides detail.takeIf { sidebar == null || entry.key == selectedEntry }) {
                             AgentTabEntryRow(entry, now, page.preferences.compact, onOpen = { openRow(entry.tab.lead) }, onToggle = { model.foldTab(entry.tab) },
-                                card = requestCards[entry.tab.lead.session.key], muted = page.preferences.mutes.mutes(entry.tab.lead))
+                                card = requestCards[entry.tab.lead.session.key], muted = page.preferences.mutes.mutes(entry.tab.lead),
+                                preferHerdrTabName = page.preferences.prefersHerdrTabName(entry.tab.lead.session))
                         }
                     }
                     is TreeIdleEntry -> item(entry.key, contentType = "idle") {
@@ -1038,7 +1040,8 @@ internal fun AgentsScreen(
         }
     }
     operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
-        page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
+        page.machines.firstOrNull { m -> m.id == it.session.machineId },
+        preferHerdrTabName = page.preferences.prefersHerdrTabName(it.session)) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
         TodoPickerSheet(
             todos = assistant.todosFor(todos, targetSession.machineId,
@@ -1228,14 +1231,20 @@ internal fun SlotRow(
     showHost: Boolean = false,
     /** Glass's row style while the list is not [compact] (#4338 A9); Brief and Board keep their row. */
     style: AgentRowStyle = AgentRowStyle.Avatar,
+    /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail. */
+    preferHerdrTabName: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
     val session = row.session
+    val primaryTab = session.displayTabName(preferHerdrTabName)
+    val rowTitle = session.displayTitle(preferHerdrTabName)
+    val titleDetail = session.displayTitleDetail(preferHerdrTabName)
     val source = session.source
     val glass = PersonaTheme.style == AppStyle.Glass
     val content = row.rowContent(AgentRowContext(located = located, machine = machine.takeIf { mixesComputers }, host = showHost,
         // Under its tab's row the agent is named by its agent and whether it started the tab; the tab's row names the tab.
-        pane = if (launcher || branch) AgentPane(session.agentLabel, launcher) else null, slot = slotLabel, stateSection = hideState), muted,
+        pane = if (launcher || branch) AgentPane(session.agentLabel, launcher) else null, slot = slotLabel, stateSection = hideState,
+        preferHerdrTabName = preferHerdrTabName), muted,
         display = AgentListDisplay.of(if (glass) style else AgentRowStyle.Avatar, compact))
     val links = androidx.compose.ui.platform.LocalUriHandler.current
     // "Lark groups" / "Terminal" under the time (#3132, #3043); a botmux session's tag opens its Feishu topic when it has one.
@@ -1247,7 +1256,7 @@ internal fun SlotRow(
     }
     JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {
     AgentRow(
-        title = session.displayTitle, status = row.rowStatus(muted), depth = depth, position = position,
+        title = rowTitle, status = row.rowStatus(muted), depth = depth, position = position,
         onClick = onOpen, onLongClick = menuItems?.let { { menu = true } }, compact = compact, muted = muted,
         selected = isSessionSelected(LocalDetailKey.current, session.key),
         // What its card asks while it needs you, else why its host says it waits or stopped, where its work stands, its last words.
@@ -1261,6 +1270,7 @@ internal fun SlotRow(
             // Glass says where it runs, its source, model and to-do on its third line ([place]); view only stays a fact.
             if (glass && source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
             if (!glass) {
+                titleDetail?.let { add(RowFact(it)) }
                 // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
                 source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
                 if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
@@ -1273,7 +1283,7 @@ internal fun SlotRow(
                 // The model it runs on (#4338 A9): the session's model, else its launcher's, by its short name, never the raw id.
                 session.rowModel?.let { add(RowFact(it)) }
                 session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
-                slotLabel?.let { add(RowFact(it)) }
+                if (primaryTab == null) slotLabel?.let { add(RowFact(it)) }
             }
             if (requestCount > 0) add(RowFact(pluralStringResource(R.plurals.agents_row_requests, requestCount, requestCount), caution = true))
             session.loop?.let { add(RowFact(it.nextRunLabel(agentResources(), now))) }
@@ -1321,7 +1331,7 @@ internal fun SlotRow(
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
-    if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
+    if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = rowTitle)
 }
 
 /**
@@ -1335,14 +1345,18 @@ internal fun AgentTabEntryRow(
     entry: TreeTabEntry, now: Instant, compact: Boolean, onOpen: () -> Unit, onToggle: () -> Unit, card: Interaction? = null,
     /** The lead agent is muted: a muted Awaiting Reply reads as Seen. */
     muted: Boolean = false,
+    preferHerdrTabName: Boolean = false,
 ) {
     val lead = entry.tab.lead
     val session = lead.session
     val titled = entry.tab.launcher ?: entry.tab.members.first()
+    val primaryTab = titled.session.displayTabName(preferHerdrTabName)
+    val tabLabel = if (primaryTab != null) "" else titled.session.slotLabel.orEmpty()
+    val tabTitle = titled.session.displayTitle(preferHerdrTabName)
     val asks = session.askingLine(card)?.text()
     val words = asks ?: session.rowLine(card, now, muted)?.text()
     AgentTabRow(
-        label = titled.session.slotLabel.orEmpty(), title = titled.session.displayTitle, status = lead.rowStatus(muted),
+        label = tabLabel, title = tabTitle, status = lead.rowStatus(muted),
         agents = entry.tab.members.size, folded = entry.folded, onToggle = onToggle, onClick = onOpen,
         depth = entry.depth, position = GroupPosition(entry.first, entry.last),
         // "Codex · Needs approval: …": the card's own words already have a colon

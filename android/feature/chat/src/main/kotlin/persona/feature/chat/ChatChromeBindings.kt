@@ -76,6 +76,8 @@ data class ChatChromeBindings(
     val lookupRows: List<persona.core.contracts.Session> = emptyList(),
     /** Fork copies into a new session without mutating the source, so a stopped history preview may still provide it. */
     val forkActions: ChatActions? = actions,
+    /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and uses the unified Rename dialog (#13899). */
+    val preferHerdrTabName: Boolean = false,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

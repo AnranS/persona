@@ -61,5 +61,6 @@ internal fun mergedSidebar(
         onSearchAgent = { key -> searchPick = knownAgents.firstOrNull { it.key == key } },
         agentsInFront = agentsInFront,
         showKnowledge = session.knowledge != null,
+        herdrTabNameHubs = preferences.herdrTabNameHubs,
     )
 }
