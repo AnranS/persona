@@ -3526,3 +3526,9 @@ in herdr appears at the next inventory refresh. The **Rename** dialog offers
 one **Name** field, which updates the tab and the CLI title where supported.
 Even with the setting off, an empty or shell-prompt title falls back to the
 herdr tab name. Sessions without a named herdr tab use their session title.
+
+### Model profiles
+
+Settings › Model configuration › **Model profiles** shows each saved profile's Agent presets, purpose bindings, launcher model overrides, and any fields that differ from the current live configuration (`changes`). Both the profile detail dialog and interactive editor expose **Update from current configuration**, backed by `PUT /api/v1/model-profiles/{id}` with `capture: true` (preserving the profile's name, description, and existing Agent presets, and refreshing the catalog on completion).
+
+When applying a profile with no drift (`changes` empty and no unsaved drift on the active profile), **Apply profile** applies immediately. When drift exists, **Apply profile** opens an inline confirmation step listing each affected purpose or launcher field and offering **Capture current into `<active>` first** (which captures the active profile via `capture: true` before applying the target), **Apply directly**, or **Cancel**. Editor saves omit empty optional fields and default (`standard`) tier speed for cross-version hub compatibility, and pin validation and save errors directly beside the Save button.
