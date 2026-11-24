@@ -701,11 +701,9 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 // global default for ordinary conversations (#13567).
 func TestSendRefusesWhenModelPickBookCannotBeRead(t *testing.T) {
 	s, f := pickFixture(t)
-	orig := s.store()
-	s.store = func() Store { return unreadablePickStore{Store: orig} }
-	s.modelPicks = modelPickBook{}
+	again := newServiceOn(t, f, unreadablePickStore{Store: s.store()})
 	f.setSessions("server", proto.Session{SessionID: "main", Assistant: true, Launcher: "claude"})
-	_, err := send(t, s, "main", map[string]any{})
+	_, err := send(t, again, "main", map[string]any{})
 	if err == nil {
 		t.Fatal("expected unreadable model picks to stop delivery")
 	}
