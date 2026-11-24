@@ -2,8 +2,11 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -181,5 +184,88 @@ func TestConnectorCallContext(t *testing.T) {
 	}
 	if got := s.connectorCallContext(ctx, "qa-nowhere"); got.Track != "" || got.Categories != nil {
 		t.Errorf("a conversation the manager cannot place: %+v", got)
+	}
+}
+
+// Tagging timeouts (context.DeadlineExceeded) and model failures count as sensitive across scenes 2-7 (#13246), while
+// inside the source track (scene 1) the information remains allowed.
+func TestTaggingTimeoutCountsAsSensitiveInScenes2To7(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := infoUseService(t)
+	timedOutCtx, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+	info := s.exitUse(timedOutCtx, "qa: timed out text", "qa-plain-1", "qa-plain")
+	if info.Known {
+		t.Fatalf("timed-out exitUse should be unknown: %+v", info)
+	}
+	want := map[scene]usageRule{
+		sceneSourceTrack: usageAllow,
+		sceneElsewhere:   usageMinimal,
+		sceneHandOff:     usageConfirm,
+		sceneLockScreen:  usageRedact,
+		sceneOthers:      usageConfirm,
+		sceneExtension:   usageDeny,
+		sceneKBWrite:     usageDeny,
+	}
+	for _, sc := range scenes {
+		if got := usage(info, sc, extensionGrant{}); got != want[sc] {
+			t.Errorf("timed-out scene %d = %d, want %d", sc, got, want[sc])
+		}
+	}
+	if got := infoTagFailure(context.DeadlineExceeded); got != "timed out" {
+		t.Errorf("infoTagFailure(DeadlineExceeded) = %q, want timed out", got)
+	}
+}
+
+// assistant.send carries conversation categories for PERSONA_CATEGORIES (#13246): general [], accumulated tags,
+// track floor + tags, and categories_unknown when a turn waits to be tagged or the store cannot be read.
+func TestPutConversationCategories(t *testing.T) {
+	ctx := context.Background()
+	s, _, st := infoUseService(t)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := map[string]any{}
+	s.putConversationCategories(ctx, "qa-main", p)
+	if cats, ok := p["categories"].([]string); !ok || len(cats) != 0 || p["categories_unknown"] != nil {
+		t.Fatalf("general main: %#v", p)
+	}
+
+	must(s.tagConversation(ctx, "qa-main", []string{categoryFinance}, infoTaggedByModel, ""))
+	s.putConversationCategories(ctx, "qa-main", p)
+	if cats, ok := p["categories"].([]string); !ok || !slices.Equal(cats, []string{categoryFinance}) || p["categories_unknown"] != nil {
+		t.Fatalf("tagged main: %#v", p)
+	}
+
+	must(s.tagConversation(ctx, "qa-health-1", []string{categoryEmotion}, infoTaggedByModel, ""))
+	s.putConversationCategories(ctx, "qa-health-1", p)
+	if cats, ok := p["categories"].([]string); !ok || !slices.Equal(cats, []string{categoryEmotion, categoryHealth}) {
+		t.Fatalf("health + emotion: %#v", p)
+	}
+
+	// Waiting turn -> categories_unknown.
+	s.infoTagTurnEnded(ctx, "qa-main")
+	s.putConversationCategories(ctx, "qa-main", p)
+	if p["categories"] != nil || p["categories_unknown"] != true {
+		t.Fatalf("turn waiting: %#v", p)
+	}
+	s.infoTagWaiting.set("qa-main", false)
+
+	// Unreadable store -> categories_unknown.
+	st.readErr = errors.New("qa: store down")
+	s.putConversationCategories(ctx, "qa-main", p)
+	if p["categories"] != nil || p["categories_unknown"] != true {
+		t.Fatalf("store error: %#v", p)
+	}
+	st.readErr = nil
+
+	// Unnoted conversation leaves both fields absent so the node keeps its prepared directory state.
+	s.putConversationCategories(ctx, "qa-nowhere", p)
+	if p["categories"] != nil || p["categories_unknown"] != nil {
+		t.Fatalf("unnoted conversation: %#v", p)
 	}
 }

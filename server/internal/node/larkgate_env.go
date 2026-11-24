@@ -71,6 +71,9 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 	if kind := n.trackKind(cwd); kind != "" {
 		env = append(env, trackKindEnv+"="+kind) // track_kind_env.go
 	}
+	if cats, known := n.processCategories(cwd, session); known {
+		env = append(env, categoriesEnv+"="+cats) // categories_env.go
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cfg := n.assistantLark(ctx)
