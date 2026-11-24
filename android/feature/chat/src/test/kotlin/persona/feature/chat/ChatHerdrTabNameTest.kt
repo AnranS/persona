@@ -129,4 +129,31 @@ class ChatHerdrTabNameTest {
         rule.waitForIdle()
         assertEquals(listOf(SessionRename(title = null, tabName = "Tab only")), calls)
     }
+
+    @Test fun sessionOverviewHonorsPreferHerdrTabName() {
+        var preferTab by mutableStateOf(false)
+        val machine = Machine("mac", name = "MacBook", online = true)
+        rule.setContent {
+            val scope = rememberCoroutineScope()
+            val chrome = ChatChromeState(rule.activity.resources, null, scope, {}, {})
+            PersonaTheme(reduceMotion = true) {
+                SessionOverviewSheet(
+                    session = herdrSession,
+                    machine = machine,
+                    machines = listOf(machine),
+                    childRows = emptyList(),
+                    state = chrome,
+                    preferHerdrTabName = preferTab,
+                    onDismiss = {},
+                )
+            }
+        }
+        rule.onNodeWithText("CLI session name").assertExists()
+        rule.onNodeWithText("Export work").assertDoesNotExist()
+
+        rule.runOnIdle { preferTab = true }
+        rule.waitForIdle()
+        rule.onNodeWithText("Export work").assertExists()
+        rule.onNodeWithText("CLI session name").assertExists()
+    }
 }

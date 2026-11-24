@@ -305,7 +305,16 @@ internal fun AgentsScreen(
     }
     /** Whether a request can be answered now: through its own group's connection when there are several groups. */
     fun reachable(request: Interaction) = groups.stateFor(request.machineId, connection) == ConnectionState.Online
-    fun open(session: SessionKey) { navigator.navigate(ChatRoute(session.machineId, session.sessionId)) }
+    fun open(session: SessionKey, openSubagents: Boolean = false) {
+        navigator.navigate(
+            ChatRoute(
+                session.machineId,
+                session.sessionId,
+                kind = if (openSubagents) ConversationKind.Agent else null,
+                openSubagents = openSubagents,
+            ),
+        )
+    }
     val takeoverOps = model.operationsApi ?: LocalAgentsOperations.current?.operations
     val takeoverClient = remember(takeoverOps) { takeoverOps?.let(CodexTakeoverClient::of) }
     val takeoverCoordinator = rememberCodexTakeoverCoordinator(
@@ -333,6 +342,22 @@ internal fun AgentsScreen(
             // A search hit inside a side session (#7944) opens the parent with that side shown.
             open(page.settings.sideHit(row.session, page.sessions, names) ?: row.session.key)
         }
+    }
+    fun openRowSubagents(row: AgentSession) {
+        model.opened(row)
+        open(row.session.key, openSubagents = true)
+    }
+    val legacyNestedKeys = remember(page.list.children) {
+        page.list.children.values.flatten().mapTo(HashSet()) { it.session.key }
+    }
+    val heldChildrenByParent = remember(page.sessions, legacyNestedKeys) {
+        val grouped = HashMap<SessionKey, MutableList<Session>>()
+        for (candidate in page.sessions) {
+            if (candidate.key in legacyNestedKeys) continue
+            val target = candidate.foldedUnderKey ?: candidate.takeIf { it.isSubagent }?.parentKey ?: continue
+            if (target != candidate.key) grouped.getOrPut(target) { mutableListOf() }.add(candidate)
+        }
+        grouped
     }
     LaunchedEffect(sidebar?.searchPick) {
         val picked = sidebar?.searchPick ?: return@LaunchedEffect
@@ -878,7 +903,9 @@ internal fun AgentsScreen(
                                 launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
                                 requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key],
                                 mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle,
-                                preferHerdrTabName = page.preferences.prefersHerdrTabName(row.session))
+                                preferHerdrTabName = page.preferences.prefersHerdrTabName(row.session),
+                                heldChildren = heldChildrenByParent[row.session.key].orEmpty(),
+                                onOpenSubagents = { openRowSubagents(row) })
                             }
                         }
                     }
@@ -1344,6 +1371,10 @@ internal fun SlotRow(
     style: AgentRowStyle = AgentRowStyle.Avatar,
     /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail. */
     preferHerdrTabName: Boolean = false,
+    /** Held folded children under this parent row, for unified [childRollup] computation. */
+    heldChildren: List<Session> = emptyList(),
+    /** Tapping the subagent rollup subtitle opens this parent session at Session Overview's Subagents section. */
+    onOpenSubagents: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     val session = row.session
@@ -1400,10 +1431,6 @@ internal fun SlotRow(
             session.loop?.let { add(RowFact(it.nextRunLabel(agentResources(), now))) }
             // a running workflow is in background too: counted once (#2935)
             session.backgroundCount.takeIf { it > 0 }?.let { add(RowFact(stringResource(R.string.agents_row_background, it))) }
-            val childrenWorking = session.children?.working ?: 0
-            maxOf(session.runningSubagents ?: session.subagents.orEmpty().count { it.running }, childrenWorking).takeIf { it > 0 }?.let {
-                add(RowFact(stringResource(if (childrenWorking > 0) R.string.agents_row_children_running else R.string.agents_row_subagents, it)))
-            }
             if (metadata.needsConfirmation) add(RowFact(if (metadata.verifying) PendingStatus.Verifying.localizedLabel else PendingStatus.Unconfirmed.localizedLabel, caution = true))
             if (metadata.pendingCount > 0) add(RowFact(stringResource(R.string.agents_row_queued, metadata.pendingCount), caution = true))
             if (metadata.sending) add(RowFact(PendingStatus.Sending.localizedLabel))
@@ -1437,7 +1464,18 @@ internal fun SlotRow(
             RowPlace(CoreText.joined(" · ", content.place).text(), content.model, content.todo, content.muted) else null,
         waiting = row.waitsInBackground && !muted,
         style = style,
-        showPreviewWithMetadata = card?.foldedUnder == session.sessionId,
+        showPreviewWithMetadata = card != null && !card.foldedUnder.isNullOrBlank() && card.homeKey == session.key,
+        subagent = childRollup(session, heldChildren)?.let { rollup ->
+            RowSubagent(
+                text = stringResource(
+                    if (rollup.kind == ChildRollupKind.NeedsYou) R.string.agents_row_subagents_need_you
+                    else R.string.agents_row_subagents_running,
+                    rollup.count,
+                ),
+                needsYou = rollup.kind == ChildRollupKind.NeedsYou,
+                onClick = onOpenSubagents,
+            )
+        },
         // Its running Workflows (#2935) stay structured until the row lays them out beside critical facts (#3435).
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
