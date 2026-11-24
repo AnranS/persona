@@ -245,10 +245,7 @@ func (s *Service) recordWorkerOutcome(ctx context.Context, t Todo, machine, sess
 	if len(workerPendingProjects(e, projects, t.ID, machine, session, turn, itemIndex, itemKey, allowLegacy)) == 0 {
 		return
 	}
-	if s.workerOutcomeNoKBWrite(ctx, t, cwd) {
-		return
-	}
-	switch s.todoVerdicts(ctx, []string{t.ID}, map[string]Todo{t.ID: t}, nil)[t.ID] {
+	switch s.workerOutcomeVerdict(ctx, t, cwd) {
 	case todoHidden:
 		return
 	case todoUntold:
@@ -292,53 +289,126 @@ func (s *Service) workerOutcomeModelText(ctx context.Context, machine, session, 
 	return conclusion
 }
 
-// workerOutcomeNoKBWrite reports whether the worker's directory or any conversation or run on t belongs to a track
-// whose policy forbids writing to the shared knowledge base (sceneKBWrite). Sensitive tracks also set
-// HideFromExtensions and are caught by todoVerdicts; this also covers a worker cwd outside t.Agents and custom tracks
-// that tighten only kb_write.
-func (s *Service) workerOutcomeNoKBWrite(ctx context.Context, t Todo, cwd string) bool {
-	if s.trackPolicy(ctx, identity.SpaceAt(cwd)).NoKBWrite {
+// workerOutcomeBlocked reports whether a track's policy forbids writing worker outcomes into shared project
+// memory.jsonl: any track hidden from extensions or denying shared KB writes (sceneKBWrite).
+func workerOutcomeBlocked(p TrackPolicy) bool {
+	return p.HideFromExtensions || p.NoKBWrite
+}
+
+// workerOutcomeStaticHidden reports whether the worker's directory or any pinned agent directory on t already belongs
+// to a track forbidden from shared project memory.jsonl.
+func (s *Service) workerOutcomeStaticHidden(ctx context.Context, t Todo, cwd string) bool {
+	if workerOutcomeBlocked(s.trackPolicy(ctx, identity.SpaceAt(cwd))) {
 		return true
 	}
 	for _, a := range t.Agents {
-		if s.trackPolicy(ctx, identity.SpaceAt(a.Cwd)).NoKBWrite {
-			return true
-		}
-	}
-	if !s.hasKBWriteOnlyTrack(ctx) {
-		return false
-	}
-	var convs []string
-	if t.Origin != "" {
-		convs = append(convs, t.Origin)
-	}
-	if t.Supervision != nil && t.Supervision.Supervisor != "" {
-		convs = append(convs, t.Supervision.Supervisor)
-	}
-	if feed, err := s.todoFeedConversations(ctx, []string{t.ID}); err == nil {
-		convs = append(convs, feed[t.ID]...)
-	}
-	if len(convs) == 0 {
-		return false
-	}
-	for _, sp := range s.conversationSpaces(ctx, convs) {
-		if sp.known && s.trackPolicy(ctx, sp.space).NoKBWrite {
+		if workerOutcomeBlocked(s.trackPolicy(ctx, identity.SpaceAt(a.Cwd))) {
 			return true
 		}
 	}
 	return false
 }
 
-// hasKBWriteOnlyTrack reports whether any registered track forbids shared KB writes without also hiding from
-// extensions (a custom track tightening only sceneKBWrite).
-func (s *Service) hasKBWriteOnlyTrack(ctx context.Context) bool {
-	for _, e := range s.tracks(ctx) {
-		p := s.trackPolicy(ctx, e.Slug)
-		if p.NoKBWrite && !p.HideFromExtensions {
-			return true
+// workerOutcomeVerdicts judges each worker outcome against both HideFromExtensions and NoKBWrite (sceneKBWrite),
+// failing closed:
+//   - any forbidden worker/agent directory, run space, conversation, feed item, step, brief mate, or deleted to-do
+//     (absent from live s.todos.todos) returns todoHidden;
+//   - any unlisted/unnoted conversation, unreadable feed history, or unreadable cwd-less run returns todoUntold
+//     (and asks space backfill to list the unknown conversations);
+//   - only todoShown may call the outcome model or append to memory.jsonl.
+func (s *Service) workerOutcomeVerdicts(ctx context.Context, items []heldWorkerOutcome) []todoVerdict {
+	out := make([]todoVerdict, len(items))
+	var ids []string
+	seenID := map[string]bool{}
+	for i, l := range items {
+		if s.workerOutcomeStaticHidden(ctx, l.t, l.cwd) {
+			out[i] = todoHidden
+			continue
+		}
+		if !seenID[l.t.ID] {
+			seenID[l.t.ID] = true
+			ids = append(ids, l.t.ID)
 		}
 	}
-	return false
+	if len(ids) == 0 {
+		return out
+	}
+	// gone is nil: a deleted to-do returns todoHidden rather than falling back to a stale snapshot.
+	live := s.todoVerdictsFor(ctx, ids, nil, nil, workerOutcomeBlocked)
+	var extraConvs []string
+	itemExtra := make([][]string, len(items))
+	for i, l := range items {
+		if out[i] == todoHidden {
+			continue
+		}
+		v := live[l.t.ID]
+		out[i] = v
+		if v == todoHidden {
+			continue
+		}
+		cur, ok := s.todoNow(l.t.ID)
+		if !ok {
+			out[i] = todoHidden
+			continue
+		}
+		// Also judge any conversation or cwd-less agent present on the pinned snapshot but no longer on cur,
+		// so a later edit cannot clear a forbidden or unknown origin/supervisor/run from the outcome's verdict.
+		curSup := ""
+		if cur.Supervision != nil {
+			curSup = cur.Supervision.Supervisor
+		}
+		if l.t.Origin != "" && l.t.Origin != cur.Origin {
+			itemExtra[i] = append(itemExtra[i], l.t.Origin)
+			extraConvs = append(extraConvs, l.t.Origin)
+		}
+		if l.t.Supervision != nil && l.t.Supervision.Supervisor != "" && l.t.Supervision.Supervisor != curSup {
+			itemExtra[i] = append(itemExtra[i], l.t.Supervision.Supervisor)
+			extraConvs = append(extraConvs, l.t.Supervision.Supervisor)
+		}
+		for _, a := range l.t.Agents {
+			if a.Cwd != "" || slices.ContainsFunc(cur.Agents, func(ca TodoAgent) bool {
+				return ca.MachineID == a.MachineID && ca.SessionID == a.SessionID
+			}) {
+				continue
+			}
+			if c, ok := s.session(ctx, a.MachineID, a.SessionID); !ok {
+				out[i] = max(out[i], todoUntold)
+			} else if workerOutcomeBlocked(s.trackPolicy(ctx, runSpace(c))) {
+				out[i] = todoHidden
+				break
+			}
+		}
+	}
+	if len(extraConvs) > 0 {
+		bad := s.unshownConversationsFor(ctx, extraConvs, workerOutcomeBlocked)
+		var untold []string
+		for c, hidden := range bad {
+			if !hidden {
+				untold = append(untold, c)
+			}
+		}
+		if len(untold) > 0 {
+			slices.Sort(untold)
+			s.spaceBackfillWant(untold)
+		}
+		for i, convs := range itemExtra {
+			if out[i] == todoHidden {
+				continue
+			}
+			for _, c := range convs {
+				if hidden, unshown := bad[c]; hidden {
+					out[i] = max(out[i], todoHidden)
+				} else if unshown {
+					out[i] = max(out[i], todoUntold)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) workerOutcomeVerdict(ctx context.Context, t Todo, cwd string) todoVerdict {
+	return s.workerOutcomeVerdicts(ctx, []heldWorkerOutcome{{t: t, cwd: cwd}})[0]
 }
 
 // writeWorkerOutcome writes one worker outcome whose to-do verdict is told shown.
@@ -447,9 +517,9 @@ func (s *Service) holdWorkerOutcome(l heldWorkerOutcome) {
 	after(delay, s.retryWorkerOutcomes)
 }
 
-// retryWorkerOutcomes judges held worker outcomes again, each to-do as it is kept now (falling back to its pinned
-// snapshot if deleted): one told shown runs its model extraction and append off the timer goroutine, one hidden is
-// dropped, and one still untold is held again.
+// retryWorkerOutcomes judges held worker outcomes again against the live to-dos (a deleted to-do is todoHidden and
+// dropped): one told shown runs its model extraction and append off the timer goroutine after re-checking its verdict
+// before writing, one hidden is dropped, and one still untold is held again.
 func (s *Service) retryWorkerOutcomes() {
 	h := &s.workerOutcomes
 	h.mu.Lock()
@@ -460,20 +530,12 @@ func (s *Service) retryWorkerOutcomes() {
 	if len(held) == 0 || s.runCtx().Err() != nil {
 		return
 	}
-	ids := make([]string, 0, len(held))
-	gone := make(map[string]Todo, len(held))
-	for _, l := range held {
-		if _, seen := gone[l.t.ID]; !seen {
-			ids = append(ids, l.t.ID)
-			gone[l.t.ID] = l.t
-		}
-	}
 	ctx, cancel := context.WithTimeout(s.runCtx(), todoNoticeTimeout)
-	verdicts := s.todoVerdicts(ctx, ids, gone, nil)
+	verdicts := s.workerOutcomeVerdicts(ctx, held)
 	cancel()
 	var shown, again []heldWorkerOutcome
-	for _, l := range held {
-		switch verdicts[l.t.ID] {
+	for i, l := range held {
+		switch verdicts[i] {
 		case todoShown:
 			shown = append(shown, l)
 		case todoUntold:
@@ -502,10 +564,14 @@ func (s *Service) retryWorkerOutcomes() {
 		s.goWorkerOutcome(func() {
 			wctx, wcancel := context.WithTimeout(s.runCtx(), outcomeModelTimeout+outcomeWriteTimeout)
 			defer wcancel()
-			if !s.kbWritable(wctx) || s.workerOutcomeNoKBWrite(wctx, l.t, l.cwd) {
+			if !s.kbWritable(wctx) {
 				return
 			}
-			if cur, ok := s.todoNow(l.t.ID); ok && s.workerOutcomeNoKBWrite(wctx, cur, l.cwd) {
+			switch s.workerOutcomeVerdict(wctx, l.t, l.cwd) {
+			case todoHidden:
+				return
+			case todoUntold:
+				s.holdWorkerOutcome(l)
 				return
 			}
 			e, err := s.kbGet(wctx)
