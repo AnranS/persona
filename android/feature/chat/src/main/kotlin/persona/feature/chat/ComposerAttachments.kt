@@ -38,6 +38,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import java.io.File
+import java.nio.ByteBuffer
 import java.util.UUID
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +81,24 @@ internal fun encodePhotoJpeg(bitmap: Bitmap, limits: ImageLimits = ImageLimits.S
 fun measurePhotoBytes(context: Context, uri: Uri, limits: ImageLimits = ImageLimits.Standard): Long? = runCatching {
     val bitmap = runCatching { decodePhoto(context, uri, limits.maxSide) }.getOrElse {
         context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: return null
+    }
+    try {
+        encodePhotoJpeg(bitmap, limits).size.toLong()
+    } finally {
+        bitmap.recycle()
+    }
+}.getOrNull()
+
+/** Measures the scaled JPEG size of encoded image [bytes] through the same decode/encode path; null if unreadable. Call off main thread. */
+internal fun measurePhotoBytes(bytes: ByteArray, limits: ImageLimits = ImageLimits.Standard): Long? = runCatching {
+    val bitmap = runCatching {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            val scale = minOf(1.0, limits.maxSide.toDouble() / maxOf(info.size.width, info.size.height))
+            decoder.setTargetSize(maxOf(1, (info.size.width * scale).roundToInt()), maxOf(1, (info.size.height * scale).roundToInt()))
+        }
+    }.getOrElse {
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
     }
     try {
         encodePhotoJpeg(bitmap, limits).size.toLong()

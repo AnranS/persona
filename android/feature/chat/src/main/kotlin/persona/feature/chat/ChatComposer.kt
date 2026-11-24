@@ -217,7 +217,7 @@ fun ChatComposer(
                                 state.attachments += attachment
                                 attachment.error?.let(onNotice)
                             } else {
-                                val scaled = withContext(Dispatchers.IO) { measurePhotoBytes(context, uri, limits) } ?: (attachment.size ?: 0L)
+                                val scaled = withContext(Dispatchers.IO) { measurePhotoBytes(context, uri, limits) }
                                 photoCandidates += PhotoCandidate(attachment, scaled)
                             }
                         }
@@ -228,7 +228,10 @@ fun ChatComposer(
                     }
                 }
                 if (photoCandidates.isNotEmpty()) {
-                    val plan = planComposerPhotos(state.attachments, photoCandidates, limits, canSpill = service != null)
+                    val existing = refreshHeldPhotoSizes(context, state.attachments, limits) { id, bytes ->
+                        state.updateAttachment(id) { if (it.scaledBytes == null) it.copy(scaledBytes = bytes) else it }
+                    }
+                    val plan = planComposerPhotos(existing, photoCandidates, limits, canSpill = service != null)
                     if (plan.added.isNotEmpty()) {
                         state.beginEdit()
                         state.attachments += plan.added
@@ -315,12 +318,20 @@ fun ChatComposer(
             var kept = false
             try {
                 val limits = currentImageLimits
-                edited = MediaShare.writeEditedPhoto(context, result, limits.maxSide)
+                edited = MediaShare.writeEditedPhoto(context, result, limits)
                 val carried = PhotoEdits(edit.sourceUri, done).takeUnless { done.edits.isEmpty }
+                var stagedBytes = edited.scaledBytes
                 val outcome = state.replaceWithEdited(edit.original, edited, carried) { photo ->
-                    uploadLimiter.withSlot { uploadAttachment(context, checkNotNull(service), session, photo, limits = limits) }
+                    uploadLimiter.withSlot {
+                        uploadAttachment(context, checkNotNull(service), session, photo, limits = limits) { size ->
+                            if (size > 0L) stagedBytes = size
+                        }
+                    }
                 }
                 kept = outcome == PhotoEditOutcome.Replaced
+                if (kept && stagedBytes != null) {
+                    state.updateAttachment(edited.id) { it.copy(size = stagedBytes, scaledBytes = stagedBytes) }
+                }
                 if (outcome is PhotoEditOutcome.Failed) onNotice(resources.getString(R.string.chat_attach_edit_failed))
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { onNotice(resources.getString(R.string.chat_attach_edit_failed)) }
@@ -351,7 +362,12 @@ fun ChatComposer(
                     val path = uploadLimiter.withSlot {
                         state.updateAttachment(attachment.id) { it.copy(uploadState = DraftUploadState.Uploading) }
                         performUpload(service, session, attachment) { size ->
-                            state.updateAttachment(attachment.id) { it.copy(size = size) }
+                            state.updateAttachment(attachment.id) {
+                                if (it.image) {
+                                    val staged = size.takeIf { v -> v > 0L }
+                                    it.copy(size = staged ?: it.size, scaledBytes = staged ?: it.scaledBytes)
+                                } else it.copy(size = size)
+                            }
                         }
                     }
                     if (state.attachments.any { it.id == attachment.id }) {

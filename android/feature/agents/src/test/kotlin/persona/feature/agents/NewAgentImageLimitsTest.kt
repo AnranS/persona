@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -33,6 +34,7 @@ import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.ModelPurposeDetail
 import persona.core.contracts.api.OutboxMessage
 import persona.feature.chat.ComposerAttachment
+import persona.feature.chat.PhotoCandidate
 import persona.feature.chat.R as ChatR
 import java.io.File
 
@@ -158,6 +160,50 @@ class NewAgentImageLimitsTest {
         } finally {
             collecting.cancel()
             model.viewModelScope.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test fun newAgentMultiPickAdmissionIsOrderIndependentWithLimitedFileSlots() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val limits = ImageLimits(
+            requestBytes = ImageLimits.BODY_ROOM + 400L,
+            imageBytes = 3_750_000L,
+            maxSide = 1600,
+            perMessage = 20,
+        )
+        val table = ImageLimitsTable(
+            requestBytes = limits.requestBytes,
+            imageBytes = limits.imageBytes,
+            maxSide = limits.maxSide,
+            perMessage = limits.perMessage,
+        )
+        val largeFirst = newModel(table)
+        val smallFirst = newModel(table)
+        try {
+            advanceUntilIdle()
+            // Leave only 1 file slot on both models.
+            assertEquals(0, largeFirst.attach(List(9) { file("f$it") }))
+            assertEquals(0, smallFirst.attach(List(9) { file("f$it") }))
+            advanceUntilIdle()
+
+            val large = PhotoCandidate(photo("large", size = 5000L), scaledBytes = 300L)
+            val smallA = PhotoCandidate(photo("smallA", size = 2000L), scaledBytes = 100L)
+            val smallB = PhotoCandidate(photo("smallB", size = 2000L), scaledBytes = 150L)
+
+            assertEquals(0, largeFirst.attachPhotos(listOf(large, smallA, smallB)))
+            assertEquals(0, smallFirst.attachPhotos(listOf(smallB, smallA, large)))
+            advanceUntilIdle()
+
+            assertEquals(setOf("smallA", "smallB"), largeFirst.state.value.attachments.filter { it.image }.map { it.id }.toSet())
+            assertEquals(setOf("smallA", "smallB"), smallFirst.state.value.attachments.filter { it.image }.map { it.id }.toSet())
+            assertEquals(listOf("smallA", "smallB"), largeFirst.state.value.attachments.filter { it.image }.map { it.id })
+            assertEquals(listOf("smallB", "smallA"), smallFirst.state.value.attachments.filter { it.image }.map { it.id })
+            assertTrue(largeFirst.state.value.attachments.any { it.id == "large" && !it.image })
+            assertTrue(smallFirst.state.value.attachments.any { it.id == "large" && !it.image })
+        } finally {
+            largeFirst.viewModelScope.cancel()
+            smallFirst.viewModelScope.cancel()
             Dispatchers.resetMain()
         }
     }

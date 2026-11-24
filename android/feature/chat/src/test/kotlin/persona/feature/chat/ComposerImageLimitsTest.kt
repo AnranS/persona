@@ -3,11 +3,13 @@ package persona.feature.chat
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,13 +20,25 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.HubScope
 import persona.core.contracts.ImageLimits
+import persona.core.contracts.ImagePayload
+import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
+import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantSnapshot
+import persona.core.contracts.api.DraftKey
+import persona.core.contracts.api.DraftSnapshot
+import persona.core.designsystem.jpegBytes
 import persona.feature.chat.media.ChatMedia
+import persona.feature.chat.media.MediaShare
 import persona.feature.chat.media.chatViewerActions
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.Base64
+import java.util.Random
 
 /**
  * Verifies #13043 across `:feature:chat`: hub `image_limits` for count & base64 body budget, overflow to file
@@ -32,6 +46,7 @@ import java.io.File
  * viewer limit, and en/zh/ja strings.
  */
 @RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35])
 class ComposerImageLimitsTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
@@ -188,6 +203,231 @@ class ComposerImageLimitsTest {
         } finally {
             big.recycle()
         }
+    }
+
+    @Test fun planComposerPhotosIsOrderIndependentForLargeAndSmallMultiPick() {
+        // Budget = 400 base64 bytes: large (300 raw = 400 b64) and small (150 raw = 200 b64) cannot both fit inline.
+        val limits = ImageLimits(requestBytes = ImageLimits.BODY_ROOM + 400L, perMessage = 20)
+        val large = PhotoCandidate(photo("large", size = 5000L), scaledBytes = 300L)
+        val small = PhotoCandidate(photo("small", size = 2000L), scaledBytes = 150L)
+
+        // Spillable: [large, small] and [small, large] both keep small inline and spill large as a file.
+        val largeThenSmall = planComposerPhotos(emptyList(), listOf(large, small), limits, canSpill = true)
+        val smallThenLarge = planComposerPhotos(emptyList(), listOf(small, large), limits, canSpill = true)
+        assertEquals(listOf("small"), largeThenSmall.acceptedPhotos.map { it.id })
+        assertEquals(listOf("small"), smallThenLarge.acceptedPhotos.map { it.id })
+        assertEquals(150L, largeThenSmall.acceptedPhotos.single().scaledBytes)
+        assertEquals(listOf("large"), largeThenSmall.spilledFiles.map { it.id })
+        assertEquals(listOf("large"), smallThenLarge.spilledFiles.map { it.id })
+        assertEquals(5000L, largeThenSmall.spilledFiles.single().size)
+        assertNull(largeThenSmall.spilledFiles.single().scaledBytes)
+        assertTrue(largeThenSmall.refused.isEmpty())
+        assertTrue(smallThenLarge.refused.isEmpty())
+
+        // Without file spill: [large, small] and [small, large] both keep small inline and refuse large.
+        val noSpillLS = planComposerPhotos(emptyList(), listOf(large, small), limits, canSpill = false)
+        val noSpillSL = planComposerPhotos(emptyList(), listOf(small, large), limits, canSpill = false)
+        assertEquals(listOf("small"), noSpillLS.acceptedPhotos.map { it.id })
+        assertEquals(listOf("small"), noSpillSL.acceptedPhotos.map { it.id })
+        assertEquals(listOf("large"), noSpillLS.refused.map { it.id })
+        assertEquals(listOf("large"), noSpillSL.refused.map { it.id })
+        assertEquals(1, noSpillLS.refusedByBytes)
+        assertEquals(1, noSpillSL.refusedByBytes)
+
+        // Limited file slots (only 1 slot left): small-first fits both small photos inline so large takes the 1 file
+        // slot and nothing is dropped, while restoring each call's original composer order.
+        val nineFiles = List(9) { file("f$it") }
+        val smallA = PhotoCandidate(photo("smallA", size = 1800L), scaledBytes = 100L) // 136 b64
+        val smallB = PhotoCandidate(photo("smallB", size = 2200L), scaledBytes = 150L) // 200 b64
+        val constrainedLS = planComposerPhotos(nineFiles, listOf(large, smallA, smallB), limits, canSpill = true)
+        val constrainedSL = planComposerPhotos(nineFiles, listOf(smallB, smallA, large), limits, canSpill = true)
+        assertEquals(listOf("smallA", "smallB"), constrainedLS.acceptedPhotos.map { it.id })
+        assertEquals(listOf("smallB", "smallA"), constrainedSL.acceptedPhotos.map { it.id })
+        assertEquals(listOf("large"), constrainedLS.spilledFiles.map { it.id })
+        assertEquals(listOf("large"), constrainedSL.spilledFiles.map { it.id })
+        assertTrue("neither small photo should be dropped", constrainedLS.refused.isEmpty())
+        assertTrue(constrainedSL.refused.isEmpty())
+
+        // Multiple overflow candidates with only 1 file slot: admission and spill sets remain order-independent.
+        val huge = PhotoCandidate(photo("huge", size = 9000L), scaledBytes = 500L) // 668 b64
+        val overflowA = planComposerPhotos(nineFiles, listOf(huge, large, smallA), limits, canSpill = true)
+        val overflowB = planComposerPhotos(nineFiles, listOf(smallA, large, huge), limits, canSpill = true)
+        assertEquals(listOf("smallA"), overflowA.acceptedPhotos.map { it.id })
+        assertEquals(listOf("smallA"), overflowB.acceptedPhotos.map { it.id })
+        assertEquals(listOf("large"), overflowA.spilledFiles.map { it.id })
+        assertEquals(listOf("large"), overflowB.spilledFiles.map { it.id })
+        assertEquals(listOf("huge"), overflowA.refused.map { it.id })
+        assertEquals(listOf("huge"), overflowB.refused.map { it.id })
+    }
+
+    @Config(qualifiers = "en")
+    @Test fun restoredMessageTagPhotosWithUnknownSizeDoNotContributeZeroAndScaledBytesPersistInDrafts() {
+        // Restoring a sent message creates remote-only photo attachments with null size and null scaledBytes.
+        val restored = ChatComposerState().apply {
+            editMessage("Check this\n\n<attached_images>\n/tmp/remote.jpg\n</attached_images>")
+        }
+        val held = restored.attachments.single()
+        assertTrue(held.image)
+        assertNull(held.size)
+        assertNull(held.scaledBytes)
+
+        // Budget = 600 b64, per-image cap = 300 raw (400 b64). The unknown held photo conservatively reserves 400 b64
+        // (leaving 200 b64), never 0.
+        val limits = ImageLimits(requestBytes = ImageLimits.BODY_ROOM + 600L, imageBytes = 300L, perMessage = 10)
+        val fits = planComposerPhotos(
+            existing = restored.attachments,
+            incoming = listOf(PhotoCandidate(photo("fits", size = 500L), scaledBytes = 150L)), // 200 b64
+            limits = limits,
+            canSpill = false,
+        )
+        assertEquals(listOf("fits"), fits.acceptedPhotos.map { it.id })
+        assertEquals(150L, fits.acceptedPhotos.single().scaledBytes)
+
+        val tooLarge = planComposerPhotos(
+            existing = restored.attachments,
+            incoming = listOf(PhotoCandidate(photo("too-large", size = 500L), scaledBytes = 200L)), // 268 b64
+            limits = limits,
+            canSpill = false,
+        )
+        assertTrue(tooLarge.acceptedPhotos.isEmpty())
+        assertEquals(listOf("too-large"), tooLarge.refused.map { it.id })
+        assertEquals(listOf("These pictures are too large to send together"), tooLarge.notices(context.resources, limits))
+
+        // Persisting the draft retains scaledBytes across serialization/restoration.
+        val draft = ChatComposerDraft("with scaled", fits.acceptedPhotos)
+        val encoded = JsonCodec.encodeToString(draft.storedAttachments())
+        assertTrue(encoded.contains("\"scaledBytes\":150"))
+        val snapshot = DraftSnapshot(
+            HubScope("hub", "pairing"),
+            DraftKey.Chat(SessionKey("machine", "session")),
+            draft.text,
+            1,
+            JsonCodec.decodeFromString(encoded),
+        )
+        val reloaded = ChatComposerState(snapshot.composerDraft())
+        assertEquals(150L, reloaded.attachments.single().scaledBytes)
+    }
+
+    @Test fun queuedPhotosUseActualScaledJpegBytesForSubsequentBodyBudgetAccounting() = runTest {
+        // Build a large lossless PNG whose raw decoded byte count is far larger than its scaled JPEG output.
+        val bitmap = noisyBitmap(600, 600)
+        val pngBytes = ByteArrayOutputStream().use { out ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, out))
+            out.toByteArray()
+        }
+        val limits = ImageLimits(maxSide = 300, imageBytes = ImageLimits.DEFAULT_IMAGE_BYTES, perMessage = 10)
+        val expectedJpegBytes = encodePhotoJpeg(bitmap, limits).size.toLong()
+        bitmap.recycle()
+        assertTrue(
+            "expected PNG (${pngBytes.size}) to exceed scaled JPEG ($expectedJpegBytes)",
+            pngBytes.size.toLong() > expectedJpegBytes * 2,
+        )
+
+        val payload = ImagePayload("image/png", Base64.getEncoder().encodeToString(pngBytes))
+        val restored = restoredPhotos(context, listOf(payload), limits = limits)
+        val queuedPhoto = restored.attachments.single()
+        assertEquals(pngBytes.size.toLong(), queuedPhoto.size)
+        assertEquals(expectedJpegBytes, queuedPhoto.scaledBytes)
+
+        // Set a body budget tight enough to reject raw pngBytes + next photo, but big enough for scaled JPEG + next.
+        val nextBytes = 2_000L
+        val tightBudget = ImageLimits.base64Bytes(expectedJpegBytes) + ImageLimits.base64Bytes(nextBytes)
+        assertTrue(ImageLimits.base64Bytes(pngBytes.size.toLong()) > tightBudget)
+        val budgetLimits = limits.copy(requestBytes = ImageLimits.BODY_ROOM + tightBudget)
+
+        val plan = planComposerPhotos(
+            existing = listOf(queuedPhoto),
+            incoming = listOf(PhotoCandidate(photo("next", size = 50_000L), scaledBytes = nextBytes)),
+            limits = budgetLimits,
+            canSpill = true,
+        )
+        assertEquals("queued photo should account for scaled JPEG bytes, not raw PNG bytes", listOf("next"), plan.acceptedPhotos.map { it.id })
+        assertTrue(plan.spilledFiles.isEmpty())
+
+        // A legacy draft holding the same local URI without scaledBytes refreshes its scaled JPEG size on demand.
+        val legacyHeld = queuedPhoto.copy(scaledBytes = null)
+        val refreshed = refreshHeldPhotoSizes(context, listOf(legacyHeld), budgetLimits)
+        assertEquals(expectedJpegBytes, refreshed.single().scaledBytes)
+    }
+
+    @Config(qualifiers = "en")
+    @Test fun writeEditedPhotoAppliesImageBytesStepDownAndViewerAdmissionEnforcesBodyBudget() = runTest {
+        val source = noisyBitmap(1600, 1600)
+        try {
+            val q75 = source.jpegBytes(1600, PHOTO_JPEG_QUALITY).size.toLong()
+            val q60 = source.jpegBytes(1600, 60).size.toLong()
+            val fallback1280 = source.jpegBytes(1280, 60).size.toLong()
+            assertTrue("expected q75 ($q75) > q60 ($q60) > 1280@q60 ($fallback1280)", q75 > q60 && q60 > fallback1280)
+
+            // Tight imageBytes below q75 must step down to quality 60.
+            val stepQualityLimits = ImageLimits(maxSide = 1600, imageBytes = q75 - 1L)
+            val qualityStepped = MediaShare.writeEditedPhoto(context, source, stepQualityLimits)
+            assertEquals(q60, qualityStepped.size)
+            assertEquals(q60, qualityStepped.scaledBytes)
+
+            // Tight imageBytes below q60 must step down to 1280px at quality 60.
+            val stepSideLimits = ImageLimits(maxSide = 1600, imageBytes = q60 - 1L)
+            val sideStepped = MediaShare.writeEditedPhoto(context, source, stepSideLimits)
+            assertEquals(fallback1280, sideStepped.size)
+            assertEquals(fallback1280, sideStepped.scaledBytes)
+
+            // Viewer admission must refuse (and clean up) when edited photo + unknown-size restored photo exceed budget.
+            val composer = ChatComposerState().apply {
+                editMessage("Before\n\n<attached_images>\n/tmp/remote.jpg\n</attached_images>")
+            }
+            val notices = mutableListOf<String>()
+            val tightLimits = ImageLimits(
+                requestBytes = ImageLimits.BODY_ROOM + ImageLimits.base64Bytes(fallback1280) + 100L,
+                imageBytes = fallback1280,
+                maxSide = 1600,
+                perMessage = 10,
+            )
+            val admitted = admitViewerEditedPhoto(
+                context = context,
+                composer = composer,
+                attachment = sideStepped,
+                limits = tightLimits,
+                canSpill = false,
+                onNotice = notices::add,
+            )
+            assertFalse("unknown held photo + edited photo exceed budget", admitted)
+            assertEquals(1, composer.attachments.size)
+            assertEquals(listOf("These pictures are too large to send together"), notices)
+            assertFalse("refused viewer edit capture must be deleted", attachmentReadable(context, sideStepped))
+
+            // An edited attachment with unknown size (size = null, scaledBytes = null) must never be admitted as 0 bytes.
+            val unmeasured = ComposerAttachment("unmeasured", "edited.jpg", "", image = true, size = null, scaledBytes = null)
+            val unmeasuredAdmitted = admitViewerEditedPhoto(
+                context = context,
+                composer = composer,
+                attachment = unmeasured,
+                limits = tightLimits,
+                canSpill = false,
+            )
+            assertFalse(unmeasuredAdmitted)
+
+            // When budget allows, viewer-edited photo joins with its measured scaledBytes intact.
+            val roomyComposer = ChatComposerState()
+            val added = admitViewerEditedPhoto(
+                context = context,
+                composer = roomyComposer,
+                attachment = qualityStepped,
+                limits = stepQualityLimits,
+                canSpill = true,
+            )
+            assertTrue(added)
+            assertEquals(q60, roomyComposer.attachments.single().scaledBytes)
+        } finally {
+            source.recycle()
+        }
+    }
+
+    private fun noisyBitmap(width: Int, height: Int): Bitmap {
+        val random = Random(13043L)
+        val pixels = IntArray(width * height) {
+            Color.rgb(random.nextInt(256), random.nextInt(256), random.nextInt(256))
+        }
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
     @Config(qualifiers = "en")

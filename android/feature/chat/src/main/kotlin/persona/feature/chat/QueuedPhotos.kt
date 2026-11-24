@@ -25,6 +25,7 @@ data class RestoredPhotos(val attachments: List<ComposerAttachment> = emptyList(
  * A payload that is not base64 or cannot be written is left out and counted in [RestoredPhotos.lost]. Call off the main thread.
  */
 internal fun restoredPhotos(context: Context, payloads: List<ImagePayload>,
+    limits: ImageLimits = ImageLimits.Standard,
     share: (File) -> Uri = { FileProvider.getUriForFile(context, "${context.packageName}.chat.files", it) }): RestoredPhotos {
     val folder = File(context.cacheDir, "chat-captures").apply { mkdirs() }
     val restored = payloads.mapNotNull { payload ->
@@ -34,7 +35,15 @@ internal fun restoredPhotos(context: Context, payloads: List<ImagePayload>,
             val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(payload.mime) ?: "jpg"
             val file = File.createTempFile("queued-", ".$extension", folder)
             val uri = try { file.writeBytes(bytes); share(file) } catch (error: Throwable) { file.delete(); throw error }
-            ComposerAttachment(UUID.randomUUID().toString(), file.name, uri.toString(), image = true, size = bytes.size.toLong())
+            val scaled = measurePhotoBytes(context, uri, limits) ?: measurePhotoBytes(bytes, limits)
+            ComposerAttachment(
+                UUID.randomUUID().toString(),
+                file.name,
+                uri.toString(),
+                image = true,
+                size = bytes.size.toLong(),
+                scaledBytes = scaled,
+            )
         }.getOrNull()
     }
     return RestoredPhotos(restored, payloads.size - restored.size)
@@ -45,6 +54,7 @@ internal fun restoredPhotos(context: Context, payloads: List<ImagePayload>,
  * A failed read or write leaves only that photo out. The original filename stays visible in the target composer.
  */
 internal suspend fun forwardedPhotos(context: Context, paths: List<String>, read: suspend (String) -> ImagePayload,
+    limits: ImageLimits = ImageLimits.Standard,
     share: (File) -> Uri = { FileProvider.getUriForFile(context, "${context.packageName}.chat.files", it) }): RestoredPhotos {
     val attachments = mutableListOf<ComposerAttachment>()
     try {
@@ -53,7 +63,7 @@ internal suspend fun forwardedPhotos(context: Context, paths: List<String>, read
             for (path in paths) {
                 val payload = try { read(path) } catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { null }
-                val restored = payload?.let { restoredPhotos(context, listOf(it), share) }
+                val restored = payload?.let { restoredPhotos(context, listOf(it), limits, share) }
                 val attachment = restored?.attachments?.singleOrNull()
                 if (attachment == null) lost++
                 else attachments += attachment.copy(name = path.trimEnd('/').substringAfterLast('/').ifEmpty { attachment.name })
@@ -81,8 +91,19 @@ suspend fun attachForwardedPhotos(
     onNotice: (String) -> Unit = {},
 ): List<ComposerAttachment> {
     val photos = handoffs.flatMap(RestoredPhotos::attachments)
-    val candidates = photos.map { PhotoCandidate(it, it.size ?: 0L) }
-    val plan = planComposerPhotos(composer.attachments, candidates, limits, canSpill = canSpill)
+    if (photos.isEmpty()) return emptyList()
+    val candidates = withContext(Dispatchers.IO) {
+        photos.map { photo ->
+            val scaled = photo.uri.takeIf { it.isNotEmpty() }
+                ?.let { measurePhotoBytes(context, Uri.parse(it), limits) }
+                ?: photo.scaledBytes
+            PhotoCandidate(photo, scaled)
+        }
+    }
+    val existing = refreshHeldPhotoSizes(context, composer.attachments, limits) { id, bytes ->
+        composer.updateAttachment(id) { if (it.scaledBytes == null) it.copy(scaledBytes = bytes) else it }
+    }
+    val plan = planComposerPhotos(existing, candidates, limits, canSpill = canSpill)
     if (plan.added.isNotEmpty()) {
         composer.beginEdit()
         composer.attachments = composer.attachments + plan.added

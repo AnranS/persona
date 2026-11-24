@@ -161,7 +161,7 @@ internal fun rememberNewAgentPickers(model: NewAgentViewModel): NewAgentPickers?
                     try {
                         val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = true) }
                         if (attachment.uploadState != DraftUploadState.Invalid) {
-                            val scaled = withContext(Dispatchers.IO) { measurePhotoBytes(context, uri, limits) } ?: (attachment.size ?: 0L)
+                            val scaled = withContext(Dispatchers.IO) { measurePhotoBytes(context, uri, limits) }
                             candidates += PhotoCandidate(attachment, scaled)
                         } else {
                             if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }

@@ -61,8 +61,9 @@ internal fun importDroppedAttachment(
         val selected = selectAttachment(context, uri, image = image, video = video)
         val attachment = selected.copy(name = name, size = size)
         if (image && attachment.uploadState != DraftUploadState.Invalid) {
-            val scaled = measurePhotoBytes(context, uri, limits) ?: size
-            val plan = planComposerPhotos(existing, listOf(PhotoCandidate(attachment, scaled)), limits, canSpill = canSpill)
+            val resolvedExisting = refreshHeldPhotoSizesBlocking(context, existing, limits)
+            val scaled = measurePhotoBytes(context, uri, limits)
+            val plan = planComposerPhotos(resolvedExisting, listOf(PhotoCandidate(attachment, scaled)), limits, canSpill = canSpill)
             val admitted = plan.added.singleOrNull()
             if (admitted == null) {
                 return ComposerDropImportResult(notice = plan.notices(context.resources, limits).firstOrNull())

@@ -136,7 +136,7 @@ internal fun ChatMessageActions(
                     val restored = when {
                         paths.isEmpty() -> RestoredPhotos()
                         photoReader == null -> RestoredPhotos(lost = paths.size)
-                        else -> forwardedPhotos(context, paths, photoReader::payload)
+                        else -> forwardedPhotos(context, paths, photoReader::payload, limits = imageLimits)
                     }
                     remainingPhotos -= restored.attachments.size
                     completed += ForwardPlacement(refs[index], restored.copy(lost = restored.lost + draft.photos.size - paths.size))

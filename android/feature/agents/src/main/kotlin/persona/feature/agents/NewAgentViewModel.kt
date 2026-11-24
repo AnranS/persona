@@ -886,7 +886,7 @@ internal class NewAgentViewModel(
         val (photos, other) = picked.partition { it.image }
         val limits = imageLimits()
         val photoPlan = if (photos.isNotEmpty()) {
-            planComposerPhotos(current.attachments, photos.map { PhotoCandidate(it, it.size ?: 0L) }, limits, canSpill = canUpload(current.machineId))
+            planComposerPhotos(current.attachments, photos.map { PhotoCandidate(it, it.scaledBytes) }, limits, canSpill = canUpload(current.machineId))
         } else null
         val afterPhotos = current.attachments + photoPlan?.added.orEmpty()
         var files = (NewAgentAttachments.MAX_FILES - afterPhotos.count { !it.media && it.uploadState != DraftUploadState.Invalid }).coerceAtLeast(0)
@@ -1007,7 +1007,12 @@ internal class NewAgentViewModel(
                     val onStaged: suspend (Long) -> Unit = { size ->
                         mutable.update { s ->
                             s.copy(attachments = s.attachments.map {
-                                if (it.id == id) it.copy(size = size) else it
+                                if (it.id == id) {
+                                    if (it.image) {
+                                        val staged = size.takeIf { v -> v > 0L }
+                                        it.copy(size = staged ?: it.size, scaledBytes = staged ?: it.scaledBytes)
+                                    } else it.copy(size = size)
+                                } else it
                             })
                         }
                     }

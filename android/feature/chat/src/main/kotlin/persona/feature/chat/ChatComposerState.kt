@@ -29,6 +29,8 @@ data class ComposerAttachment(
     val video: Boolean = false,
     /** A video's length in seconds, when the phone could read it. */
     val duration: Double? = null,
+    /** Actual scaled/staged JPEG byte count for an inline photo, persisted for body-budget accounting. */
+    val scaledBytes: Long? = null,
 ) {
     /** A photo or a video (videos keep their own cap of 4 while pictures follow the hub's image limits). */
     val media: Boolean get() = image || video
@@ -42,7 +44,7 @@ data class ChatComposerDraft(
 
 private fun DraftAttachment.composerAttachment() = ComposerAttachment(
     id, name, uri, type == DraftAttachmentType.Image, uploadedPath, error, size, uploadState,
-    video = type == DraftAttachmentType.Video, duration = duration)
+    video = type == DraftAttachmentType.Video, duration = duration, scaledBytes = scaledBytes)
 
 internal fun DraftSnapshot.composerDraft() =
     ChatComposerDraft(text, attachments.map { it.composerAttachment() }, sessionVersion, hasPickedSavedPrompt)
@@ -57,7 +59,7 @@ internal fun ChatComposerDraft.storedAttachments() = attachments.map {
             it.path != null -> DraftUploadState.Uploaded
             it.error != null -> DraftUploadState.Failed
             else -> it.uploadState
-        }, it.path, it.error, it.duration)
+        }, it.path, it.error, it.duration, it.scaledBytes)
 }
 
 @Stable

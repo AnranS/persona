@@ -61,7 +61,7 @@ class NewAgentAttachmentsTest {
     }
 
     private fun photo(id: String, path: String? = null) =
-        ComposerAttachment(id, "$id.heic", "content://media/$id", image = true, path = path, uploadState = if (path != null) DraftUploadState.Uploaded else DraftUploadState.Pending)
+        ComposerAttachment(id, "$id.heic", "content://media/$id", image = true, path = path, size = 2048, uploadState = if (path != null) DraftUploadState.Uploaded else DraftUploadState.Pending)
     private fun file(id: String, path: String? = null) =
         ComposerAttachment(id, id, "content://docs/$id", image = false, path = path, size = 2048, uploadState = if (path != null) DraftUploadState.Uploaded else DraftUploadState.Pending)
 
