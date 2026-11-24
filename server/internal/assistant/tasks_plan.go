@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -175,29 +176,6 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
 		}
-		if t.Continues != "" {
-			if prevTodo, ok := s.todoNow(t.Continues); ok {
-				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, t.Launcher)
-				if providerSwitch {
-					if asked == "" && !t.Readonly {
-						if pred, ok := s.todoPredecessor(ctx, prevTodo); ok && pred.permission() != "" {
-							t.Permission = pred.permission()
-							cp := t.Permission
-							t.CallerPermission = &cp
-						}
-					}
-					if t.Permission != "" || t.Readonly {
-						t.preservePermission = true
-					}
-				}
-				if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, providerSwitch); err != nil {
-					return "", fmt.Errorf("task %d: %w", i+1, err)
-				}
-				if providerSwitch {
-					t.HandoffOperationID = "op_" + randomHex(12)
-				}
-			}
-		}
 		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
 			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
 		}
@@ -209,15 +187,70 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		s.healthyPlace(ctx, &preview) // health follows the resolved launcher
 		t.Machine, t.Cwd, t.Why = preview.Machine, preview.Cwd, preview.Why
 		t.Reroute = preview.Reroute
+		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
+			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+		}
 		// What it runs on the computer it lands on (#2640): a default that computer lacks is swapped now, so the card
 		// names the launcher that will run and its why says so; a launcher this plan names that it lacks is refused.
 		takesModes := true
-		if _, ok := s.machineByName(ctx, t.Machine); ok {
-			own := t.launchPick()
-			fit, configuredMode, err := s.fitPlanTask(ctx, t)
+		own := t.launchPick()
+		resolvedLauncher := cmp.Or(t.Launcher, preview.Launcher)
+		var fit startAgent
+		var configuredMode string
+		var fitParams map[string]any
+		var fitMachine Device
+		var fitOK bool
+		if m, ok := s.machineByName(ctx, t.Machine); ok {
+			var err error
+			fit, fitParams, fitOK, err = s.resolveFitPlanTask(ctx, t)
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
+			configuredMode, _ = fitParams["permission_mode"].(string)
+			if fitOK {
+				if err := checkStartSpeed(fitParams, fit, ""); err != nil {
+					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+				fitMachine = m
+			}
+			if lp, _ := fitParams["launcher"].(string); lp != "" {
+				resolvedLauncher = lp
+			}
+		}
+		// Evaluate continuation blockers and provider-switch handoff guards after healthyPlace and fitPlanTask have
+		// resolved the actual landing machine and launcher (#12980).
+		if t.Continues != "" {
+			if prevTodo, ok := s.todoNow(t.Continues); ok {
+				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, resolvedLauncher)
+				if providerSwitch {
+					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok && pred.permission() != "" {
+						if asked == "" && (!t.Readonly || pred.permission() == "plan") {
+							t.Permission = pred.permission()
+							cp := t.Permission
+							t.CallerPermission = &cp
+						}
+					}
+					if t.Permission == "plan" {
+						t.Readonly = true
+					}
+					if t.Permission != "" || t.Readonly {
+						t.preservePermission = true
+					}
+				}
+				if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, providerSwitch); err != nil {
+					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+				if t.Readonly && fitOK {
+					if err := s.readonlyLauncherRefusal(ctx, fitMachine, fitParams, fit); err != nil {
+						return "", fmt.Errorf("task %d: %w", i+1, err)
+					}
+				}
+				if providerSwitch {
+					t.HandoffOperationID = "op_" + randomHex(12)
+				}
+			}
+		}
+		if fitOK {
 			if !t.preservePermission {
 				switch {
 				case t.Readonly:
@@ -235,7 +268,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
 			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.
 			if takesModes = startTakesModes(fit.agent); !takesModes {
-				if err := startModesRefused(t.Launcher, fit.agent, asked, own.effort); err != nil {
+				if err := startModesRefused(cmp.Or(t.Launcher, resolvedLauncher), fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
 				}
 				t.Effort = ""

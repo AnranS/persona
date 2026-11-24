@@ -195,6 +195,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
 	}
+	if (t.HandoffID != "" || t.HandoffOperationID != "") && (t.Permission != "" || t.Readonly) {
+		t.preservePermission = true
+	}
 	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	settledPermission := t.Permission
 	if err := t.normalizeMachinePolicy(); err != nil {

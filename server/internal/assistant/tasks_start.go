@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,6 +54,14 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if task.CloseTabOnAccept && (task.ReuseTodo != "" || task.Continues != "" || task.Parent != "") {
 			return nil, planInvalid{errors.New("close_tab_on_accept requires a new to-do from this plan")}
 		}
+		if task.Continues != "" && task.HandoffOperationID != "" {
+			if strings.TrimSpace(task.Permission) == "plan" {
+				task.Readonly = true
+			}
+			if strings.TrimSpace(task.Permission) != "" || task.Readonly {
+				task.preservePermission = true
+			}
+		}
 		p.Tasks[i].normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		if err := p.Tasks[i].normalizeMachinePolicy(); err != nil {
 			return nil, planInvalid{err}
@@ -93,7 +102,11 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 		if task.Continues != "" {
 			if prevTodo, ok := s.todoNow(task.Continues); ok {
-				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, task.Machine, task.Launcher) || task.HandoffOperationID != ""
+				resolvedLauncher := cmp.Or(task.Launcher, preview.Launcher)
+				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, task.Machine, resolvedLauncher) || task.HandoffOperationID != ""
+				if providerSwitch && task.Permission == "plan" {
+					task.Readonly = true
+				}
 				if err := s.checkContinuationBlockers(ctx, prevTodo, task.Permission, task.Readonly, providerSwitch); err != nil {
 					return nil, planInvalid{fmt.Errorf("task %d: %w", i+1, err)}
 				}

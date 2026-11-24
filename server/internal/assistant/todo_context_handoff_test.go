@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -831,5 +832,452 @@ func TestTodoContextHandoffPostgresPersistence(t *testing.T) {
 	}
 	if len(e.f.starts) != startsBefore {
 		t.Fatalf("restarted retry started another worker: before=%d after=%d", startsBefore, len(e.f.starts))
+	}
+}
+
+// Regression tests for PR #14334 review findings on task_plan ordering and owner handoff validation/state.
+
+func TestTodoContextHandoffPlanContinuationOrderingGuards(t *testing.T) {
+	t.Run("inherit_plan_sets_readonly_and_constrains_no_mode_and_mode_launchers", func(t *testing.T) {
+		for _, tc := range []struct {
+			name            string
+			launcher        string
+			expectMode      string
+			expectRefused   string
+			expectNoModeKey bool
+		}{
+			{name: "no_mode_traex_gets_readonly_constraint", launcher: "traex", expectNoModeKey: true},
+			{name: "work_agent_pi_refused_as_readonly_unsupported", launcher: "pi", expectRefused: "readonly_unsupported"},
+			{name: "codex_keeps_plan_mode_and_readonly", launcher: "codex", expectMode: "plan"},
+			{name: "claude_profile_keeps_plan_mode_and_readonly", launcher: "profiles-ag", expectMode: "plan"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "plan", proto.Session{
+					SessionID: "agent01",
+					Status:    proto.StatusIdle,
+					State:     proto.StateIdle,
+				})
+				e.f.launcherList = append(e.f.launcherList,
+					proto.Launcher{Name: "traex", Agent: "traex"},
+					proto.Launcher{Name: "pi", Agent: "pi"},
+				)
+				ctx := context.Background()
+
+				args, _ := json.Marshal(map[string]any{
+					"tasks": []map[string]any{{
+						"title":          "Continue read-only plan on " + tc.launcher,
+						"prompt":         "Audit remaining auth paths without editing.",
+						"machine":        "box",
+						"cwd":            "/code/app",
+						"launcher":       tc.launcher,
+						"role":           "worker",
+						"user_requested": true,
+						"continues":      todo.ID,
+						"continues_why":  "Switch launcher while preserving read-only plan mode",
+					}},
+				})
+				planRes, err := e.s.toolTaskPlan(ctx, "m1", args)
+				if tc.expectRefused != "" {
+					if err == nil || !strings.Contains(err.Error(), tc.expectRefused) {
+						var rerr *rpc.Error
+						if err == nil || !errors.As(err, &rerr) || rerr.Code != tc.expectRefused {
+							t.Fatalf("expected %s refusal, got res=%q err=%v", tc.expectRefused, planRes, err)
+						}
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("toolTaskPlan: %v", err)
+				}
+				if !strings.Contains(planRes, "nothing has started") {
+					t.Fatalf("expected owner approval card, got: %s", planRes)
+				}
+				planID := planIDRe.FindString(planRes)
+				plan, err := e.s.loadPlan(ctx, planID)
+				if err != nil {
+					t.Fatalf("loadPlan: %v", err)
+				}
+				if !plan.Tasks[0].Readonly {
+					t.Fatalf("inheriting plan left Readonly=false on planned task: %+v", plan.Tasks[0])
+				}
+				if plan.Tasks[0].Permission != "plan" {
+					t.Fatalf("expected Permission=plan, got %q", plan.Tasks[0].Permission)
+				}
+
+				if _, err := e.s.startPlan(ownerStart(ctx), planID, nil, false); err != nil {
+					t.Fatalf("startPlan: %v", err)
+				}
+				waitFor(t, "replacement agent linked", func() bool {
+					return len(todoNow(e.s, todo.ID).Agents) == 2 && e.s.taskStarting.Load() == 0
+				})
+
+				e.f.mu.Lock()
+				starts := append([]map[string]any(nil), e.f.starts...)
+				e.f.mu.Unlock()
+				if len(starts) != 1 {
+					t.Fatalf("expected 1 start, got %d", len(starts))
+				}
+				sentPrompt, _ := starts[0]["prompt"].(string)
+				roConstraint := prompts.RenderReadonlyTaskConstraint(answerLanguage(e.s.hello(ctx).Locale))
+				if !strings.Contains(sentPrompt, roConstraint) {
+					t.Fatalf("startTaskAgent skipped read-only prompt constraint:\n%s", sentPrompt)
+				}
+				if tc.expectNoModeKey {
+					if _, hasMode := starts[0]["permission_mode"]; hasMode {
+						t.Fatalf("no-mode launcher received permission_mode=%v", starts[0]["permission_mode"])
+					}
+				} else if starts[0]["permission_mode"] != tc.expectMode {
+					t.Fatalf("permission_mode = %v, want %q", starts[0]["permission_mode"], tc.expectMode)
+				}
+			})
+		}
+	})
+
+	t.Run("omitted_launcher_resolved_from_agent_new_is_detected_as_provider_switch", func(t *testing.T) {
+		store := &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}
+		e, todo, _ := setupHandoffFixture(t, store, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusIdle,
+			State:     proto.StateIdle,
+		})
+		ctx := context.Background()
+		setModel(t, e.s, "agent.new", ModelBinding{Provider: "launcher.codex"})
+		e.s.mainPlansWait = false
+
+		// Escalating permission with omitted launcher must be refused.
+		escArgs, _ := json.Marshal(map[string]any{
+			"tasks": []map[string]any{{
+				"title":          "Escalate via omitted launcher",
+				"prompt":         "Continue with bypassPermissions",
+				"machine":        "box",
+				"cwd":            "/code/app",
+				"permission":     "bypassPermissions",
+				"role":           "worker",
+				"user_requested": true,
+				"continues":      todo.ID,
+				"continues_why":  "Continue on default launcher",
+			}},
+		})
+		if _, err := e.s.toolTaskPlan(ctx, "m1", escArgs); err == nil || !strings.Contains(err.Error(), "cannot raise permissions") {
+			t.Fatalf("expected permission escalation refusal when omitted launcher resolves to codex, got: %v", err)
+		}
+
+		// Omitted permission & launcher must wait for owner approval and preserve predecessor permission.
+		okArgs, _ := json.Marshal(map[string]any{
+			"tasks": []map[string]any{{
+				"title":          "Continue via omitted launcher",
+				"prompt":         "Continue work",
+				"machine":        "box",
+				"cwd":            "/code/app",
+				"role":           "worker",
+				"user_requested": true,
+				"continues":      todo.ID,
+				"continues_why":  "Continue on default launcher",
+			}},
+		})
+		planRes, err := e.s.toolTaskPlan(ctx, "m1", okArgs)
+		if err != nil {
+			t.Fatalf("toolTaskPlan: %v", err)
+		}
+		if !strings.Contains(planRes, "nothing has started") {
+			t.Fatalf("cross-provider continuation with omitted launcher auto-started without owner approval: %s", planRes)
+		}
+		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
+		if err != nil {
+			t.Fatalf("loadPlan: %v", err)
+		}
+		if plan.Tasks[0].HandoffOperationID == "" {
+			t.Fatalf("expected HandoffOperationID on resolved provider switch: %+v", plan.Tasks[0])
+		}
+		if plan.Tasks[0].Permission != "default" {
+			t.Fatalf("expected inherited Permission=default, got %q", plan.Tasks[0].Permission)
+		}
+	})
+
+	t.Run("swapped_default_launcher_on_target_machine_is_detected_as_provider_switch", func(t *testing.T) {
+		store := &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}
+		e, todo, _ := setupHandoffFixture(t, store, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusIdle,
+			State:     proto.StateIdle,
+		})
+		ctx := context.Background()
+		// Machine lacks default launcher "missing-default" and claude; fitPlanTask swaps default to "codex".
+		setModel(t, e.s, "agent.new", ModelBinding{Provider: "launcher.missing-default"})
+		e.f.launcherList = []proto.Launcher{
+			{Name: "codex", Agent: "codex"},
+		}
+		e.f.devices = []Device{{ID: "box", Name: "box", Online: true, Reachable: true}}
+		e.s.mainPlansWait = false
+
+		escArgs, _ := json.Marshal(map[string]any{
+			"tasks": []map[string]any{{
+				"title":          "Escalate via swapped launcher",
+				"prompt":         "Continue with bypassPermissions",
+				"machine":        "box",
+				"cwd":            "/code/app",
+				"permission":     "bypassPermissions",
+				"role":           "worker",
+				"user_requested": true,
+				"continues":      todo.ID,
+				"continues_why":  "Continue on swapped launcher",
+			}},
+		})
+		if _, err := e.s.toolTaskPlan(ctx, "m1", escArgs); err == nil || !strings.Contains(err.Error(), "cannot raise permissions") {
+			t.Fatalf("expected permission escalation refusal on swapped launcher, got: %v", err)
+		}
+
+		okArgs, _ := json.Marshal(map[string]any{
+			"tasks": []map[string]any{{
+				"title":          "Continue via swapped launcher",
+				"prompt":         "Continue work",
+				"machine":        "box",
+				"cwd":            "/code/app",
+				"role":           "worker",
+				"user_requested": true,
+				"continues":      todo.ID,
+				"continues_why":  "Continue on swapped launcher",
+			}},
+		})
+		planRes, err := e.s.toolTaskPlan(ctx, "m1", okArgs)
+		if err != nil {
+			t.Fatalf("toolTaskPlan: %v", err)
+		}
+		if !strings.Contains(planRes, "nothing has started") {
+			t.Fatalf("swapped-launcher continuation auto-started without owner approval: %s", planRes)
+		}
+		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
+		if err != nil {
+			t.Fatalf("loadPlan: %v", err)
+		}
+		if plan.Tasks[0].Launcher != "codex" || plan.Tasks[0].HandoffOperationID == "" || plan.Tasks[0].Permission != "default" {
+			t.Fatalf("unexpected swapped plan task: %+v", plan.Tasks[0])
+		}
+	})
+
+	t.Run("flexible_health_detour_to_other_machine_is_detected_as_provider_switch", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusIdle,
+			State:     proto.StateIdle,
+		})
+		ctx := context.Background()
+		e.f.devices = []Device{
+			{ID: "box", Name: "box", Online: true, Reachable: true, ClaudeVersion: "1.0"},
+			{ID: "box2", Name: "box2", Online: true, Reachable: true, ClaudeVersion: "1.0"},
+		}
+		e.sessions("box2")
+		reset := time.Now().Add(2 * time.Hour)
+		e.s.recordHealth(ctx, "box", "claude", healthResult{
+			err: "You've hit your usage limit", kind: errKindUsageLimit, resetsAt: &reset, source: healthSourceSession,
+		})
+		e.s.mainPlansWait = false
+
+		escArgs, _ := json.Marshal(map[string]any{
+			"tasks": []map[string]any{{
+				"title":          "Escalate via flexible detour",
+				"prompt":         "Continue with bypassPermissions",
+				"machine":        "box",
+				"machine_policy": "flexible",
+				"cwd":            "/code/app",
+				"launcher":       "claude",
+				"permission":     "bypassPermissions",
+				"role":           "worker",
+				"user_requested": true,
+				"continues":      todo.ID,
+				"continues_why":  "Continue on healthy machine",
+			}},
+		})
+		if _, err := e.s.toolTaskPlan(ctx, "m1", escArgs); err == nil || !strings.Contains(err.Error(), "cannot raise permissions") {
+			t.Fatalf("expected permission escalation refusal after healthyPlace detour, got: %v", err)
+		}
+
+		okArgs, _ := json.Marshal(map[string]any{
+			"tasks": []map[string]any{{
+				"title":          "Continue via flexible detour",
+				"prompt":         "Continue work",
+				"machine":        "box",
+				"machine_policy": "flexible",
+				"cwd":            "/code/app",
+				"launcher":       "claude",
+				"role":           "worker",
+				"user_requested": true,
+				"continues":      todo.ID,
+				"continues_why":  "Continue on healthy machine",
+			}},
+		})
+		planRes, err := e.s.toolTaskPlan(ctx, "m1", okArgs)
+		if err != nil {
+			t.Fatalf("toolTaskPlan: %v", err)
+		}
+		if !strings.Contains(planRes, "nothing has started") {
+			t.Fatalf("health-detoured continuation auto-started without owner approval: %s", planRes)
+		}
+		plan, err := e.s.loadPlan(ctx, planIDRe.FindString(planRes))
+		if err != nil {
+			t.Fatalf("loadPlan: %v", err)
+		}
+		if plan.Tasks[0].Machine != "box2" || plan.Tasks[0].HandoffOperationID == "" || plan.Tasks[0].Permission != "default" {
+			t.Fatalf("unexpected detoured plan task: %+v", plan.Tasks[0])
+		}
+	})
+}
+
+func TestTodoContextHandoffOwnerValidationBeforeStoppingPredecessor(t *testing.T) {
+	t.Run("missing_launcher_leaves_predecessor_running_and_linked", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusWorking,
+			State:     proto.StateWorking,
+		})
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_missing","launcher":"codex-typo"}`, "")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("expected 409 for missing launcher, got %d %s", w.Code, w.Body.String())
+		}
+		if len(e.f.stopped) != 0 || len(e.f.starts) != 0 {
+			t.Fatalf("missing launcher stopped or started agents: stops=%d starts=%d", len(e.f.stopped), len(e.f.starts))
+		}
+		if todoNow(e.s, todo.ID).Agents[0].ReleasedAt != nil {
+			t.Fatalf("missing launcher released predecessor link")
+		}
+	})
+
+	t.Run("unhealthy_launcher_leaves_predecessor_running_and_linked", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusWorking,
+			State:     proto.StateWorking,
+		})
+		reset := time.Now().Add(2 * time.Hour)
+		e.s.recordHealth(context.Background(), "box", "codex", healthResult{
+			err: "You've hit your usage limit", kind: errKindUsageLimit, resetsAt: &reset, source: healthSourceSession,
+		})
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_unhealthy","launcher":"codex"}`, "")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "launcher_unhealthy") {
+			t.Fatalf("expected 409 launcher_unhealthy, got %d %s", w.Code, w.Body.String())
+		}
+		if len(e.f.stopped) != 0 || len(e.f.starts) != 0 {
+			t.Fatalf("unhealthy launcher stopped or started agents: stops=%d starts=%d", len(e.f.stopped), len(e.f.starts))
+		}
+		if todoNow(e.s, todo.ID).Agents[0].ReleasedAt != nil {
+			t.Fatalf("unhealthy launcher released predecessor link")
+		}
+	})
+
+	t.Run("incompatible_permission_or_effort_for_no_mode_launcher_leaves_predecessor_running", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusWorking,
+			State:     proto.StateWorking,
+		})
+		e.f.launcherList = append(e.f.launcherList,
+			proto.Launcher{Name: "traex", Agent: "traex"},
+			proto.Launcher{Name: "omp", Agent: "omp"},
+		)
+		wPerm := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_traex_perm","launcher":"traex","permission":"default"}`, "")
+		if wPerm.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for traex permission mode, got %d %s", wPerm.Code, wPerm.Body.String())
+		}
+		wEff := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_omp_effort","launcher":"omp","effort":"high"}`, "")
+		if wEff.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for omp effort, got %d %s", wEff.Code, wEff.Body.String())
+		}
+		if len(e.f.stopped) != 0 || len(e.f.starts) != 0 {
+			t.Fatalf("incompatible modes stopped or started agents: stops=%d starts=%d", len(e.f.stopped), len(e.f.starts))
+		}
+		if todoNow(e.s, todo.ID).Agents[0].ReleasedAt != nil {
+			t.Fatalf("incompatible modes released predecessor link")
+		}
+	})
+
+	t.Run("readonly_predecessor_onto_work_agent_refused_before_stopping", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "plan", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusWorking,
+			State:     proto.StateWorking,
+		})
+		e.f.launcherList = append(e.f.launcherList, proto.Launcher{Name: "pi", Agent: "pi"})
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_pi_ro","launcher":"pi"}`, "")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "readonly_unsupported") {
+			t.Fatalf("expected 409 readonly_unsupported, got %d %s", w.Code, w.Body.String())
+		}
+		if len(e.f.stopped) != 0 || len(e.f.starts) != 0 {
+			t.Fatalf("readonly refusal stopped or started agents: stops=%d starts=%d", len(e.f.stopped), len(e.f.starts))
+		}
+		if todoNow(e.s, todo.ID).Agents[0].ReleasedAt != nil {
+			t.Fatalf("readonly refusal released predecessor link")
+		}
+	})
+}
+
+type stopHookHub struct {
+	Hub
+	onStop func(machine string)
+}
+
+func (h *stopHookHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == deviceSessionStop && h.onStop != nil {
+		h.onStop(p.Device)
+	}
+	return h.Hub.DeviceCall(ctx, p)
+}
+
+func TestTodoContextHandoffRefreshesMetadataAfterLockAndStop(t *testing.T) {
+	e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+		SessionID: "agent01",
+		Status:    proto.StatusWorking,
+		State:     proto.StateWorking,
+		TurnError: "stale initial error",
+	})
+	var priorID string
+	setHub(e.s, &stopHookHub{
+		Hub: e.f,
+		onStop: func(machine string) {
+			// Simulate final predecessor failure & an intervening handoff record arriving by the time stop completes.
+			e.sessions(machine, proto.Session{
+				SessionID:      "agent01",
+				MachineID:      machine,
+				Cwd:            "/code/app",
+				Agent:          "claude",
+				Launcher:       "claude",
+				PermissionMode: "default",
+				Status:         proto.StatusDone,
+				State:          proto.StateIdle,
+				TurnError:      "API Error: 503 fresh post-stop failure",
+				UpdatedAt:      time.Now().UTC(),
+			})
+			saved, _, err := e.s.persistTodoContextHandoff(context.Background(), TodoContextHandoff{
+				OperationID:    "op_intervening_prior",
+				TodoID:         todo.ID,
+				Summary:        "prior handoff",
+				DeliveryStatus: handoffDeliveryRejected,
+			})
+			if err == nil {
+				priorID = saved.ID
+			}
+		},
+	})
+
+	w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+		`{"operation_id":"op_fresh_meta","launcher":"codex"}`, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("handoff = %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Handoff TodoContextHandoff `json:"handoff"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Handoff.Summary, "API Error: 503 fresh post-stop failure") {
+		t.Fatalf("handoff recorded stale failure instead of post-stop failure:\n%s", resp.Handoff.Summary)
+	}
+	if priorID == "" || resp.Handoff.SupersedesID != priorID {
+		t.Fatalf("supersedes_id = %q, want %q (refreshed under lock/after stop)", resp.Handoff.SupersedesID, priorID)
 	}
 }

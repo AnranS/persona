@@ -508,10 +508,11 @@ func (s *Service) sessionUnresolvedApproval(c proto.Session) bool {
 // permissionRank orders permission modes from most restrictive to most permissive so a provider or
 // launcher switch never silently or explicitly raises permissions.
 func permissionRank(mode string, readonly bool) int {
-	if readonly {
+	m := strings.TrimSpace(mode)
+	if readonly && (m == "" || m == "plan") {
 		return 0
 	}
-	switch strings.TrimSpace(mode) {
+	switch m {
 	case "plan":
 		return 0
 	case "", "default":
@@ -607,10 +608,7 @@ func (s *Service) isProviderSwitchContinuation(ctx context.Context, todo Todo, t
 		return true
 	}
 	srcLauncher := cmp.Or(pred.launcher(), "claude")
-	dstLauncher := strings.TrimSpace(targetLauncher)
-	if dstLauncher == "" {
-		return false
-	}
+	dstLauncher := s.startLauncher(ctx, strings.TrimSpace(targetLauncher))
 	return dstLauncher != srcLauncher
 }
 
@@ -1248,6 +1246,126 @@ func (s *Service) todoHandoffRoutes() {
 	})
 }
 
+type ownerTodoHandoffPlan struct {
+	todo          Todo
+	pred          todoPredecessorInfo
+	machine       Device
+	targetAgent   string
+	targetCwd     string
+	effectivePerm string
+	opID          string
+	buildIn       todoHandoffBuildInput
+}
+
+func (s *Service) buildOwnerHandoffInput(ctx context.Context, todo Todo, pred todoPredecessorInfo, m Device, launcher, targetAgent, targetCwd, opID string) todoHandoffBuildInput {
+	var supersedesID string
+	if prev := s.latestTodoContextHandoff(ctx, todo.ID); prev != nil {
+		supersedesID = prev.ID
+	}
+	return todoHandoffBuildInput{
+		Todo:           todo,
+		SourceMachine:  pred.agent.MachineID,
+		SourceSession:  pred.agent.SessionID,
+		SourceLauncher: pred.launcher(),
+		SourceAgent:    pred.agentKind(),
+		SourceCwd:      pred.cwd(),
+		KnownFailure:   pred.session.TurnError,
+		TargetMachine:  m.ID,
+		TargetLauncher: launcher,
+		TargetAgent:    targetAgent,
+		TargetCwd:      targetCwd,
+		OperationID:    opID,
+		SupersedesID:   supersedesID,
+	}
+}
+
+func (s *Service) prepareOwnerTodoHandoff(ctx context.Context, todo Todo, req todoHandoffPostRequest) (ownerTodoHandoffPlan, int, string, error) {
+	pred, hasPred := s.todoPredecessor(ctx, todo)
+	targetMachine := req.Machine
+	if targetMachine == "" && hasPred {
+		targetMachine = pred.agent.MachineID
+	}
+	m, ok := s.machineByName(ctx, targetMachine)
+	if !ok {
+		return ownerTodoHandoffPlan{}, http.StatusBadRequest, "unknown_machine", fmt.Errorf("unknown machine %q", targetMachine)
+	}
+	if !m.Reachable {
+		return ownerTodoHandoffPlan{}, http.StatusConflict, "machine_offline", machineOffline(m.Name)
+	}
+	if err := s.launcherScopeErr(ctx, m.ID, req.Launcher); err != nil {
+		return ownerTodoHandoffPlan{}, http.StatusConflict, "launcher_out_of_scope", err
+	}
+
+	// Safety refusal, unresolved approval, and permission-escalation checks run before anything touches the predecessor.
+	srcPerm := pred.permission()
+	effectivePerm := req.Permission
+	if effectivePerm == "" {
+		effectivePerm = srcPerm
+	}
+	if err := s.checkContinuationBlockers(ctx, todo, effectivePerm, effectivePerm == "plan", true); err != nil {
+		var be handoffBlockerError
+		code := "handoff_blocked"
+		if errors.As(err, &be) {
+			code = be.code
+		}
+		return ownerTodoHandoffPlan{}, http.StatusConflict, code, err
+	}
+
+	targetCwd := pred.cwd()
+	if targetCwd == "" {
+		return ownerTodoHandoffPlan{}, http.StatusConflict, "missing_workspace", fmt.Errorf("to-do %s has no workspace directory to continue in", todo.ID)
+	}
+	if assistantWorkspace(m, targetCwd) {
+		return ownerTodoHandoffPlan{}, http.StatusBadRequest, "invalid_workspace", i18n.Err("rpc-errors.agent_assistant_workspace")
+	}
+
+	// Verify target launcher existence, readonly compatibility, requested modes/effort, and health before
+	// stopping or unlinking the predecessor.
+	fitParams := map[string]any{
+		"launcher": req.Launcher,
+		"model":    req.Model,
+		"effort":   req.Effort,
+	}
+	own, err := s.resolveStart(ctx, fitParams, false)
+	if err != nil {
+		return ownerTodoHandoffPlan{}, http.StatusBadRequest, "invalid_launcher", err
+	}
+	_, fit, err := s.fitNewLauncher(ctx, m, own, fitParams)
+	if err != nil {
+		return ownerTodoHandoffPlan{}, http.StatusConflict, "launcher_unavailable", err
+	}
+	targetAgent := cmp.Or(fit.agent, s.launcherAgent(ctx, m.ID, req.Launcher))
+	if effectivePerm == "plan" {
+		if err := s.readonlyLauncherRefusal(ctx, m, fitParams, fit); err != nil {
+			return ownerTodoHandoffPlan{}, http.StatusConflict, "readonly_unsupported", err
+		}
+	}
+	if err := startModesRefused(req.Launcher, targetAgent, req.Permission, req.Effort); err != nil {
+		return ownerTodoHandoffPlan{}, http.StatusBadRequest, "unsupported_launch_modes", err
+	}
+	if r, bad := s.launcherUnusableNow(ctx, m.ID, req.Launcher); bad {
+		return ownerTodoHandoffPlan{}, http.StatusConflict, "launcher_unhealthy", i18n.Err("assistant-tasks.fixed_launcher_unhealthy", i18n.Args{
+			"machine": m.ID, "launcher": req.Launcher, "reason": r.Error,
+		})
+	}
+
+	opID := req.OperationID
+	if opID == "" {
+		opID = "op_" + randomHex(12)
+	}
+	buildIn := s.buildOwnerHandoffInput(ctx, todo, pred, m, req.Launcher, targetAgent, targetCwd, opID)
+	return ownerTodoHandoffPlan{
+		todo:          todo,
+		pred:          pred,
+		machine:       m,
+		targetAgent:   targetAgent,
+		targetCwd:     targetCwd,
+		effectivePerm: effectivePerm,
+		opID:          opID,
+		buildIn:       buildIn,
+	}, 0, "", nil
+}
+
 func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, req todoHandoffPostRequest) (*TodoContextHandoff, int, string, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return nil, http.StatusServiceUnavailable, "todos_unavailable", errTodosUnavailable
@@ -1273,9 +1391,18 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 		return nil, http.StatusBadRequest, "invalid_operation_id", errors.New("operation_id must be at most 128 characters")
 	}
 
+	if req.Preview {
+		prep, status, code, err := s.prepareOwnerTodoHandoff(ctx, todo, req)
+		if err != nil {
+			return nil, status, code, err
+		}
+		preview := s.buildTodoContextHandoff(ctx, prep.buildIn)
+		return &preview, http.StatusOK, "", nil
+	}
+
 	// Idempotent replay check before mutating state: retrying an accepted, pending, or unknown
 	// operation never starts a second worker or injects context twice.
-	if !req.Preview && req.OperationID != "" {
+	if req.OperationID != "" {
 		existing, err := s.getTodoContextHandoffByOp(ctx, todoID, req.OperationID)
 		if err != nil {
 			return nil, http.StatusServiceUnavailable, "handoff_unavailable", err
@@ -1283,78 +1410,6 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 		if existing != nil {
 			return existing, http.StatusOK, "", nil
 		}
-	}
-
-	pred, hasPred := s.todoPredecessor(ctx, todo)
-	targetMachine := req.Machine
-	if targetMachine == "" && hasPred {
-		targetMachine = pred.agent.MachineID
-	}
-	m, ok := s.machineByName(ctx, targetMachine)
-	if !ok {
-		return nil, http.StatusBadRequest, "unknown_machine", fmt.Errorf("unknown machine %q", targetMachine)
-	}
-	targetMachine = m.ID
-	if !m.Reachable {
-		return nil, http.StatusConflict, "machine_offline", machineOffline(m.Name)
-	}
-	if err := s.launcherScopeErr(ctx, m.ID, req.Launcher); err != nil {
-		return nil, http.StatusConflict, "launcher_out_of_scope", err
-	}
-
-	// Safety refusal, unresolved approval, and permission-escalation checks run before anything touches the predecessor.
-	srcPerm := pred.permission()
-	effectivePerm := req.Permission
-	if effectivePerm == "" {
-		effectivePerm = srcPerm
-	}
-	if err := s.checkContinuationBlockers(ctx, todo, effectivePerm, effectivePerm == "plan", true); err != nil {
-		var be handoffBlockerError
-		code := "handoff_blocked"
-		if errors.As(err, &be) {
-			code = be.code
-		}
-		return nil, http.StatusConflict, code, err
-	}
-
-	targetCwd := pred.cwd()
-	if targetCwd == "" {
-		return nil, http.StatusConflict, "missing_workspace", fmt.Errorf("to-do %s has no workspace directory to continue in", todo.ID)
-	}
-	if assistantWorkspace(m, targetCwd) {
-		return nil, http.StatusBadRequest, "invalid_workspace", i18n.Err("rpc-errors.agent_assistant_workspace")
-	}
-
-	// Determine target agent kind and verify launcher exists on target computer before stopping predecessor.
-	targetAgent := s.launcherAgent(ctx, m.ID, req.Launcher)
-	var supersedesID string
-	if prev := s.latestTodoContextHandoff(ctx, todo.ID); prev != nil {
-		supersedesID = prev.ID
-	}
-	opID := req.OperationID
-	if opID == "" {
-		opID = "op_" + randomHex(12)
-	}
-
-	buildIn := todoHandoffBuildInput{
-		Todo:           todo,
-		SourceMachine:  pred.agent.MachineID,
-		SourceSession:  pred.agent.SessionID,
-		SourceLauncher: pred.launcher(),
-		SourceAgent:    pred.agentKind(),
-		SourceCwd:      pred.cwd(),
-		KnownFailure:   pred.session.TurnError,
-		TargetMachine:  m.ID,
-		TargetLauncher: req.Launcher,
-		TargetAgent:    targetAgent,
-		TargetCwd:      targetCwd,
-		OperationID:    opID,
-		SupersedesID:   supersedesID,
-	}
-
-	if req.Preview {
-		preview := s.buildTodoContextHandoff(ctx, buildIn)
-		return &preview, http.StatusOK, "", nil
 	}
 
 	// Single-flight claim on this to-do: racing requests cannot start two active workers.
@@ -1381,23 +1436,19 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 		}
 	}
 
-	// Reload todo and re-verify blockers under the claim.
+	// Reload todo and resolve predecessor, blockers, target launcher/modes/health, and build input under the claim.
 	todo, ok = s.todoNow(todoID)
 	if !ok {
 		return nil, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found")
 	}
-	if err := s.checkContinuationBlockers(ctx, todo, effectivePerm, effectivePerm == "plan", true); err != nil {
-		var be handoffBlockerError
-		code := "handoff_blocked"
-		if errors.As(err, &be) {
-			code = be.code
-		}
-		return nil, http.StatusConflict, code, err
+	prep, status, code, err := s.prepareOwnerTodoHandoff(ctx, todo, req)
+	if err != nil {
+		return nil, status, code, err
 	}
 
 	// Optional pre-check for missing sources so the owner can defer before stopping the predecessor.
 	if req.DeferOnMissingSources {
-		draft := s.buildTodoContextHandoff(ctx, buildIn)
+		draft := s.buildTodoContextHandoff(ctx, prep.buildIn)
 		if len(draft.MissingSources) > 0 {
 			return &draft, http.StatusConflict, "missing_sources", fmt.Errorf("handoff deferred: %d source(s) missing or truncated", len(draft.MissingSources))
 		}
@@ -1406,8 +1457,31 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 	// Ensure predecessor safely relinquishes the workspace before starting the replacement.
 	stopped, err := s.stopContinuedTaskAgents(ctx, todo)
 	if err != nil {
-		return nil, http.StatusConflict, "workspace_not_quiescent", err
+		var be handoffBlockerError
+		code := "workspace_not_quiescent"
+		if errors.As(err, &be) {
+			code = be.code
+		}
+		return nil, http.StatusConflict, code, err
 	}
+
+	// Refresh todo, predecessor session snapshot, effective permission, and supersedes metadata after
+	// quiescence so the persisted handoff reflects final predecessor state and failure details.
+	if latestTodo, ok := s.todoNow(todoID); ok {
+		todo = latestTodo
+	}
+	pred := prep.pred
+	effectivePerm := prep.effectivePerm
+	if freshPred, ok := s.todoPredecessor(ctx, todo); ok {
+		pred = freshPred
+		if req.Permission == "" && pred.permission() != "" {
+			effectivePerm = pred.permission()
+		}
+	}
+	m := prep.machine
+	targetAgent := prep.targetAgent
+	targetCwd := prep.targetCwd
+	buildIn := s.buildOwnerHandoffInput(ctx, todo, pred, m, req.Launcher, targetAgent, targetCwd, prep.opID)
 
 	// Build and persist the canonical auditable handoff after predecessor quiescence.
 	handoff := s.buildTodoContextHandoff(ctx, buildIn)
@@ -1506,7 +1580,15 @@ func (s *Service) prepareContinuationHandoff(ctx context.Context, t *PlanTask, t
 	if prev := s.latestTodoContextHandoff(ctx, todo.ID); prev != nil {
 		supersedesID = prev.ID
 	}
-	targetAgent := s.launcherAgent(ctx, t.Machine, s.startLauncher(ctx, t.Launcher))
+	targetLauncher := strings.TrimSpace(t.Launcher)
+	if targetLauncher == "" && t.Tier != "" {
+		preview := *t
+		if s.applyTaskTier(ctx, &preview) == nil && preview.Launcher != "" {
+			targetLauncher = preview.Launcher
+		}
+	}
+	targetLauncher = s.startLauncher(ctx, targetLauncher)
+	targetAgent := s.launcherAgent(ctx, t.Machine, targetLauncher)
 	h := s.buildTodoContextHandoff(ctx, todoHandoffBuildInput{
 		Todo:           todo,
 		SourceMachine:  pred.agent.MachineID,
@@ -1516,7 +1598,7 @@ func (s *Service) prepareContinuationHandoff(ctx context.Context, t *PlanTask, t
 		SourceCwd:      pred.cwd(),
 		KnownFailure:   pred.session.TurnError,
 		TargetMachine:  t.Machine,
-		TargetLauncher: cmp.Or(t.Launcher, s.startLauncher(ctx, t.Launcher)),
+		TargetLauncher: targetLauncher,
 		TargetAgent:    targetAgent,
 		TargetCwd:      taskRunDir(*t),
 		OperationID:    opID,
