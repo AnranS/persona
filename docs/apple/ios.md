@@ -2445,9 +2445,12 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   the entry, which leaves the table (at most 64: one more lets the oldest go without a state), while the cell keeps
   what it was told. Each cell is observed on its own, so a burst of other sends' receipts draws nothing. Receipts are
   feedback only: the HTTP answer, or the op id's receipt, stays authoritative, and the events are not replayed after a
-  reconnect. Nothing reads the cells yet: the to-do page's composer will, and the chats still show Processing after
-  the HTTP answer (`ChatSendFeedback`). `MOCK_TODO_VIEW` sends both (`docs/operations/testing.md`). Tests:
-  `SendReceiptsTests`; `SendReceiptsBurstTests` prints the main thread's time per event under a burst.
+  reconnect. Chats expect their `client_msg_id` before posting (`sendPending`), move `ChatSendFeedback` to Processing
+  on a trusted `message_send_state` receipt (tracking Send → Processing separately from execution, and ending
+  Processing on `failed`/`kept`/`unknown` without altering outbox durability), and keep the HTTP answer as the fallback
+  on older hubs or dropped sockets (#12773); the to-do page's composer will read `todo_send_state` cells.
+  `MOCK_TODO_VIEW` sends both (`docs/operations/testing.md`). Tests: `SendReceiptsTests`, `ChatSendFeedbackTests`;
+  `SendReceiptsBurstTests` prints the main thread's time per event under a burst.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
