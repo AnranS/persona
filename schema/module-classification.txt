@@ -63,7 +63,6 @@ go server/cmd/persona-manager core
 go server/cmd/persona-node core
 go server/cmd/persona-projects core
 go server/cmd/personad core
-go server/cmd/pushrec core
 go server/internal/acceptloop core
 go server/internal/agents core
 go server/internal/agentsend core
@@ -132,7 +131,6 @@ go server/internal/extmgr/imessageport core
 go server/internal/extmgr/mailport core
 go server/internal/extmgr/storage core
 go server/internal/extwire core
-go server/internal/fleetsoak core
 go server/internal/githubwire core
 go server/internal/imessagewire core
 go server/internal/herdr core
@@ -167,6 +165,8 @@ go server/internal/memtrim core
 go server/internal/modapi core
 go server/internal/modelhttp core
 go server/internal/modelretry core
+go server/internal/moduleswitch core
+go server/internal/moduleswitch/switchtest core
 go server/internal/netaddr core
 go server/internal/netproxy core
 go server/internal/netshape core
@@ -247,6 +247,8 @@ go server/internal/webpush/webpushtest core
 go server/internal/workspaceboard core
 go server/internal/workspacenaming core
 go server/plugins core
+go server/scripts/fleetsoak core
+go server/scripts/pushrec core
 
 # Module code still in core paths.
 go server/internal/transcribelive voice
@@ -353,8 +355,6 @@ web web/src/lib core
 web web/src/lib/configuration core
 web web/src/lib/html-runtime core
 web web/src/modules core
-web web/src/screen screen-share
-web web/src/screen/tiers screen-share
 web web/src/sharing core
 web web/src/showcase core
 web web/src/showcase/images core
