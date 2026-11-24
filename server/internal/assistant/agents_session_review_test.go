@@ -625,10 +625,12 @@ func TestSessionReviewReadFailureKeepsPendingCard(t *testing.T) {
 	fx := newSessionReviewFixture(t)
 	_, reviewer := fx.start(t)
 	finished := fx.finish(t, reviewer, sessionReviewRawReport, sessionReviewDisplayReport)
+	fx.ft.s.sessionReviews.mu.Lock()
 	fx.ft.s.sessionReviews.loaded = false
-	fx.ft.s.store = func() Store {
+	fx.ft.s.sessionReviews.mu.Unlock()
+	fx.ft.s.setStore(func() Store {
 		return &settingFailing{fleetMem: fx.ft.st, fail: map[string]bool{sessionReviewSetting: true}}
-	}
+	})
 	still := sessionReviewOneCard(t, fx.ft.s)
 	if still.ID != finished.ID || still.ReviewReport != sessionReviewDisplayReport {
 		t.Fatalf("a store read failure withdrew the pending card: %+v", still)

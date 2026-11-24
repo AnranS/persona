@@ -2483,7 +2483,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		w := delayedWait{ID: "limit_" + run.ID, Kind: delayedScheduledRetry, At: now.Add(wait),
 			Retry: &scheduledLimitRetry{Run: run, RunOf: run.of, MachineName: m.Name, LimitTurn: turn}}
 		persisted := false
-		if s.store != nil && s.store() != nil {
+		if s.store() != nil {
 			pctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
 			err := s.persistScheduledRetry(pctx, w)
 			cancel()

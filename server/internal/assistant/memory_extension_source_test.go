@@ -200,7 +200,7 @@ func TestDecisionsQueryMemoryField(t *testing.T) {
 	main := entryQAMain
 	main.Type = "decision"
 	ledger := &entriesMemStore{infoCategoryMemStore: st, entries: []proto.AssistantEntry{main}}
-	s.store = func() Store { return ledger }
+	s.setStore(func() Store { return ledger })
 	memory := func(args string) string {
 		t.Helper()
 		raw, err := s.toolEntries(ctx, "qa-machine", "qa-main", "decisions_query", json.RawMessage(args))

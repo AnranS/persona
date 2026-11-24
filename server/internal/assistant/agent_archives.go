@@ -472,9 +472,6 @@ type archivedPart struct {
 }
 
 func (svc *Service) archiveStore() Store {
-	if svc.store == nil {
-		return nil
-	}
 	return svc.store()
 }
 
