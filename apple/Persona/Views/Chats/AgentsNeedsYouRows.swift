@@ -90,6 +90,7 @@ struct NeedsYouWaitingCard: View {
     var machine: String?
     /// The list's cell is the card: no chrome of its own (as `InteractionPreviewCard`'s `inCell`).
     var inCell = true
+    var preferHerdrTabName = false
     var open: () -> Void
 
     var body: some View {
@@ -100,7 +101,7 @@ struct NeedsYouWaitingCard: View {
                     .scaledFrame(width: Theme.Size.icon) // the cards' icon column
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(Self.title(session)).font(Theme.Font.heading).lineLimit(1)
-                    Text(NeedsYouWaitingCard.place(session, machine: machine))
+                    Text(NeedsYouWaitingCard.place(session, machine: machine, preferHerdrTabName: preferHerdrTabName))
                         .font(Theme.Font.label)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -146,8 +147,8 @@ struct NeedsYouWaitingCard: View {
     }
 
     /// The session's name and its computer, as a card's place line reads.
-    static func place(_ session: Session?, machine: String?) -> String {
-        [session?.displayTitle, machine].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    static func place(_ session: Session?, machine: String?, preferHerdrTabName: Bool = false) -> String {
+        [session?.displayTitle(preferTab: preferHerdrTabName), machine].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     /// The Mac: under the title, after the icon's column, as the cards' lines sit (`InteractionPreviewCard`).
@@ -170,6 +171,7 @@ struct CompactWaitingRow: View {
     var session: Session?
     var machine: String?
     var since: Date?
+    var preferHerdrTabName = false
 
     var body: some View {
         HStack(spacing: CompactList.gap) {
@@ -179,7 +181,7 @@ struct CompactWaitingRow: View {
                 .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
                 Text(NeedsYouWaitingCard.title(session)).font(CompactList.titleUnread).lineLimit(1).fixedSize()
-                Text(NeedsYouWaitingCard.place(session, machine: machine))
+                Text(NeedsYouWaitingCard.place(session, machine: machine, preferHerdrTabName: preferHerdrTabName))
                     .font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: Theme.Space.xs)
