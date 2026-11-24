@@ -127,6 +127,8 @@ type Node struct {
 	external *externalAdapterRegistry
 	// externalStarts contains cancelable initialization only, never the lifetime of an established conversation.
 	externalStarts externalStarts
+	// startOps tracks in-flight and completed op_ids for new-Agent starts (start_op.go, #10674).
+	startOps startOpLog
 
 	hosts    *host.Registry // the terminal hosts, by kind (hosts.go): the one of the machine's engine
 	eng      engineState    // which engine, and its change stream (engine.go)
@@ -902,6 +904,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		SessionID               string        `json:"session_id"`
 		CreationID              string        `json:"creation_id"`
 		Incarnation             string        `json:"incarnation"`
+		OpID                    string        `json:"op_id"`
 		CodexEffortFallback     string        `json:"codex_effort_fallback"`
 		TaskTerminalToken       string        `json:"task_terminal_token"`
 		Cwd                     string        `json:"cwd"`
@@ -1590,6 +1593,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if p.ResumeSessionID == "" && p.OpID != "" {
+			existing, finishOp, err := n.beginStartOp(ctx, p.OpID)
+			if err != nil {
+				return nil, err
+			}
+			if existing != nil {
+				return n.creationResult(existing, nil, "", p.CreationID, p.Incarnation)
+			}
+			defer func() {
+				var sess *proto.Session
+				if resultErr == nil {
+					if out, ok := result.(map[string]any); ok {
+						sess, _ = out["session"].(*proto.Session)
+					}
+				}
+				finishOp(sess)
+			}()
+		}
 		if err := n.guardAgentDirectory(ctx, p.Cwd); err != nil {
 			return nil, err
 		}
