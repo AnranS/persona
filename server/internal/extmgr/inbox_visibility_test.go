@@ -10,7 +10,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	larkcliconnector "github.com/nwverse/persona/server/internal/connector/larkcli"
 	"github.com/nwverse/persona/server/internal/lark"
 )
 
@@ -63,6 +62,7 @@ func TestLoadConfigValidatesInboxVisibilityAndReadProfile(t *testing.T) {
 }
 
 func TestInboxConfigViewUnionsManagerAndConnectorVisibility(t *testing.T) {
+	needsLarkCLI(t)
 	reg := connector.NewRegistry(nil)
 	h := &Manager{
 		cfg: &Config{
@@ -99,5 +99,4 @@ func TestInboxConfigViewUnionsManagerAndConnectorVisibility(t *testing.T) {
 	if _, err := lc.Call(context.Background(), "larkcli_messages", json.RawMessage(`{"chat_id":"oc_from_config"}`)); err == nil {
 		t.Fatal("newLarkCLIConnector did not apply manager.json excluded_chat_ids default")
 	}
-	_ = larkcliconnector.ID
 }
