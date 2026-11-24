@@ -3000,8 +3000,9 @@ and Android follow in #5117.
   before never lands on the one picked since.
 - **What the pill says**: what this start runs: the mark of the Agent the launcher runs, the model (the one picked; else Model
   settings' model on their launcher; else the model the launcher's default entry stands for, by its list's name; a
-  launcher that fixes its own `--model`, that model) and, for Claude Code and Antigravity, the effort
-  (the one picked, else Model settings'). Codex shows no effort: a start doesn't set it. The workflow mark while ultracode
+  launcher that fixes its own `--model`, that model) and the effort: for Claude Code and Antigravity, the one picked
+  (else Model settings'); for Codex, only an explicit level reported by the selected model (unset follows Codex's
+  configured default, keeping existing launch settings; #13764). The workflow mark while ultracode
   is on.
 - **Providers** (`lib/new-agent-panel.ts`): the chosen computer's launchers in the hub's order (`GET
   /machines/{mid}/launchers`), by display name, the startup ID small and monospace beside the group's name and in the
