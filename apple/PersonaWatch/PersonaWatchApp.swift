@@ -82,6 +82,8 @@ final class WatchModel {
     var groups: [String] { configs.keys.sorted { ($0.isEmpty ? 0 : 1, $0) < ($1.isEmpty ? 0 : 1, $1) } }
     var sessions: [Session] = []
     var interactions: [Interaction] = []
+    /// Visible cards plus supervisor-held cards so `WatchPet.status` knows which `needs_you` sessions are held only by their supervisor.
+    private var petInteractions: [Interaction] = []
     /// The inbox's Needs You (Feishu messages, mail and connectors' items the AI says need the user), newest first.
     var inbox: [InboxItem] = []
     var machines: [Machine] = []
@@ -118,7 +120,7 @@ final class WatchModel {
             return WatchPetStatus(state: state, count: 3)
         }
         #endif
-        return WatchPet.status(sessions: sessions, interactions: interactions, unreachable: error != nil,
+        return WatchPet.status(sessions: sessions, interactions: petInteractions, unreachable: error != nil,
                                partlyUnreachable: !groupFailures.isEmpty)
     }
 
@@ -234,6 +236,7 @@ final class WatchModel {
         self.sessions = folded.filter { $0.state.isLive && !$0.assistant || $0.state == .needsYou || $0.state == .working }
             .sorted { rank($0) != rank($1) ? rank($0) < rank($1) : $0.sortDate > $1.sortDate }
         self.interactions = shown
+        self.petInteractions = WatchInteractions.forPet(interactions)
         if !machines.isEmpty { self.machines = machines }
         lastUpdate = at
         guard !freshUids.isEmpty else { return }
@@ -342,11 +345,13 @@ final class WatchModel {
         do {
             _ = try await api.resolve(ix.id, r)
             interactions.removeAll { $0.uid == ix.uid }
+            petInteractions.removeAll { $0.uid == ix.uid }
             forgetSeen(ix.uid)
             WKInterfaceDevice.current().play(.success)
         } catch let e as APIError where e.status == 410 {
             // Already ended on server: remove interaction cleanly without error
             interactions.removeAll { $0.uid == ix.uid }
+            petInteractions.removeAll { $0.uid == ix.uid }
             forgetSeen(ix.uid)
             WKInterfaceDevice.current().play(.directionDown)
         } catch {

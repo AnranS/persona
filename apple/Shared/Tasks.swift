@@ -923,6 +923,12 @@ nonisolated enum WatchInteractions {
         interactions.filter { !$0.muted && !$0.isDelegating && $0.answerableHere }
     }
 
+    /// Cards passed to `WatchPet.status`: keeps the wrist's visible cards alongside supervisor-held cards so
+    /// `WatchPet.status` still sees which `needs_you` sessions are held only by their supervisor.
+    static func forPet(_ interactions: [Interaction]) -> [Interaction] {
+        interactions.filter { $0.supervisorHeld || (!$0.muted && !$0.isDelegating) }
+    }
+
     /// The cards the watch has not shown yet: only these are worth a buzz. Called after the muted ones are out, so a
     /// muted card arriving never plays the notification sound.
     static func newOnes(in interactions: [Interaction], alreadyShown: [Interaction]) -> [Interaction] {
