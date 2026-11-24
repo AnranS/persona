@@ -723,7 +723,6 @@ fun PersonaModelPill(
                     onPagePick(pick); onEffort?.invoke(effort)
                 }
             }
-            Unit
         } },
         onReload = { readModels(it, again = true) },
         onConfigure = onConfigure,

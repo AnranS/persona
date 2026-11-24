@@ -217,6 +217,14 @@ class PersonaModelPanelTest {
         assertFalse(PersonaModelPanel.switchNeeded(runtimeSession, AgentLauncher("other", source = "runtime-one"), "claude"))
         assertTrue(PersonaModelPanel.switchNeeded(runtimeSession, AgentLauncher("other", source = "runtime-two"), "claude"))
         assertTrue(PersonaModelPanel.switchNeeded(runtimeSession, AgentLauncher("team", source = "zshrc"), "claude"))
+
+        // Codex threads identified via source_kind without an explicit agent field still require switching to Claude.
+        val codexAppSession = chat.copy(launcher = "codex", agent = null, sourceKind = "codex_app_server")
+        assertTrue(PersonaModelPanel.switchNeeded(codexAppSession, AgentLauncher("claude", agentType = "claude", source = "builtin"), "claude"))
+        assertFalse(PersonaModelPanel.switchNeeded(codexAppSession, AgentLauncher("codex-work", agentType = "codex", source = "path"), "codex"))
+        // Engine aliases ("claude-code", "codex-cli") normalize identically to their canonical engine IDs.
+        val aliasedClaude = chat.copy(launcher = "claude", agent = "claude-code")
+        assertFalse(PersonaModelPanel.switchNeeded(aliasedClaude, AgentLauncher("team", agentType = "claude", source = "zshrc"), "claude"))
     }
 
     @Test fun switchingCapabilityEnablesOtherEnginesAndSupervisionFiltersIneligibleConnections() {

@@ -54,6 +54,21 @@ object PersonaModelPanel {
         return chat.pagePick?.takeIf { it.launcher.isNotEmpty() }
     }
 
+    private val engineAliases = mapOf(
+        "claudecode" to "claude",
+        "codexcli" to "codex",
+        "geminicli" to "gemini",
+        "cursoragent" to "cursor",
+        "piweb" to "pi",
+        "traecli" to "trae",
+    )
+
+    private fun canonicalEngine(raw: String?): String {
+        val id = AgentModelPanel.engineId(raw)
+        val key = id.filter { !it.isWhitespace() && it != '.' && it != '_' && it != '-' }
+        return engineAliases[key] ?: id
+    }
+
     private fun isNativeSource(source: String?): Boolean =
         source.isNullOrEmpty() || source == "zshrc" || source == "path" || source == "builtin" ||
             ProtocolCompatibility.managedProvider(source)
@@ -64,7 +79,7 @@ object PersonaModelPanel {
      */
     fun switchNeeded(session: Session, target: AgentLauncher, engine: String): Boolean {
         if (session.launcher == target.name) return false
-        if (AgentModelPanel.engineId(session.agent) != AgentModelPanel.engineId(engine)) return true
+        if (canonicalEngine(AgentModelPanel.engine(session)) != canonicalEngine(engine)) return true
         if (session.launcher?.startsWith("persona_ext_") == true || target.name.startsWith("persona_ext_")) return true
         val runtimeTarget = !isNativeSource(target.source)
         if (session.sourceKind == "runtime") return !runtimeTarget || session.sourceInstanceId != target.source
@@ -75,7 +90,7 @@ object PersonaModelPanel {
     fun launcherSupervisionPolicy(target: AgentLauncher): Boolean {
         if (target.name.isEmpty() || target.name.startsWith("persona_ext_")) return false
         val native = isNativeSource(target.source)
-        val agent = AgentModelPanel.engineId(target.agentType)
+        val agent = canonicalEngine(target.agentType)
         if (native && (agent == "claude" || agent == "codex")) return true
         return target.assistant && target.supervisionPolicy
     }
@@ -119,7 +134,7 @@ object PersonaModelPanel {
             ?: return false
         val configuredAgent = engineOf(configured)
         val actualAgent = AgentModelPanel.engine(s)
-        return configuredAgent != actualAgent || switchNeeded(s, configured, configuredAgent)
+        return canonicalEngine(configuredAgent) != canonicalEngine(actualAgent) || switchNeeded(s, configured, configuredAgent)
     }
 
     /** The setup the chat's next message runs on, as the hub decides it (assistant/start.go `sendModel`). */
@@ -140,7 +155,7 @@ object PersonaModelPanel {
         return Setup(own ?: chat.config?.takeIf(String::isNotEmpty) ?: "claude", if (own != null) s.model else null, s.effort, Source.Own)
     }
 
-    private fun engineOf(l: AgentLauncher) = AgentModelPanel.launcherEngine(l.name, l.agentType)
+    private fun engineOf(l: AgentLauncher) = canonicalEngine(AgentModelPanel.launcherEngine(l.name, l.agentType))
 
     private fun panelModel(m: AgentModel, engine: String) = PanelModel(
         id = m.id, name = m.label, description = m.description?.takeIf(String::isNotBlank), resolved = m.resolved?.takeIf(String::isNotBlank),
@@ -165,7 +180,7 @@ object PersonaModelPanel {
         switching: Boolean = false,
         supervision: Boolean = false,
     ): PanelData {
-        val runs = AgentModelPanel.engineId(engine)
+        val runs = canonicalEngine(engine)
         val launchers = info?.launchers.orEmpty()
         val providers = launchers.map { l ->
             val kind = engineOf(l)
