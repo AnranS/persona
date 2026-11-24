@@ -74,7 +74,7 @@ const rememberHubModules = (features: readonly string[]) => {
 /** The typed chat slots a module may fill (#13430 `composer_actions`, `chat_accessories`), each drawn by the chat page
  *  where the comment on ChatSlotComponents says. */
 export type ChatSlot = "composer.trailingAction" | "chat.tail" | "chat.bar" | "interaction.asked";
-export const CHAT_SLOTS: readonly ChatSlot[] = ["composer.trailingAction", "chat.tail", "chat.bar", "interaction.asked"];
+export const CHAT_SLOTS: readonly ChatSlot[] = "composer.trailingAction chat.tail chat.bar interaction.asked".split(" ") as ChatSlot[];
 
 /** What a chat page hands every chat slot: which conversation it shows, and what of it a slot may read or do. */
 export interface ChatPageProps {
@@ -327,16 +327,14 @@ const MODULE_ID = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 export const MODULE_API = 1;
 
 /** The pending-card kinds the core draws itself (views/chat/Interactions.tsx InteractionCard): no module renders them. */
-export const CORE_CARD_KINDS: ReadonlySet<string> = new Set(["question", "plan", "permission", "screen", "elicitation"]);
+export const CORE_CARD_KINDS: ReadonlySet<string> = new Set("question plan permission screen elicitation".split(" "));
 
 
 /** The first segments of the core's own addresses (lib/router.ts parse, and what the hub serves beside the app): a
  *  module's base may not be one. lib/router.test.ts keeps it in step with parse. */
-export const CORE_PATHS: ReadonlySet<string> = new Set([
-  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox", "messages",
-  "starred", "routines", "kb", "space", "machines", "terminal", "a", "agents", "compare", "settings", "subscriptions",
-  "extension", "plugin", "todos", "api", "login", "screen", "share", "admin", "assets",
-]);
+export const CORE_PATHS: ReadonlySet<string> = new Set(
+  "s t persona j workspace-board requests overview history tracks assistant inbox messages starred routines kb space machines terminal a agents compare settings subscriptions extension plugin todos api login screen share admin assets".split(" "),
+);
 
 const routePaths = (r: ModuleRoute): (readonly string[])[] => [[r.base], ...(r.aliases ?? [])];
 /** Whether two paths would route the same address: one is a prefix of the other. */
@@ -357,7 +355,12 @@ export function registerModule(d: ModuleDescriptor): void {
   const fail = (msg: string): never => {
     throw new Error(`module "${d.id}" ${msg}`);
   };
-  const takenBy = (has: (m: ModuleDescriptor) => boolean | undefined) => [...registry.values()].find(has);
+  const checkUnique = (items: readonly string[] | undefined, what: string, of: (m: ModuleDescriptor) => readonly string[] | undefined) => {
+    for (const x of items ?? []) {
+      const other = [...registry.values()].find((m) => of(m)?.includes(x));
+      if (other) fail(`${what} "${x}", which "${other.id}" has`);
+    }
+  };
   if (!MODULE_ID.test(d.id)) throw new Error(`module id "${d.id}" is not lower-case and hyphenated`);
   if (registry.has(d.id)) fail("is registered twice");
   if ((d.api ?? MODULE_API) !== MODULE_API) fail(`is written for module API ${d.api}; this shell serves ${MODULE_API}`);
@@ -370,9 +373,8 @@ export function registerModule(d: ModuleDescriptor): void {
   }
   for (const kind of d.cardRenderers ?? []) {
     if (CORE_CARD_KINDS.has(kind)) fail(`renders the card kind "${kind}", which the core draws`);
-    const other = takenBy((m) => m.cardRenderers?.includes(kind));
-    if (other) fail(`renders the card kind "${kind}", which "${other.id}" has`);
   }
+  checkUnique(d.cardRenderers, "renders the card kind", (m) => m.cardRenderers);
   for (const r of d.routes ?? []) {
     for (const path of routePaths(r)) {
       if (path.length === 1 && CORE_PATHS.has(path[0]!)) fail(`claims /${path[0]}, a core address`);
@@ -385,13 +387,9 @@ export function registerModule(d: ModuleDescriptor): void {
   }
   for (const id of d.extensionPages ?? []) {
     if (!/^-[a-z][a-z0-9-]*$/.test(id)) fail(`claims the extension page id "${id}", which is not a reserved one (it must start with "-")`);
-    const other = takenBy((m) => m.extensionPages?.includes(id));
-    if (other) fail(`claims the extension page id "${id}", which "${other.id}" has`);
   }
-  for (const kind of d.kbKinds ?? []) {
-    const other = takenBy((m) => m.kbKinds?.includes(kind));
-    if (other) fail(`claims the knowledge kind "${kind}", which "${other.id}" has`);
-  }
+  checkUnique(d.extensionPages, "claims the extension page id", (m) => m.extensionPages);
+  checkUnique(d.kbKinds, "claims the knowledge kind", (m) => m.kbKinds);
   registry.set(d.id, d);
   changed();
 }
@@ -513,10 +511,12 @@ const loaded = new Map<string, ModuleCode>();
 
 /** What `code` must fill for `d`: every chat slot, Settings category and card kind the descriptor names. */
 function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
+  const miss = (keys: readonly string[] | undefined, have: Readonly<Record<string, unknown>> | undefined, what: string) =>
+    (keys ?? []).filter((x) => !have?.[x]).map((x) => `the ${what} "${x}"`);
   const missing = [
-    ...(d.chatSlots ?? []).filter((x) => !code.chat?.[x]).map((x) => `the chat slot "${x}"`),
-    ...(d.settingsTabs ?? []).filter((x) => !code.settings?.[x.key]).map((x) => `the Settings category "${x.key}"`),
-    ...(d.cardRenderers ?? []).filter((x) => !code.cards?.[x]).map((x) => `the card kind "${x}"`),
+    ...miss(d.chatSlots, code.chat as Readonly<Record<string, unknown>> | undefined, "chat slot"),
+    ...miss(d.settingsTabs?.map((x) => x.key), code.settings, "Settings category"),
+    ...miss(d.cardRenderers, code.cards, "card kind"),
     ...(d.kbKinds?.length && !code.KBDetail ? [`the knowledge kind "${d.kbKinds[0]}"`] : []),
   ];
   if (missing.length) throw new Error(`module "${d.id}" names ${missing.join(", ")}, which its code does not draw`);
