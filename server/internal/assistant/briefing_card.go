@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
+
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/modapi"
 )
@@ -25,7 +26,7 @@ const (
 type briefBlock struct {
 	md    string
 	plain string
-	btn   feishubot.Button
+	btn   botcard.Button
 	todo  string // the task a button accepts
 }
 
@@ -33,17 +34,17 @@ type briefBlock struct {
 // the sections, each row as on the standing board. Production passes it through splitBriefAnswerCards, which enforces
 // Feishu's physical budgets with continuations. Optional rows that do not fit are counted ("and N more"); required
 // owner waits are never folded by the renderer. shown are the tasks whose Accept buttons are on the logical card.
-func (s *Service) briefCard(f *briefFacts, label, answer string) (card *feishubot.Card, fallback string, shown []string) {
+func (s *Service) briefCard(f *briefFacts, label, answer string) (card *botcard.Card, fallback string, shown []string) {
 	return s.briefCardWithHeader(f, label, answer, "")
 }
 
 // briefCardWithHeader is briefCard with a fixed first line in place of the usual routine title. The model-failure
 // fallback uses it: both the Feishu title and the plain-text body's first line say the model was unavailable.
-func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header string) (card *feishubot.Card, fallback string, shown []string) {
+func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header string) (card *botcard.Card, fallback string, shown []string) {
 	l := i18n.Lang(f.Lang)
-	color := feishubot.Blue
+	color := botcard.Blue
 	if len(f.Waiting) > 0 {
-		color = feishubot.Orange
+		color = botcard.Orange
 	}
 	title, subtitle := label, briefCountsIn(f, l)
 	plain := []string{label}
@@ -51,11 +52,11 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 		title, subtitle = header, label
 		plain = []string{header, label}
 	}
-	c := feishubot.NewCard(title, color, subtitle)
+	c := botcard.NewCard(title, color, subtitle)
 	if answer = strings.TrimSpace(answer); answer != "" {
 		// Charts become text first, as the bot's answers do (feishu_answer.go): clipMarkdown drops a persona-card block
 		// it cannot draw down to its title, so a chart on a long answer would lose its numbers.
-		c.Markdown(feishubot.CardMarkdown(clipMarkdown(feishubot.PersonaCards(answer), briefAnswerRunes)))
+		c.Markdown(botcard.CardMarkdown(clipMarkdown(botcard.PersonaCards(answer), briefAnswerRunes)))
 		plain = append(plain, clip(answer, briefAnswerRunes))
 		if len([]rune(answer)) > briefAnswerRunes {
 			c.Note(i18n.T(l, "assistant-briefing.answer_clipped"))
@@ -66,7 +67,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 	// The north star first: the report opens with it (north_star.go).
 	var star []briefBlock
 	for _, line := range f.NorthStarLines {
-		star = append(star, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+		star = append(star, briefBlock{md: botcard.EscapeMarkdown(line), plain: line})
 	}
 	if len(star) > 0 {
 		room.section(c, &plain, l, i18n.T(l, "assistant-north_star.heading"), star, len(star))
@@ -74,9 +75,9 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 
 	var confirmations []briefBlock
 	confSummary := briefConfirmationsSummary(l, f.Confirmations)
-	confirmations = append(confirmations, briefBlock{md: feishubot.EscapeMarkdown(confSummary), plain: confSummary})
+	confirmations = append(confirmations, briefBlock{md: botcard.EscapeMarkdown(confSummary), plain: confSummary})
 	for _, line := range f.ConfirmationLines {
-		confirmations = append(confirmations, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+		confirmations = append(confirmations, briefBlock{md: botcard.EscapeMarkdown(line), plain: line})
 	}
 	room.section(c, &plain, l, i18n.T(l, "assistant-confirmations.heading"), confirmations, len(confirmations))
 
@@ -86,7 +87,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 		waiting = append(waiting, briefBlock{md: boardRowMarkdown(l, i+1, fromBriefBoardRow(r)), plain: boardRowPlain(l, i+1, r)})
 	}
 	if f.WaitingUnknown { // the cards waiting were not read yet: it does not say that none waits
-		line := feishubot.EscapeMarkdown(i18n.T(l, "assistant-briefing.waiting_unknown"))
+		line := botcard.EscapeMarkdown(i18n.T(l, "assistant-briefing.waiting_unknown"))
 		c.Markdown(line)
 		plain = append(plain, line)
 	} else {
@@ -111,7 +112,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 		line := func(esc func(string) string) string {
 			return i18n.T(l, "assistant-briefing.done_line", i18n.Args{"title": esc(clip(oneLine(d.Title), 60)), "time": briefClock(f, d.At)})
 		}
-		past = append(past, briefBlock{md: line(feishubot.EscapeMarkdown) + briefLink(l, todoLink(f.Web, d.ID)), plain: line(func(s string) string { return s })})
+		past = append(past, briefBlock{md: line(botcard.EscapeMarkdown) + briefLink(l, todoLink(f.Web, d.ID)), plain: line(func(s string) string { return s })})
 	}
 	pastHead := i18n.T(l, "assistant-briefing.head_past", i18n.Args{"hours": int(briefWindow / time.Hour), "done": f.DoneTotal, "failed": f.FailedTotal})
 	room.section(c, &plain, l, pastHead, past, f.DoneTotal+f.FailedTotal)
@@ -123,13 +124,13 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 		btnLabel := i18n.T(l, "assistant-reports.accept_pass")
 		a, asked := f.Asks[r.ID]
 		if asked && !a.Conclusion { // a conclusion's row says its verdict already (boardRows); deployed work's says it here (#1226)
-			md += "\n" + feishubot.EscapeMarkdown(a.Verdict)
+			md += "\n" + botcard.EscapeMarkdown(a.Verdict)
 		}
 		if ch := f.Changed[r.ID]; ch != "" {
-			md += "\n" + feishubot.EscapeMarkdown(clip(oneLine(ch), 80))
+			md += "\n" + botcard.EscapeMarkdown(clip(oneLine(ch), 80))
 		}
 		if rec := a.RecommendText; asked && rec != "" {
-			md += "\n" + feishubot.EscapeMarkdown(rec)
+			md += "\n" + botcard.EscapeMarkdown(rec)
 			btnLabel = i18n.T(l, "assistant-reports.verdict_take")
 		} else if asked && a.Decide {
 			// Nothing recommended: there is nothing for a button to take, the owner answers its card.
@@ -138,7 +139,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 		} else if asked && a.Conclusion {
 			btnLabel = i18n.T(l, "assistant-reports.verdict_ack")
 		}
-		btn := feishubot.Btn(btnLabel, feishubot.Primary,
+		btn := botcard.Btn(btnLabel, botcard.Primary,
 			map[string]any{"a": "accept", "id": r.ID, "asked_at": r.Asked.UTC().Format(timeKeyLayout)})
 		accept = append(accept, briefBlock{md: md, plain: boardRowPlain(l, i+1, r), btn: btn, todo: r.ID})
 	}
@@ -148,7 +149,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 	if f.LaterTotal > 0 {
 		var later []briefBlock
 		for i, r := range f.Later {
-			btn := feishubot.Btn(i18n.T(l, "assistant-briefing.later_done"), feishubot.Default, map[string]any{"a": "later_done", "id": r.ID})
+			btn := botcard.Btn(i18n.T(l, "assistant-briefing.later_done"), botcard.Default, map[string]any{"a": "later_done", "id": r.ID})
 			later = append(later, briefBlock{md: boardRowMarkdown(l, i+1, fromBriefBoardRow(r)), plain: boardRowPlain(l, i+1, r), btn: btn})
 		}
 		room.section(c, &plain, l, i18n.T(l, "assistant-briefing.head_later", i18n.Args{"n": f.LaterTotal}), later, f.LaterTotal)
@@ -162,7 +163,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 			if p.StageKind != "general" {
 				stage = stageBar(l, p.Stage, false) // open work: never done
 			}
-			md := fmt.Sprintf("**%d** %s\n%s", i+1, feishubot.EscapeMarkdown(clip(oneLine(p.Title), 60)), stage+briefLink(l, todoLink(f.Web, p.ID)))
+			md := fmt.Sprintf("**%d** %s\n%s", i+1, botcard.EscapeMarkdown(clip(oneLine(p.Title), 60)), stage+briefLink(l, todoLink(f.Web, p.ID)))
 			working = append(working, briefBlock{md: md, plain: fmt.Sprintf("%d. %s", i+1, clip(oneLine(p.Title), 60))})
 		}
 		room.section(c, &plain, l, i18n.T(l, "assistant-briefing.head_progress", i18n.Args{"n": f.ProgressTotal}), working, f.ProgressTotal)
@@ -172,7 +173,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 	if len(f.Captures) > 0 {
 		var captures []briefBlock
 		for _, line := range f.Captures {
-			captures = append(captures, briefBlock{md: feishubot.EscapeMarkdown(line), plain: line})
+			captures = append(captures, briefBlock{md: botcard.EscapeMarkdown(line), plain: line})
 		}
 		room.section(c, &plain, l, i18n.T(l, "assistant-captures.heading"), captures, len(captures))
 	}
@@ -181,9 +182,9 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 	// mechanism would have removed, its cost and where it is turned on. Nothing is turned on from here.
 	if f.Setup != nil && len(f.Setup.Suggestions) > 0 {
 		intro := i18n.T(l, "assistant-setup_suggest.intro")
-		setup := []briefBlock{{md: feishubot.EscapeMarkdown(intro), plain: intro}}
+		setup := []briefBlock{{md: botcard.EscapeMarkdown(intro), plain: intro}}
 		for _, sg := range f.Setup.Suggestions {
-			setup = append(setup, briefBlock{md: feishubot.EscapeMarkdown(sg.Text) + briefLink(l, sg.Link), plain: sg.Text})
+			setup = append(setup, briefBlock{md: botcard.EscapeMarkdown(sg.Text) + briefLink(l, sg.Link), plain: sg.Text})
 		}
 		room.section(c, &plain, l, i18n.T(l, "assistant-setup_suggest.heading"), setup, len(setup))
 	}
@@ -199,14 +200,14 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 // unchanged when it fits. Otherwise Markdown is split only at line boundaries (or inside one exceptionally long line),
 // then elements are packed in their original order; no required row is replaced by an overflow count. plain remains the
 // complete phone notification, while each rich card gets only its own text as its plain-text substitute.
-func splitBriefAnswerCards(card *feishubot.Card, plain, title string) []botAnswerCard {
-	fits := func(c *feishubot.Card) bool {
+func splitBriefAnswerCards(card *botcard.Card, plain, title string) []botAnswerCard {
+	fits := func(c *botcard.Card) bool {
 		return len(c.JSON()) <= reportCardMaxBytes && len(c.Body.Elements) <= reportCardMaxElements
 	}
 	if fits(card) {
 		return []botAnswerCard{{card: card, fallback: plain}}
 	}
-	empty := func() *feishubot.Card {
+	empty := func() *botcard.Card {
 		c := *card // header and config are immutable here; each continuation gets its own element slice
 		c.Body.Elements = nil
 		return &c
@@ -217,7 +218,7 @@ func splitBriefAnswerCards(card *feishubot.Card, plain, title string) []botAnswe
 		c.Markdown(s)
 		return fits(c)
 	}
-	var cards []*feishubot.Card
+	var cards []*botcard.Card
 	cur := empty()
 	flush := func() {
 		if len(cur.Body.Elements) == 0 {
@@ -279,7 +280,7 @@ func splitBriefAnswerCards(card *feishubot.Card, plain, title string) []botAnswe
 
 // briefCardElementText is used only when a rich continuation itself is refused. Keeping its Markdown markers and links
 // is preferable to repeating the whole briefing under every continuation or dropping that continuation's fixed rows.
-func briefCardElementText(c *feishubot.Card, title string) string {
+func briefCardElementText(c *botcard.Card, title string) string {
 	lines := []string{title}
 	for _, el := range c.Body.Elements {
 		m, ok := el.(map[string]any)
@@ -304,7 +305,7 @@ func briefCardElementText(c *feishubot.Card, title string) string {
 
 // briefFixedDirections writes every collected direction wait. Folding is data, decided by foldBriefDirection, not a
 // side effect of the card's remaining byte budget: in particular no owner row can disappear here.
-func briefFixedDirections(c *feishubot.Card, plain *[]string, room *briefBudget, f *briefFacts) {
+func briefFixedDirections(c *botcard.Card, plain *[]string, room *briefBudget, f *briefFacts) {
 	if len(f.Directions) == 0 {
 		return
 	}
@@ -312,16 +313,16 @@ func briefFixedDirections(c *feishubot.Card, plain *[]string, room *briefBudget,
 	head := i18n.T(l, "assistant-briefing.head_directions")
 	*plain = append(*plain, head)
 	var body strings.Builder
-	body.WriteString("**" + feishubot.EscapeMarkdown(head) + "**")
+	body.WriteString("**" + botcard.EscapeMarkdown(head) + "**")
 	for _, d := range f.Directions {
 		line := i18n.T(l, "assistant-briefing.direction_head", i18n.Args{"name": d.Name, "open": d.Open, "active": d.Active, "undispatched": d.Undispatched})
-		body.WriteString("\n\n**" + feishubot.EscapeMarkdown(line) + "**")
+		body.WriteString("\n\n**" + botcard.EscapeMarkdown(line) + "**")
 		if d.Link != "" {
 			body.WriteString(briefLink(l, d.Link))
 		}
 		*plain = append(*plain, line)
 		for _, w := range d.Waits {
-			body.WriteString("\n" + feishubot.EscapeMarkdown(w.Line) + briefLink(l, w.Link))
+			body.WriteString("\n" + botcard.EscapeMarkdown(w.Line) + briefLink(l, w.Link))
 			row := w.Line
 			if boardLinkOK(w.Link) {
 				row += " · " + w.Link
@@ -330,7 +331,7 @@ func briefFixedDirections(c *feishubot.Card, plain *[]string, room *briefBudget,
 		}
 		if d.More > 0 {
 			more := i18n.T(l, "assistant-briefing.direction_more", i18n.Args{"n": d.More})
-			body.WriteString("\n" + feishubot.EscapeMarkdown(more) + briefLink(l, d.Link))
+			body.WriteString("\n" + botcard.EscapeMarkdown(more) + briefLink(l, d.Link))
 			*plain = append(*plain, more)
 		}
 	}
@@ -339,7 +340,7 @@ func briefFixedDirections(c *feishubot.Card, plain *[]string, room *briefBudget,
 	room.bytes, room.els = room.bytes-mdCost(text), room.els-1
 }
 
-func briefFixedDisabled(c *feishubot.Card, plain *[]string, room *briefBudget, f *briefFacts) {
+func briefFixedDisabled(c *botcard.Card, plain *[]string, room *briefBudget, f *briefFacts) {
 	if len(f.DisabledRoutines) == 0 {
 		return
 	}
@@ -347,9 +348,9 @@ func briefFixedDisabled(c *feishubot.Card, plain *[]string, room *briefBudget, f
 	head := i18n.T(l, "assistant-briefing.head_disabled")
 	*plain = append(*plain, head)
 	var body strings.Builder
-	body.WriteString("**" + feishubot.EscapeMarkdown(head) + "**")
+	body.WriteString("**" + botcard.EscapeMarkdown(head) + "**")
 	for _, r := range f.DisabledRoutines {
-		body.WriteString("\n\n" + feishubot.EscapeMarkdown(r.Line) + briefLink(l, r.Link))
+		body.WriteString("\n\n" + botcard.EscapeMarkdown(r.Line) + briefLink(l, r.Link))
 		*plain = append(*plain, r.Line)
 	}
 	text := body.String()
@@ -367,11 +368,11 @@ type briefBudget struct{ bytes, els int }
 // one per block; the blocks that do not fit, and those beyond briefRowsMax, are counted in an "and N more" line. total is
 // how many rows the section stands for (its blocks may be fewer: the lists are cut before). It returns the todos of the
 // blocks with buttons that were added.
-func (b *briefBudget) section(c *feishubot.Card, plain *[]string, l i18n.Lang, head string, blocks []briefBlock, total int) (shown []string) {
-	head = "**" + feishubot.EscapeMarkdown(head) + "**"
+func (b *briefBudget) section(c *botcard.Card, plain *[]string, l i18n.Lang, head string, blocks []briefBlock, total int) (shown []string) {
+	head = "**" + botcard.EscapeMarkdown(head) + "**"
 	*plain = append(*plain, head)
 	if total == 0 {
-		line := head + "\n" + feishubot.EscapeMarkdown(i18n.T(l, "assistant-briefing.none"))
+		line := head + "\n" + botcard.EscapeMarkdown(i18n.T(l, "assistant-briefing.none"))
 		if n := mdCost(line); n <= b.bytes && b.els >= 1 {
 			c.Markdown(line)
 			b.bytes, b.els = b.bytes-n, b.els-1
@@ -402,7 +403,7 @@ func (b *briefBudget) section(c *feishubot.Card, plain *[]string, l i18n.Lang, h
 			c.Markdown(bl.md)
 			b.bytes, b.els = b.bytes-n, b.els-1
 		} else if hasButtons {
-			n := feishuElBytes(func(x *feishubot.Card) { x.Markdown(bl.md).Buttons(bl.btn) })
+			n := feishuElBytes(func(x *botcard.Card) { x.Markdown(bl.md).Buttons(bl.btn) })
 			if n > b.bytes || b.els < 2 {
 				break
 			}
@@ -425,7 +426,7 @@ func (b *briefBudget) section(c *feishubot.Card, plain *[]string, l i18n.Lang, h
 		b.els--
 	}
 	if more := total - added; more > 0 {
-		line := feishubot.EscapeMarkdown(i18n.T(l, "assistant-feishu_cards.board_more", i18n.Args{"count": more}))
+		line := botcard.EscapeMarkdown(i18n.T(l, "assistant-feishu_cards.board_more", i18n.Args{"count": more}))
 		*plain = append(*plain, line)
 		c.Markdown(line) // its room is the tail's
 	}
@@ -459,7 +460,7 @@ func briefConfirmationsSummary(l i18n.Lang, c modapi.BriefConfirmations) string 
 func briefFailedLine(f *briefFacts, x modapi.BriefFailure, md bool) string {
 	esc := func(s string) string { return s }
 	if md {
-		esc = feishubot.EscapeMarkdown
+		esc = botcard.EscapeMarkdown
 	}
 	key := "failed_task"
 	switch {
