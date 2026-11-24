@@ -1,5 +1,5 @@
-// Writing this browser's module switch (Settings › Labs › Features, core/module-labs.ts): loaded with Labs rather than
-// on the first screen, which only reads and subscribes to the switch (core/module-switch.ts).
+// Writing this browser's module switch (Settings › General › Optional features, core/module-features.ts): loaded with
+// Settings rather than on the first screen, which only reads and subscribes to the switch (core/module-switch.ts).
 import { forgetModuleSwitches, MODULE_SWITCH_KEY, moduleSwitchedOff, readModuleSwitches } from "./module-switch";
 
 /** Switches a module on or off here; false when the browser does not keep it. */
