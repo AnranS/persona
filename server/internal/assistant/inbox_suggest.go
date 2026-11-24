@@ -150,11 +150,14 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	lookup := func() (*InboxItem, *SessionRef, bool, error) {
 		if item != "" {
 			got, ref, err := b.handedItem(item, sessionID)
-			return got, ref, err != nil && b.itemAgentStarting(item), err
+			// While the item's own agent is still starting (SessionID not yet recorded), both a lookup error and a
+			// hand-off match are provisional: once Agent.SessionID is populated, handedItem gives the item's own
+			// processing conversation precedence over any recorded hand-off to the same session.
+			return got, ref, sessionID != "" && (err != nil || ref != nil) && b.itemAgentStarting(item), err
 		}
 		got := b.itemOfAgent(sessionID)
 		if got == nil {
-			return nil, nil, b.agentStarting(), errNotProcessing
+			return nil, nil, sessionID != "" && b.agentStarting(), errNotProcessing
 		}
 		return got, nil, false, nil
 	}
@@ -164,8 +167,13 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	// A conversation that answers before its start returned (an agent runtime already running starts a turn at
 	// once): its item learns the conversation's id a moment later.
 	for wait := time.Now().Add(inboxDraftWait); waitMore && time.Now().Before(wait); {
+		hook := b.waitHook
 		b.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
+		if hook != nil {
+			hook()
+		} else {
+			time.Sleep(100 * time.Millisecond)
+		}
 		b.mu.Lock()
 		it, from, waitMore, err = lookup()
 	}
