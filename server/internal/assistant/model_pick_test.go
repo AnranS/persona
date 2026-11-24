@@ -676,6 +676,51 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 			t.Fatalf("kept: %v", picks)
 		}
 	})
+	t.Run("pinning the displayed default model holds across later config changes (#13567)", func(t *testing.T) {
+		s, f := pickFixture(t)
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "opus", Effort: "high"})
+		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"claude","model":"opus","effort":"high"}`)
+		want := proto.ModelPick{Launcher: "claude", Model: "opus", Effort: "high"}
+		if code != 200 || got["pick"] != want {
+			t.Fatalf("%d %v", code, got)
+		}
+		if p := f.lastSend(t); p["launcher"] != "claude" || p["model"] != "opus" || p["effort"] != "high" {
+			t.Fatalf("first message: %v", p)
+		}
+		// Changing global Model configuration does not override the pinned conversation pick on turn 2.
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.gw", Model: "fable"})
+		sid := got["sid"].(string)
+		f.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Launcher: "claude"})
+		if p, err := send(t, s, sid, map[string]any{}); err != nil || p["launcher"] != "claude" || p["model"] != "opus" || p["effort"] != "high" {
+			t.Fatalf("turn 2: %v %v", p, err)
+		}
+	})
+}
+
+// An unreadable persisted model-pick book stops delivery with an actionable error rather than falling back to the
+// global default for ordinary conversations (#13567).
+func TestSendRefusesWhenModelPickBookCannotBeRead(t *testing.T) {
+	s, f := pickFixture(t)
+	orig := s.store()
+	s.store = func() Store { return unreadablePickStore{Store: orig} }
+	s.modelPicks = modelPickBook{}
+	f.setSessions("server", proto.Session{SessionID: "main", Assistant: true, Launcher: "claude"})
+	_, err := send(t, s, "main", map[string]any{})
+	if err == nil {
+		t.Fatal("expected unreadable model picks to stop delivery")
+	}
+	if !strings.Contains(err.Error(), "couldn’t be read") && !strings.Contains(err.Error(), "读不到") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+type unreadablePickStore struct{ Store }
+
+func (u unreadablePickStore) Setting(ctx context.Context, key string, dst any) (bool, error) {
+	if key == modelPicksKey {
+		return false, errors.New("db unavailable")
+	}
+	return u.Store.Setting(ctx, key, dst)
 }
 
 // The hub's own messages to a conversation (supervision, notices, another conversation's) run on its pick like the

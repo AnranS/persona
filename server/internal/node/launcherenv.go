@@ -2,12 +2,14 @@ package node
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -384,6 +386,13 @@ func planTier(m string) string {
 	return m
 }
 
+// isDefaultAlias reports whether m is an explicit follow-default alias ("default" or "inherit", with or without "[1m]")
+// rather than a named model tier.
+func isDefaultAlias(m string) bool {
+	base := strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))
+	return base == "default" || base == "inherit"
+}
+
 // claudeModelArg is providerModelArg for launcher by name: the --model every claude start passes (an assistant
 // conversation, a terminal Agent, a check, a typed /model). A launcher Persona does not manage (plain claude, a shell
 // launcher) keeps model as it is: its own environment resolves the alias.
@@ -392,6 +401,22 @@ func (n *Node) claudeModelArg(launcher, model string) string {
 		return providerModelArg(l, model)
 	}
 	return model
+}
+
+// resolveClaudeModelArg translates an explicit model choice into the --model flag for launcher. Empty and explicit
+// default aliases intentionally follow the launcher's default. An explicit named tier that a gateway provider cannot
+// translate stops delivery with an actionable refusal instead of silently falling back to an empty model flag.
+func (n *Node) resolveClaudeModelArg(ctx context.Context, launcher, model string) (string, error) {
+	if model == "" {
+		return "", nil
+	}
+	resolved := n.claudeModelArg(launcher, model)
+	if resolved != "" || isDefaultAlias(model) {
+		return resolved, nil
+	}
+	return "", refusal("assistant_model_unresolved",
+		i18n.T(i18n.From(ctx), "rpc-errors.assistant_model_unresolved", i18n.Args{"model": model, "launcher": launcher}),
+		map[string]any{"model": model, "launcher": launcher, "retryable": false})
 }
 
 // outputTokens is CLAUDE_CODE_MAX_OUTPUT_TOKENS for a process with env's models (#8798), limit giving what a model

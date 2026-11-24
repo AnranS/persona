@@ -661,3 +661,22 @@ func TestSupervisionRefusalsSpeakTheClientsLanguage(t *testing.T) {
 		}
 	}
 }
+
+func TestUnresolvedModelRefusalSpeaksTheClientsLanguage(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		rec := httptest.NewRecorder()
+		data := json.RawMessage(`{"delivered":"none","retryable":false,"launcher":"gw","model":"opus"}`)
+		body := call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "assistant_model_unresolved", Message: "native diagnostic", Data: data})
+		want := i18n.T(lang, "rpc-errors.assistant_model_unresolved", i18n.Args{"launcher": "gw", "model": "opus"})
+		if rec.Code != http.StatusConflict || body["code"] != "assistant_model_unresolved" || body["error"] != want ||
+			body["delivered"] != "none" || body["retryable"] != false || body["detail"] != nil {
+			t.Fatalf("%s: %d %v", lang, rec.Code, body)
+		}
+		// Missing metadata keeps the original message rather than leaking unexpanded placeholders.
+		rec = httptest.NewRecorder()
+		body = call(t, langWriter{rec, lang}, rec, &rpc.Error{Code: "assistant_model_unresolved", Message: "explicit fallback"})
+		if body["error"] != "explicit fallback" || strings.Contains(body["error"].(string), "{") {
+			t.Fatalf("fallback %s: %v", lang, body)
+		}
+	}
+}
