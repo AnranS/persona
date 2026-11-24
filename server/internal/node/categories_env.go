@@ -11,10 +11,11 @@ import (
 // "Assistant"): next to PERSONA_SPACE and PERSONA_TRACK_KIND, the process gets PERSONA_CATEGORIES, a comma-separated
 // sorted list of category names (empty string for general, e.g. PERSONA_CATEGORIES=; "health" in the health space;
 // "emotion,finance" when tagged with both). The manager sends the directory's default categories on assistant.prepare
-// (categories) and an existing conversation's accumulated categories on assistant.send (categories, or
-// categories_unknown when a turn waits to be tagged or the store cannot be read). When the node was not told (an older
-// manager, a directory not prepared since the node started, categories_unknown, or an invalid token), PERSONA_CATEGORIES
-// is left out of the environment so a command takes the categories as unknown (sensitive).
+// (categories) and an existing conversation's accumulated categories on assistant.send, session.send (via SendParams)
+// and assistant.answer_again (categories, or categories_unknown when a turn waits to be tagged, the store cannot be
+// read, or the conversation's track cannot be placed). When the node was not told (an older manager, a directory not
+// prepared since the node started, categories_unknown, or an invalid token), PERSONA_CATEGORIES is left out of the
+// environment so a command takes the categories as unknown (sensitive).
 
 // categoriesEnv is the variable.
 const categoriesEnv = "PERSONA_CATEGORIES"

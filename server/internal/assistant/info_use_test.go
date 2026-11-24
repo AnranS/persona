@@ -263,9 +263,60 @@ func TestPutConversationCategories(t *testing.T) {
 	}
 	st.readErr = nil
 
-	// Unnoted conversation leaves both fields absent so the node keeps its prepared directory state.
+	// Unplaced conversation fails closed with categories_unknown rather than falling back to the directory default.
 	s.putConversationCategories(ctx, "qa-nowhere", p)
-	if p["categories"] != nil || p["categories_unknown"] != nil {
-		t.Fatalf("unnoted conversation: %#v", p)
+	if p["categories"] != nil || p["categories_unknown"] != true {
+		t.Fatalf("unplaced conversation: %#v", p)
+	}
+}
+
+// SendParams attaches manager-attested categories to session.send for assistant conversations (#13246) and strips any
+// client-supplied categories or categories_unknown fields.
+func TestSendParamsAttestsConversationCategories(t *testing.T) {
+	ctx := context.Background()
+	s, f, _ := infoUseService(t)
+	f.sessions["qa-machine"] = []proto.Session{
+		{SessionID: "qa-main", Cwd: "/home/me/.persona/assistant", Assistant: true, Agent: "claude"},
+		{SessionID: "qa-health-1", Cwd: "/home/me/.persona/health", Space: SpaceHealth, Assistant: true, Agent: "claude"},
+	}
+	if err := s.tagConversation(ctx, "qa-main", []string{categoryFinance}, infoTaggedByModel, ""); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.SendParams(ctx, SendParams{
+		MachineID: "qa-machine",
+		SessionID: "qa-main",
+		Params:    map[string]any{"text": "follow up", "categories": []string{}, "categories_unknown": true},
+	})
+	if err != nil {
+		t.Fatalf("SendParams main: %v", err)
+	}
+	if cats, ok := p["categories"].([]string); !ok || !slices.Equal(cats, []string{categoryFinance}) || p["categories_unknown"] != nil {
+		t.Fatalf("SendParams main categories: %#v", p)
+	}
+
+	s.infoTagTurnEnded(ctx, "qa-main")
+	p, err = s.SendParams(ctx, SendParams{
+		MachineID: "qa-machine",
+		SessionID: "qa-main",
+		Params:    map[string]any{"text": "while waiting", "categories": []string{}},
+	})
+	if err != nil {
+		t.Fatalf("SendParams waiting: %v", err)
+	}
+	if p["categories"] != nil || p["categories_unknown"] != true {
+		t.Fatalf("SendParams waiting categories: %#v", p)
+	}
+	s.infoTagWaiting.set("qa-main", false)
+
+	p, err = s.SendParams(ctx, SendParams{
+		MachineID: "qa-machine",
+		SessionID: "qa-health-1",
+		Params:    map[string]any{"text": "health follow up"},
+	})
+	if err != nil {
+		t.Fatalf("SendParams health: %v", err)
+	}
+	if cats, ok := p["categories"].([]string); !ok || !slices.Equal(cats, []string{categoryHealth}) || p["categories_unknown"] != nil {
+		t.Fatalf("SendParams health categories: %#v", p)
 	}
 }

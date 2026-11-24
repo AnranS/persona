@@ -113,4 +113,48 @@ func TestAssistantProcessKnowsItsCategories(t *testing.T) {
 	if !slices.Contains(assistantOnlyEnvNames(), categoriesEnv) {
 		t.Error("an Agent would take PERSONA_CATEGORIES over from the assistant's pane")
 	}
+
+	// Inherited PERSONA_CATEGORIES in the node's own environment is stripped when starting a process or gate script
+	// whose categories are unknown.
+	t.Setenv(categoriesEnv, "")
+	n.setSessionCategories("qa-conv-1", nil, true)
+	stripped := withoutEnv(os.Environ(), []string{categoriesEnv})
+	if val, ok := hasCategoriesEnv(append(stripped, envOf(own, "qa-conv-1")...)); ok {
+		t.Fatalf("inherited %s leaked when unknown: %q", categoriesEnv, val)
+	}
+
+	// session.send for an assistant session also updates its recorded categories before invoking assistantSend.
+	n.state.Sessions["qa-conv-rpc"] = sessionState{Cwd: own}
+	sendParams, _ := json.Marshal(map[string]any{
+		"session_id": "qa-conv-rpc",
+		"text":       "hello",
+		"launcher":   "bad launcher!",
+		"categories": []string{"finance", "emotion"},
+	})
+	_, _ = n.handle(t.Context(), "session.send", sendParams)
+	if val, ok := hasCategoriesEnv(envOf(own, "qa-conv-rpc")); !ok || val != "emotion,finance" {
+		t.Fatalf("session.send categories: ok=%v val=%q, want emotion,finance", ok, val)
+	}
+	unknownParams, _ := json.Marshal(map[string]any{
+		"session_id":         "qa-conv-rpc",
+		"text":               "hello",
+		"launcher":           "bad launcher!",
+		"categories_unknown": true,
+	})
+	_, _ = n.handle(t.Context(), "session.send", unknownParams)
+	if val, ok := hasCategoriesEnv(envOf(own, "qa-conv-rpc")); ok {
+		t.Fatalf("session.send categories_unknown: got %s=%q, want absent", categoriesEnv, val)
+	}
+	// assistant.send updates recorded categories before invoking assistantSend as well.
+	asstSendParams, _ := json.Marshal(map[string]any{
+		"session_id": "qa-conv-rpc",
+		"cwd":        own,
+		"text":       "hello",
+		"launcher":   "bad launcher!",
+		"categories": []string{"legal_id"},
+	})
+	_, _ = n.handle(t.Context(), "assistant.send", asstSendParams)
+	if val, ok := hasCategoriesEnv(envOf(own, "qa-conv-rpc")); !ok || val != "legal_id" {
+		t.Fatalf("assistant.send categories: ok=%v val=%q, want legal_id", ok, val)
+	}
 }

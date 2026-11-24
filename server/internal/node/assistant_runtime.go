@@ -514,7 +514,7 @@ const gateOutputNotice = "\n…（输出太长，后面的没有放进来；用 
 func runGateScript(ctx context.Context, name, script string, args []string, cwd string, env []string) proto.ToolResult {
 	cmd := exec.CommandContext(ctx, "bash", append([]string{script}, args...)...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(withoutEnv(os.Environ(), []string{categoriesEnv}), env...)
 	killGroupOnCancel(cmd)
 	out := &cappedBuffer{max: gateOutputCap}
 	cmd.Stdout, cmd.Stderr = out, out // the same comparable writer: exec calls it from one goroutine at a time

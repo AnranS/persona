@@ -1373,6 +1373,8 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if err := s.putInboxPermissionMode(ctx, p.MachineID, p.SessionID, params, origin, originKnown); err != nil {
 		return nil, false, err
 	}
+	delete(params, "categories") // only the manager may attest conversation categories, including on early returns
+	delete(params, "categories_unknown")
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
@@ -1399,6 +1401,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 			return params, own, nil
 		}
 	}
+	s.putConversationCategories(ctx, p.SessionID, params)
 	// sendModel has successful early returns for native and external picks. Attach mode provenance at their common
 	// exit too; on an error the params are not sent. Inbox keeps its dedicated policy, and guests returned above.
 	inputMode, _ := params["permission_mode"].(string)

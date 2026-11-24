@@ -449,7 +449,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if toolSearch.env != "" {
 		startEnv = append(startEnv, toolSearchEnv+"="+toolSearch.env)
 	}
-	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv}), append(startEnv, compaction.env()...)...)
+	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv, categoriesEnv}), append(startEnv, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
 	if cacheProxy != nil {
 		env = identity.Environment(env, "ANTHROPIC_BASE_URL="+cacheProxy.BaseURL())

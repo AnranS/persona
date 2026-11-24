@@ -136,7 +136,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	}
 	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
-	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
+	cmd.Env = identity.Environment(withoutEnv(os.Environ(), []string{categoriesEnv}), "PERSONA_ASSISTANT=1")
 	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
 		// Use the same managed environment and header bindings as personad launch,
 		// without passing secrets as shell code or command-line arguments.
