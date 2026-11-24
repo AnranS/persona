@@ -91,6 +91,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
+		t.HandoffID, t.HandoffOperationID = "", ""
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
 		t.MemoryTopic = nil    // the hub's: the plan's own confirmation decision sets it (below)
@@ -165,6 +166,23 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
+		}
+		if t.Continues != "" {
+			if prevTodo, ok := s.todoNow(t.Continues); ok {
+				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, t.Launcher)
+				if providerSwitch && asked == "" && !t.Readonly {
+					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok && pred.permission() != "" {
+						t.Permission = pred.permission()
+						t.preservePermission = true
+					}
+				}
+				if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, providerSwitch); err != nil {
+					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+				if providerSwitch {
+					t.HandoffOperationID = "op_" + randomHex(12)
+				}
+			}
 		}
 		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
 			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
@@ -349,9 +367,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, and an ordinary
-	// conversation's writable work where the owner has not let such work start by itself.
-	needsOwner := policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" })
+	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a cross-provider
+	// or cross-launcher continuation handoff (#12980), and an ordinary conversation's writable work where the owner
+	// has not let such work start by itself.
+	needsOwner := policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool {
+		return task.RequestGate != "" || task.HandoffOperationID != ""
+	})
 	if needsOwner || (!orchestrates && !s.planStartsAtOnceUnder(ctx, p.Tasks, granted)) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, s.lang(ctx)))})
 		if _, talking := s.ownersPresent(time.Now())[sessionID]; talking {

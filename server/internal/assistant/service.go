@@ -234,7 +234,8 @@ type Service struct {
 	supervise        superviseBook         // supervise_signals.go
 	progress         progressBook          // supervise_progress.go
 	preempt          preemptBook           // owner_preempt.go
-	tbriefs          taskBriefBook         // task_brief.go
+	tbriefs          taskBriefBook          // task_brief.go
+	handoffs         todoContextHandoffBook // todo_context_handoff.go
 	search           searchIndex           // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go

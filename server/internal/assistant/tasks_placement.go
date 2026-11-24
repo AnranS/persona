@@ -356,6 +356,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		s.grantScheduleKind(ctx, id, *t)
 	}
 	prompt := t.Prompt
+	if t.HandoffID != "" {
+		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
+			prompt = handoffSummary + "\n\n" + prompt
+		}
+	}
 	if t.backendWorkspace() {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
