@@ -266,6 +266,19 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	return h, nil
 }
 
+// setHello updates the hub's hello under f.mu so tests can mutate it after a
+// Service has started background work without racing against Hello.
+func (f *fakeHub) setHello(fn func(*Hello)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(&f.hello)
+}
+
+// setLocale sets the hub hello's locale under f.mu.
+func (f *fakeHub) setLocale(locale string) {
+	f.setHello(func(h *Hello) { h.Locale = locale })
+}
+
 // deviceCallsForTest records calls made with the test's context under fakeHub.mu.
 // Background refreshes can reach the same node independently of the action under test.
 type deviceCallsForTest struct{}
