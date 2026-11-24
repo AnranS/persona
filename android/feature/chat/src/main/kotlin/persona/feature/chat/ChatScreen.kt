@@ -800,7 +800,10 @@ private fun ChatPage(
     }
     val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
         ownModelPicker -> TurnErrorModelActions(openPicker = { openModelRoutePicker = true }, clearPick = clearModelAction,
-            clearLabel = if (session?.sessionId == chrome.mainConversation) R.string.chat_modelpill_follow_default else R.string.chat_modelpill_undo_pick)
+            clearLabel = if (session != null && (session.sessionId == chrome.mainConversation ||
+                session.sessionId in chrome.leaderConversations || session.origin == "task")) {
+                R.string.chat_modelpill_follow_default
+            } else R.string.chat_modelpill_undo_pick)
         fixModel != null -> TurnErrorModelActions(
             openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
         else -> null
@@ -1220,7 +1223,15 @@ private fun ChatPage(
                                             onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) },
                                             openRequested = openModes || openModelRoutePicker,
                                             onOpenHandled = { openModes = false; openModelRoutePicker = false },
-                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false })
+                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false },
+                                            leaderConversations = chrome.leaderConversations,
+                                            onSwitched = {
+                                                scope.launch {
+                                                    try { sessions.refresh() }
+                                                    catch (cancelled: CancellationException) { throw cancelled }
+                                                    catch (_: Exception) { }
+                                                }
+                                            })
                                     }),
                                     accessory = {
                                         // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
