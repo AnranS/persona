@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
-import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
+import { effortChoices, effortRule, providerModels } from "../../lib/launcher-models";
 import { lazyPage } from "../../lib/lazy-page";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { modelProviderTitle, providerAgent, providerName, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
@@ -370,14 +370,14 @@ export function ProfileEffortSelect({
 
   const agent = (launcherList?.list?.agent) || providerAgent(chosen);
   const rawChoices =
-    launcherList?.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
+    launcherList?.status === "ready" && launcherList.list && effortRule(launcherList.list.agent) === "any"
       ? effortChoices(launcherList.list, model, followed)
       : allowOff || kind === "api"
         ? ["off", ...EFFORT_LEVELS]
         : EFFORT_LEVELS;
   const allowed = new Set(allowOff || kind === "api" ? ["off", "none", ...EFFORT_LEVELS] : EFFORT_LEVELS);
   const choices = rawChoices.filter((e) => allowed.has(e));
-  const unsupported = !takesEffort(agent) && kind === "launcher" && !allowOff;
+  const unsupported = effortRule(agent) !== "any" && kind === "launcher" && !allowOff;
   const effortLabel = (effort: string) =>
     effort === "off" || effort === "none" ? t("settings-modelconfiguration.api_effort_off") : effortTitle(effort);
 

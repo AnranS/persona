@@ -14,7 +14,7 @@ import { BYPASS_MODE, BYPASS_WARNING, modeTitle } from "../../lib/session-action
 import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import type { AssistantLaunchers } from "../../lib/session-models";
-import { effortChoices, takesEffort } from "../../lib/launcher-models";
+import { effortChoices, effortRule } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { formatTokens } from "../../lib/tokens";
 import { formatNumber, t } from "../../i18n";
@@ -319,7 +319,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
       ? sameParentProvider ? parent?.effective?.permission_mode : undefined
       : sameEffectiveProvider && !p?.override?.permission_mode ? p?.effective?.permission_mode : undefined;
   const codexRunLauncher = p?.kind === "api" && isModelRunLauncher(chosen) && chosenAgent === "codex";
-  const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
+  const listedEfforts = launcherList.status === "ready" && launcherList.list && effortRule(launcherList.list.agent) === "any"
     ? effortChoices(launcherList.list, draft.model, inherited)
     : (codexRunLauncher
       ? ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
