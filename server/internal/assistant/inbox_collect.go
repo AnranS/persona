@@ -67,9 +67,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		}
 	}
 	b.srcMu.Unlock()
+	b.setVisibility(cfg.Lark)
 	b.mu.Lock()
 	b.larkAccount = cfg.LarkAccount
-	b.visibility = cfg.Lark.Normalized()
 	b.batch = newInboxBatch()
 	b.mu.Unlock()
 	var changed []*InboxItem
@@ -183,9 +183,7 @@ func withoutCounts(things []connector.InboxThing) []connector.InboxThing {
 func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSource) []*InboxItem {
 	b := &s.inbox
 	b.readSource(src.ID, src.Name)
-	b.mu.Lock()
-	vis := b.visibility
-	b.mu.Unlock()
+	vis := b.getVisibility()
 	if vis.Active() && len(src.Things) > 0 {
 		filtered := make([]connector.InboxThing, 0, len(src.Things))
 		for _, t := range src.Things {

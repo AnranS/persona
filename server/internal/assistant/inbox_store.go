@@ -109,10 +109,10 @@ func (s *Service) loadInbox(ctx context.Context) bool {
 	}
 	cfg := s.inboxConfig(ctx)
 	b.knowExtensions(cfg.Extensions)
+	b.setVisibility(cfg.Lark)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.larkAccount = cfg.LarkAccount
-	b.visibility = cfg.Lark.Normalized()
 	for _, it := range loaded {
 		if _, have := b.items[it.ID]; have {
 			continue // newer in memory than in the database

@@ -137,9 +137,21 @@ func excludesThing(vis assistantwire.InboxVisibility, source string, t connector
 	return vis.ExcludesChat(chatID, isDirect)
 }
 
+func (b *inboxBook) getVisibility() assistantwire.InboxVisibility {
+	if p := b.visibility.Load(); p != nil {
+		return *p
+	}
+	return assistantwire.InboxVisibility{}
+}
+
+func (b *inboxBook) setVisibility(v assistantwire.InboxVisibility) {
+	norm := v.Normalized()
+	b.visibility.Store(&norm)
+}
+
 // isExcluded reports whether it (or any row merged into it) is excluded under the active visibility policy. Under b.mu.
 func (b *inboxBook) isExcluded(it *InboxItem) bool {
-	return b.isExcludedWith(it, b.visibility)
+	return b.isExcludedWith(it, b.getVisibility())
 }
 
 func (b *inboxBook) isExcludedWith(it *InboxItem, vis assistantwire.InboxVisibility) bool {
@@ -238,8 +250,8 @@ func (b *inboxBook) quarantineExcludedLocked(now time.Time) []*inboxWrite {
 // quarantineExcludedInbox updates the active visibility policy and persists any quarantine transitions.
 func (s *Service) quarantineExcludedInbox(ctx context.Context, cfg assistantwire.InboxConfig) {
 	b := &s.inbox
+	b.setVisibility(cfg.Lark)
 	b.mu.Lock()
-	b.visibility = cfg.Lark.Normalized()
 	writes := b.quarantineExcludedLocked(time.Now())
 	b.mu.Unlock()
 	if len(writes) > 0 {

@@ -36,6 +36,7 @@ var listedDrops = map[string]string{
 	"group":       "the event's conversation (inbox_group.go)",
 	"chain_seq":   "bookkeeping: numbers the chain's entries",
 	"suggest_seq": "bookkeeping: the last suggestion's version",
+	"quarantined": "bookkeeping: item quarantined out of AI handling by Lark Inbox visibility controls",
 	"title_by":    "who wrote the title (inbox_follow.go): kept, not listed",
 	// Kept so that Undo of a merge puts the title back (inbox_merge_title.go).
 	"pre_merge_title":    "kept for Undo of a merge",

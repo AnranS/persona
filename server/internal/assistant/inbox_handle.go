@@ -414,7 +414,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		return
 	}
 	if b.isExcludedWith(it, fullCfg.Lark) {
-		b.visibility = fullCfg.Lark.Normalized()
+		b.setVisibility(fullCfg.Lark)
 		writes := b.quarantineExcludedLocked(time.Now())
 		b.mu.Unlock()
 		if len(writes) > 0 {

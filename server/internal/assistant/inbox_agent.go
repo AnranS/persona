@@ -453,8 +453,10 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 
 // kbChatOf is the knowledge base's chat of an item: its Feishu chat, or the mail's correspondent; "" for none.
 func (b *inboxBook) kbChatOf(it *InboxItem) string {
-	if b.isExcluded(it) {
-		return ""
+	if vis := b.getVisibility(); vis.Active() {
+		if isLark, chatID, _, isDirect, _ := inboxItemLarkTarget(it); isLark && vis.ExcludesChat(chatID, isDirect) {
+			return ""
+		}
 	}
 	switch {
 	case it.Lark != nil:

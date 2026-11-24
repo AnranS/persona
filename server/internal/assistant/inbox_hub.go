@@ -92,9 +92,7 @@ func (s *Service) readInboxConfig(ctx context.Context, force bool) assistantwire
 	}
 	b.cfg, b.cfgAt = cfg, time.Now()
 	b.cfgMu.Unlock()
-	b.mu.Lock()
-	b.visibility = cfg.Lark.Normalized()
-	b.mu.Unlock()
+	b.setVisibility(cfg.Lark)
 	return cfg
 }
 
