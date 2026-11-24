@@ -172,9 +172,41 @@ struct HerdrTabNameTests {
         #expect(ix.placeLine(machine: "MacBook") == "CLI session name · MacBook")
         #expect(ix.placeLine(machine: "MacBook", sessionTitleOverride: "Export work") == "Export work · MacBook")
 
-        // Folded side/subagent cards keep their own source label.
+        // Folded side/subagent cards keep their own source label (including cross-machine folded cards).
         let sideCard = try decodeInteraction(["folded_under": "parent", "folded_as": SideFold.side, "session_title": "Side work"])
         #expect(sideCard.placeLine(machine: "MacBook", sessionTitleOverride: "Export work").contains("Side work"))
+        let crossMachineCard = try decodeInteraction([
+            "folded_under": "s1",
+            "folded_under_machine_id": "other-mac",
+            "session_title": "Remote child",
+        ])
+        #expect(crossMachineCard.placeLine(machine: "MacBook", sessionTitleOverride: "Export work").contains("Remote child"))
+    }
+
+    @Test func subagentOverviewHonorsPreferHerdrTabNameForFoldedChildren() throws {
+        let parent = try decodeSession(["session_id": "parent", "title": "Parent CLI", "slot_name": "Parent tab"])
+        let child = try decodeSession([
+            "session_id": "child",
+            "title": "Child CLI",
+            "slot_name": "Child tab",
+            "state": "working",
+            "folded_under": "parent",
+            "is_subagent": true,
+        ])
+
+        let stampOff = SubagentOverview.inputStamp(session: parent, children: [child], pending: [], tasks: TaskIndex(), preferTab: false)
+        let stampOn = SubagentOverview.inputStamp(session: parent, children: [child], pending: [], tasks: TaskIndex(), preferTab: true)
+        #expect(stampOff != stampOn)
+
+        let offOverview = SubagentOverview.build(
+            parent: parent, parentKey: parent.key, embedded: [], foldedChildren: [child], preferTab: false
+        )
+        #expect(offOverview.running.first?.title == "Child CLI")
+
+        let onOverview = SubagentOverview.build(
+            parent: parent, parentKey: parent.key, embedded: [], foldedChildren: [child], preferTab: true
+        )
+        #expect(onOverview.running.first?.title == "Child tab")
     }
 
     @Test func settingsSearchFindsAgentsByHerdrTabAliases() {
