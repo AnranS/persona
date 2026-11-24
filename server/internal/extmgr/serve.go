@@ -633,9 +633,13 @@ func (h *Manager) report() extwire.Report {
 		r.Looks = h.extensionLooks()
 	}
 	if ps := h.extensions; ps != nil {
+		r.PushGradingDeclared = true
 		for _, p := range ps.reg.List() {
 			if !p.Record.Enabled || p.Problem != "" {
 				continue
+			}
+			if ps.reg.HubScopeAllowed(p.Record.ID, extension.ScopePushGrading) {
+				r.PushGradingExtensions = append(r.PushGradingExtensions, p.Record.ID)
 			}
 			hp := ps.get(p.Record.ID)
 			if hp == nil || hp.proc == nil || hp.proxy == nil {
@@ -645,6 +649,7 @@ func (h *Manager) report() extwire.Report {
 				r.APIs = append(r.APIs, extwire.APIPrefix{Prefix: a.Prefix, Receipts: a.Receipts, Events: a.Events})
 			}
 		}
+		slices.Sort(r.PushGradingExtensions)
 	}
 	for _, m := range h.machinesNow() {
 		var x extwire.MachineExtras
