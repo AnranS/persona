@@ -596,6 +596,7 @@ type legacySpawnTodoStore struct {
 	*memA2AStore
 	todoStore
 	agentsMu     sync.Mutex
+	todos        []db.TodoRow
 	agents       []db.TodoAgentRow
 	agentsErr    error
 	agentsCalls  int
@@ -604,9 +605,9 @@ type legacySpawnTodoStore struct {
 
 func (st *legacySpawnTodoStore) ListTodos(context.Context) ([]db.TodoRow, error) {
 	st.agentsMu.Lock()
+	defer st.agentsMu.Unlock()
 	st.listTodosHit++
-	st.agentsMu.Unlock()
-	return nil, nil
+	return slices.Clone(st.todos), nil
 }
 
 func (st *legacySpawnTodoStore) ListAllTodoSpaces(context.Context) ([]db.TodoSpaceRow, error) {
@@ -638,6 +639,7 @@ func TestLegacySpawnedSubagentLoadsWithoutInitializingTodos(t *testing.T) {
 	ctx := context.Background()
 	st := &legacySpawnTodoStore{
 		memA2AStore: newMemA2AStore(),
+		todos:       []db.TodoRow{{ID: "t1", Title: "Parent task"}},
 		agents: []db.TodoAgentRow{
 			{TodoID: "t1", MachineID: "box", SessionID: "spawn-cross", Source: sourceSpawned, Via: "mac/lead"},
 			{TodoID: "t1", MachineID: "mac", SessionID: "spawn-local", Source: sourceSpawned, Via: "mac/lead"},
@@ -698,7 +700,13 @@ func TestLegacySpawnedSubagentLoadsWithoutInitializingTodos(t *testing.T) {
 	}
 
 	// 3. When todos are already loaded in memory, ensureLegacySubagentsLoaded reads them with zero DB queries.
-	st2 := &legacySpawnTodoStore{memA2AStore: newMemA2AStore()}
+	st2 := &legacySpawnTodoStore{
+		memA2AStore: newMemA2AStore(),
+		todos:       []db.TodoRow{{ID: "t2", Title: "In-memory parent task"}},
+		agents: []db.TodoAgentRow{
+			{TodoID: "t2", MachineID: "box", SessionID: "mem-spawn", Source: sourceSpawned, Via: "mac/lead"},
+		},
+	}
 	s2 := New(Options{Hub: newFakeHub(), Store: func() Store { return st2 }, Logf: testLogf(t)})
 	s2.todos.mu.Lock()
 	s2.todos.loaded = true
