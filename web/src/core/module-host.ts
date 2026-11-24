@@ -13,12 +13,13 @@
 // Field names follow the module contract of #13430 section 4 (`id`, `api`, `needs`, `wants`, `feature`, `shell_places`,
 // `settings`, `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
 //   id → id · api → api · needs → needs · wants → wants · feature → feature
-//   shell_places → routes + extensionPages + navItems
+//   shell_places → routes + extensionPages + navItems + kbKinds + standalonePages
 //   settings → settingsTabs · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
 //   i18n_namespaces → i18nNamespaces (+ locales)
 // Served: id, api (checked against MODULE_API), needs (the ESLint boundary), feature, routes, navItems, extensionPages
 // (reserved `/extension/<id>/…` pages, also shell_places), kbKinds (the knowledge detail's `kb.detail` slot, also
-// shell_places), i18nNamespaces / locales, chatSlots (#13846: ChatView,
+// shell_places), standalonePages (a page drawn without the app shell, served by main.tsx; also shell_places),
+// i18nNamespaces / locales, chatSlots (#13846: ChatView,
 // Composer and Interactions draw what a module's code fills, ChatSlotOutlet), settingsTabs (Settings draws the module's
 // page under its own category) and cardRenderers (a pending card of a kind the core has no card for). Declared but not
 // yet served: wants. registerModule refuses a descriptor that fills it, or that names a slot, a tab or a card kind the
@@ -32,7 +33,7 @@
 // defaults never change and nothing waits on the hello to draw. Each hub's last module flags are remembered per hub
 // (origin and reverse-proxy subpath, #14431) and used on reload until the new hello arrives, so an off module is neither
 // drawn nor fetched while waiting for the hello.
-import type { ComponentType, ReactNode, RefObject } from "react";
+import type { ComponentType, ReactElement, ReactNode, RefObject } from "react";
 import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
 import type { IconName } from "../ui/icons";
@@ -44,23 +45,22 @@ import type { State } from "../lib/store";
 import type { Interaction, Item, Session } from "../lib/types";
 import { moduleSwitchedOff, readStoredJson, subscribeModuleSwitches } from "./module-switch";
 
-/** The hello feature a hub that publishes module flags announces (the hub flag rule above). */
-export const MODULES_FEATURE = "modules";
-const MODULE_PREFIX = "module.";
-/** The hello feature that says the hub serves module `id`: what its descriptor names as `feature`. */
-export const moduleFeature = (id: string) => `${MODULE_PREFIX}${id}`;
+import { MODULES_FEATURE } from "./module-flags";
+
+// The hub flag names (the rule above) live in module-flags.ts, so a descriptor can name its flag without the host.
+export { MODULES_FEATURE, moduleFeature } from "./module-flags";
 
 const hubKey = () => `persona.modules.hub:${typeof location < "u" ? location.origin ?? "" : ""}${BASE}`;
 
 const readHubModules = (): string[] | null => {
   const v = readStoredJson(hubKey());
-  return Array.isArray(v) && v.every((x): x is string => typeof x === "string" && x.startsWith(MODULE_PREFIX)) ? v : null;
+  return Array.isArray(v) && v.every((x): x is string => typeof x === "string" && x.startsWith("module.")) ? v : null;
 };
 
 const rememberHubModules = (features: readonly string[]) => {
   const key = hubKey();
   const next = features.includes(MODULES_FEATURE)
-    ? JSON.stringify([...new Set(features.filter((f) => f.startsWith(MODULE_PREFIX)))].sort())
+    ? JSON.stringify([...new Set(features.filter((f) => f.startsWith("module.")))].sort())
     : null;
   try {
     if (next === localStorage.getItem(key)) return;
@@ -252,6 +252,10 @@ export interface ModuleCode {
   settings?: Readonly<Record<string, ComponentType<ModuleSettingsProps>>>;
   /** Its pending cards, by `cardRenderers` kind. */
   cards?: Readonly<Record<string, ComponentType<ModuleCardProps>>>;
+  /** The page its `standalonePages` open (main.tsx draws what it returns as the whole page, with no app shell), given
+   *  the page's address. It takes from the address what must not stay there (a token in the fragment) before App
+   *  could read it; null when the address is not one of its pages after all, and the app opens instead. */
+  Standalone?: (address: string) => ReactElement | null;
 }
 
 /** A module's static descriptor: small, imported at start by the module list, naming what it contributes. */
@@ -275,6 +279,14 @@ export interface ModuleDescriptor {
    *  declarative extension page of its own, under an id no extension can have (ids starting with "-"). */
   extensionPages?: readonly string[];
   navItems?: readonly ModuleNavItem[];
+  /** Pages it draws on their own, without the app shell: no sign-in flow, no sidebar (#14404, #13430 `shell_places`),
+   *  each the first segment of its addresses (`screen` for `/screen/<machine>`). Before App loads, main.tsx asks
+   *  src/modules/standalone.ts (the modules that have one) and draws `ModuleCode.Standalone`; there the hub's flag is
+   *  read from one hello of its own (hubServesHere). Inside the app, standaloneAt / standaloneOn. The code comes from
+   *  the module's `standalone.tsx`, which the build preloads on these addresses and lets load without waiting for the
+   *  rest of the catalog (vite.config.ts): that file and what it imports statically read only the first screen's core
+   *  strings, and the module's own. Not a core address, nor another module's page. */
+  standalonePages?: readonly string[];
   /** Knowledge entry kinds whose page it adds parts to (`kb.detail`, #13430 `shell_places`): `ModuleCode.KBDetail`.
    *  One module per kind. */
   kbKinds?: readonly string[];
@@ -331,10 +343,14 @@ export const CORE_CARD_KINDS: ReadonlySet<string> = new Set("question plan permi
 
 
 /** The first segments of the core's own addresses (lib/router.ts parse, and what the hub serves beside the app): a
- *  module's base may not be one. lib/router.test.ts keeps it in step with parse. */
-export const CORE_PATHS: ReadonlySet<string> = new Set(
-  "s t persona j workspace-board requests overview history tracks assistant inbox messages starred routines kb space machines terminal a agents compare settings subscriptions extension plugin todos api login screen share admin assets".split(" "),
-);
+ *  module's base or standalone page may not be one. lib/router.test.ts keeps it in step with parse. */
+export const CORE_PATHS: ReadonlySet<string> = new Set([
+  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox", "messages",
+  "starred", "routines", "kb", "space", "machines", "terminal", "a", "agents", "compare", "settings", "subscriptions",
+  "extension", "plugin", "todos", "api", "login", "screen", "share", "admin", "assets",
+]);
+/** Core addresses whose deeper paths a module may take as an alias: `/tracks/<slug>` of a space it has its own page for. */
+const ALIASABLE: ReadonlySet<string> = new Set(["tracks"]);
 
 const routePaths = (r: ModuleRoute): (readonly string[])[] => [[r.base], ...(r.aliases ?? [])];
 /** Whether two paths would route the same address: one is a prefix of the other. */
@@ -375,10 +391,13 @@ export function registerModule(d: ModuleDescriptor): void {
     if (CORE_CARD_KINDS.has(kind)) fail(`renders the card kind "${kind}", which the core draws`);
   }
   checkUnique(d.cardRenderers, "renders the card kind", (m) => m.cardRenderers);
+  const standaloneOwner = (base: string) => [...registry.values()].find((m) => m.standalonePages?.includes(base));
   for (const r of d.routes ?? []) {
     for (const path of routePaths(r)) {
       if (path.length === 1 && CORE_PATHS.has(path[0]!)) fail(`claims /${path[0]}, a core address`);
-      if (path.length > 1 && CORE_PATHS.has(path[0]!) && path[0] !== "tracks") fail(`claims /${path.join("/")}, under the core address /${path[0]}`);
+      const page = standaloneOwner(path[0]!);
+      if (page) fail(`claims /${path.join("/")}, which "${page.id}" draws as a page of its own`);
+      if (path.length > 1 && CORE_PATHS.has(path[0]!) && !ALIASABLE.has(path[0]!)) fail(`claims /${path.join("/")}, under the core address /${path[0]}`);
       for (const other of registry.values()) {
         const taken = (other.routes ?? []).flatMap(routePaths).find((o) => overlaps(o, path));
         if (taken) fail(`claims /${path.join("/")}, which "${other.id}" has (/${taken.join("/")})`);
@@ -387,6 +406,14 @@ export function registerModule(d: ModuleDescriptor): void {
   }
   for (const id of d.extensionPages ?? []) {
     if (!/^-[a-z][a-z0-9-]*$/.test(id)) fail(`claims the extension page id "${id}", which is not a reserved one (it must start with "-")`);
+  }
+  for (const base of d.standalonePages ?? []) {
+    if (!/^[a-z][a-z0-9-]*$/.test(base)) fail(`claims the page of its own "${base}", which is not one address segment`);
+    if (CORE_PATHS.has(base)) fail(`claims /${base} as a page of its own, a core address`);
+    const other = standaloneOwner(base);
+    if (other) fail(`claims /${base} as a page of its own, which "${other.id}" has`);
+    const routed = [...registry.values(), d].find((m) => (m.routes ?? []).flatMap(routePaths).some((p) => p[0] === base));
+    if (routed) fail(`claims /${base} as a page of its own, which "${routed.id}" routes in the app`);
   }
   checkUnique(d.extensionPages, "claims the extension page id", (m) => m.extensionPages);
   checkUnique(d.kbKinds, "claims the knowledge kind", (m) => m.kbKinds);
@@ -459,6 +486,25 @@ export function moduleKBKindAt(kind: string): ModuleDescriptor | "absent" | null
   return moduleWith((d) => d.kbKinds?.includes(kind));
 }
 
+/** The module that draws the page at these address segments on its own (`standalonePages`): its descriptor while it
+ *  is on, "absent" while it is off (main.tsx drops the address' fragment, so a token meant for the page is not taken
+ *  for a sign-in, and the app answers the address as an unknown one), null for an address no module has. Inside the
+ *  app; before App, main.tsx asks src/modules/standalone.ts, which does the same with this browser's switch. */
+export function standaloneAt(segments: readonly string[]): ModuleDescriptor | "absent" | null {
+  const base = segments[0];
+  if (!base) return null;
+  for (const d of registry.values()) {
+    if (!d.standalonePages?.includes(base)) continue;
+    return moduleState(d) === "off" ? "absent" : d;
+  }
+  return null;
+}
+
+/** Whether an enabled module draws the page at /<base> on its own: what the core's links to it ask before they show. */
+export function standaloneOn(base: string, s?: Pick<State, "features" | "loaded">): boolean {
+  return enabledModules(s).some((d) => d.standalonePages?.includes(base));
+}
+
 /** A module route's address in the app. */
 export function modulePath(r: { base: string; path: readonly string[] }): string {
   return `/${[r.base, ...r.path].map(encodeURIComponent).join("/")}`;
@@ -518,6 +564,7 @@ function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
     ...miss(d.settingsTabs?.map((x) => x.key), code.settings, "Settings category"),
     ...miss(d.cardRenderers, code.cards, "card kind"),
     ...(d.kbKinds?.length && !code.KBDetail ? [`the knowledge kind "${d.kbKinds[0]}"`] : []),
+    ...(d.standalonePages?.length && !code.Standalone ? [`the page of its own /${d.standalonePages[0]}`] : []),
   ];
   if (missing.length) throw new Error(`module "${d.id}" names ${missing.join(", ")}, which its code does not draw`);
   return code;
