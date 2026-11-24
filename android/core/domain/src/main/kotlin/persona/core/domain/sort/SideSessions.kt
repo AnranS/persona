@@ -84,7 +84,7 @@ fun sideSearchHits(rows: List<AgentSession>, listed: List<AgentSession>, setting
     val shown = listed.mapTo(HashSet()) { it.session.key }
     return rows.mapNotNull { row ->
         val s = row.session
-        val parent = s.foldedUnder?.takeIf { s.sideHome != null && it.isNotBlank() }?.let { SessionKey(s.machineId, it) }
+        val parent = s.foldedUnderKey?.takeIf { s.sideHome != null }
         parent?.takeIf { it in shown && settings.admits(s, machineNames = machineNames) }?.path
     }.toSet()
 }
@@ -172,11 +172,11 @@ fun unreadClearedBySeen(hubSessions: List<Session>, visibleSessions: List<Sessio
     val listed = hubSessions.mapTo(HashSet()) { it.key }
     val visibleByKey = visibleSessions.associateBy { it.key }
     val visibleSides = visibleSessions.filter { it.isFoldedSide }
-        .groupBy { SessionKey(it.machineId, it.foldedUnder.orEmpty()) }
+        .mapNotNull { side -> side.foldedUnderKey?.let { it to side } }
+        .groupBy({ it.first }, { it.second })
     var cleared = 0
     for (hub in hubSessions) {
-        val foldedUnder = hub.foldedUnder?.takeIf(String::isNotBlank)
-        if (foldedUnder != null && SessionKey(hub.machineId, foldedUnder) in listed) continue
+        if (hub.foldedUnderKey?.let { it in listed } == true) continue
         if (hub.foldedState != AgentState.Unread) continue
         val own = visibleByKey[hub.key] ?: hub
         val held = visibleSides[hub.key].orEmpty().filter { it.key != hub.key }
