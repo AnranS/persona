@@ -1818,7 +1818,10 @@ every platform are described from #13430; this section is the Apple side.
   apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`), under which `Modules.builtIn`
   lists it;
   `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
-  the server's `persona_core_only` tag does. `scripts/ci/apple.sh` builds that core-only app ("Core-only iOS build").
+  the server's `persona_core_only` tag does. `scripts/ci/apple.sh ios-core-only` (and the local `all` lane) builds
+  that core-only app ("Core-only iOS build"); in hosted CI, `.github/workflows/apple-test.yml` runs it in its own
+  parallel `ios-core-only` job alongside the full `ios` lane so both gate `CI required` without pushing `ios` past its
+  120-minute limit (#14496).
   The watch, widgets and extensions never compile a module home. Source-scanning PersonaTests (token, icon, motion,
   sheet and dialog rules) walk `apple/Modules` as well as `apple/Persona`.
 - **`screen-share`** (`apple/Modules/ScreenShare/`, #14017, `feature` = `module.screen-share`): a Mac's live screen over
