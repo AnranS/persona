@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/connector/imessage"
@@ -133,6 +135,22 @@ func loadConfig(dir, file string) (*Config, error) {
 		}
 		return cfg, fmt.Errorf("%s: connector_gate: %w", where, err)
 	}
+	where := "hub.json"
+	if file != "" {
+		where = file
+	}
+	if !assistantwire.ValidInboxReadProfile(cfg.Inbox.ReadProfile) {
+		return cfg, fmt.Errorf("%s: inbox.read_profile: unsupported profile %q", where, cfg.Inbox.ReadProfile)
+	}
+	if !assistantwire.ValidInboxReadProfile(cfg.Inbox.Agent.ReadProfile) {
+		return cfg, fmt.Errorf("%s: inbox.agent.read_profile: unsupported profile %q", where, cfg.Inbox.Agent.ReadProfile)
+	}
+	if err := cfg.Inbox.Lark.Validate(); err != nil {
+		return cfg, fmt.Errorf("%s: inbox.lark: %w", where, err)
+	}
+	cfg.Inbox.ReadProfile = strings.TrimSpace(cfg.Inbox.ReadProfile)
+	cfg.Inbox.Agent.ReadProfile = strings.TrimSpace(cfg.Inbox.Agent.ReadProfile)
+	cfg.Inbox.Lark = cfg.Inbox.Lark.Normalized()
 	if err := cfg.Lark.Validate(); err != nil { // was the hub's check at start; now the manager's, which uses it
 		cfg.warnings = append(cfg.warnings, err.Error()+": lark is not read")
 		cfg.Lark = lark.Config{}

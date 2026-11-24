@@ -307,6 +307,9 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 	defer b.mu.Unlock()
 	var changed []*inboxWrite
 	for _, it := range b.items {
+		if b.isExcluded(it) {
+			continue
+		}
 		a := it.Agent
 		if !it.open() || it.Context == "" ||
 			a != nil && (a.Of == it.Last && !a.InterruptedByDisable || a.savingRetry) {
@@ -365,6 +368,9 @@ func (s *Service) deliverPending(ctx context.Context) {
 	b.mu.Lock()
 	var todo []*InboxItem
 	for _, it := range b.items {
+		if b.isExcluded(it) {
+			continue
+		}
 		if a := it.Agent; a != nil && len(a.Pending) > 0 && a.SessionID != "" {
 			todo = append(todo, it)
 		}
@@ -393,7 +399,8 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
-	enabled := s.inboxConfig(ctx).Agent.Enabled
+	fullCfg := s.inboxConfig(ctx)
+	enabled := fullCfg.Agent.Enabled
 	hello := s.hello(ctx)
 	owner, language := inboxPromptOwner(hello), answerLanguage(hello.Locale)
 	b.mu.Lock()
@@ -404,6 +411,15 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 			b.telling.CompareAndDelete(it.ID, mu)
 		}
 		b.mu.Unlock()
+		return
+	}
+	if b.isExcludedWith(it, fullCfg.Lark) {
+		b.visibility = fullCfg.Lark.Normalized()
+		writes := b.quarantineExcludedLocked(time.Now())
+		b.mu.Unlock()
+		if len(writes) > 0 {
+			s.saveWrites(ctx, writes, "quarantined excluded items")
+		}
 		return
 	}
 	if !enabled {
@@ -527,7 +543,7 @@ func (s *Service) inboxAgentStarted(ctx context.Context, self, machine, session,
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.itemOfAgent(self)
-	if it == nil || !it.open() {
+	if it == nil || !it.open() || b.isExcluded(it) {
 		b.mu.Unlock()
 		return
 	}
@@ -576,7 +592,7 @@ func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompt
 func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask) (string, error) {
 	b := &s.inbox
 	b.mu.Lock()
-	if !inboxTaskLinkEligible(it) {
+	if b.isExcluded(it) || !inboxTaskLinkEligible(it) {
 		b.mu.Unlock()
 		return "", nil
 	}

@@ -297,6 +297,7 @@ func (h *Manager) newLarkCLIConnector(profile string) *larkcliconnector.Connecto
 			return current, nil
 		}})
 	lc.SetStateStore(h.store)
+	lc.SetVisibilityDefaults(h.cfg.Inbox.Lark.ExcludeDirectChats, h.cfg.Inbox.Lark.ExcludedChatIDs)
 	lc.SetInboxSource(h.cfg.Lark.Prefer, func(ctx context.Context) bool {
 		gateway := h.connectors.Get(connector.Lark)
 		if gateway == nil {

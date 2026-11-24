@@ -139,7 +139,7 @@ func TestInboxModelReadOnlyInvestigationAndSuggestion(t *testing.T) {
 	if calls := h.f.appParams(assistantwire.AppPhone, assistantwire.PhoneCall); len(calls) != 1 {
 		t.Fatalf("phone read executed %d times, want 1", len(calls))
 	}
-	if _, refused := h.inboxModelRefusal(t.Context(), "server", "s1", OriginInbox, "agents_list"); refused {
+	if _, refused := h.inboxModelRefusal(t.Context(), "server", "s1", OriginInbox, "agents_list", nil); refused {
 		t.Fatal("read-only Agent investigation was refused")
 	}
 	turn := inboxTestProcessingTurn(h, "s1")

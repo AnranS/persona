@@ -38,7 +38,7 @@ func (s *Service) inboxHasAgentLink(machine, sid string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, it := range b.items {
-		if it.open() && inboxItemLinksAgent(it, machine, sid) {
+		if it.open() && !b.isExcluded(it) && inboxItemLinksAgent(it, machine, sid) {
 			return true
 		}
 	}
@@ -81,6 +81,9 @@ func (s *Service) recordInboxAgentStops(ctx context.Context, sess proto.Session)
 	deliver := map[*inboxWrite]bool{}
 	b.mu.Lock()
 	for _, it := range b.items {
+		if b.isExcluded(it) {
+			continue
+		}
 		linked, duplicate := inboxAgentStopDuplicate(it, sess)
 		a := it.Agent
 		if !it.open() || !linked || a != nil && a.savingRetry {

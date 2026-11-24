@@ -2,10 +2,21 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+// inboxSourceOnlyAssistantTools are the only assistant-owned tools allowed under the source_only Inbox read profile.
+var inboxSourceOnlyAssistantTools = map[string]bool{
+	"inbox_suggest": true, "inbox_draft": true,
+}
+
+// inboxSourceOnlyMessageTools are the connector message/media tools allowed under source_only after target validation.
+var inboxSourceOnlyMessageTools = map[string]bool{
+	"larkcli_messages": true, "lark_messages": true, "lark_image": true,
+}
 
 // inboxReadOnlyTools are the assistant-owned tools an Inbox handling chat may call itself. Everything not listed is
 // denied by default: a newly added outbound, interruption, delegation, scheduling or settings tool must not become an
@@ -86,9 +97,39 @@ func (s *Service) managerOriginDecision(ctx context.Context, machine, session, s
 
 // inboxModelRefusal applies only to model/node tool entry points, never runTool. Owner-confirmed reply, Agent and to-do
 // execution deliberately takes the latter path as the owner's action.
-func (s *Service) inboxModelRefusal(ctx context.Context, machine, session, originHint, name string) (proto.ToolResult, bool) {
+func (s *Service) inboxModelRefusal(ctx context.Context, machine, session, originHint, name string, args json.RawMessage) (proto.ToolResult, bool) {
 	if !s.isInboxModelCall(ctx, machine, session, originHint) {
 		return proto.ToolResult{}, false
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "this tool"
+	}
+	cfg := s.inboxConfig(ctx)
+	if cfg.SourceOnly() {
+		if inboxSourceOnlyAssistantTools[name] {
+			return proto.ToolResult{}, false
+		}
+		if inboxSourceOnlyMessageTools[name] {
+			if reason, ok := s.validateInboxSourceRead(ctx, machine, session, cfg.Lark, name, args); !ok {
+				return proto.TextResult(reason, true), true
+			}
+			return proto.ToolResult{}, false
+		}
+		return proto.TextResult(name+" is disabled under the Inbox source_only read profile. Use only the item context, "+
+			"source-scoped message reads for this conversation, and inbox_suggest.", true), true
+	}
+	if cfg.Lark.Active() {
+		if it := s.boundInboxItem(ctx, machine, session); it != nil {
+			s.inbox.mu.Lock()
+			excluded := s.inbox.isExcludedWith(it, cfg.Lark)
+			s.inbox.mu.Unlock()
+			if excluded {
+				return proto.TextResult("this Inbox item is excluded by Lark Inbox visibility settings.", true), true
+			}
+		}
+		if excludedMessageToolTarget(cfg.Lark, name, args) {
+			return proto.TextResult("that chat is excluded by Lark Inbox visibility settings.", true), true
+		}
 	}
 	if inboxReadOnlyTools[name] || inboxReadOnlyPhoneTools[name] {
 		return proto.ToolResult{}, false
@@ -100,9 +141,6 @@ func (s *Service) inboxModelRefusal(ctx context.Context, machine, session, origi
 	}
 	// Unknown tools are denied too. In particular, a connector Action is never mistaken for a read because its name
 	// happens not to end in _send, and future extension/phone tools cannot silently widen the outbound surface.
-	if strings.TrimSpace(name) == "" {
-		name = "this tool"
-	}
 	return proto.TextResult("Inbox conversations cannot call "+name+" directly because it may send, interrupt, delegate, "+
 		"or change external state. Use inbox_suggest; the owner-confirmed action will run separately.", true), true
 }

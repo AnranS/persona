@@ -52,6 +52,9 @@ func (b *inboxBook) sortBatch(batch *inboxBatch, changed []*InboxItem, now time.
 		}
 	}
 	for _, it := range batch.items {
+		if b.isExcluded(it) {
+			continue
+		}
 		if m := mutedBy(b.mutes, it); m != nil {
 			b.roundWrite(it)
 			b.fileMuted(it, now, m.Name)
@@ -127,6 +130,9 @@ func (s *Service) admit(ctx context.Context, batch *inboxBatch, todo []*InboxIte
 	behind := false
 	b.mu.Lock()
 	for i, it := range todo {
+		if b.isExcluded(it) {
+			continue
+		}
 		v := verdicts[i]
 		fallback := b.ruleTier(it)
 		switch {

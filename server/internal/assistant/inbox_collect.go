@@ -47,7 +47,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		}
 		b.epoch, b.seq = r.Epoch, r.Seq
 	}
-	cfg := s.inboxConfig(ctx)
+	cfg := s.refreshInboxConfig(ctx)
 	b.knowExtensions(cfg.Extensions)
 	b.srcMu.Lock()
 	for id, name := range r.Names {
@@ -69,6 +69,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.srcMu.Unlock()
 	b.mu.Lock()
 	b.larkAccount = cfg.LarkAccount
+	b.visibility = cfg.Lark.Normalized()
 	b.batch = newInboxBatch()
 	b.mu.Unlock()
 	var changed []*InboxItem
@@ -109,6 +110,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.batch = nil
 	b.mu.Unlock()
 	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	s.quarantineExcludedInbox(ctx, cfg)
 	if st := s.inboxDB(); st != nil {
 		s.purgeInboxHistory(ctx, st, now)
 	}
@@ -181,6 +183,19 @@ func withoutCounts(things []connector.InboxThing) []connector.InboxThing {
 func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSource) []*InboxItem {
 	b := &s.inbox
 	b.readSource(src.ID, src.Name)
+	b.mu.Lock()
+	vis := b.visibility
+	b.mu.Unlock()
+	if vis.Active() && len(src.Things) > 0 {
+		filtered := make([]connector.InboxThing, 0, len(src.Things))
+		for _, t := range src.Things {
+			if excludesThing(vis, src.ID, t) {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		src.Things = filtered
+	}
 	if len(src.Things) == 0 && !src.Settles {
 		return nil
 	}

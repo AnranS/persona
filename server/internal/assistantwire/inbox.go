@@ -3,7 +3,9 @@ package assistantwire
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"time"
 
@@ -357,6 +359,115 @@ type InboxMailMessage struct {
 	Text    string        `json:"text"`
 }
 
+// Inbox read profiles (manager.json inbox.read_profile or inbox.agent.read_profile).
+const (
+	InboxReadProfileDefault    = ""
+	InboxReadProfileSourceOnly = "source_only"
+)
+
+// ValidInboxReadProfile reports whether profile is a recognized Inbox read profile.
+func ValidInboxReadProfile(profile string) bool {
+	switch strings.TrimSpace(profile) {
+	case InboxReadProfileDefault, InboxReadProfileSourceOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// InboxVisibility configures opt-in chat visibility exclusions for Lark Inbox sources.
+// Its zero value leaves default behavior unchanged.
+type InboxVisibility struct {
+	ExcludeDirectChats bool     `json:"exclude_direct_chats,omitempty"`
+	ExcludedChatIDs    []string `json:"excluded_chat_ids,omitempty"`
+}
+
+// Active reports whether any visibility exclusion is enabled.
+func (v InboxVisibility) Active() bool {
+	if v.ExcludeDirectChats {
+		return true
+	}
+	for _, id := range v.ExcludedChatIDs {
+		if strings.TrimSpace(id) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks that excluded chat IDs are non-empty, bounded, and unique.
+func (v InboxVisibility) Validate() error {
+	seen := make(map[string]struct{}, len(v.ExcludedChatIDs))
+	for _, raw := range v.ExcludedChatIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return fmt.Errorf("excluded_chat_ids contains an empty chat id")
+		}
+		if len(id) > 256 {
+			return fmt.Errorf("excluded_chat_ids chat id is too long")
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("excluded_chat_ids contains duplicate chat id %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// Normalized returns a copy with trimmed, deduplicated, sorted ExcludedChatIDs.
+func (v InboxVisibility) Normalized() InboxVisibility {
+	out := InboxVisibility{ExcludeDirectChats: v.ExcludeDirectChats}
+	if len(v.ExcludedChatIDs) == 0 {
+		return out
+	}
+	seen := make(map[string]struct{}, len(v.ExcludedChatIDs))
+	ids := make([]string, 0, len(v.ExcludedChatIDs))
+	for _, raw := range v.ExcludedChatIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	if len(ids) > 0 {
+		out.ExcludedChatIDs = ids
+	}
+	return out
+}
+
+// Union merges two visibility policies so exclusions from either source apply.
+func (v InboxVisibility) Union(other InboxVisibility) InboxVisibility {
+	merged := InboxVisibility{
+		ExcludeDirectChats: v.ExcludeDirectChats || other.ExcludeDirectChats,
+		ExcludedChatIDs:    make([]string, 0, len(v.ExcludedChatIDs)+len(other.ExcludedChatIDs)),
+	}
+	merged.ExcludedChatIDs = append(merged.ExcludedChatIDs, v.ExcludedChatIDs...)
+	merged.ExcludedChatIDs = append(merged.ExcludedChatIDs, other.ExcludedChatIDs...)
+	return merged.Normalized()
+}
+
+// ExcludesChat reports whether a Lark chat should be excluded under this visibility policy.
+func (v InboxVisibility) ExcludesChat(chatID string, direct bool) bool {
+	if v.ExcludeDirectChats && direct {
+		return true
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return false
+	}
+	for _, id := range v.ExcludedChatIDs {
+		if strings.TrimSpace(id) == chatID {
+			return true
+		}
+	}
+	return false
+}
+
 // InboxConfig is what the inbox goes by of the extension manager's (manager.json's inbox section, its settings, the
 // devices' mail languages it gets from the hub): asked for when it is needed, kept a few seconds.
 type InboxConfig struct {
@@ -366,6 +477,10 @@ type InboxConfig struct {
 	Rules      string           `json:"rules,omitempty"`
 	AgentRules string           `json:"agent_rules,omitempty"`
 	Agent      InboxAgentConfig `json:"agent"`
+	// ReadProfile restricts what context and read tools Inbox AI handling may access ("" default, or "source_only").
+	ReadProfile string `json:"read_profile,omitempty"`
+	// Lark holds opt-in Lark Inbox visibility exclusions (direct chats and explicitly excluded chat IDs).
+	Lark InboxVisibility `json:"lark,omitempty"`
 	// LarkAccount is the default Feishu account, the gateway account Feishu items came to unless they say another: the
 	// Feishu extension's default (GET accounts of its messaging source), else hub.json's lark.account (#5098).
 	LarkAccount int `json:"lark_account,omitempty"`
@@ -374,6 +489,19 @@ type InboxConfig struct {
 	// Extensions are the connectors a plugin provides (installed, or hub.json's), whether or not a round read them:
 	// their items have no fallback tier (a model sorts them, or they wait), from the manager's start on.
 	Extensions []string `json:"extensions,omitempty"`
+}
+
+// EffectiveReadProfile returns the configured Inbox read profile, falling back from inbox.read_profile to inbox.agent.read_profile.
+func (c InboxConfig) EffectiveReadProfile() string {
+	if p := strings.TrimSpace(c.ReadProfile); p != "" {
+		return p
+	}
+	return strings.TrimSpace(c.Agent.ReadProfile)
+}
+
+// SourceOnly reports whether Inbox AI handling is restricted to the source_only read profile.
+func (c InboxConfig) SourceOnly() bool {
+	return c.EffectiveReadProfile() == InboxReadProfileSourceOnly
 }
 
 // InboxAgentConfig is manager.json's inbox.agent: the AI twin (docs/assistant/inbox.md).
@@ -389,6 +517,8 @@ type InboxAgentConfig struct {
 	// MaxAgeHours: items whose newest message is older are not handed over (default 24), so turning this on does
 	// not start an agent for every old item.
 	MaxAgeHours int `json:"max_age_hours,omitempty"`
+	// ReadProfile restricts Inbox agent context and read tools ("" default, or "source_only").
+	ReadProfile string `json:"read_profile,omitempty"`
 	// Rules is manager.json's inbox.agent.rules: the file default for the settings key `inbox.agent_rules`
 	// (extmgr/self_settings.go inboxAgentRules). The database value wins once set; without either, what the twin takes on
 	// is set by inbox policies. Kept so older hub.json files still parse.

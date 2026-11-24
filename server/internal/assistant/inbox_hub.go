@@ -67,18 +67,34 @@ const inboxConfigFor = 5 * time.Second
 // inboxConfig is the hub's inbox settings (InboxConfigMethod), read again after a few seconds; while the hub can't
 // say, the last ones (none: the zero settings).
 func (s *Service) inboxConfig(ctx context.Context) assistantwire.InboxConfig {
+	return s.readInboxConfig(ctx, false)
+}
+
+// refreshInboxConfig reads the hub's inbox settings immediately without waiting for inboxConfigFor.
+func (s *Service) refreshInboxConfig(ctx context.Context) assistantwire.InboxConfig {
+	return s.readInboxConfig(ctx, true)
+}
+
+func (s *Service) readInboxConfig(ctx context.Context, force bool) assistantwire.InboxConfig {
 	b := &s.inbox
 	b.cfgMu.Lock()
-	defer b.cfgMu.Unlock()
-	if !b.cfgAt.IsZero() && time.Since(b.cfgAt) < inboxConfigFor {
-		return b.cfg
+	if !force && !b.cfgAt.IsZero() && time.Since(b.cfgAt) < inboxConfigFor {
+		cfg := b.cfg
+		b.cfgMu.Unlock()
+		return cfg
 	}
 	var cfg assistantwire.InboxConfig
 	if err := s.appCall(ctx, AppInbox, assistantwire.InboxConfigMethod, map[string]any{}, &cfg); err != nil {
 		s.logf("inbox: the hub's settings: %v", err)
-		return b.cfg
+		cached := b.cfg
+		b.cfgMu.Unlock()
+		return cached
 	}
 	b.cfg, b.cfgAt = cfg, time.Now()
+	b.cfgMu.Unlock()
+	b.mu.Lock()
+	b.visibility = cfg.Lark.Normalized()
+	b.mu.Unlock()
 	return cfg
 }
 

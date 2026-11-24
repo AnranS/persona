@@ -52,6 +52,9 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 	b.mu.Lock()
 	todos := make([]string, len(items))
 	for i, it := range items {
+		if b.isExcluded(it) {
+			continue
+		}
 		if it.Agent != nil {
 			todos[i] = it.Agent.TodoID
 		}

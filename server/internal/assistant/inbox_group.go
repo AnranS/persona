@@ -163,6 +163,9 @@ type plannedEvent struct {
 
 // relateBatch relates one batch: by the model, else by the connector's fallback; then has each event written.
 func (s *Service) relateBatch(ctx context.Context, c assistantwire.InboxSource, t connector.InboxThing) {
+	if excludesThing(s.inboxConfig(ctx).Lark, c.ID, t) {
+		return
+	}
 	events := s.groupEvents(c.ID, t.Thread, "")
 	plan, why := s.askGroup(ctx, c, t, events)
 	if plan == nil {
@@ -226,7 +229,7 @@ func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 	q := strings.ToLower(strings.TrimSpace(query))
 	var open, done []*InboxItem
 	for _, it := range b.items {
-		if it.Group == nil || it.Group.Connector != connectorID || !sameConversation(it.Group.Thread, thread) || it.MergedInto != "" {
+		if b.isExcluded(it) || it.Group == nil || it.Group.Connector != connectorID || !sameConversation(it.Group.Thread, thread) || it.MergedInto != "" {
 			continue
 		}
 		isOpen := it.DoneAt == nil // merged members, the other way open() is false, are skipped above

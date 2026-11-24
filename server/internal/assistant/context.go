@@ -557,7 +557,7 @@ func (s *Service) followingInboxItems(ctx context.Context) []InboxItem {
 	defer s.inbox.mu.Unlock()
 	var out []InboxItem
 	for _, it := range s.inbox.items {
-		if !it.open() {
+		if !it.open() || s.inbox.isExcluded(it) {
 			continue
 		}
 		listed := it.listed()

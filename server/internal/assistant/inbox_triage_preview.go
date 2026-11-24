@@ -31,10 +31,14 @@ func (s *Service) InboxTriagePreview(ctx context.Context, p assistantwire.InboxT
 	}
 	hello := s.hello(ctx)
 	language := answerLanguage(hello.Locale)
+	vis := s.inboxConfig(ctx).Lark
 	b := &s.inbox
 	out := make([]assistantwire.InboxTriageVerdict, len(things))
 	var wg sync.WaitGroup
 	for i, t := range things {
+		if excludesThing(vis, source, t) {
+			continue
+		}
 		it := &InboxItem{ID: "preview", Source: source}
 		fillConnectorItem(it, t)
 		b.mu.Lock()

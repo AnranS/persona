@@ -397,12 +397,16 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   `reasoning_effort` applies to `responses` and `messages` (e.g. `low`): `off` maps to Responses `none` and the model's supported Messages no-thinking mode, or low effort on Messages models that cannot disable thinking; `bearer` (default `false`) true sends the Messages API key as `Authorization: Bearer` instead of `x-api-key`, for gateways accepting only Bearer (`responses` always uses Bearer).
 - `inbox.triage_ai` / `inbox.judge_ai` (optional, same fields as `ai`, omitted fields inherit from `ai`): AI twin model 1 (triage) and model 2 (linking a Needs you item to one of the user's tasks);
   omitted means both use `ai`. `inbox.agent`: model 3, `enabled`, `launcher` (Claude Code launcher, default the assistant's), `machine` (default the assistant's machine),
-  `concurrency` (1), `timeout_minutes` (15), `max_age_hours` (24), `rules` (no longer read; what the twin takes on is set by inbox policies, `docs/assistant/inbox.md` ("Policies")). See `docs/assistant/inbox.md` ("AI twin: handling chats and suggestions").
+  `concurrency` (1), `timeout_minutes` (15), `max_age_hours` (24), `read_profile` (optional, `""` default or `"source_only"`), `rules` (no longer read; what the twin takes on is set by inbox policies, `docs/assistant/inbox.md` ("Policies")). See `docs/assistant/inbox.md` ("AI twin: handling chats and suggestions").
+- `inbox.read_profile` (optional, default `""`; supports `"source_only"`): restricts Inbox AI handling to source-only context (disables automatic knowledge-base / memory injection and unrestricted conversation/search tools, and validates message-read targets against the bound Inbox item before downstream calls; falls back to `inbox.agent.read_profile` when omitted).
+- `inbox.lark` (optional, all fields default off / empty): opt-in Lark Inbox visibility exclusions — `exclude_direct_chats` (bool; excludes `p2p` direct chats from Lark Inbox collection, sweep, search, and AI handling) and `excluded_chat_ids` (array of non-empty unique Lark chat IDs, max 256 bytes each; excludes those chats even if listed in `inbox_all_chats`). Unions with the same opt-in fields in `larkcli` connector options (`docs/assistant/inbox.md`, "Lark visibility controls and `source_only` read profile (#11902)").
 
   ```json
   "inbox": {
     "triage_ai": { "base_url": "<gateway address>", "api_key_file": "~/.persona/inbox-ai.key", "model": "<model>" },
     "judge_ai":  { "base_url": "<gateway address>", "api_key_file": "~/.persona/inbox-ai.key", "model": "<model>" },
+    "read_profile": "source_only",
+    "lark": { "exclude_direct_chats": true, "excluded_chat_ids": ["oc_example_excluded"] },
     "agent": { "enabled": true, "launcher": "<launcher>" }
   }
   ```

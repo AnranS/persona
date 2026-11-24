@@ -265,6 +265,9 @@ func suggestionReplyTarget(it *InboxItem) string {
 }
 
 func (b *inboxBook) currentReplyAttempt(it *InboxItem, a *InboxSuggestionAttempt) bool {
+	if b.isExcluded(it) {
+		return false
+	}
 	if a.Proposal != nil && a.Proposal.Conversation == nil && a.Proposal.Owner != nil &&
 		(it.Agent == nil || it.Agent.MachineID != a.Proposal.Owner.MachineID || it.Agent.SessionID != a.Proposal.Owner.SessionID) {
 		return false
@@ -308,6 +311,11 @@ func suggestionSendOnly(ctx context.Context) bool {
 // retain one current action; uncertain sends remain visible but cannot be reissued with a new caller UUID.
 func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, in suggestionReq) (InboxItem, error) {
 	b := &s.inbox
+	if b.isExcluded(it) {
+		out := it.listed()
+		b.mu.Unlock()
+		return out, errInboxExcluded
+	}
 	a := suggestionAttempt(it, g.Version)
 	if a != nil && (a.Status == suggestionSending || a.Status == suggestionUnknown) {
 		out := it.listed()

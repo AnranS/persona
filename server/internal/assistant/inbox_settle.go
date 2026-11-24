@@ -150,7 +150,7 @@ func (s *Service) settleInbox(ctx context.Context) {
 	}
 	var todo []*InboxItem
 	for _, it := range b.items {
-		if settleCandidate(it) && now.Sub(b.settleAsked[it.ID]) >= settleEvery {
+		if !b.isExcluded(it) && settleCandidate(it) && now.Sub(b.settleAsked[it.ID]) >= settleEvery {
 			todo = append(todo, it)
 		}
 	}

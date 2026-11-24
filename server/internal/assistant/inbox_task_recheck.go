@@ -47,7 +47,7 @@ func (s *Service) recheckInboxTask(ctx context.Context, id string) (inboxTaskLin
 		out.Status = "closed"
 		return out, http.StatusConflict, nil
 	}
-	if !inboxTaskLinkEligible(it) {
+	if b.isExcluded(it) || !inboxTaskLinkEligible(it) {
 		out.Status, out.Method = "excluded", "policy"
 		if it.Agent == nil || it.Agent.TodoID == "" {
 			b.mu.Unlock()
@@ -97,7 +97,7 @@ func (s *Service) recheckInboxTask(ctx context.Context, id string) (inboxTaskLin
 		return out, http.StatusConflict, nil
 	}
 	b.mu.Lock()
-	if b.items[id] != it || it.Last != snapshot.Last || !it.open() || !inboxTaskLinkEligible(it) {
+	if b.items[id] != it || it.Last != snapshot.Last || !it.open() || b.isExcluded(it) || !inboxTaskLinkEligible(it) {
 		b.mu.Unlock()
 		out.Status = "changed"
 		return out, http.StatusConflict, nil

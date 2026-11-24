@@ -287,6 +287,14 @@ func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig
 	slices.Sort(out.Extensions)
 	if h.cfg != nil {
 		out.Agent = h.cfg.Inbox.Agent
+		out.ReadProfile = h.cfg.Inbox.ReadProfile
+		out.Lark = h.cfg.Inbox.Lark.Normalized()
+	}
+	if o, ok := connector.As[connector.Options](h.connectorOf("larkcli")); ok {
+		var opt assistantwire.InboxVisibility
+		if err := json.Unmarshal(o.Options(), &opt); err == nil {
+			out.Lark = out.Lark.Union(opt)
+		}
 	}
 	out.LarkAccount = h.inboxLarkAccount(ctx)
 	if h.mail != nil {

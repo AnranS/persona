@@ -25,7 +25,7 @@ func (b *inboxBook) inboxWakeCandidates(cfg InboxAgentConfig, due []*InboxItem) 
 	if cfg.Enabled {
 		for _, it := range b.items {
 			a := it.Agent
-			if !it.open() || a == nil || a.SessionID == "" || a.DeferredAt == nil {
+			if !it.open() || b.isExcluded(it) || a == nil || a.SessionID == "" || a.DeferredAt == nil {
 				continue
 			}
 			held := false
@@ -83,7 +83,7 @@ func (b *inboxBook) admitFreshInboxWakes(cfg InboxAgentConfig, now time.Time, fr
 	}
 	var due []*InboxItem
 	for _, it := range b.items {
-		if inboxFollowCheckDue(it, now) && it.Agent != nil && it.Agent.Of == it.Last {
+		if !b.isExcluded(it) && inboxFollowCheckDue(it, now) && it.Agent != nil && it.Agent.Of == it.Last {
 			due = append(due, it)
 		}
 	}
@@ -108,7 +108,7 @@ func (s *Service) checkInboxFollowUps(ctx context.Context, cfg InboxAgentConfig,
 	b.mu.Lock()
 	var due []*InboxItem
 	for _, it := range b.items {
-		if inboxFollowCheckDue(it, now) && it.Agent != nil && it.Agent.Of == it.Last {
+		if !b.isExcluded(it) && inboxFollowCheckDue(it, now) && it.Agent != nil && it.Agent.Of == it.Last {
 			// Content the conversation has not seen goes through escalate first: it is news, not an empty due check. This
 			// also leaves it waiting while the twin is off, so enabling the twin again still delivers that content.
 			due = append(due, it)

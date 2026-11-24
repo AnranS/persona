@@ -427,6 +427,25 @@ func (r *Runner) ListChats(ctx context.Context, limit int) (ChatList, error) {
 	return page, nil
 }
 
+// ListGroupChats lists only group chats, most recently active first.
+func (r *Runner) ListGroupChats(ctx context.Context, limit int) (ChatList, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	out, err := r.execute(ctx, []string{"im", "+chat-list", "--types", "group", "--sort", "active_time", "--page-size", fmt.Sprint(limit)}, outputJSON)
+	if err != nil {
+		return ChatList{}, err
+	}
+	var page ChatList
+	if err := decodeData(out, &page); err != nil {
+		return ChatList{}, cliError(KindOther, errors.New("invalid chat list JSON"))
+	}
+	return page, nil
+}
+
 // ListChatsAtMe finds chats with a message mentioning the user and normalizes
 // the message results to the same chat list shape as ListChats.
 func (r *Runner) ListChatsAtMe(ctx context.Context, limit int) (ChatList, error) {

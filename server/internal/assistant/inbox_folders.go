@@ -207,7 +207,7 @@ func (s *Service) fileFolders(ctx context.Context) {
 	cutoff := time.Now().Add(-inboxKeepDone)
 	var todo []*InboxItem
 	for _, it := range b.items {
-		if it.unfiled() && (it.DoneAt == nil || !it.DoneAt.Before(cutoff)) {
+		if !b.isExcluded(it) && it.unfiled() && (it.DoneAt == nil || !it.DoneAt.Before(cutoff)) {
 			todo = append(todo, it)
 		}
 	}
@@ -240,7 +240,7 @@ func (s *Service) fileBatch(ctx context.Context, batch []*InboxItem) error {
 	in := prompts.InboxFoldersInput{Folders: b.folderLines(), Examples: b.folderExamples()}
 	asked := make(map[string]string, len(batch))
 	for _, it := range batch {
-		if !it.unfiled() || b.items[it.ID] != it {
+		if b.isExcluded(it) || !it.unfiled() || b.items[it.ID] != it {
 			continue
 		}
 		asked[it.ID] = it.Last
@@ -301,7 +301,7 @@ func (b *inboxBook) folderLines() []prompts.InboxFolderUse {
 func (b *inboxBook) folderExamples() []prompts.InboxFolderExample {
 	var mine []*InboxItem
 	for _, it := range b.items {
-		if it.FolderBy == FolderByUser && it.Folder != "" {
+		if !b.isExcluded(it) && it.FolderBy == FolderByUser && it.Folder != "" {
 			mine = append(mine, it)
 		}
 	}
@@ -399,7 +399,7 @@ func (s *Service) toolInboxFolders(ctx context.Context, args json.RawMessage) (s
 	cutoff := time.Now().Add(-inboxKeepDone)
 	var items []*InboxItem
 	for _, it := range b.items {
-		if it.DoneAt != nil && it.DoneAt.Before(cutoff) {
+		if b.isExcluded(it) || it.DoneAt != nil && it.DoneAt.Before(cutoff) {
 			continue
 		}
 		if f != "" && (it.Folder == f || strings.HasPrefix(it.Folder, f+"/")) || f == "" && it.Folder == "" {

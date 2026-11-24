@@ -123,14 +123,19 @@ func (s *Service) sendFromCard(ctx context.Context, cardID, itemID string, send 
 		b.mu.Unlock()
 		return it, true, nil
 	}
-	// A card put in before its item was filed ("Done", "Ignore", read elsewhere, archived) is not a way to reply to it:
-	// the reply would go out unasked and the item's mark would become "Replied". Moved back to the inbox, it sends.
+	// A card put in before its item was filed ("Done", "Ignore", read elsewhere, archived) or excluded is not a way to
+	// reply to it: the reply would go out unasked and the item's mark would become "Replied".
+	vis := s.inboxConfig(ctx).Lark
 	b.mu.Lock()
 	ib := b.items[itemID]
 	filed := ib != nil && !ib.open()
+	excluded := ib != nil && b.isExcludedWith(ib, vis)
 	b.mu.Unlock()
 	if filed {
 		return InboxItem{}, false, errInboxItemDone
+	}
+	if excluded {
+		return InboxItem{}, false, errInboxExcluded
 	}
 	it, err = send()
 	return it, false, err

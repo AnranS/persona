@@ -64,6 +64,8 @@ func (s *Service) inboxSuggestionRoutes() {
 		switch {
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
+		case errors.Is(err, errInboxExcluded):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "inbox_item_excluded", "error": i18n.T(l, "inbox-errors.item_excluded"), "retryable": false, "delivered": "none", "item": it})
 		case errors.Is(err, errSuggestionStale):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "suggestion_stale", "error": i18n.T(l, "assistant-inbox.suggestion_stale"), "item": it})
 		case errors.Is(err, errInboxItemDone):
@@ -86,13 +88,19 @@ func (s *Service) inboxSuggestionRoutes() {
 // instruction at version 0 is also accepted when no suggestion is current. full is false for an answer-only device
 // (the watch): it may only confirm a reply or a conclusion, as text.
 func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionReq, full bool) (InboxItem, error) {
-	enabled := s.inboxConfig(ctx).Agent.Enabled
+	fullCfg := s.inboxConfig(ctx)
+	enabled := fullCfg.Agent.Enabled
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.items[id]
 	if it == nil {
 		b.mu.Unlock()
 		return InboxItem{}, errNoInboxItem
+	}
+	if b.isExcludedWith(it, fullCfg.Lark) {
+		out := it.listed()
+		b.mu.Unlock()
+		return out, errInboxExcluded
 	}
 	g := currentSuggestion(it)
 	switch {

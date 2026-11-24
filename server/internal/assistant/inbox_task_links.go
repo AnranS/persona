@@ -231,7 +231,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	var done []*InboxItem
 	b.mu.Lock()
 	for _, it := range b.items {
-		if !inboxTaskLinkEligible(it) {
+		if b.isExcluded(it) || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if !it.open() {

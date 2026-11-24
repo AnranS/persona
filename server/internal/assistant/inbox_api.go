@@ -123,6 +123,8 @@ func (s *Service) inboxRoutes() {
 		switch {
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
+		case errors.Is(err, errInboxExcluded):
+			apierr.WriteCode(w, http.StatusConflict, "inbox_item_excluded", err)
 		case modelUnconfigured(err):
 			// Nothing the hub can call is set up for drafting: a coded answer the apps can explain, not a bare 502
 			// (an internal error's text never reaches the screen).
@@ -175,6 +177,8 @@ func (s *Service) inboxRoutes() {
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "task_draft_dismissed", "error": i18n.T(i18n.OfWriter(w), "assistant-tasks.draft_dismissed"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errInboxItemDone):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "inbox_item_done", "error": i18n.T(i18n.OfWriter(w), "assistant-inbox.item_done"), "retryable": false, "delivered": "none"})
+		case errors.Is(err, errInboxExcluded):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "inbox_item_excluded", "error": i18n.T(i18n.OfWriter(w), "inbox-errors.item_excluded"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
 		case err != nil && s.writeInboxSendError(w, r, "reply", r.PathValue("id"), err):

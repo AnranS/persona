@@ -206,11 +206,15 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 			if t := messageTime(message); !t.IsZero() && t.After(newest) {
 				newest = t
 			}
+			if message.ChatType == "p2p" {
+				c.noteDirectChat(message.ChatID)
+			}
 			if message.MessageID != "" {
-				if !conversationMessage(message) || isBoundAppMessage(message, auth.AppID) {
+				if !conversationMessage(message) || isBoundAppMessage(message, auth.AppID) || c.messageExcluded(message) {
 					// The app bound to lark-cli is Persona's own bot in the
-					// recommended setup. Consume its messages and non-conversation
-					// events without waking Inbox, but keep cursor/seen progress.
+					// recommended setup. Consume its messages, non-conversation
+					// events, and visibility-excluded chats without waking Inbox,
+					// while keeping cursor/seen progress.
 					c.markSeen(message.MessageID)
 					continue
 				}
@@ -232,7 +236,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	// doesn't lose what search found; the round keeps it and reports the error at the end.
 	direct, directErr := c.sweepDirectChats(ctx)
 	for _, message := range direct {
-		if !conversationMessage(message) || isBoundAppMessage(message, auth.AppID) {
+		if !conversationMessage(message) || isBoundAppMessage(message, auth.AppID) || c.messageExcluded(message) {
 			c.markSeen(message.MessageID)
 			continue
 		}
@@ -287,6 +291,10 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 // indexing delay, so these chats are read here as well; the seen ledger drops what search already delivered. Search
 // results carry the chat's type and partner; history does not, so they are filled in from the chat list.
 func (c *Connector) sweepDirectChats(ctx context.Context) ([]adapter.Message, error) {
+	excludeDirect, excluded := c.visibility()
+	if excludeDirect {
+		return nil, nil
+	}
 	list, err := c.runner.ListDirectChats(ctx, inboxDirectCandidates)
 	if err != nil {
 		return nil, err
@@ -297,6 +305,10 @@ func (c *Connector) sweepDirectChats(ctx context.Context) ([]adapter.Message, er
 	var chats []adapter.Chat
 	for _, chat := range list.Chats {
 		if chat.ChatID == "" || (chat.ChatMode != "p2p" && chat.ChatType != "p2p") {
+			continue
+		}
+		c.noteDirectChat(chat.ChatID)
+		if _, skip := excluded[strings.TrimSpace(chat.ChatID)]; skip {
 			continue
 		}
 		chats = append(chats, chat)
@@ -392,6 +404,9 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 	out := make([]connector.InboxThing, 0, len(c.inboxThings))
 	if c.inboxCollecting {
 		for _, thing := range c.inboxThings {
+			if c.thingExcludedLocked(thing) {
+				continue
+			}
 			out = append(out, thing)
 		}
 	}
@@ -500,9 +515,18 @@ func (c *Connector) loadInboxStateLocked(ctx context.Context) error {
 	c.inboxState = saved
 	for thread, thing := range saved.Things {
 		if thread != "" {
+			if thing.Kind == "dm" || thing.Kind == "bot" {
+				if id, ok := chatIDFromThread(thread); ok {
+					if c.knownDirectChats == nil {
+						c.knownDirectChats = map[string]struct{}{}
+					}
+					c.knownDirectChats[id] = struct{}{}
+				}
+			}
 			c.inboxThings[thread] = thing
 		}
 	}
+	c.pruneExcludedThingsLocked()
 	for _, id := range saved.Seen {
 		if id != "" {
 			c.inboxSeen[id] = struct{}{}
@@ -557,6 +581,9 @@ func (c *Connector) seedTopics(ctx context.Context, me, start string, pageLimit 
 			return err
 		}
 		for _, message := range page.Messages {
+			if c.messageExcluded(message) {
+				continue
+			}
 			c.noteTopic(message, me)
 		}
 		if !page.HasMore || page.PageToken == "" {
@@ -646,6 +673,9 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 	var out []*inboxGroup
 	byKey := map[string]*inboxGroup{}
 	for _, message := range messages {
+		if c.messageExcluded(message) {
+			continue
+		}
 		key := messageKey(message)
 		if key == "" {
 			continue
@@ -696,12 +726,20 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 }
 
 func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connector.InboxThing {
-	if group == nil || len(group.messages) == 0 {
+	if group == nil || len(group.messages) == 0 || c.groupExcluded(group) {
 		return connector.InboxThing{}
 	}
 	latest := group.latest
 	contextMessages := append([]adapter.Message(nil), group.messages...)
 	if page, err := c.runner.ListMessages(ctx, group.chatID, group.threadID, "", 40); err == nil && len(page.Messages) > 0 {
+		for _, m := range page.Messages {
+			if m.ChatType == "p2p" && (m.ChatID == "" || m.ChatID == group.chatID) {
+				c.noteDirectChat(group.chatID)
+			}
+		}
+		if c.groupExcluded(group) {
+			return connector.InboxThing{}
+		}
 		contextMessages = mergeMessages(page.Messages, group.messages)
 	}
 	visible := contextMessages[:0]

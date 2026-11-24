@@ -36,13 +36,19 @@ func (s *Service) inboxRetryRoutes() {
 
 // retryInboxHandling takes an open failed item once and saves its recovery before scheduling any work.
 func (s *Service) retryInboxHandling(ctx context.Context, id string) (InboxItem, int, string, error) {
-	cfg := s.inboxConfig(ctx).Agent
+	fullCfg := s.inboxConfig(ctx)
+	cfg := fullCfg.Agent
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.items[id]
 	if it == nil {
 		b.mu.Unlock()
 		return InboxItem{}, http.StatusNotFound, "", errNoInboxItem
+	}
+	if b.isExcludedWith(it, fullCfg.Lark) {
+		out := it.listed()
+		b.mu.Unlock()
+		return out, http.StatusConflict, "inbox_item_excluded", errInboxExcluded
 	}
 	failed := it.Handling != nil && it.Handling.State == HandlingFailed ||
 		it.Handling == nil && it.Agent != nil && it.Agent.State == AgentFailed

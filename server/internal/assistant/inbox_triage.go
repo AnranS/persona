@@ -49,6 +49,9 @@ func (s *Service) triageInbox(ctx context.Context) {
 	b.mu.Lock()
 	var todo, stale, ruled []*InboxItem
 	for _, it := range b.items {
+		if b.isExcluded(it) {
+			continue
+		}
 		if it.open() && it.TriagedAt != it.Last && it.Context != "" {
 			if it.handled() { // what joins an event being handled follows it: its conversation decides (inbox_handle.go)
 				it.TriagedAt = it.Last
@@ -108,14 +111,20 @@ func (s *Service) triageInbox(ctx context.Context) {
 // (a connector's thing its rules leave to the model) keeps what it shows until a pass gets an answer. It returns the
 // change, settled (inbox_rollback.go); nil when the item was left as it was.
 func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
+	b := &s.inbox
+	b.mu.Lock()
+	excluded := b.isExcluded(it)
+	b.mu.Unlock()
+	if excluded {
+		return nil
+	}
 	last, v := s.askTriage(ctx, it, 90*time.Second)
 	if ctx.Err() != nil {
 		return nil
 	}
-	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if it.Last != last { // new messages arrived meanwhile: the next pass sees them
+	if b.isExcluded(it) || it.Last != last { // excluded or new messages arrived meanwhile: the next pass sees them
 		return nil
 	}
 	ruled := it.RuleOf == last
@@ -279,11 +288,15 @@ func (s *Service) triageModel(ctx context.Context, input, rules string, timeout 
 
 // triageModelIn uses the same owner/language snapshot as the input wrapper.
 func (s *Service) triageModelIn(ctx context.Context, input, rules string, timeout time.Duration, hello Hello) (v triageVerdict) {
+	cfg := s.inboxConfig(ctx)
 	if rules == "" {
-		rules = s.inboxConfig(ctx).Rules
+		rules = cfg.Rules
 	}
-	extContext, _ := s.inboxExtensionContext(ctx)
-	extContext = append(extContext, s.inboxMemoryContext(ctx, input)...) // memory_extension_source.go
+	var extContext []prompts.ExtensionContext
+	if !cfg.SourceOnly() {
+		extContext, _ = s.inboxExtensionContext(ctx)
+		extContext = append(extContext, s.inboxMemoryContext(ctx, input)...) // memory_extension_source.go
+	}
 	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale),
 		Context: extContext})
 	var out struct {
@@ -382,24 +395,35 @@ const draftModelWait = 2 * time.Minute
 
 // draftReply writes a reply to an inbox item in the user's voice (optionally following their instruction).
 func (s *Service) draftReply(ctx context.Context, id, instruction string) (string, error) {
+	cfg := s.inboxConfig(ctx)
 	hello := s.hello(ctx)
 	language := answerLanguage(hello.Locale)
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
+	excluded := ok && b.isExcludedWith(it, cfg.Lark)
 	var item prompts.InboxItem
-	if ok {
+	if ok && !excluded {
 		item = b.promptItemIn(it, language)
 	}
 	b.mu.Unlock()
 	if !ok {
 		return "", errNoInboxItem
 	}
-	extContext, neverQuote := s.inboxExtensionContext(ctx)
+	if excluded {
+		return "", errInboxExcluded
+	}
+	var extContext []prompts.ExtensionContext
+	var neverQuote []string
+	if !cfg.SourceOnly() {
+		extContext, neverQuote = s.inboxExtensionContext(ctx)
+	}
 	// About me as the user last edited it in the app, else the config file's (notes), as the main chat has it.
 	d := prompts.InboxDraft{Owner: hello.Owner, Notes: s.notes(ctx), Language: answerLanguage(hello.Locale), Context: extContext}
 	input := prompts.RenderInboxDraftInput(prompts.InboxDraftInput{Language: language, Item: item, Instruction: strings.TrimSpace(instruction)})
-	d.Context = append(d.Context, s.inboxMemoryContext(ctx, input)...) // memory_extension_source.go
+	if !cfg.SourceOnly() {
+		d.Context = append(d.Context, s.inboxMemoryContext(ctx, input)...) // memory_extension_source.go
+	}
 	cctx, cancel := context.WithTimeout(ctx, draftModelWait)
 	defer cancel()
 	// A draft that repeats a sentence an extension marked never to quote (what it keeps about people: evaluations,

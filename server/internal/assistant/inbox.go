@@ -169,6 +169,9 @@ type InboxItem struct {
 	// ChainSeq numbers the chain's entries; SuggestSeq is the last suggestion's version (a new one is the next).
 	ChainSeq   int `json:"chain_seq,omitempty"`
 	SuggestSeq int `json:"suggest_seq,omitempty"`
+	// Quarantined marks an existing item excluded from AI handling by Lark Inbox visibility controls without deleting
+	// its history or sent-attempt audit records. Persisted, not listed.
+	Quarantined bool `json:"quarantined,omitempty"`
 }
 
 type InboxLark struct {
@@ -241,7 +244,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.TriageRev, c.SettledOf, c.RuleOf, c.RepliedOf = 0, "", "", ""
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
-	c.ChainSeq, c.SuggestSeq = 0, 0
+	c.ChainSeq, c.SuggestSeq, c.Quarantined = 0, 0, false
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
 	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""

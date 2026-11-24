@@ -2,6 +2,7 @@
   "retry_stale": "这件事已经不需要重试",
   "no_item": "没有这条收件箱内容。",
   "item_done": "这条内容已归档，没有发送任何内容。",
+  "item_excluded": "飞书收件箱可见性设置已将这条内容排除在 AI 处理之外。",
   "save_failed": "无法保存这条内容，请重试。",
   "cannot_reply": "这条内容不支持回复。",
   "text_required": "请填写文字。",

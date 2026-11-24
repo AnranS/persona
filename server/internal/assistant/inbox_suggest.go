@@ -144,6 +144,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if s.inboxReady(ctx) != nil {
 		return "", nil, nil, false, errInboxUnavailable
 	}
+	vis := s.inboxConfig(ctx).Lark
 	b := &s.inbox
 	b.mu.Lock()
 	var it *InboxItem
@@ -168,6 +169,10 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			b.mu.Unlock()
 			return "", nil, nil, false, errNotProcessing
 		}
+	}
+	if b.isExcludedWith(it, vis) {
+		b.mu.Unlock()
+		return "", nil, nil, false, errSuggestExcluded
 	}
 	if from == nil && in.ProcessingTurn != it.Agent.ProcessingTurn {
 		b.mu.Unlock()
@@ -360,7 +365,7 @@ func suggestWritesTitle(it *InboxItem) bool {
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
 func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange, processingTurn string) (string, *DocChange, error) {
 	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed, ProcessingTurn: processingTurn})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) {
+	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) && !errors.Is(err, errSuggestExcluded) {
 		return "", nil, nil
 	}
 	return id, refused, err

@@ -30,11 +30,16 @@ type Connector struct {
 	now     func() time.Time
 	profile string
 
-	inboxMu       sync.Mutex
-	inboxThings   map[string]connector.InboxThing
-	inboxSeen     map[string]struct{}
-	inboxTopics   map[string]struct{}
-	inboxAllChats map[string]struct{}
+	inboxMu                sync.Mutex
+	inboxThings            map[string]connector.InboxThing
+	inboxSeen              map[string]struct{}
+	inboxTopics            map[string]struct{}
+	inboxAllChats          map[string]struct{}
+	excludeDirectChats     bool
+	excludedChatIDs        map[string]struct{}
+	defaultExcludeDirect   bool
+	defaultExcludedChatIDs map[string]struct{}
+	knownDirectChats       map[string]struct{}
 	// triageRules are the user's triage rules for lark-cli's Inbox items, in their words (options.triage_rules): the
 	// Inbox's triage reads them instead of the global inbox.rules.
 	triageRules       string
@@ -197,18 +202,40 @@ func (c *Connector) chats(ctx context.Context, args json.RawMessage) (string, er
 	if a.Limit <= 0 || a.Limit > 100 {
 		a.Limit = 30
 	}
+	excludeDirect, excluded := c.visibility()
+	var (
+		page adapter.ChatList
+		err  error
+	)
 	switch a.Filter {
 	case "", "recent", "unread":
 		// Open Platform has no unread state. The CLI's active-time list is the
 		// documented L2 fallback for both the old default and recent filter.
-		page, err := c.runner.ListChats(ctx, a.Limit)
-		return marshal(page, err)
+		if excludeDirect {
+			page, err = c.runner.ListGroupChats(ctx, a.Limit)
+		} else {
+			page, err = c.runner.ListChats(ctx, a.Limit)
+		}
 	case "at_me":
-		page, err := c.runner.ListChatsAtMe(ctx, a.Limit)
-		return marshal(page, err)
+		page, err = c.runner.ListChatsAtMe(ctx, a.Limit)
 	default:
 		return "", fmt.Errorf("unknown chat filter %q", a.Filter)
 	}
+	if err != nil {
+		return "", err
+	}
+	if excludeDirect || len(excluded) > 0 {
+		filtered := make([]adapter.Chat, 0, len(page.Chats))
+		for _, chat := range page.Chats {
+			if c.chatExcluded(chat) {
+				continue
+			}
+			filtered = append(filtered, chat)
+		}
+		page.Chats = filtered
+		page.Total = len(filtered)
+	}
+	return marshal(page, nil)
 }
 
 func (c *Connector) messages(ctx context.Context, args json.RawMessage) (string, error) {
@@ -222,11 +249,59 @@ func (c *Connector) messages(ctx context.Context, args json.RawMessage) (string,
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %v", err)
 	}
+	a.ChatID = strings.TrimSpace(a.ChatID)
+	a.Thread = strings.TrimSpace(a.Thread)
 	if a.ChatID == "" && a.Thread == "" {
 		return "", fmt.Errorf("chat_id is required")
 	}
+	excludeDirect, excluded := c.visibility()
+	if excludeDirect || len(excluded) > 0 {
+		if a.ChatID != "" {
+			if c.chatIDExcluded(a.ChatID) {
+				return "", fmt.Errorf("chat is excluded from Lark Inbox visibility")
+			}
+			if excludeDirect {
+				if c.isKnownDirectChat(a.ChatID) {
+					return "", fmt.Errorf("direct chats are excluded from Lark Inbox visibility")
+				}
+				rec := c.conversationChat(ctx, a.ChatID)
+				if rec.kind == "dm" {
+					c.noteDirectChat(a.ChatID)
+					return "", fmt.Errorf("direct chats are excluded from Lark Inbox visibility")
+				}
+				if rec.kind != "group" {
+					return "", fmt.Errorf("chat visibility could not be verified as non-direct")
+				}
+			}
+		} else {
+			chatID, direct, found := c.chatForThread(a.Thread)
+			if !found || c.chatIDExcluded(chatID) || (excludeDirect && direct) {
+				return "", fmt.Errorf("thread is excluded or unverified under Lark Inbox visibility")
+			}
+		}
+	}
 	page, err := c.runner.ListMessages(ctx, a.ChatID, a.Thread, a.Before, a.Limit)
-	return marshal(page, err)
+	if err != nil {
+		return "", err
+	}
+	if excludeDirect || len(excluded) > 0 {
+		filtered := make([]adapter.Message, 0, len(page.Messages))
+		for _, m := range page.Messages {
+			if m.ChatType == "p2p" {
+				c.noteDirectChat(m.ChatID)
+				if excludeDirect {
+					return "", fmt.Errorf("direct chats are excluded from Lark Inbox visibility")
+				}
+			}
+			if c.messageExcluded(m) {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		page.Messages = filtered
+		page.Total = len(filtered)
+	}
+	return marshal(page, nil)
 }
 
 func (c *Connector) search(ctx context.Context, args json.RawMessage) (string, error) {
@@ -240,11 +315,56 @@ func (c *Connector) search(ctx context.Context, args json.RawMessage) (string, e
 	if strings.TrimSpace(a.Query) == "" {
 		return "", fmt.Errorf("query is required")
 	}
-	raw, err := c.runner.Search(ctx, a.Kind, a.Query)
-	if err != nil {
-		return "", err
+	excludeDirect, excluded := c.visibility()
+	if !excludeDirect && len(excluded) == 0 {
+		raw, err := c.runner.Search(ctx, a.Kind, a.Query)
+		if err != nil {
+			return "", err
+		}
+		return string(raw), nil
 	}
-	return string(raw), nil
+	switch a.Kind {
+	case "", "messages":
+		page, err := c.runner.SearchMessages(ctx, a.Query, adapter.SearchOptions{})
+		if err != nil {
+			return "", err
+		}
+		filtered := make([]adapter.Message, 0, len(page.Messages))
+		for _, m := range page.Messages {
+			if c.messageExcluded(m) {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		page.Messages = filtered
+		page.Total = len(filtered)
+		return marshal(page, nil)
+	case "chats":
+		raw, err := c.runner.Search(ctx, a.Kind, a.Query)
+		if err != nil {
+			return "", err
+		}
+		var list adapter.ChatList
+		if err := json.Unmarshal(raw, &list); err != nil {
+			return "", err
+		}
+		filtered := make([]adapter.Chat, 0, len(list.Chats))
+		for _, chat := range list.Chats {
+			if c.chatExcluded(chat) {
+				continue
+			}
+			filtered = append(filtered, chat)
+		}
+		list.Chats = filtered
+		list.Total = len(filtered)
+		return marshal(list, nil)
+	default:
+		raw, err := c.runner.Search(ctx, a.Kind, a.Query)
+		if err != nil {
+			return "", err
+		}
+		return string(raw), nil
+	}
 }
 
 func marshal(value any, err error) (string, error) {

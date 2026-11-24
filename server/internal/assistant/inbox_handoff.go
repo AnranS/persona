@@ -78,6 +78,8 @@ func (s *Service) inboxHandoffRoutes() {
 		switch {
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
+		case errors.Is(err, errInboxExcluded):
+			apierr.WriteCode(w, http.StatusConflict, "inbox_item_excluded", err)
 		case err != nil:
 			apierr.Call(w, err)
 		default:
@@ -91,6 +93,7 @@ func (s *Service) inboxHandoffRoutes() {
 // already recorded is answered as it was. A repeat whose record was lost is dropped by session.send_once when the
 // main conversation was there already; one that started it starts another.
 func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxItem, SessionRef, error) {
+	vis := s.inboxConfig(ctx).Lark
 	b := &s.inbox
 	text := strings.TrimSpace(in.Text)
 	op := strings.ToLower(strings.TrimSpace(in.ClientID))
@@ -107,6 +110,11 @@ func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxI
 		b.handingOff.CompareAndDelete(id, mu)
 		b.mu.Unlock()
 		return InboxItem{}, SessionRef{}, errNoInboxItem
+	}
+	if b.isExcludedWith(it, vis) {
+		out := it.listed()
+		b.mu.Unlock()
+		return out, SessionRef{}, errInboxExcluded
 	}
 	if in.ReusePending {
 		var to *SessionRef

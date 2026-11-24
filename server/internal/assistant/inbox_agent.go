@@ -210,7 +210,9 @@ func (s *Service) handInbox(ctx context.Context) {
 
 // handPass is one pass of handInbox, with b.handing held.
 func (s *Service) handPass(ctx context.Context) {
-	cfg := s.inboxConfig(ctx).Agent
+	fullCfg := s.inboxConfig(ctx)
+	s.quarantineExcludedInbox(ctx, fullCfg)
+	cfg := fullCfg.Agent
 	b := &s.inbox
 	s.forwardInboxToTodos(ctx)
 	s.linkInboxTaskURLs(ctx)
@@ -312,6 +314,8 @@ func inboxAgentReleaseState(it *InboxItem) (active, pending bool) {
 // than the configured number are looking): one the event's id finds (a start the manager restarted during) is taken
 // back instead; one that comes after a lost conversation carries the recap and the chain.
 func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
+	fullCfg := s.inboxConfig(ctx)
+	sourceOnly := fullCfg.SourceOnly() || strings.TrimSpace(cfg.ReadProfile) == assistantwire.InboxReadProfileSourceOnly
 	b := &s.inbox
 	linked := map[string]*prompts.InboxTask{} // read before the inbox lock (todos and sessions)
 	for _, t := range s.activeTasks(ctx) {
@@ -327,7 +331,7 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 	var queued []*InboxItem
 	var released []*inboxWrite
 	for _, it := range b.items {
-		if it.Agent == nil {
+		if it.Agent == nil || b.isExcluded(it) {
 			continue
 		}
 		switch {
@@ -376,11 +380,17 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
 		a := b.inboxAgentForIn(it, owner, linked[it.Agent.TodoID], larkDefault, loc, language)
-		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
+		chat := ""
+		if !sourceOnly {
+			a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
+			chat = b.kbChatOf(it)
+		}
 		turn := rand.Text()
 		it.Agent.ProcessingTurn = turn
-		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string {
-			a.KB = kbc
+		jobs = append(jobs, job{it, chat, func(kbc *prompts.KBContext) string {
+			if !sourceOnly {
+				a.KB = kbc
+			}
 			return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(a))
 		},
 			it.Agent.told})
@@ -443,6 +453,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 
 // kbChatOf is the knowledge base's chat of an item: its Feishu chat, or the mail's correspondent; "" for none.
 func (b *inboxBook) kbChatOf(it *InboxItem) string {
+	if b.isExcluded(it) {
+		return ""
+	}
 	switch {
 	case it.Lark != nil:
 		return kb.ChatID("lark", it.Lark.FeedID)

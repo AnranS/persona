@@ -217,7 +217,7 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 		s.noteAssistantDenied(ctx, machine, session, name)
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
 	}
-	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
+	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name, args); refused {
 		return res
 	}
 	if slices.Contains(resourceToolNames, name) {

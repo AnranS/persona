@@ -2,6 +2,7 @@
   "retry_stale": "This item no longer has failed handling to retry",
   "no_item": "no such inbox item",
   "item_done": "the inbox item was filed: nothing was sent",
+  "item_excluded": "this inbox item is excluded from AI handling by Lark Inbox visibility settings",
   "save_failed": "the inbox item could not be saved",
   "cannot_reply": "this item cannot be replied to",
   "text_required": "text is required",

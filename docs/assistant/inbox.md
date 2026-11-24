@@ -1214,3 +1214,21 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   iPhone's Watch summary carries up to 20 items (`WatchSummary.inbox`); while open, Watch fetches `/api/v1/inbox` directly every 8 seconds. New items vibrate.
 - Open `WatchInboxItemView`: summary, latest message; AI reply drafts first and displays it, then Send (`/reply`); Done.
 - DEBUG: Watch `-openInboxFirst YES` opens the first item.
+
+## Lark visibility controls and `source_only` read profile (#11902)
+
+All visibility controls and read-profile restrictions are **strictly opt-in**: leaving them unset preserves the default Inbox behavior unchanged.
+
+- **Collection exclusions (`inbox.lark` in `manager.json` and `larkcli` connector options)**:
+  - `exclude_direct_chats: true` excludes direct (`p2p`) chats (human DMs and bot DMs) from Lark Inbox collection. In `larkcli`, direct-chat sweeps (`sweepDirectChats`) skip with zero CLI calls, search results and topic seeding filter out `p2p` messages independently, and `thingForGroup` skips excluded chats before fetching message context.
+  - `excluded_chat_ids: ["oc_..."]` excludes specific Lark chat IDs (groups or direct chats) from collection, search, direct-chat sweep, and `larkcli` chat/search/message tool results. Explicit exclusions override `inbox_all_chats`, `@me` mentions, and known topics.
+  - Exclusions configured in `manager.json` (`inbox.lark`) and in `larkcli` connector options (`PUT /api/v1/connectors/larkcli/settings`) are unioned and propagated through `inbox.config` (`assistantwire.InboxConfig.Lark`).
+- **`source_only` read profile (`inbox.read_profile: "source_only"` or `inbox.agent.read_profile: "source_only"`)**:
+  - Disables automatic knowledge-base and memory injection in Inbox handling chats (`kbChatContext`, `KnowledgeDir`), triage (`triageModelIn`), and reply drafting (`draftReply`).
+  - Restricts Inbox handling chat model tool calls (`server/internal/assistant/inbox_policy.go`, `server/internal/assistant/inbox_visibility.go`) to `inbox_suggest` / `inbox_draft` and source-scoped message/image reads (`larkcli_messages`, `lark_messages`, `lark_image`).
+  - Rejects knowledge-base tools (`kb_*`), unrestricted chat/search tools (`lark_chats`, `lark_search`, `larkcli_chats`, `larkcli_search`, `conversations_list`, `conversation_read`, `inbox_folders`, `mail_search`), and phone tools with zero downstream calls.
+  - Validates message-read targets against the bound, non-excluded, non-direct Inbox item **before** calling any downstream connector: cross-conversation `chat_id`, mismatched `thread` / `account`, foreign `lark_image` message IDs, and direct-chat message reads fail closed with zero downstream calls.
+- **Quarantine and fail-closed boundaries (`server/internal/assistant/inbox_visibility.go`)**:
+  - When exclusions are enabled (at startup load in `inboxReady`, on `InboxCollected`, and at the start of `handPass`), existing excluded items (queued, handling, waiting, or suggested—including legacy `AgentDrafted` drafts) are quarantined out of AI eligibility: current suggestions, pending notes, wakes, retries, follow-up checks, and task links are cleared, while item history (`Chain`, `DoneAt`, `DoneBy`) and sent-attempt audit records (`SuggestionAttempts`) remain intact.
+  - Excluded items never enter triage, admission, event grouping, folder filing, task linking, auto-forwarding, supervision signals, or the main-chat "Following up" snapshot.
+  - Suggestion submission (`inbox_suggest`, `inbox_draft`), suggestion confirmation (`POST /api/v1/inbox/{id}/suggestion`), card sends (`sendFromCard`), AI drafting (`POST /api/v1/inbox/{id}/draft`), hand-off (`POST /api/v1/inbox/{id}/handoff`), and handling retry (`POST /api/v1/inbox/{id}/retry`) all fail closed (`409 inbox_item_excluded`, `retryable: false`, `delivered: "none"`) for excluded items. Removing an exclusion clears quarantine on the next sync without deleting history.

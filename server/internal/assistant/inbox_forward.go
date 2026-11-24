@@ -806,7 +806,7 @@ func (s *Service) forwardInboxToTodos(ctx context.Context) {
 		}
 	}
 	for _, it := range b.items {
-		if !it.open() || !inboxTaskLinkEligible(it) {
+		if !it.open() || b.isExcluded(it) || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if isSelfAuthoredInboxItem(it, owner, ownEmails) {

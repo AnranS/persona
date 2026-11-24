@@ -62,6 +62,12 @@ func (s *Service) inboxReady(ctx context.Context) error {
 		return errInboxUnavailable
 	}
 	b.loaded.Store(true)
+	b.mu.Lock()
+	quarantined := b.quarantineExcludedLocked(time.Now())
+	b.mu.Unlock()
+	if len(quarantined) > 0 {
+		s.saveWrites(ctx, quarantined, "quarantined excluded items")
+	}
 	s.tellInboxNeedsYou() // the hub was told none while it was unread
 	return nil
 }
@@ -106,6 +112,7 @@ func (s *Service) loadInbox(ctx context.Context) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.larkAccount = cfg.LarkAccount
+	b.visibility = cfg.Lark.Normalized()
 	for _, it := range loaded {
 		if _, have := b.items[it.ID]; have {
 			continue // newer in memory than in the database

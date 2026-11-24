@@ -80,12 +80,12 @@ func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if err := s.guardRefusal(ctx, call.MachineID, call.SessionID, call.Name); err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
-	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name); refused {
-		return res
-	}
 	args := call.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
+	}
+	if res, refused := s.inboxModelRefusal(ctx, call.MachineID, call.SessionID, "", call.Name, args); refused {
+		return res
 	}
 	if res, refused := s.meetingRefuses(ctx, call.MachineID, call.SessionID, call.Name, true); refused {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
