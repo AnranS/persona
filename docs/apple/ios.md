@@ -62,6 +62,16 @@ Working sessions also use last activity, not work-start time; seen, idle and not
 The existing `AgentsFeed` and scroll protection remain; structure updates only when activity timestamps change relative session order, with reordering paused while browsing to preserve reading position.
 Mac's previous / next Agent follows pinned order then recent activity in this mode; other modes retain their order.
 
+## Use the herdr tab name as the session name (#13899)
+
+Who it serves: people who name terminal tabs in herdr and want Agents on iOS to match the names they see on Web (`use_herdr_tab_name` in `GET`/`PUT /api/v1/agents/display-settings`). Default: off; older hubs that omit `use_herdr_tab_name` or return 404 keep the setting off and hide the switch.
+
+- **Per-hub sync and caching**: each paired hub group keeps its own `AgentsDisplayStore` (`apple/Persona/App/AgentsDisplayStore.swift`), cached in `StateCache` (`agents-display` / `agents-display.<group>`), refreshed on every hub hello, pull-to-refresh, and when Settings › Agent opens. Writes send a single-field `PUT /api/v1/agents/display-settings` (`{"use_herdr_tab_name": true|false}`) and only update local state after the hub acknowledges; failures preserve the last acknowledged value and offer Retry. Demo Mode leaves the switch hidden and off.
+- **Settings › Agent**: `AgentHerdrTabNameSection` (`apple/Persona/Views/Settings/SettingsAgentView.swift`) exposes the **Use the herdr tab name as the session name** switch (with saving status and Retry on write failure) and adds herdr/tab-name search aliases under `settings.search.agents`.
+- **Display and search**: `apple/Shared/SessionNaming.swift` (`herdrTabName`, `displayTabName(preferTab:)`, `displayTitle(preferTab:)`, `displayTitleDetail(preferTab:)`, `usesUnifiedHerdrRename(preferTab:)`) mirrors server `Session.HerdrTabName` and Web `web/src/lib/format.ts`. When enabled for a session's hub, Agents rows (`SlotRow` across Avatar / Two Lines / State Cards / BeautifulUI, `CompactSlotRow`, `WorkspaceAgentRow`, `TabGroupRow`, `SessionRow`, `SlotCard`, Needs You rows), Chat headers (`ChatView` title, `devSubtitle`, `SessionOverviewSheet` / `SessionInfoSheet`, `SubagentOverview`, `ChildSessionCard`, `NextNeedsYouStrip`, `SiblingList`), `TerminalsView`, and Search (`AssistantFullSearch`, Agents list search, `ForwardTargets`, `MentionMenu`) promote the herdr tab name to the main title, move a differing CLI session title to the secondary/detail line, and avoid repeating the tab name in the place line. When off, rendering stays unchanged.
+- **Unified Rename**: when enabled for a session with a herdr tab name, `RenameSessionAlert` (`SessionRenameForm`) merges into a single **Name** field with unified hint text (`"Updates the herdr tab and, where supported, the CLI session name."`), updating `tab_name` and — for Claude Code and Codex — also `title` (tab-only for other CLIs). When off, the separate Tab name and Session name fields stay unchanged.
+- **Tests**: `HerdrTabNameTests` (`apple/PersonaTests/HerdrTabNameTests.swift`).
+
 ## Pinned directions (#4352)
 
 One tree from the hub drives the sidebar, the To-dos page and the Agents page: `GET /api/v1/assistant/directions/tree`

@@ -221079,25 +221079,117 @@
         }
       }
     },
+    "Saving session naming preference…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving session naming preference…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッション名の設定を保存中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在保存会话命名设置…"
+          }
+        }
+      }
+    },
+    "Shows the tab name first and syncs this preference across devices on this hub." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the tab name first and syncs this preference across devices on this hub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "优先显示标签名。此设置会在连接同一 Hub 的设备间同步。"
+          }
+        }
+      }
+    },
+    "Updates the herdr tab and, where supported, the CLI session name." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updates the herdr tab and, where supported, the CLI session name."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "herdr のタブ名を変更します。CLI がセッション名の変更に対応している場合は、そちらも変更します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新 herdr 标签名。如果 CLI 支持改名，也会更新 CLI 会话名。"
+          }
+        }
+      }
+    },
+    "Use the herdr tab name as the session name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use the herdr tab name as the session name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "herdr のタブ名をセッション名として使う"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 herdr 标签名作为会话名"
+          }
+        }
+      }
+    },
     "settings.search.agents" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex Antigravity agy session triage runtime"
+            "value" : "Agent Claude Code Codex Antigravity agy session triage runtime herdr tab name"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex Antigravity agy 会话 分诊 运行时"
+            "value" : "Agent Claude Code Codex Antigravity agy 会话 分诊 运行时 herdr 标签名 会话名"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agent Claude Code Codex Antigravity agy セッション トリアージ ランタイム"
+            "value" : "Agent Claude Code Codex Antigravity agy セッション トリアージ ランタイム herdr タブ名"
           }
         }
       }
