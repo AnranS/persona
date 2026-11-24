@@ -144,7 +144,12 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if s.inboxReady(ctx) != nil {
 		return "", nil, nil, false, errInboxUnavailable
 	}
-	vis := s.inboxConfig(ctx).Lark
+	fullCfg := s.inboxConfig(ctx)
+	vis := fullCfg.Lark
+	var policy replyPolicySpec
+	if in.Kind == SuggestReply && !in.Handback {
+		policy = compileReplyPolicy(fullCfg.ReplyPolicy)
+	}
 	b := &s.inbox
 	b.mu.Lock()
 	var it *InboxItem
@@ -191,6 +196,38 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			b.mu.Unlock()
 			return it.ID, &ch, nil, false, nil
 		}
+	}
+	var policySnap *InboxReplyPolicySnapshot
+	if policy.enabled && in.Kind == SuggestReply && !in.Handback && it.open() {
+		itemData := snapshotItemForReplyPolicyLocked(it)
+		existingSnap := cloneReplyPolicySnapshot(it.ReplyPolicy)
+		b.mu.Unlock()
+		snap, gateErr := s.gateReplyPolicySuggestion(ctx, policy, itemData, existingSnap, in.Text)
+		liveCfg := s.inboxConfig(ctx)
+		livePolicy := compileReplyPolicy(liveCfg.ReplyPolicy)
+		b.mu.Lock()
+		if gateErr != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, replyPolicySuggestionErr(snap, gateErr)
+		}
+		if b.isExcludedWith(it, liveCfg.Lark) {
+			b.mu.Unlock()
+			return "", nil, nil, false, errSuggestExcluded
+		}
+		if b.items[itemData.id] != it || !it.open() {
+			b.mu.Unlock()
+			return "", nil, nil, false, errSuggestFiled
+		}
+		if from == nil && (it.Agent == nil || in.ProcessingTurn != it.Agent.ProcessingTurn) {
+			b.mu.Unlock()
+			return "", nil, nil, false, errStaleInboxTurn
+		}
+		if !livePolicy.enabled || livePolicy.revision != policy.revision || replyPolicyContentVersion(it) != itemData.contentVersion ||
+			livePolicy.allowsOwnerDraft(snap, itemData.contentVersion) != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, replyPolicySuggestionErr(snap, errReplyPolicyStaleSnapshot)
+		}
+		policySnap = snap
 	}
 	now := time.Now().UTC()
 	w := beginWrite(it)
@@ -259,7 +296,11 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 		}
 		g := &InboxSuggestion{Version: it.SuggestSeq + 1, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
-			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from,
+			ReplyPolicy: cloneReplyPolicySnapshot(policySnap)}
+		if policySnap != nil {
+			it.ReplyPolicy = cloneReplyPolicySnapshot(policySnap)
+		}
 		if from != nil {
 			owner := *from
 			g.Owner = &owner
@@ -365,7 +406,8 @@ func suggestWritesTitle(it *InboxItem) bool {
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
 func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange, processingTurn string) (string, *DocChange, error) {
 	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed, ProcessingTurn: processingTurn})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) && !errors.Is(err, errSuggestExcluded) {
+	var se errSuggestion
+	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) && !errors.Is(err, errSuggestExcluded) && !errors.As(err, &se) {
 		return "", nil, nil
 	}
 	return id, refused, err

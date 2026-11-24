@@ -213,6 +213,7 @@ func (s *Service) handPass(ctx context.Context) {
 	fullCfg := s.inboxConfig(ctx)
 	s.quarantineExcludedInbox(ctx, fullCfg)
 	cfg := fullCfg.Agent
+	policy := compileReplyPolicy(fullCfg.ReplyPolicy)
 	b := &s.inbox
 	s.forwardInboxToTodos(ctx)
 	s.linkInboxTaskURLs(ctx)
@@ -226,7 +227,8 @@ func (s *Service) handPass(ctx context.Context) {
 	}
 	now := time.Now()
 	s.sweepInboxAgents(ctx, cfg, now)
-	escalated := b.escalate(now.Add(-agentMaxAge(cfg)), now)
+	s.gateReplyPolicyQueue(ctx, policy, now.Add(-agentMaxAge(cfg)))
+	escalated := b.escalateWithPolicy(now.Add(-agentMaxAge(cfg)), now, policy)
 	linked := map[*InboxItem]bool{}
 	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
 		for _, w := range escalated {
@@ -325,6 +327,7 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 	owner, language := inboxPromptOwner(hello), answerLanguage(hello.Locale)
 	loc := s.location(ctx) // the chain's times, read in the user's zone (the hub runs in UTC)
 	now := time.Now().UTC()
+	policy := compileReplyPolicy(fullCfg.ReplyPolicy)
 	byEvent := s.conversationsByEvent(ctx)
 	b.mu.Lock()
 	running := 0
@@ -341,6 +344,12 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 			// Recheck before backoff, capacity or adoption: a saved rule also covers work already queued.
 			if b.policyTwin(it) == TwinNever {
 				if w := b.releaseInboxAgent(it, HandlingDone, i18n.T(b.userLang(), "assistant-inbox_agent.never"), now, false); w != nil {
+					released = append(released, w)
+				}
+				continue
+			}
+			if !replyPolicyAllowsQueueLocked(it, policy) {
+				if w := b.releaseInboxAgent(it, HandlingDone, i18n.T(b.userLang(), "assistant-inbox_agent.reply_policy_blocked"), now, false); w != nil {
 					released = append(released, w)
 				}
 				continue

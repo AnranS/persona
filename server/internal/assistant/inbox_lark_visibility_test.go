@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -475,6 +476,35 @@ func TestInboxQuarantineExistingExcludedItemsPreservesAuditAndFailsClosed(t *tes
 	if code != http.StatusConflict || body["code"] != "inbox_item_excluded" {
 		t.Fatalf("POST /retry on excluded item: status=%d body=%+v", code, body)
 	}
+
+	// 3b. Enabling reply_policy alongside visibility exclusions must still skip excluded items with zero model calls.
+	h.setConfig(func(c *assistantwire.InboxConfig) {
+		c.ReplyPolicy = assistantwire.InboxReplyPolicyConfig{Enabled: true}
+	})
+	h.inbox.mu.Lock()
+	h.inbox.items["dm-unhandled-excl"] = &InboxItem{
+		ID:        "dm-unhandled-excl",
+		Source:    "larkcli",
+		Kind:      KindDM,
+		Title:     "DM excluded with reply_policy",
+		Context:   "Private DM that must never hit reply policy classifier",
+		Last:      "om_dm_rp_1",
+		TriagedAt: "om_dm_rp_1",
+		Tier:      TierAction,
+		UpdatedAt: now,
+		Connector: &InboxConnector{Thread: "larkcli:chat:oc_dm_rp", CanReply: true},
+	}
+	h.inbox.mu.Unlock()
+	h.handPass(t.Context())
+	if _, err := h.draftReply(t.Context(), "dm-unhandled-excl", ""); !errors.Is(err, errInboxExcluded) {
+		t.Fatalf("draftReply on excluded item with reply_policy enabled: got %v, want errInboxExcluded", err)
+	}
+	if len(calls()) != 0 {
+		t.Fatalf("excluded items triggered %d model calls with reply_policy enabled", len(calls()))
+	}
+	h.setConfig(func(c *assistantwire.InboxConfig) {
+		c.ReplyPolicy = assistantwire.InboxReplyPolicyConfig{}
+	})
 
 	// 4. Reversibility: removing exclusions clears quarantine without losing history or audit records.
 	h.setConfig(func(c *assistantwire.InboxConfig) {

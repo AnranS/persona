@@ -398,13 +398,20 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 	cfg := s.inboxConfig(ctx)
 	hello := s.hello(ctx)
 	language := answerLanguage(hello.Locale)
+	policy := compileReplyPolicy(cfg.ReplyPolicy)
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
 	excluded := ok && b.isExcludedWith(it, cfg.Lark)
 	var item prompts.InboxItem
+	var policyItem replyPolicyItemData
+	var existingSnap *InboxReplyPolicySnapshot
 	if ok && !excluded {
 		item = b.promptItemIn(it, language)
+		if policy.enabled {
+			policyItem = snapshotItemForReplyPolicyLocked(it)
+			existingSnap = cloneReplyPolicySnapshot(it.ReplyPolicy)
+		}
 	}
 	b.mu.Unlock()
 	if !ok {
@@ -412,6 +419,11 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 	}
 	if excluded {
 		return "", errInboxExcluded
+	}
+	if policy.enabled {
+		if _, err := s.gateReplyPolicySuggestion(ctx, policy, policyItem, existingSnap, instruction); err != nil {
+			return "", errReplyPolicyBlocked
+		}
 	}
 	var extContext []prompts.ExtensionContext
 	var neverQuote []string
@@ -436,6 +448,23 @@ func (s *Service) draftReply(ctx context.Context, id, instruction string) (strin
 		text = strings.TrimSpace(text)
 		hit := quotesAny(text, neverQuote)
 		if hit == "" {
+			liveCfg := s.inboxConfig(ctx)
+			b.mu.Lock()
+			liveItem := b.items[id]
+			liveExcluded := liveItem != nil && b.isExcludedWith(liveItem, liveCfg.Lark)
+			liveCV := replyPolicyContentVersion(liveItem)
+			b.mu.Unlock()
+			if liveExcluded {
+				return "", errInboxExcluded
+			}
+			if livePolicy := compileReplyPolicy(liveCfg.ReplyPolicy); livePolicy.enabled {
+				if !policy.enabled || livePolicy.revision != policy.revision || liveCV != policyItem.contentVersion {
+					return "", errReplyPolicyBlocked
+				}
+				if _, err := s.gateReplyPolicySend(ctx, livePolicy, policyItem, text); err != nil {
+					return "", errReplyPolicyBlocked
+				}
+			}
 			return text, nil
 		}
 		if d.Rewrite {
@@ -562,11 +591,17 @@ func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID strin
 	once.mu.Lock()
 	defer once.mu.Unlock()
 	if attempt, _ := ctx.Value(suggestionReplyOnly{}).(*InboxSuggestionAttempt); attempt != nil {
+		liveCfg := s.inboxConfig(ctx)
+		livePolicy := compileReplyPolicy(liveCfg.ReplyPolicy)
 		b.mu.Lock()
-		current := b.currentReplyAttempt(it, attempt)
+		current := !b.isExcludedWith(it, liveCfg.Lark) && b.currentReplyAttempt(it, attempt)
+		policyErr := verifyReplyPolicySendAttemptLocked(it, attempt, livePolicy)
 		b.mu.Unlock()
 		if !current {
 			return InboxItem{}, errSuggestionStale
+		}
+		if policyErr != nil {
+			return InboxItem{}, errReplyPolicyBlocked
 		}
 	}
 	if fromCard {

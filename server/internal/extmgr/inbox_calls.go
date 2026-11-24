@@ -288,6 +288,7 @@ func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig
 		out.Agent = h.cfg.Inbox.Agent
 		out.ReadProfile = h.cfg.Inbox.ReadProfile
 		out.Lark = h.cfg.Inbox.Lark.Normalized()
+		out.ReplyPolicy = cloneReplyPolicyConfig(h.cfg.Inbox.ReplyPolicy)
 	}
 	if o, ok := connector.As[connector.Options](h.connectorOf("larkcli")); ok {
 		var opt assistantwire.InboxVisibility
@@ -298,6 +299,17 @@ func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig
 	out.LarkAccount = h.inboxLarkAccount(ctx)
 	if h.mail != nil {
 		out.Translate = h.mailTargets(ctx)
+	}
+	return out
+}
+
+func cloneReplyPolicyConfig(in assistantwire.InboxReplyPolicyConfig) assistantwire.InboxReplyPolicyConfig {
+	out := in
+	if len(in.Categories) > 0 {
+		out.Categories = make(map[string]string, len(in.Categories))
+		for k, v := range in.Categories {
+			out.Categories[k] = v
+		}
 	}
 	return out
 }

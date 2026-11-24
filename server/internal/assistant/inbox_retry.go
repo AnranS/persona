@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -38,6 +39,7 @@ func (s *Service) inboxRetryRoutes() {
 func (s *Service) retryInboxHandling(ctx context.Context, id string) (InboxItem, int, string, error) {
 	fullCfg := s.inboxConfig(ctx)
 	cfg := fullCfg.Agent
+	policy := compileReplyPolicy(fullCfg.ReplyPolicy)
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.items[id]
@@ -65,6 +67,11 @@ func (s *Service) retryInboxHandling(ctx context.Context, id string) (InboxItem,
 		out := it.listed()
 		b.mu.Unlock()
 		return out, http.StatusConflict, "inbox_retry_disabled", i18n.ErrEnglish(key)
+	}
+	if policy.enabled && !replyPolicyAllowsQueueLocked(it, policy) {
+		out := it.listed()
+		b.mu.Unlock()
+		return out, http.StatusConflict, assistantwire.CodeInboxReplyPolicyBlocked, errReplyPolicyBlocked
 	}
 
 	w := beginWrite(it)

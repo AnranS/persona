@@ -172,6 +172,9 @@ type InboxItem struct {
 	// Quarantined marks an existing item excluded from AI handling by Lark Inbox visibility controls without deleting
 	// its history or sent-attempt audit records. Persisted, not listed.
 	Quarantined bool `json:"quarantined,omitempty"`
+	// ReplyPolicy is the latest server-side reply-policy classification for this item (inbox_reply_policy.go).
+	// Persisted, never listed.
+	ReplyPolicy *InboxReplyPolicySnapshot `json:"reply_policy,omitempty"`
 }
 
 type InboxLark struct {
@@ -245,6 +248,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq, c.Quarantined = 0, 0, false
+	c.ReplyPolicy = nil
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
 	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
@@ -264,6 +268,7 @@ func (it *InboxItem) listed() InboxItem {
 		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
 		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		g.Owner, g.SourceOf = nil, ""
+		g.ReplyPolicy = nil
 		c.Suggestion = &g
 		if c.Handling == nil && g.Conversation == nil && it.Agent != nil { // an old draft: its conversation is done with this round
 			c.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}

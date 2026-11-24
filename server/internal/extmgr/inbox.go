@@ -57,10 +57,16 @@ type InboxConfig struct {
 	ReadProfile string `json:"read_profile,omitempty"`
 	// Lark configures opt-in chat visibility exclusions for Lark Inbox sources.
 	Lark assistantwire.InboxVisibility `json:"lark,omitempty"`
+	// ReplyPolicy is the opt-in server-side category routing and fail-closed owner-draft gate (manager.json
+	// inbox.reply_policy). Disabled by default.
+	ReplyPolicy InboxReplyPolicyConfig `json:"reply_policy,omitempty"`
 }
 
 // InboxAgentConfig is manager.json's inbox.agent, handed to the manager as it is.
 type InboxAgentConfig = assistantwire.InboxAgentConfig
+
+// InboxReplyPolicyConfig is manager.json's inbox.reply_policy, handed to the manager as it is.
+type InboxReplyPolicyConfig = assistantwire.InboxReplyPolicyConfig
 
 // inboxSources is this code's part of the inbox: the wake-ups, one collection at a time, and what the manager
 // reported.
