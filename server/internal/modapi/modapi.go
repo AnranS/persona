@@ -179,5 +179,5 @@ type WaitRow struct {
 // hub. An id leaves this list in the PR that gives the module a server half with its own feature
 // (internal/modules/all checks that no built-in module is listed).
 func ClientModules() []string {
-	return []string{"glasses", "health", "knowledge-ui"}
+	return []string{"glasses"}
 }
