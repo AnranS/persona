@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
@@ -157,11 +158,30 @@ class HerdrTabNameUiTest {
         rule.waitForIdle()
         rule.onNodeWithText("Tab name (herdr tab)").assertExists()
         rule.onNodeWithText("Session name").assertExists()
-        rule.onNode(hasSetTextAction() and hasText("CLI session name")).performTextClearance()
-        rule.onNode(hasSetTextAction() and hasText("Session name")).performTextInput("CLI only")
+        rule.onNode(hasSetTextAction() and hasText("CLI session name")).performTextReplacement("CLI only")
         rule.onNodeWithText("Save").assertIsEnabled().performClick()
         rule.waitForIdle()
         assertEquals(listOf(SessionRename(title = "CLI only", tabName = null)), renames)
+    }
+
+    @Test fun glassNeedsYouWaitingRowShowsHerdrTabNameWhenEnabled() {
+        var preferTab by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                GlassNeedsYouWaitingRow(
+                    owner = herdrSession,
+                    machine = "MacBook",
+                    sidebar = false,
+                    preferHerdrTabName = preferTab,
+                    onClick = {},
+                )
+            }
+        }
+        rule.onNodeWithText("CLI session name · MacBook").assertExists()
+
+        rule.runOnIdle { preferTab = true }
+        rule.waitForIdle()
+        rule.onNodeWithText("Export work · MacBook").assertExists()
     }
 
     private fun viewModelRecording(renames: MutableList<SessionRename>): AgentsViewModel {
@@ -215,6 +235,8 @@ class HerdrTabNameUiTest {
         }
         val assistant = object : AssistantConversations {
             override val assistant = MutableStateFlow(AssistantSnapshot())
+            override val pinned = MutableStateFlow(emptySet<SessionKey>())
+            override suspend fun startConversation() = SessionKey("mac", "assistant")
             override suspend fun refresh() = Unit
         }
         return AgentsViewModel(

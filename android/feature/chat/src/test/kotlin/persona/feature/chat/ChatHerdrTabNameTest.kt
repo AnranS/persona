@@ -105,8 +105,8 @@ class ChatHerdrTabNameTest {
         rule.onNodeWithText("Export work").assertExists()
         rule.onNodeWithText("CLI session name · MacBook · persona", substring = true).assertExists()
 
-        // Open More -> Rename: single "Name" field, saves both tab_name and title for Claude.
-        rule.onNodeWithContentDescription("More").performClick()
+        // Open More actions -> Rename: single "Name" field, saves both tab_name and title for Claude.
+        rule.onNodeWithContentDescription("More actions").performClick()
         rule.onNodeWithText("Rename").performClick()
         rule.onNodeWithText("Name").assertExists()
         rule.onNodeWithText("Tab name (herdr tab)").assertDoesNotExist()
@@ -121,7 +121,7 @@ class ChatHerdrTabNameTest {
         calls.clear()
         rule.runOnIdle { current = herdrSession.copy(sessionId = "opencode-1", agent = "opencode") }
         rule.waitForIdle()
-        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithContentDescription("More actions").performClick()
         rule.onNodeWithText("Rename").performClick()
         rule.onNode(hasSetTextAction() and hasText("Export work")).performTextClearance()
         rule.onNode(hasSetTextAction()).performTextInput("Tab only")

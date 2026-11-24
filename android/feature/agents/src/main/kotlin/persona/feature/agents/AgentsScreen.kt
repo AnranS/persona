@@ -630,6 +630,7 @@ internal fun AgentsScreen(
                                     owner = entry.owner,
                                     machine = entry.machine,
                                     sidebar = sidebar != null,
+                                    preferHerdrTabName = entry.owner?.let(page.preferences::prefersHerdrTabName) == true,
                                     onClick = {
                                         if (entry.owner != null) openRow(entry.owner.listSession(page.preferences)) else open(entry.row.key)
                                     },
@@ -657,7 +658,9 @@ internal fun AgentsScreen(
                             if (owner != null || sidebar != null) item("needs-you:${row.id}") {
                                 JRow(stringResource(persona.core.designsystem.R.string.designsystem_decision_screen),
                                     subtitle = owner?.let {
-                                        if (sidebar == null) it.title.takeIf(String::isNotBlank) ?: it.sessionId else it.displayTitle
+                                        val preferTab = page.preferences.prefersHerdrTabName(it)
+                                        if (sidebar == null) it.displayTabName(preferTab) ?: it.title.takeIf(String::isNotBlank) ?: it.sessionId
+                                        else it.displayTitle(preferTab)
                                     },
                                     leadingIcon = persona.core.designsystem.icons.PersonaIcons.terminal,
                                     value = names[row.key.machineId], onClick = {
