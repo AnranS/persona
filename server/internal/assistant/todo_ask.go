@@ -220,8 +220,7 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 
 // todoPushOver: to-do id no longer waits on the owner (its decision answered, superseded or withdrawn by its
 // supervisor, its owner wait over, the to-do closed). The hub lets the next push about it ring
-// (assistantwire.TodoPushKey). Nothing is pushed. Pushes already on the phones stay there: they carry no card id
-// (pushDecisionAbout says why), so there is nothing to take back by.
+// (assistantwire.TodoPushKey) and recalls delivered pushes keyed by todo_id on iOS via todo-ask:<id> (#13916).
 func (s *Service) todoPushOver(id string) {
 	if s.hub == nil || id == "" {
 		return

@@ -1,64 +1,177 @@
 import Foundation
 import UserNotifications
 
-/// Taking back the pushes about interactions that are settled (#3513): an approval or a question answered in the app,
-/// on the computer, on the web or the watch, withdrawn by the agent or expired leaves the notification center with
-/// it. The pushes carry `interaction_id` (push.go) and the session they are about. The app keeps the notification
-/// center in step with its list of pending interactions; while it is suspended the hub's withdrawal push names the
-/// cards that are over (#4349, `resolved`). Pure, for the tests; AppModel reads and removes the delivered notifications.
+/// Taking back the pushes about interactions and to-do asks that are settled (#3513, #13916): an approval, a question
+/// or a to-do decision / needs-user ask answered in the app, on the computer, on the web or the watch, withdrawn or
+/// expired leaves the notification center with it. Interaction pushes carry `interaction_id` (push_payload.go) and the
+/// session they are about; to-do decision and needs-user pushes carry `todo_id` without `interaction_id` so `stale`
+/// never sweeps unanswered to-do decisions. The app keeps the notification center in step with its list of pending
+/// interactions and recalls to-do pushes on `todo-ask:<todo id>`; while it is suspended the hub's withdrawal push names
+/// the cards and to-do asks that are over (#4349, `resolved`). Pure, for the tests; AppModel reads and removes the
+/// delivered notifications.
 nonisolated enum NotificationWithdrawal {
-    /// A delivered notification about an interaction: the interaction's group (the push's, resolved the way a tap
-    /// resolves it) and the hub's id, and when it was delivered.
+    /// Prefix of a to-do ask id in `EventFleetResolved` / `interaction_resolved` / `resolved_interaction_ids`
+    /// (`assistantwire.TodoAskCardID`, `todo-ask:<todo id>`).
+    static let todoAskPrefix = "todo-ask:"
+
+    /// The to-do id named by a `todo-ask:<id>` resolution id, or nil for an interaction card id.
+    static func todoID(fromResolved id: String) -> String? {
+        guard id.hasPrefix(todoAskPrefix) else { return nil }
+        let todo = id.dropFirst(todoAskPrefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        return todo.isEmpty ? nil : todo
+    }
+
+    /// What a delivered notification is keyed by: an interaction card (`interaction_id`) or a to-do decision /
+    /// needs-user ask (`todo_id`, without `interaction_id`, #13916).
+    enum Target: Sendable, Equatable {
+        case interaction(String)
+        case todo(String)
+    }
+
+    /// A delivered notification about an interaction or a to-do ask: its group (the push's, resolved the way a tap
+    /// resolves it), its target key, and when it was delivered.
     struct Delivered: Sendable, Equatable {
         var identifier: String
         var group: String
-        var interactionID: String
+        var target: Target
         var date: Date
 
-        /// As `Interaction.uid`: unique across groups, just the id for the default group.
-        var uid: String { group.isEmpty ? interactionID : group + "|" + interactionID }
+        init(identifier: String, group: String, interactionID: String, date: Date) {
+            self.identifier = identifier
+            self.group = group
+            self.target = .interaction(interactionID)
+            self.date = date
+        }
+
+        init(identifier: String, group: String, todoID: String, date: Date) {
+            self.identifier = identifier
+            self.group = group
+            self.target = .todo(todoID)
+            self.date = date
+        }
+
+        init(identifier: String, group: String, target: Target, date: Date) {
+            self.identifier = identifier
+            self.group = group
+            self.target = target
+            self.date = date
+        }
+
+        /// The interaction id when this notification is for an interaction card; nil for a to-do ask.
+        var interactionID: String? {
+            if case .interaction(let id) = target { return id }
+            return nil
+        }
+
+        /// The to-do id when this notification is for a to-do decision or needs-user push; nil for an interaction card.
+        var todoID: String? {
+            if case .todo(let id) = target { return id }
+            return nil
+        }
+
+        /// As `Interaction.uid`: unique across groups, just the id for the default group. Only interaction cards have
+        /// an interaction uid, so interaction-list sweeps (`settled`, `stale`) never touch to-do asks.
+        var uid: String? {
+            guard let id = interactionID else { return nil }
+            return group.isEmpty ? id : group + "|" + id
+        }
     }
 
     /// The notifications about interactions that left the list (`gone`, by uid), unless one is pending again by now
-    /// (an answer that did not go through puts its card back).
+    /// (an answer that did not go through puts its card back). Never removes to-do asks.
     static func settled(gone: Set<String>, pending: Set<String>, delivered: [Delivered]) -> [String] {
         let over = gone.subtracting(pending)
-        return delivered.filter { over.contains($0.uid) }.map(\.identifier)
+        return delivered.filter { d in
+            guard let uid = d.uid else { return false }
+            return over.contains(uid)
+        }.map(\.identifier)
     }
 
     /// The notifications a group's whole list says are over: delivered before that list was asked for (a later push
     /// can be ahead of its own event) and not pending now. Groups without such a list (`listedAt`) are left alone:
-    /// the cached list of the last run says nothing about what happened since.
+    /// the cached list of the last run says nothing about what happened since. Never removes to-do asks, which never
+    /// appear in the interaction card list (#13916).
     static func stale(listedAt: [String: Date], pending: Set<String>, delivered: [Delivered]) -> [String] {
         delivered.filter { d in
-            guard let at = listedAt[d.group] else { return false }
-            return d.date < at && !pending.contains(d.uid)
+            guard let uid = d.uid, let at = listedAt[d.group] else { return false }
+            return d.date < at && !pending.contains(uid)
         }.map(\.identifier)
     }
 
-    /// The notifications of the cards a hub's withdrawal push names (#4349), in that hub's group (nil: the push did
-    /// not say whose, so the ids in any group). Pending or not: the hub knows they are over, and a suspended app's list
-    /// is the one from before.
+    /// The notifications of the cards or to-do asks a hub's withdrawal push or `interaction_resolved` event names
+    /// (#4349, #13916), in that hub's group (nil: the push did not say whose, so matching ids in any group).
+    /// Pending or not: the hub knows they are over, and a suspended app's list is the one from before.
     static func resolved(_ ids: [String], group: String?, delivered: [Delivered]) -> [String] {
-        let over = Set(ids)
-        return delivered.filter { over.contains($0.interactionID) && (group == nil || $0.group == group) }.map(\.identifier)
+        var overInteractions: Set<String> = []
+        var overTodos: Set<String> = []
+        for id in ids {
+            if let todo = todoID(fromResolved: id) {
+                overTodos.insert(todo)
+            } else if !id.isEmpty {
+                overInteractions.insert(id)
+            }
+        }
+        guard !overInteractions.isEmpty || !overTodos.isEmpty else { return [] }
+        return delivered.filter { d in
+            guard group == nil || d.group == group else { return false }
+            switch d.target {
+            case .interaction(let id): return overInteractions.contains(id)
+            case .todo(let id): return overTodos.contains(id)
+            }
+        }.map(\.identifier)
     }
 
     /// What the notification center gave, read where it calls back (off the main thread): the pushes about an
-    /// interaction, with the session they name (`PushRef`, whose group the app resolves on the main actor).
-    struct Raw: Sendable {
+    /// interaction or to-do ask, with the session or hub metadata whose group the app resolves on the main actor.
+    struct Raw: Sendable, Equatable {
         var identifier: String
-        var interactionID: String
+        var target: Target
         var date: Date
-        var ref: PushRef
+        var ref: PushRef?
+        var hubID: String?
+        var sealedGroup: String?
+
+        @MainActor func group(_ model: AppModel) -> String {
+            if let ref { return ref.key(model).group }
+            var info: [AnyHashable: Any] = [:]
+            if let hubID { info["hub_id"] = hubID }
+            if let sealedGroup { info[PushCrypto.groupKey] = sealedGroup }
+            return model.pushGroup(info) ?? ""
+        }
     }
 
     static func raw(_ notifications: [UNNotification]) -> [Raw] {
         notifications.compactMap { n in
-            let info = n.request.content.userInfo
-            guard let id = info["interaction_id"] as? String, !id.isEmpty, let ref = PushRef(info) else { return nil }
-            return Raw(identifier: n.request.identifier, interactionID: id, date: n.date, ref: ref)
+            raw(identifier: n.request.identifier, date: n.date, userInfo: n.request.content.userInfo)
         }
+    }
+
+    /// Extracts a trackable interaction or to-do target from a delivered notification's `userInfo`.
+    static func raw(identifier: String, date: Date, userInfo info: [AnyHashable: Any]) -> Raw? {
+        if let id = info["interaction_id"] as? String, !id.isEmpty {
+            guard let ref = PushRef(info) else { return nil }
+            return Raw(identifier: identifier, target: .interaction(id), date: date, ref: ref,
+                       hubID: info["hub_id"] as? String, sealedGroup: PushCrypto.group(from: info))
+        }
+        if let todo = todoID(in: info) {
+            return Raw(identifier: identifier, target: .todo(todo), date: date, ref: PushRef(info),
+                       hubID: info["hub_id"] as? String, sealedGroup: PushCrypto.group(from: info))
+        }
+        return nil
+    }
+
+    /// To-do id carried by a decision or needs-user push: top-level `todo_id`, or `todo.id` on a decision push from
+    /// an older hub before #13916.
+    private static func todoID(in info: [AnyHashable: Any]) -> String? {
+        if let id = info["todo_id"] as? String {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if let todo = info["todo"] as? [String: Any], let id = todo["id"] as? String {
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 }
 
@@ -81,10 +194,18 @@ extension AppModel {
         }
     }
 
-    /// A hub's withdrawal push (#4349): the cards it names are over, answered elsewhere while the app was suspended.
-    /// `done` runs on the main queue once their notifications are gone.
+    /// A hub's withdrawal push (#4349, #13916): the cards and to-do asks it names are over, answered or withdrawn
+    /// elsewhere while the app was suspended. `done` runs on the main queue once their notifications are gone.
     func withdrawResolved(_ ids: [String], group: String?, done: @escaping @Sendable () -> Void) {
         withdrawDelivered({ _, delivered in NotificationWithdrawal.resolved(ids, group: group, delivered: delivered) }, done: done)
+    }
+
+    /// A `todo-ask:<todo id>` resolution over the socket (#13916): takes back any delivered decision or needs-user
+    /// push for that to-do in `group`, without touching interaction-card state.
+    func withdrawTodoAsk(_ id: String, group: String) -> Bool {
+        guard NotificationWithdrawal.todoID(fromResolved: id) != nil else { return false }
+        withdrawResolved([id], group: group) {}
+        return true
     }
 
     /// Reads what the notification center shows and removes what `pick` names. The center answers on its own queue;
@@ -101,8 +222,8 @@ extension AppModel {
                 MainActor.assumeIsolated {
                     let model = self
                     let delivered = raw.map {
-                        NotificationWithdrawal.Delivered(identifier: $0.identifier, group: $0.ref.key(model).group,
-                                                         interactionID: $0.interactionID, date: $0.date)
+                        NotificationWithdrawal.Delivered(identifier: $0.identifier, group: $0.group(model),
+                                                         target: $0.target, date: $0.date)
                     }
                     let ids = pick(model, delivered)
                     if !ids.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids) }

@@ -30,6 +30,9 @@ const (
 	// withdrawKept: how long the hub remembers where a card's push went. A card still pending after this is old
 	// news on the lock screen, and the app clears it when it next lists the cards.
 	withdrawKept = 30 * time.Minute
+	// todoWithdrawKept: how long the hub remembers where a to-do decision or needs-user push went (#13916). Those
+	// wait up to 24 hours and are never swept by the app's interaction-list stale check.
+	todoWithdrawKept = 24 * time.Hour
 	// withdrawGather: cards over within this of the first go in one push ("always allow" settles several at once).
 	withdrawGather = 5 * time.Second
 	// withdrawEvery: at most one withdrawal push per device this often; what comes between waits for the next.
@@ -113,15 +116,27 @@ func cardCollapseID(manager, id string) string {
 // apnsCollapseMax is the longest apns-collapse-id APNs takes, in bytes.
 const apnsCollapseMax = 64
 
+func withdrawTTL(id string) time.Duration {
+	if assistantwire.TodoOfAskCard(id) != "" {
+		return todoWithdrawKept
+	}
+	return withdrawKept
+}
+
 func (p *Pusher) cardPushedTo(id, device string) {
 	w := &p.withdrawals
 	now := p.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for old, c := range w.pushed {
-		if now.Sub(c.at) > withdrawKept {
+		if now.Sub(c.at) > withdrawTTL(old) {
 			delete(w.pushed, old)
 		}
+	}
+	if q := w.queue[device]; q != nil && len(q.ids) > 0 {
+		// A fresh push for the same id (e.g. a superseded to-do decision's new round) supersedes any queued withdrawal
+		// from the earlier round so the delayed background push cannot wipe the new alert.
+		q.ids = slices.DeleteFunc(q.ids, func(queued string) bool { return queued == id })
 	}
 	c, ok := w.pushed[id]
 	if !ok {
@@ -144,7 +159,7 @@ func (p *Pusher) withdraw(id string) {
 	defer w.mu.Unlock()
 	c, ok := w.pushed[id]
 	delete(w.pushed, id)
-	if !ok || now.Sub(c.at) > withdrawKept {
+	if !ok || now.Sub(c.at) > withdrawTTL(id) {
 		return
 	}
 	for device := range c.devices {

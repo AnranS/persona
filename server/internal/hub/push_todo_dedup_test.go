@@ -90,9 +90,9 @@ func TestLegacyTodoKeysRingEveryRound(t *testing.T) {
 	f.calls(t, 1)
 }
 
-// Once the manager says the to-do no longer waits on the owner (EventFleetResolved naming its ask), the next push
-// about it rings. The decision push carries no interaction_id: the iOS app would clear it as a stale card, unanswered,
-// and nothing is pushed to take it back.
+// Once the manager says the to-do no longer waits on the owner (EventFleetResolved naming its ask), the hub recalls
+// the delivered push from withdraw-capable devices with todo-ask:<id>, and the next push about the to-do rings.
+// The decision push carries todo_id and never interaction_id (older apps ignore todo_id and never sweep it as stale).
 func TestTodoPushOverRingsAgain(t *testing.T) {
 	h, f, open := withdrawHub(t, featureWithdraw)
 	asked := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
@@ -100,25 +100,129 @@ func TestTodoPushOverRingsAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := f.wait(t, 1)[0]
-	if p := open(first); p["interaction_id"] != nil {
+	p := open(first)
+	if p["interaction_id"] != nil {
 		t.Fatalf("decision push payload %v carries an interaction_id", p)
+	}
+	if p["todo_id"] != "todo_1" {
+		t.Fatalf("decision push payload %v missing todo_id=todo_1", p)
 	}
 	if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Minute), assistantwire.TodoPushDecide)); err != nil {
 		t.Fatal(err)
 	}
 	reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
+	withdrawn := f.wait(t, 2)[1]
+	if withdrawn.PushType != "background" {
+		t.Fatalf("expected background withdrawal push for todo-ask:todo_1, got %+v", withdrawn)
+	}
+	if ids, _ := open(withdrawn)["resolved_interaction_ids"].([]any); len(ids) != 1 || ids[0] != assistantwire.TodoAskCardID("todo_1") {
+		t.Fatalf("withdrawal payload %v, want resolved_interaction_ids=[%s]", open(withdrawn), assistantwire.TodoAskCardID("todo_1"))
+	}
 	if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Hour), assistantwire.TodoPushDecide)); err != nil {
 		t.Fatal(err)
 	}
-	got := f.wait(t, 2)
-	if got[1].PushType != "alert" {
-		t.Fatalf("after the to-do was over: %+v, want the next decision's alert (the repeat before it was held)", got[1])
+	got := f.wait(t, 3)
+	if got[2].PushType != "alert" {
+		t.Fatalf("after the to-do was over: %+v, want the next decision's alert (the repeat before it was held)", got[2])
 	}
-	for _, r := range got {
-		if r.PushType == "background" {
-			t.Fatalf("a withdrawal went out for a decision push: %+v", r)
+}
+
+// A to-do needs-user push carries todo_id (never interaction_id) and is recalled on EventFleetResolved(todo-ask:<id>)
+// for withdraw-capable devices; an ordinary NotifyPush carries neither, and an older app without featureWithdraw gets
+// the alert and no withdrawal push.
+func TestTodoNeedsUserPushCarriesTodoIDAndWithdraws(t *testing.T) {
+	t.Run("withdraw-capable device", func(t *testing.T) {
+		h, f, open := withdrawHub(t, featureWithdraw)
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, todoNeedsUser("todo_1")); err != nil {
+			t.Fatal(err)
 		}
-	}
+		alert := f.wait(t, 1)[0]
+		p := open(alert)
+		if p["interaction_id"] != nil {
+			t.Fatalf("needs-user push payload %v carries an interaction_id", p)
+		}
+		if p["todo_id"] != "todo_1" {
+			t.Fatalf("needs-user push payload %v missing todo_id=todo_1", p)
+		}
+		// An ordinary notice with a non-TodoPushKey related key carries neither todo_id nor interaction_id.
+		plain := gradingNotification(assistantwire.LevelP0, "todo:todo_2", "普通提醒")
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, plain); err != nil {
+			t.Fatal(err)
+		}
+		plainPayload := open(f.wait(t, 2)[1])
+		if plainPayload["todo_id"] != nil || plainPayload["interaction_id"] != nil {
+			t.Fatalf("plain notice payload %v should not carry todo_id or interaction_id", plainPayload)
+		}
+		reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
+		bg := f.wait(t, 3)[2]
+		if bg.PushType != "background" {
+			t.Fatalf("expected background withdrawal, got %+v", bg)
+		}
+		if ids, _ := open(bg)["resolved_interaction_ids"].([]any); len(ids) != 1 || ids[0] != assistantwire.TodoAskCardID("todo_1") {
+			t.Fatalf("withdrawal payload %v", open(bg))
+		}
+	})
+	t.Run("older app without withdraw feature", func(t *testing.T) {
+		h, f, open := withdrawHub(t)
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, todoNeedsUser("todo_1")); err != nil {
+			t.Fatal(err)
+		}
+		p := open(f.wait(t, 1)[0])
+		if p["todo_id"] != "todo_1" || p["interaction_id"] != nil {
+			t.Fatalf("payload %v, want todo_id=todo_1 without interaction_id", p)
+		}
+		reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
+		time.Sleep(150 * time.Millisecond)
+		if bg := backgroundPushes(f); len(bg) != 0 {
+			t.Fatalf("older app got %d background pushes", len(bg))
+		}
+	})
+}
+
+// A to-do decision or needs-user push stays eligible for withdrawal past the 30-minute card TTL, and a fresh round
+// pushed before the previous round's withdrawal flushes cancels that stale withdrawal so it cannot wipe the new alert.
+func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
+	t.Run("remembered past 30-minute card TTL", func(t *testing.T) {
+		p := newPusher(t.TempDir(), nil, t.Logf)
+		now := time.Now()
+		p.now = func() time.Time { return now }
+		todoCard := assistantwire.TodoAskCardID("todo_1")
+		p.cardPushedTo(todoCard, "phone")
+		p.cardPushedTo("ix_old", "phone")
+		now = now.Add(2 * time.Hour)
+		p.cardPushedTo("ix_fresh", "ipad") // triggers prune
+		p.withdrawals.gather = time.Hour
+		p.withdraw("ix_old")
+		p.withdraw(todoCard)
+		p.withdrawals.mu.Lock()
+		defer p.withdrawals.mu.Unlock()
+		if q := p.withdrawals.queue["phone"]; q == nil || len(q.ids) != 1 || q.ids[0] != todoCard {
+			t.Fatalf("phone queue after 2h = %+v, want [%s]", q, todoCard)
+		}
+		for _, q := range p.withdrawals.queue {
+			if q.timer != nil {
+				q.timer.Stop()
+			}
+		}
+	})
+	t.Run("new round cancels queued withdrawal", func(t *testing.T) {
+		h, f, _ := withdrawHub(t, featureWithdraw)
+		asked := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+		if err := h.deliverPush(todoDecision("todo_1", asked, assistantwire.TodoPushDecide)); err != nil {
+			t.Fatal(err)
+		}
+		f.wait(t, 1)
+		// Supersede round 1 and immediately push round 2 before withdrawGather (60ms) fires.
+		reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
+		if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Minute), assistantwire.TodoPushDecide)); err != nil {
+			t.Fatal(err)
+		}
+		f.wait(t, 2)
+		time.Sleep(150 * time.Millisecond)
+		if bg := backgroundPushes(f); len(bg) != 0 {
+			t.Fatalf("delayed withdrawal went out after round 2 was pushed: %+v", bg)
+		}
+	})
 }
 
 // The to-do a related key names, in every form a client follows: the legacy round, the reason, the bare to-do.

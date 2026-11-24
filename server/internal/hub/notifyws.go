@@ -65,6 +65,12 @@ func (o pushOutcome) reason() string {
 // where the push went, with the ln-mode reason it was held, so the assistant can tell the model whether a notify_user
 // notice reached a device, the briefing or nothing.
 func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text string, wants pushWants, collapseID, recordingID string, policy pushPolicy) pushOutcome {
+	todoPushID := ""
+	if policy.cardID == "" {
+		if id, _, ok := assistantwire.TodoPushKeyParts(policy.relatedKey); ok {
+			todoPushID = id
+		}
+	}
 	build := func(l i18n.Lang) map[string]any {
 		p := donePayloadIn(l, machineID, machine, sessionID, title, text)
 		if recordingID != "" {
@@ -72,12 +78,27 @@ func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title,
 		}
 		if policy.cardID != "" {
 			p["interaction_id"] = policy.cardID
+		} else if todoPushID != "" {
+			// Needs-user / to-do owner pushes carry todo_id (never interaction_id) so iOS recalls them on
+			// todo-ask:<id> without NotificationWithdrawal.stale sweeping unanswered ones (#13916).
+			p["todo_id"] = todoPushID
 		}
 		return p
 	}
 	var sent func(Device)
 	if policy.cardID != "" {
-		sent = func(d Device) { h.push.cardPushedTo(policy.cardID, d.DeviceID) }
+		sent = func(d Device) {
+			if hasFeature(d, featureWithdraw) {
+				h.push.cardPushedTo(policy.cardID, d.DeviceID)
+			}
+		}
+	} else if todoPushID != "" {
+		cardID := assistantwire.TodoAskCardID(todoPushID)
+		sent = func(d Device) {
+			if hasFeature(d, featureWithdraw) {
+				h.push.cardPushedTo(cardID, d.DeviceID)
+			}
+		}
 	}
 	if !h.sessionHiddenFromExtensions(machineID, sessionID) { // only of a session the extensions are shown (extension_private.go)
 		h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
@@ -153,8 +174,9 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 // notifyDecideKeyed is notifyDecide with the manager's related key (assistantwire.Notification). A key of the to-do
 // and a reason ("todo:<id>:decide", assistantwire.TodoPushKey) rings once while the to-do still waits on the owner for
 // it (push_todo_dedup.go); without one (an older manager) the key is the round, and each round rings as before. The
-// payload is as before either way. It never carries an interaction_id: the iOS app clears a delivered push whose
-// interaction_id is not in its card list as stale, and a decision is never in that list.
+// payload carries todo_id (never interaction_id: the iOS app clears a delivered push whose interaction_id is not in its
+// card list as stale, and a decision is never in that list) and records withdraw-capable devices under TodoAskCardID so
+// EventFleetResolved(todo-ask:<id>) recalls it (#13916).
 func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo, relatedKey string) {
 	key := strings.TrimSpace(relatedKey)
 	if id, _, ok := assistantwire.TodoPushKeyParts(key); !ok || id != todo.ID {
@@ -170,7 +192,16 @@ func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, tex
 	wants := pushWants{Kind: "input"}
 	sum := sha256.Sum256([]byte("todo_decide\x00" + todo.ID))
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: key, title: title, body: text}
-	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+	var sent func(Device)
+	if todo.ID != "" {
+		cardID := assistantwire.TodoAskCardID(todo.ID)
+		sent = func(d Device) {
+			if hasFeature(d, featureWithdraw) {
+				h.push.cardPushedTo(cardID, d.DeviceID)
+			}
+		}
+	}
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, sent); heldReason == "" {
 		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
 	}
 }
@@ -347,6 +378,9 @@ func notifyMessage(kind string, payload map[string]any) map[string]any {
 	}
 	if td, ok := payload["todo"]; ok { // a decision's push (decidePayloadIn)
 		msg["todo"] = td
+	}
+	if id, ok := payload["todo_id"]; ok { // a to-do decision or needs-user push (#13916)
+		msg["todo_id"] = id
 	}
 	if health, ok := payload["health"]; ok {
 		msg["health"] = health
