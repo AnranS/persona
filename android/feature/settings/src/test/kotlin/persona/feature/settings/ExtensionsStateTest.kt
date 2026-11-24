@@ -742,4 +742,59 @@ class ExtensionsStateTest {
         assertTrue(model.save())
         assertFalse("accounts" in api.configs.last())
     }
+
+    @Test fun clearingOnlyRemainingEntryFieldKeepsEntryRowAndSavedId() = runBlocking {
+        // 1. Sole unsaved entry with 1 populated field: clearing it keeps the empty row, its key, and compacted array.
+        val emptyDetail = entryListDetail(required = false, maxItems = 2).copy(config = JsonObject(emptyMap()), secrets = emptyList())
+        val unsavedModel = ExtensionModel(FakeExtensions(emptyDetail), "example-entries", res)
+        unsavedModel.load()
+        unsavedModel.addEntry("accounts")
+        val unsavedKey = unsavedModel.state.value.entryKeys["accounts"]!!.single()
+        unsavedModel.edit(listOf("accounts", "0", "name"), JsonPrimitive("Draft"))
+        unsavedModel.edit(listOf("accounts", "0", "name"), null)
+        assertEquals(listOf(JsonObject(emptyMap())), ExtensionDraft.entryItems(unsavedModel.state.value.draft, listOf("accounts")))
+        assertEquals(listOf(unsavedKey), unsavedModel.state.value.entryKeys["accounts"])
+        assertTrue(unsavedModel.state.value.dirty)
+        assertEquals(
+            buildJsonObject { putJsonArray("accounts") { addJsonObject {} } },
+            ExtensionDraft.compact(unsavedModel.state.value.draft, unsavedModel.state.value.requiredEntryLists),
+        )
+
+        // 2. Saved entry holding only _id + one populated field: clearing that field keeps the row and host-minted _id.
+        val savedOneField = entryListDetail(required = false, maxItems = 2).copy(
+            config = buildJsonObject {
+                putJsonArray("accounts") {
+                    addJsonObject {
+                        put("_id", "entry_saved")
+                        put("name", "主账号")
+                    }
+                }
+            },
+        )
+        val savedModel = ExtensionModel(FakeExtensions(savedOneField), "example-entries", res)
+        savedModel.load()
+        savedModel.edit(listOf("accounts", "0", "name"), null)
+        val keptEntry = ExtensionDraft.entryItems(savedModel.state.value.draft, listOf("accounts")).single()
+        assertEquals("entry_saved", ExtensionDraft.entryId(keptEntry))
+        assertEquals(listOf("entry_saved"), savedModel.state.value.entryKeys["accounts"])
+        assertEquals(
+            buildJsonObject { putJsonArray("accounts") { addJsonObject { put("_id", "entry_saved") } } },
+            ExtensionDraft.compact(savedModel.state.value.draft, savedModel.state.value.requiredEntryLists),
+        )
+
+        // 3. Clearing every field on a multi-field saved entry keeps the row and _id; object groups still collapse.
+        val fullModel = ExtensionModel(FakeExtensions(entryListDetail()), "example-entries", res)
+        fullModel.load()
+        fullModel.edit(listOf("accounts", "0", "name"), null)
+        fullModel.edit(listOf("accounts", "0", "address"), null)
+        assertEquals(
+            listOf(buildJsonObject { put("_id", "entry_saved") }),
+            ExtensionDraft.entryItems(fullModel.state.value.draft, listOf("accounts")),
+        )
+        assertNull(ExtensionDraft.value(fullModel.state.value.draft, listOf("accounts", "99999999999999999999", "name")))
+        assertEquals(
+            fullModel.state.value.draft,
+            ExtensionDraft.set(fullModel.state.value.draft, listOf("accounts", "99999999999999999999", "name"), null),
+        )
+    }
 }

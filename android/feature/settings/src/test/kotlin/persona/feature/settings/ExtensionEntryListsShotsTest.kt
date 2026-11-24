@@ -213,6 +213,34 @@ class ExtensionEntryListsShotsTest {
         rule.onNode(hasText("Secret") and hasAnyAncestor(hasTestTag("entry-card-entry_new_1"))).assertIsEnabled()
     }
 
+    @Test fun clearingOnlyPopulatedFieldKeepsEntryCardAndSavedId() {
+        val hub = Hub(baseDetail())
+        show(hub)
+
+        // Add an unsaved entry, populate only Name, then clear it: the row card stays for further editing.
+        rule.onNodeWithText("Add entry").performClick()
+        rule.waitForIdle()
+        val secondInputs = rule.onAllNodes(hasSetTextAction() and hasAnyAncestor(hasTestTag("entry-card-new-entry-1")))
+        secondInputs[0].performTextReplacement("Draft")
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("Remove Draft").assertExists()
+        secondInputs[0].performTextReplacement("")
+        rule.waitForIdle()
+        rule.onNodeWithTag("entry-card-new-entry-1").assertExists()
+        rule.onNodeWithText("Entry 2").assertExists()
+        rule.onNodeWithContentDescription("Remove Entry 2").assertExists()
+
+        // Clearing all fields on the saved entry keeps its card, host-minted _id, and Secret action intact.
+        val firstInputs = rule.onAllNodes(hasSetTextAction() and hasAnyAncestor(hasTestTag("entry-card-entry_saved")))
+        firstInputs[0].performTextReplacement("")
+        firstInputs[1].performTextReplacement("")
+        rule.waitForIdle()
+        rule.onNodeWithTag("entry-card-entry_saved").assertExists()
+        rule.onNodeWithText("Entry 1").assertExists()
+        rule.onNodeWithContentDescription("Remove Entry 1").assertExists()
+        rule.onNode(hasText("Secret") and hasAnyAncestor(hasTestTag("entry-card-entry_saved"))).assertIsEnabled()
+    }
+
     @Test fun opensExistingWriteOnlySecretSheetForSavedEntryOnly() {
         val hub = Hub(baseDetail())
         show(hub)

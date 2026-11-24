@@ -456,8 +456,8 @@ internal object ExtensionDraft {
         for (key in path) {
             current = when (current) {
                 is JsonArray -> {
-                    if (!ArrayIndex.matches(key)) return null
-                    current.getOrNull(key.toInt()) ?: return null
+                    val index = key.takeIf { ArrayIndex.matches(it) }?.toIntOrNull() ?: return null
+                    current.getOrNull(index) ?: return null
                 }
                 is JsonObject -> current[key] ?: return null
                 else -> return null
@@ -473,11 +473,11 @@ internal object ExtensionDraft {
         val key = path.firstOrNull() ?: return value
         val rest = path.drop(1)
         if (current is JsonArray) {
-            if (!ArrayIndex.matches(key)) return current
-            val index = key.toInt()
+            val index = key.takeIf { ArrayIndex.matches(it) }?.toIntOrNull() ?: return current
             if (index !in current.indices) return current
             val out = current.toMutableList()
             val next = if (rest.isNotEmpty()) setNested(out[index], rest, value) else value
+            // Clearing all fields on an entry returns JsonObject(emptyMap()), never null, so rows stay until explicitly removed.
             if (next == null) out.removeAt(index) else out[index] = next
             return JsonArray(out)
         }
@@ -486,7 +486,13 @@ internal object ExtensionDraft {
             if (value == null) out.remove(key) else out[key] = value
             return JsonObject(out)
         }
-        val next = setNested(out[key], rest, value)
+        val existing = out[key]
+        val next = setNested(existing, rest, value)
+        if (existing is JsonArray) {
+            if (next != null) out[key] = next
+            return JsonObject(out)
+        }
+        // Only nested object groups (e.g. "proxy") collapse when emptied; entry-list arrays are never pruned here.
         if (next == null || (next is JsonObject && next.isEmpty())) out.remove(key) else out[key] = next
         return JsonObject(out)
     }
