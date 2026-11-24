@@ -1926,6 +1926,40 @@ manager that connects the computer holds it and sends it once the computer is ba
   (the assistant's, an extension's, the hub token's) carry no `ordered` mark and may go ahead of a person's held
   ones. A manager rolled back to a version without this keeps the rows it was told to hold but neither shows nor
   sends them; the apps were told they go later.
+
+### Starting a new Agent on an offline computer (#10674)
+
+Starting a new Agent (`POST /api/v1/sessions`, without `resume_session_id`) on a paired computer that is offline
+follows the same durable-hold model in `held_operations` (`kind = "start"`, `session_id = ""`,
+`server/internal/devices/held_starts.go`, `server/internal/hub/held_starts.go`, `server/internal/node/start_op.go`):
+
+- **Held after validation.** When a person's full device declaring `agent_start_hold` (`client_hello` or
+  `X-Persona-Features`) sends `POST /api/v1/sessions` with a UUID `X-Persona-Op-Id` targeting a trusted, paired
+  computer that is currently offline, the hub runs static, auth, image-limit, work-session, and trust checks first,
+  then asks the computer's manager to hold the start (`devices.hold_start`). The manager persists the original start
+  payload in Postgres and the hub answers **202** `{"delivered":"later","held_start":{…}}` (saved in `client_ops` so
+  HTTP retries replay the same 202 idempotently). Clients that do not declare `agent_start_hold`, resumes, non-person
+  tokens, or requests without `X-Persona-Op-Id` keep the existing offline failure. At most 50 held starts per computer
+  are allowed (`409 held_start_full`).
+- **List, Retry, Cancel, and live updates.** Full person devices list a computer's held starts with
+  `GET /api/v1/machines/{mid}/held-starts`, retry a failed one with `POST /api/v1/machines/{mid}/held-starts/{op}/retry`,
+  and cancel/delete a waiting or failed one with `DELETE /api/v1/machines/{mid}/held-starts/{op}` (409 while actively
+  starting). Transitions (`waiting`, `starting`, `failed`, `started` with `session_id`, `deleted`) push `held_start`
+  WebSocket events only to full devices declaring `agent_start_hold`.
+- **Replayed once through the real start path.** Once the computer reconnects (configured and listed, with the bus to
+  the hub up), the manager replays each waiting held start once via `devices.replay_held_start` on the hub, running
+  `startSessionWith` fresh (`todoHandoff`, `agentStartParams`, `WorkSession` checks, `NodeInfo.EngineHosts`, start
+  options/speed/goal, `TodoLink`, `h.fresh`, `autoTabName`). Revalidation refusal moves the row to `failed`
+  (`refused`) with the owner-readable reason; a held start waiting 24 hours expires (`expired`); revoking the sending
+  device credential marks it `failed` (`signed_out`, `delete_only: true`). Independent held starts on the same
+  computer do not block each other.
+- **Node-side `op_id` recording and reconciliation.** Every new-Agent `session.start` / `session.start.work` carries
+  `op_id`. Nodes announcing `start_op_id_v1` deduplicate concurrent/repeat `op_id` calls, persist `start_op_id` on the
+  session's state (`state.put` / `state.load`), and answer `start.status {op_id}` (`started` with `session_id`,
+  `pending`, or `unknown`). If a start disconnects mid-flight or the manager restarts while it is `sending`, the row
+  becomes `failed` (`unclear`) and is never blindly auto-retried: reconnect reconciliation checks `start.status` first,
+  completing and linking cleanly with zero duplicates if the session already started, or leaving the decision to the
+  owner (Retry checks once more → `unconfirmed` if still unknown/unsupported, then a second Retry starts it).
 - **Not yet held**: starting a new Agent on an offline computer (#10674) and dispatching a to-do to one (#10675).
 
 ## Availability metrics (#4924)
