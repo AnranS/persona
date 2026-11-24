@@ -13,10 +13,10 @@ import (
 // inboxBook is the inbox's state.
 type inboxBook struct {
 	lang        func() i18n.Lang // the user's language, for the reasons it writes on items (nil: the default)
-	larkAccount int // lark.account (InboxConfig.LarkAccount); zero is primary account 1
+	larkAccount int              // lark.account (InboxConfig.LarkAccount); zero is primary account 1
 	// visibility holds the active opt-in Lark Inbox chat visibility exclusions (lock-free atomic pointer).
-	visibility atomic.Pointer[assistantwire.InboxVisibility]
-	mu         sync.Mutex
+	visibility  atomic.Pointer[assistantwire.InboxVisibility]
+	mu          sync.Mutex
 	items       map[string]*InboxItem
 	once        sync.Once
 	loadMu      sync.Mutex              // one load at a time
