@@ -172,7 +172,14 @@ func TestTodoNeedsUserPushCarriesTodoIDAndWithdraws(t *testing.T) {
 			t.Fatalf("payload %v, want todo_id=todo_1 without interaction_id", p)
 		}
 		reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
-		time.Sleep(150 * time.Millisecond)
+		h.push.withdrawals.mu.Lock()
+		q := h.push.withdrawals.queue["phone"]
+		h.push.withdrawals.mu.Unlock()
+		if q != nil && len(q.ids) > 0 {
+			t.Fatalf("older app queued withdrawal ids: %v", q.ids)
+		}
+		h.push.flushWithdraw("phone")
+		h.push.sends.Wait()
 		if bg := backgroundPushes(f); len(bg) != 0 {
 			t.Fatalf("older app got %d background pushes", len(bg))
 		}
@@ -207,18 +214,46 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 	})
 	t.Run("new round cancels queued withdrawal", func(t *testing.T) {
 		h, f, _ := withdrawHub(t, featureWithdraw)
+		h.push.withdrawals.gather = time.Hour // deterministic: keep withdrawal queued until explicitly flushed
+		t.Cleanup(func() {
+			h.push.withdrawals.mu.Lock()
+			for _, q := range h.push.withdrawals.queue {
+				if q.timer != nil {
+					q.timer.Stop()
+				}
+			}
+			h.push.withdrawals.mu.Unlock()
+		})
 		asked := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 		if err := h.deliverPush(todoDecision("todo_1", asked, assistantwire.TodoPushDecide)); err != nil {
 			t.Fatal(err)
 		}
 		f.wait(t, 1)
-		// Supersede round 1 and immediately push round 2 before withdrawGather (60ms) fires.
-		reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
+		todoCard := assistantwire.TodoAskCardID("todo_1")
+		// Supersede round 1: withdrawal is queued for phone.
+		reportResolved(t, h, todoCard, "")
+		h.push.withdrawals.mu.Lock()
+		queuedBefore := len(h.push.withdrawals.queue["phone"].ids)
+		h.push.withdrawals.mu.Unlock()
+		if queuedBefore != 1 {
+			t.Fatalf("expected 1 queued withdrawal before round 2, got %d", queuedBefore)
+		}
+		// Immediately push round 2 before the gather timer fires: cancels the stale queued withdrawal.
 		if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Minute), assistantwire.TodoPushDecide)); err != nil {
 			t.Fatal(err)
 		}
 		f.wait(t, 2)
-		time.Sleep(150 * time.Millisecond)
+		h.push.withdrawals.mu.Lock()
+		queuedAfter := len(h.push.withdrawals.queue["phone"].ids)
+		if q := h.push.withdrawals.queue["phone"]; q != nil && q.timer != nil {
+			q.timer.Stop()
+		}
+		h.push.withdrawals.mu.Unlock()
+		if queuedAfter != 0 {
+			t.Fatalf("expected round 2 to cancel queued withdrawal, still have %d", queuedAfter)
+		}
+		h.push.flushWithdraw("phone")
+		h.push.sends.Wait()
 		if bg := backgroundPushes(f); len(bg) != 0 {
 			t.Fatalf("delayed withdrawal went out after round 2 was pushed: %+v", bg)
 		}
