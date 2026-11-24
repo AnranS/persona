@@ -389,8 +389,20 @@ func planTier(m string) string {
 // isDefaultAlias reports whether m is an explicit follow-default alias ("default" or "inherit", with or without "[1m]")
 // rather than a named model tier.
 func isDefaultAlias(m string) bool {
-	base := strings.ToLower(strings.TrimSuffix(m, oneMillionSuffix))
+	base := strings.ToLower(proto.TrimModelWindow(m))
 	return base == "default" || base == "inherit"
+}
+
+// matchesManagedDefault reports whether model names the same model as managed launcher l's own default Model
+// (case-insensitive, ignoring a trailing "[1m]" window marker). When a gateway launcher's own Model is an unmapped
+// tier alias (e.g. "opus"), requesting that same tier intentionally follows the launcher's default without --model
+// rather than refusing delivery.
+func matchesManagedDefault(l proto.ManagedLauncher, model string) bool {
+	def := proto.TrimModelWindow(l.Model)
+	if def == "" {
+		return false
+	}
+	return strings.EqualFold(proto.TrimModelWindow(model), def)
 }
 
 // claudeModelArg is providerModelArg for launcher by name: the --model every claude start passes (an assistant
@@ -403,9 +415,10 @@ func (n *Node) claudeModelArg(launcher, model string) string {
 	return model
 }
 
-// resolveClaudeModelArg translates an explicit model choice into the --model flag for launcher. Empty and explicit
-// default aliases intentionally follow the launcher's default. An explicit named tier that a gateway provider cannot
-// translate stops delivery with an actionable refusal instead of silently falling back to an empty model flag.
+// resolveClaudeModelArg translates an explicit model choice into the --model flag for launcher. Empty, explicit
+// default aliases, and a request matching a managed launcher's own default Model (ignoring case and "[1m]")
+// intentionally follow the launcher's default. An explicit named tier that a gateway provider cannot translate stops
+// delivery with an actionable refusal instead of silently falling back to an empty model flag.
 func (n *Node) resolveClaudeModelArg(ctx context.Context, launcher, model string) (string, error) {
 	if model == "" {
 		return "", nil
@@ -413,6 +426,9 @@ func (n *Node) resolveClaudeModelArg(ctx context.Context, launcher, model string
 	resolved := n.claudeModelArg(launcher, model)
 	if resolved != "" || isDefaultAlias(model) {
 		return resolved, nil
+	}
+	if l, ok := n.managedLauncher(launcher); ok && matchesManagedDefault(l, model) {
+		return "", nil
 	}
 	return "", refusal("assistant_model_unresolved",
 		i18n.T(i18n.From(ctx), "rpc-errors.assistant_model_unresolved", i18n.Args{"model": model, "launcher": launcher}),

@@ -79,10 +79,12 @@ sleep 30
 
 // An explicit tier that a gateway provider cannot translate must stop delivery with a coded, actionable refusal before
 // spawning Claude, instead of silently dropping --model and falling back to a default (#13567). Explicit follow-default
-// choices ("", "default", "inherit") and mapped gateway tiers continue to work cleanly.
+// choices ("", "default", "inherit"), requests matching a managed launcher's own default Model tier, and mapped gateway
+// tiers continue to work cleanly.
 func TestAssistantGatewayModelResolutionFailsClosedOnUnresolvableTier(t *testing.T) {
 	const gwURL = "https://gw.example.com"
-	unmapped := proto.ManagedLauncher{Name: "gw-unmapped", Kind: "api", BaseURL: gwURL, APIKey: "sk-test-k", Model: "opus"}
+	unmapped := proto.ManagedLauncher{Name: "gw-unmapped", Kind: "api", BaseURL: gwURL, APIKey: "sk-test-k"}
+	tierDefault := proto.ManagedLauncher{Name: "gw-tier-default", Kind: "api", BaseURL: gwURL, APIKey: "sk-test-k", Model: "opus"}
 	mapped := proto.ManagedLauncher{Name: "gw-mapped", Kind: "api", BaseURL: gwURL, APIKey: "sk-test-k", Model: "route/claude-opus-5-5"}
 
 	setupNode := func(t *testing.T, launchers ...proto.ManagedLauncher) (*Node, string) {
@@ -154,6 +156,41 @@ func TestAssistantGatewayModelResolutionFailsClosedOnUnresolvableTier(t *testing
 		defer n.stopAssistant(p.id)
 		if indexOf(p.cmd.Args, "--model") >= 0 {
 			t.Fatalf("expected no --model for gateway default, got %q", p.cmd.Args)
+		}
+	})
+
+	t.Run("managed gateway tier default accepts matching tier and refuses other unmapped tiers", func(t *testing.T) {
+		n, _ := setupNode(t, tierDefault)
+		for _, match := range []string{"opus", "Opus", "opus[1m]"} {
+			got, err := n.resolveClaudeModelArg(context.Background(), tierDefault.Name, match)
+			if err != nil || got != "" {
+				t.Fatalf("resolveClaudeModelArg(%q) = (%q, %v), want (\"\", nil)", match, got, err)
+			}
+		}
+		p, err := n.spawnClaude("11111111-2222-3333-4444-555555555558", t.TempDir(), tierDefault.Name, false, false,
+			modelExecution{Model: "opus", Fingerprint: "fp-tier-default"})
+		if err != nil {
+			t.Fatalf("spawnClaude(tier default opus): %v", err)
+		}
+		defer n.stopAssistant(p.id)
+		if indexOf(p.cmd.Args, "--model") >= 0 {
+			t.Fatalf("expected no --model when matching launcher tier default, got %q", p.cmd.Args)
+		}
+
+		for _, other := range []string{"haiku", "sonnet", "fable"} {
+			t.Run("refuses_"+other, func(t *testing.T) {
+				n2, marker := setupNode(t, tierDefault)
+				ctx := i18n.With(context.Background(), i18n.En)
+				_, err := n2.assistantSend(ctx, "", t.TempDir(), tierDefault.Name, "hello", nil, "", "",
+					modelExecution{Model: other, Fingerprint: "fp-other-tier"})
+				var re *rpc.Error
+				if !errors.As(err, &re) || re.Code != "assistant_model_unresolved" {
+					t.Fatalf("assistantSend(%q) = %v, want assistant_model_unresolved", other, err)
+				}
+				if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+					t.Fatalf("claude process was spawned despite unmapped tier %q", other)
+				}
+			})
 		}
 	})
 
