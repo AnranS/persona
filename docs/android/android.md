@@ -382,7 +382,14 @@ and a side's own subtasks never come back as roots. The parent shows its folded 
 list holds (`withHeldSides` in `SideSessions.kt`, `core:domain`), so seeing or answering a side shows at once; only a
 paged parent whose sides the list does not hold reads the hub's `children.sides*`. `Session.foldedState` adds the
 sides-only step: unread when a side's result is not looked at yet (`sides_unread`), unless the parent works itself;
-Codex children and workers do not make it unread. The raw `Session.state` stays as the hub sent it for the chat and
+Codex children and workers do not make it unread. When a parent row is Unread because one or more folded sides are
+unread (#13524, `unreadSideSummary` / `RowSideUnread`), the row names the most recent unread side under the parent's
+title (with `+N` for additional unread sides) in the unread tint and opens that side in one tap through the existing
+side-session route (`ChatRoute(machineId, sideId)`), replacing the parent's own already-seen preview when only sides
+are unread and keeping both lines when the parent is unread too; before folded rows are read on a paged list it shows
+only the unread count, non-clickable. Seeing only the parent keeps the parent Unread while a side is unread, and
+seeing its held sides takes it out of Unread counts at once (`unreadClearedBySeen`). Rows with no unread side stay
+unchanged. The raw `Session.state` stays as the hub sent it for the chat and
 completion tracking. The ongoing notification's counts are the hub's fleet summary, which folds sides the same way.
 
 In the parent's chat (every style) the header carries a **Side sessions** `JIconButton` (`PersonaIcons.sideSessions`)
