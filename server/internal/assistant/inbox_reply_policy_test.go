@@ -807,6 +807,37 @@ func TestInboxReplyPolicySendGate(t *testing.T) {
 			t.Fatalf("mid-check revision change must make zero sender calls, got %d", len(lark.got))
 		}
 	})
+
+	t.Run("blocks_stale_attempt_at_pre_dispatch_send_boundary_with_zero_sender_calls", func(t *testing.T) {
+		h, lark, it := setupAcceptedSuggestion(t, assistantwire.InboxReplyPolicyConfig{Enabled: true, Revision: "rev-1"}, nil, true)
+		h.inbox.mu.Lock()
+		g := it.Suggestion
+		a := &InboxSuggestionAttempt{
+			Version:        g.Version,
+			Status:         suggestionSending,
+			Text:           g.Text,
+			ClientID:       namedClientID("pre-dispatch-check"),
+			Proposal:       copySuggestion(g),
+			Target:         suggestionReplyTarget(it),
+			Category:       g.ReplyPolicy.Category,
+			Route:          g.ReplyPolicy.Route,
+			ContentVersion: g.ReplyPolicy.ContentVersion,
+			PolicyRevision: g.ReplyPolicy.PolicyRevision,
+			active:         true,
+		}
+		keepSuggestionAttempt(it, a)
+		h.inbox.mu.Unlock()
+		// Policy revision advances right before replyInboxDoMode dispatches to the sender.
+		h.setConfig(func(c *assistantwire.InboxConfig) { c.ReplyPolicy.Revision = "rev-2" })
+
+		sendCtx := context.WithValue(context.Background(), suggestionReplyOnly{}, a)
+		if _, err := h.replyInboxDo(sendCtx, it.ID, a.Text, a.ClientID, false, false); err == nil {
+			t.Fatal("stale attempt at pre-dispatch send boundary must fail closed")
+		}
+		if len(lark.got) != 0 {
+			t.Fatalf("pre-dispatch send gate must make zero sender calls, got %d", len(lark.got))
+		}
+	})
 }
 
 // End-to-end test for a normal owner-draft category:
@@ -922,4 +953,50 @@ func TestInboxReplyPolicyOwnerDraftConfirmationStoresAuditSnapshot(t *testing.T)
 		t.Fatalf("expected direct owner reply to send, got %+v", lark.got)
 	}
 	_ = connector.TagChat
+}
+
+func TestInboxReplyPolicyDraftAndRetryGates(t *testing.T) {
+	t.Run("draftReply_vetoes_generated_draft_text", func(t *testing.T) {
+		classifier, classifierCalls := replyPolicyClassifierModel(t, func(call int, _, user string, _ *http.Request) (int, string) {
+			if call == 1 {
+				return http.StatusOK, `{"category":"routine_reply","reason":"initial question"}`
+			}
+			if strings.Contains(user, "Approved for immediate payout") {
+				return http.StatusOK, `{"category":"approval_commitment","reason":"generated text approves payout"}`
+			}
+			return http.StatusOK, `{"category":"routine_reply","reason":"ok"}`
+		})
+		draftModel, draftCalls := replyPolicyClassifierModel(t, func(_ int, _, _ string, _ *http.Request) (int, string) {
+			return http.StatusOK, "Approved for immediate payout."
+		})
+		h, _ := newReplyPolicyHub(t, assistantwire.InboxReplyPolicyConfig{Enabled: true, Revision: "draft-v1"}, classifier)
+		h.in.models[purposeDraft] = draftModel
+		it := replyPolicyTestItem("lark:draft-veto:1", "1", "Can we proceed?")
+		h.inbox.mu.Lock()
+		h.inbox.items[it.ID] = it
+		h.inbox.mu.Unlock()
+
+		if got, err := h.draftReply(context.Background(), it.ID, ""); err == nil || got != "" {
+			t.Fatalf("expected generated draft text veto, got text=%q err=%v", got, err)
+		}
+		if draftCalls() != 1 || classifierCalls() != 2 {
+			t.Fatalf("expected 1 draft call and 2 classifier calls (pre + generated text), got draft=%d classifier=%d", draftCalls(), classifierCalls())
+		}
+	})
+
+	t.Run("retryInboxHandling_blocks_disallowed_item", func(t *testing.T) {
+		h, _ := newReplyPolicyHub(t, assistantwire.InboxReplyPolicyConfig{Enabled: true, Revision: "retry-v1"}, nil)
+		it := replyPolicyTestItem("lark:retry-block:1", "1", "Please approve contract")
+		now := time.Now().UTC()
+		h.inbox.mu.Lock()
+		h.inbox.items[it.ID] = it
+		it.Agent = &InboxAgent{State: AgentFailed, Of: it.Last}
+		h.inbox.setHandling(it, HandlingFailed, "failed", now)
+		h.inbox.mu.Unlock()
+
+		_, status, code, err := h.retryInboxHandling(context.Background(), it.ID)
+		if err == nil || status != http.StatusConflict || code != assistantwire.CodeInboxReplyPolicyBlocked {
+			t.Fatalf("expected 409 reply_policy_blocked on retry, got status=%d code=%q err=%v", status, code, err)
+		}
+	})
 }
