@@ -49,7 +49,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 	if mods == nil {
 		mods = kernel.Builtin()
 	}
-	s.modules = kernel.New(mods, func(id string) bool { return slices.Contains(off, id) }, s.logf)
+	s.modules = kernel.NewWithPorts(mods, func(id string) bool { return slices.Contains(off, id) }, s.modulePorts(), s.logf)
 }
 
 // moduleValue is a module setting's value as the assistant's settings keep it: the JSON as stored, nil when never set.
@@ -174,4 +174,13 @@ func (s *Service) briefingWaits(v Settings) (modapi.WaitRules, bool) {
 func (s *Service) briefingOn() bool {
 	_, ok := s.modules.ScheduleFacts()
 	return ok
+}
+
+// briefingRunner returns the loaded briefing module's runtime runner, or false when the module is off or built out.
+func (s *Service) briefingRunner() (modapi.ScheduleFactsRunner, bool) {
+	f, ok := s.modules.ScheduleFacts()
+	if !ok || f.Runner == nil {
+		return nil, false
+	}
+	return f.Runner, true
 }

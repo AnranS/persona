@@ -518,6 +518,7 @@ func TestBusHelloNamesRecordingDay(t *testing.T) {
 // The evening routine's facts say today's all-day recording to the model only: its coverage, each part's recap or
 // state, the timeline's titles and the to-dos not confirmed; never in the card, and not for another routine.
 func TestEveningFactsSayTodaysDayRecording(t *testing.T) {
+	needsBriefingModule(t)
 	d := newDayFixture(t)
 	ctx := context.Background()
 	if f := d.s.briefFactsAt(ctx, time.Now(), "evening"); f.Day != nil {
@@ -543,7 +544,7 @@ func TestEveningFactsSayTodaysDayRecording(t *testing.T) {
 	if f.Day == nil || len(f.Day.Parts) != 2 || len(f.Day.Timeline) != 2 || len(f.Day.Actions) != 1 || len(f.Day.Gaps) != 1 {
 		t.Fatalf("facts %+v", f.Day)
 	}
-	text := f.modelText()
+	text := d.s.briefModelText(f)
 	made := rc.GeneratedAt.In(d.owner).Format("15:04")
 	// Open, it was recorded until now; its text goes as far as the phone uploaded it.
 	recorded := "录音时段 08:00–" + now.In(d.owner).Format("15:04") + "，文字转写到 09:05，"
@@ -558,15 +559,15 @@ func TestEveningFactsSayTodaysDayRecording(t *testing.T) {
 		t.Errorf("facts carry the points:\n%s", text)
 	}
 	card, fallback, _ := d.s.briefCard(f, "晚报", "ok")
-	if strings.Contains(card.JSON(), "Export review") || strings.Contains(fallback, "Export review") || strings.Contains(f.countsText(), "Export review") {
+	if strings.Contains(card.JSON(), "Export review") || strings.Contains(fallback, "Export review") || strings.Contains(briefCountsIn(f, i18n.Lang(f.Lang)), "Export review") {
 		t.Fatalf("the card or the push carries the day: %s\n%s", card.JSON(), fallback)
 	}
-	if f := d.s.briefFactsAt(ctx, time.Now(), "morning"); f.Day != nil || strings.Contains(f.modelText(), "全天录音") {
+	if f := d.s.briefFactsAt(ctx, time.Now(), "morning"); f.Day != nil || strings.Contains(d.s.briefModelText(f), "全天录音") {
 		t.Fatalf("the morning routine: %+v", f.Day)
 	}
 	// Confirmed, a to-do is not a suggestion any more.
 	d.do("POST", "/api/v1/recordings/"+dayRec+"/minutes/todos", "", map[string]any{"version": 1, "actions": []string{"a1"}}, http.StatusOK)
-	if f := d.s.briefFactsAt(ctx, time.Now(), "evening"); len(f.Day.Actions) != 0 || strings.Contains(f.modelText(), "还没确认的建议待办") {
+	if f := d.s.briefFactsAt(ctx, time.Now(), "evening"); len(f.Day.Actions) != 0 || strings.Contains(d.s.briefModelText(f), "还没确认的建议待办") {
 		t.Fatalf("a confirmed to-do: %+v", f.Day.Actions)
 	}
 }
@@ -582,7 +583,7 @@ func TestEveningFactsDayIsBounded(t *testing.T) {
 		d.Actions = append(d.Actions, prompts.BriefDayAction{Who: "Bo", What: fmt.Sprintf("Thing %d", i)})
 	}
 	d.Parts = []prompts.BriefDayPart{{Part: 1, Made: "21:00", Upto: "20:58", Summary: strings.Repeat("概", 300)}}
-	briefDayBound(d)
+	briefDayBound(t, d)
 	if n := prompts.BriefDayRunes(d); n > briefDayRunes || n < briefDayRunes-200 {
 		t.Fatalf("%d runes", n)
 	}
@@ -865,18 +866,21 @@ func TestEveningFactsDayReadOnlyInTheOwnersZone(t *testing.T) {
 	d.f.mu.Lock()
 	d.f.hello.KB = &KBSettings{ReadOnly: true}
 	d.f.mu.Unlock()
-	f := d.s.briefFactsAt(context.Background(), now, "evening")
-	if f.Day == nil || f.Day.Date != y.Format(time.DateOnly) {
-		t.Fatalf("the owner's day in a read-only knowledge base: %+v", f.Day)
-	}
-	if text := f.modelText(); !strings.Contains(text, "录音时段 08:00–09:00，文字转写到 08:30") {
-		t.Fatalf("recorded and transcribed:\n%s", text)
+	if d.s.briefingOn() {
+		f := d.s.briefFactsAt(context.Background(), now, "evening")
+		if f.Day == nil || f.Day.Date != y.Format(time.DateOnly) {
+			t.Fatalf("the owner's day in a read-only knowledge base: %+v", f.Day)
+		}
+		if text := d.s.briefModelText(f); !strings.Contains(text, "录音时段 08:00–09:00，文字转写到 08:30") {
+			t.Fatalf("recorded and transcribed:\n%s", text)
+		}
 	}
 }
 
 // The section stays within 4000 runes whatever a valid day holds: 500 gaps of as many reasons, a dozen parts. The
 // reasons with the most time and the first and latest parts are listed, the others counted.
 func TestEveningFactsDayBoundsGapsAndParts(t *testing.T) {
+	needsBriefingModule(t)
 	d := newDayFixture(t)
 	var gaps []map[string]any
 	for i := range 500 {
@@ -907,7 +911,7 @@ func TestEveningFactsDayBoundsGapsAndParts(t *testing.T) {
 	if len(day.Parts) != briefDayParts || day.PartsLeft != 7 || day.Parts[0].Part != 1 || day.Parts[len(day.Parts)-1].Part != 12 {
 		t.Errorf("parts %+v, %d left", day.Parts, day.PartsLeft)
 	}
-	text := f.modelText()
+	text := d.s.briefModelText(f)
 	for _, want := range []string{"；另有 494 种原因共 494 段 494 分钟", "  - 中间另有 7 个部分没列出\n", "Standup"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("facts lack %q:\n%s", want, text)
@@ -937,7 +941,7 @@ func TestEveningFactsDayBoundsEverything(t *testing.T) {
 	for range 50 {
 		d.Actions = append(d.Actions, prompts.BriefDayAction{Who: strings.Repeat("人", 40), What: strings.Repeat("事", briefDayWhat)})
 	}
-	briefDayBound(d)
+	briefDayBound(t, d)
 	if n := prompts.BriefDayRunes(d); n > briefDayRunes {
 		t.Fatalf("%d runes", n)
 	}
