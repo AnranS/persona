@@ -35,7 +35,17 @@ the Manager's enrolled computers. Enable this for runtimes you trust with that a
 ## Send and receive
 
 Use the tools through Persona MCP, a runtime's existing `callTool` API, or
-`personad tool` from a shell associated with a supported session.
+`personad tool` from a shell associated with a supported session. Because
+`personad` is often not on a terminal pane's `PATH` (or may be installed under
+another name), when the manager renders an A2A message for a session that calls
+Persona's tools from a node-verifiable terminal (a pane or a Codex thread)
+without Persona MCP tools—or for the first prompt of a session launched by A2A
+or `dispatch_start` unless its launcher runs Claude Code or a runtime—it reads
+the recipient node's absolute executable from `node.info` and includes it as a
+JSON string to decode and quote for the shell, matching task handoffs. Sessions
+with Persona MCP tools, runtimes that wire A2A tools in themselves, and nodes
+that report no absolute executable keep the plain `personad tool` wording
+unchanged.
 
 | Tool | Purpose |
 | --- | --- |
@@ -149,8 +159,12 @@ notification and interaction APIs.
 | Cindy database fallback, other read-only integrations and historical sessions | Can be viewed through the ordinary session client |
 
 Terminal engines such as herdr, Herdr App, Orca and Tern use the A2A support
-of the Agent running in their terminal. The supported launch, send and resume
-operations still depend on the engine and runtime.
+of the Agent running in their terminal. When a terminal Agent (such as Codex or
+Antigravity CLI in a node-verifiable pane, or a Codex thread) has no Persona MCP
+tools, A2A messages name the recipient node's reported absolute executable as a
+JSON string so the Agent can run `tool` commands even when `personad` is not on
+`PATH`. The supported launch, send and resume operations still depend on the
+engine and runtime.
 
 The server integration tests exercise two Node connections, a Manager,
 Postgres and the Hub. They check an input-required round trip and read the
