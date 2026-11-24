@@ -132,14 +132,14 @@ func (h *fakeHost) AddMCPTool(string, string, json.RawMessage, func(context.Cont
 }
 func (h *fakeHost) AddBackgroundJob(string, func(context.Context) error) error { return nil }
 func (h *fakeHost) Tasks() modapi.TaskPort                                     { return h.tasks }
-func (h *fakeHost) Todos() modapi.TodoPort                        { return h.todos }
-func (h *fakeHost) Inbox() modapi.InboxPort                       { return h.inbox }
-func (h *fakeHost) Later() modapi.LaterPort                       { return h.later }
-func (h *fakeHost) Schedule() modapi.SchedulePort                 { return h.schedule }
-func (h *fakeHost) Feed() modapi.FeedPort                         { return h.feed }
-func (h *fakeHost) Delivery() modapi.DeliveryPort                 { return h.delivery }
-func (h *fakeHost) DayRecap() modapi.DayRecapPort                 { return h.dayRecap }
-func (h *fakeHost) Prompts() modapi.PromptPort                    { return h.prompts }
+func (h *fakeHost) Todos() modapi.TodoPort                                     { return h.todos }
+func (h *fakeHost) Inbox() modapi.InboxPort                                    { return h.inbox }
+func (h *fakeHost) Later() modapi.LaterPort                                    { return h.later }
+func (h *fakeHost) Schedule() modapi.SchedulePort                              { return h.schedule }
+func (h *fakeHost) Feed() modapi.FeedPort                                      { return h.feed }
+func (h *fakeHost) Delivery() modapi.DeliveryPort                              { return h.delivery }
+func (h *fakeHost) DayRecap() modapi.DayRecapPort                              { return h.dayRecap }
+func (h *fakeHost) Prompts() modapi.PromptPort                                 { return h.prompts }
 
 type fakeTasks struct {
 	lang, web    string
