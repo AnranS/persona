@@ -357,7 +357,15 @@ func (h *herdrCoreHost) Watch(ctx context.Context, _ []host.PaneRef, changed fun
 }
 
 // hcAgents names the agents herdr-core's status reports (status.app, the program's own word) the way the node does.
-var hcAgents = map[string]string{"claude-code": "claude", "claude": "claude", "codex": "codex"}
+var hcAgents = map[string]string{
+	"claude-code": "claude",
+	"claude":      "claude",
+	"codex":       "codex",
+	"traex":       traexAgent,
+	"traecli":     traexAgent,
+	"trae-cli":    traexAgent,
+	"trae_cli":    traexAgent,
+}
 
 // hcStatus maps OSC 7501 states to the node's; error has no counterpart (the program said something failed, not what
 // it does now).
@@ -365,9 +373,9 @@ var hcStatus = map[string]string{
 	"idle": proto.StatusIdle, "working": proto.StatusWorking, "blocked": proto.StatusBlocked, "done": proto.StatusDone,
 }
 
-// fromTerminal is a terminal as an agent pane. Its agent is what its status names (claude or codex), else what runs in
-// it (a claude that has not reported yet) — none when a shell, classic herdr or nothing is in the foreground; its
-// space and slot are the Herdr app's when the app opened it, else its directory.
+// fromTerminal is a terminal as an agent pane. Its agent is what its status names (claude, codex, or traex), else what
+// runs in it (an agent that has not reported yet) — none when a shell, classic herdr or nothing is in the foreground;
+// its space and slot are the Herdr app's when the app opened it, else its directory.
 func fromTerminal(t herdrcore.Terminal) host.Agent {
 	a := host.Agent{
 		Name: t.Name, Cwd: t.Cwd, PaneID: host.PaneRef{Kind: host.HerdrCore, ID: t.Address}.String(),
@@ -384,15 +392,35 @@ func fromTerminal(t herdrcore.Terminal) host.Agent {
 		return a // nothing runs (finished): a status left behind is not an agent
 	}
 	a.ForegroundCwd = t.Foreground.Cwd
+	a.ForegroundPID = t.Foreground.Pid
+	if len(t.Foreground.Argv) > 0 {
+		a.ForegroundArgv = slices.Clone(t.Foreground.Argv)
+	}
 	if nestedHerdr(t.Foreground) || isShell(t.Foreground) {
 		// Classic herdr's client: whatever runs inside belongs to herdr. A shell: the agent that reported the status
 		// has exited (herdr-core keeps a program's last status until the terminal's own program ends).
 		return a
 	}
+	fgAgent := ""
+	if len(t.Foreground.Argv) > 0 {
+		fgAgent = hcAgentProgram(t.Foreground.Argv[0])
+	}
+	if fgAgent == "" && t.Foreground.Name != "" {
+		fgAgent = hcAgentProgram(t.Foreground.Name)
+	}
 	if t.Status != nil && t.Status.App != "" {
-		k, ok := hcAgents[t.Status.App]
+		app := strings.ToLower(t.Status.App)
+		k, ok := hcAgents[app]
+		if !ok && fgAgent == traexAgent && app == "trae" {
+			k, ok = traexAgent, true
+		}
 		if !ok {
 			return a // a program the node does not drive: left to the panes a compatible CLI may claim
+		}
+		// TRAE CLI is Codex-compatible and may report OSC 7501 under app "codex".
+		// When the terminal's foreground program is TRAE CLI, keep it as traex with its native status.
+		if k == "codex" && fgAgent == traexAgent {
+			k = traexAgent
 		}
 		a.Agent = k
 		a.AgentStatus = hcStatus[t.Status.State]
@@ -401,18 +429,21 @@ func fromTerminal(t herdrcore.Terminal) host.Agent {
 		}
 		return a
 	}
-	if len(t.Foreground.Argv) > 0 {
-		if k := hcAgentProgram(t.Foreground.Argv[0]); k != "" {
-			a.Agent, a.AgentStatus = k, proto.StatusUnknown
-		}
+	if fgAgent != "" {
+		a.Agent, a.AgentStatus = fgAgent, proto.StatusUnknown
 	}
 	return a
 }
 
-// hcAgentProgram is the agent a program name or path is ("claude", "codex", also as claude.exe), else "".
+// hcAgentProgram is the agent a program name or path is ("claude", "codex", "traex", also with .exe), else "".
 func hcAgentProgram(name string) string {
-	if k := strings.TrimSuffix(filepath.Base(name), ".exe"); k == "claude" || k == "codex" {
-		return k
+	switch strings.ToLower(strings.TrimSuffix(filepath.Base(name), ".exe")) {
+	case "claude":
+		return "claude"
+	case "codex":
+		return "codex"
+	case "traex", "traecli", "trae-cli", "trae_cli":
+		return traexAgent
 	}
 	return ""
 }
