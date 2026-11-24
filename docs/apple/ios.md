@@ -1771,11 +1771,14 @@ every platform are described from #13430; this section is the Apple side.
   has anything to draw so the host leaves its spacing out), `settings` (`settingsEntry(id:info:row:page:)`: an entry
   listed, searched and routed as the core's own through `SettingsPage.module(<id>)`) and the client-side
   `capabilities` (`provide(_:_:)`: an interface the core declares and asks for, such as `LiveScreen`; nil when no
-  active module provides it, and the core then offers none of it), and, since #14278, `shell_places`
+  active module provides it, and the core then offers none of it), since #14278, `shell_places`
   (`shellPage(id:_:)`: a page the core routes to by id, handed `PersonaHostApp.ShellContext`; the core lists its row and
-  opens its route only while a module provides it). Declared but **not yet served**, with no API until a module needs
-  one: `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`, `phone_tools`, `intents`,
-  `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet). Each gets its registrar
+  opens its route only while a module provides it), and, since #13849, `audio_leases`
+  (`audioLease(id:kind:)`: a lease on the shared audio session, ranked `call > voice_conversation > meeting_recording >
+  playback`, recorded by the core's `AudioSessionBroker` in `apple/Shared/AudioSessionBroker.swift`, through which every
+  direct `AVAudioSession` call routes — guarded by `scripts/test/test_apple_audio_session_broker.py`). Declared but
+  **not yet served**, with no API until a module needs one: `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
+  `phone_tools`, `intents` and `push_categories`. Each gets its registrar
   method and registry reader with the first module that needs it (#13849).
 - **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
   `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
