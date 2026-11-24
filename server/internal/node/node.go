@@ -175,8 +175,9 @@ type Node struct {
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
-	waiting map[string]*watch
-	agents  map[string]host.Agent // session id -> live agent
+	waiting   map[string]*watch
+	agents    map[string]host.Agent // session id -> live agent
+	traexLive map[string]bool       // traex session ids live on the previous sessionList pass (stopped-thread history refresh)
 	// onAgentsList: the parked sessions whose pane is on Claude's agents list, listed in it read-only (claudebg.go).
 	onAgentsList map[string]bool
 	// lastPanes: the pane each session was last seen live in (it is no longer live when its agent exits or is
