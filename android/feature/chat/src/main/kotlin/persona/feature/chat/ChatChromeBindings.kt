@@ -76,6 +76,8 @@ data class ChatChromeBindings(
     val lookupRows: List<persona.core.contracts.Session> = emptyList(),
     /** Fork copies into a new session without mutating the source, so a stopped history preview may still provide it. */
     val forkActions: ChatActions? = actions,
+    /** Explicit Codex takeover / continuation actions, also available when previewing an offline codex_history session. */
+    val takeoverActions: ChatActions? = actions,
     /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and uses the unified Rename dialog (#13899). */
     val preferHerdrTabName: Boolean = false,
 )
