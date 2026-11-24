@@ -18,6 +18,23 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+type blockingStartHub struct {
+	Hub
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingStartHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionStart {
+		select {
+		case b.entered <- struct{}{}:
+		default:
+		}
+		<-b.release
+	}
+	return b.Hub.DeviceCall(ctx, p)
+}
+
 func todoHandoffHTTPReq(t *testing.T, s *Service, method, path, body, role string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -454,7 +471,7 @@ func TestTodoContextHandoffSafetyRefusalApprovalPermissionAndQuiescence(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(batchRes, "1 refused") || !strings.Contains(batchRes, "safety refusal") {
+		if !strings.Contains(batchRes, "refused, nothing changed") || !strings.Contains(batchRes, "safety refusal") {
 			t.Fatalf("agents_switch did not refuse safety refusal:\n%s", batchRes)
 		}
 		if len(nodeCalls(ft.f)) != 0 {
@@ -607,21 +624,7 @@ func TestTodoContextHandoffRejectionIdempotencyConcurrencyUnknownAndGaps(t *test
 		})
 		entered := make(chan struct{}, 1)
 		release := make(chan struct{})
-		e.f.nodes[DeviceSessionStart] = func(_ string, raw json.RawMessage) (any, error) {
-			select {
-			case entered <- struct{}{}:
-			default:
-			}
-			<-release
-			var p map[string]any
-			_ = json.Unmarshal(raw, &p)
-			e.f.mu.Lock()
-			e.f.starts = append(e.f.starts, p)
-			e.f.mu.Unlock()
-			return map[string]any{"session": proto.Session{
-				SessionID: "codex_raced_1", MachineID: "box", Cwd: "/code/app", Agent: "codex", Launcher: "codex",
-			}}, nil
-		}
+		setHub(e.s, &blockingStartHub{Hub: e.f, entered: entered, release: release})
 
 		var wg sync.WaitGroup
 		var w1, w2 *httptest.ResponseRecorder
@@ -674,6 +677,9 @@ func TestTodoContextHandoffRejectionIdempotencyConcurrencyUnknownAndGaps(t *test
 		if unknown.Handoff.DeliveryStatus != handoffDeliveryUnknown {
 			t.Fatalf("expected delivery_status=unknown, got %+v", unknown.Handoff)
 		}
+		e.f.mu.Lock()
+		startsBeforeRetry := len(e.f.starts)
+		e.f.mu.Unlock()
 		// Retrying the same operation_id returns the existing unknown handoff and does NOT replay.
 		e.f.failStart = nil
 		wRetry := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
@@ -688,8 +694,11 @@ func TestTodoContextHandoffRejectionIdempotencyConcurrencyUnknownAndGaps(t *test
 		if retried.Handoff.ID != unknown.Handoff.ID || retried.Handoff.DeliveryStatus != handoffDeliveryUnknown {
 			t.Fatalf("unknown op replayed or mutated: %+v", retried.Handoff)
 		}
-		if len(e.f.starts) != 0 {
-			t.Fatalf("unknown delivery replayed start: %d", len(e.f.starts))
+		e.f.mu.Lock()
+		startsAfterRetry := len(e.f.starts)
+		e.f.mu.Unlock()
+		if startsAfterRetry != startsBeforeRetry {
+			t.Fatalf("unknown delivery replayed start: before=%d after=%d", startsBeforeRetry, startsAfterRetry)
 		}
 	})
 
@@ -803,5 +812,24 @@ func TestTodoContextHandoffPostgresPersistence(t *testing.T) {
 	if listed.Handoffs[0].ID != got.Handoff.ID || listed.Handoffs[0].DeliveryStatus != handoffDeliveryAccepted ||
 		listed.Handoffs[0].Summary != got.Handoff.Summary {
 		t.Fatalf("restarted handoff did not preserve exact fields: %+v", listed.Handoffs[0])
+	}
+	if !strings.Contains(listed.Handoffs[0].Summary, "Single-flight per token key") {
+		t.Fatalf("persisted handoff summary missing recorded decision:\n%s", listed.Handoffs[0].Summary)
+	}
+	// Retrying op_pg_1 after restart stays strictly idempotent via the Postgres unique index.
+	startsBefore := len(e.f.starts)
+	retryW := todoHandoffHTTPReq(t, restarted, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+		`{"operation_id":"op_pg_1","launcher":"codex","prompt":"Continue with Postgres persistence."}`, "")
+	if retryW.Code != http.StatusOK {
+		t.Fatalf("restarted idempotent retry = %d %s", retryW.Code, retryW.Body.String())
+	}
+	var retried struct {
+		Handoff TodoContextHandoff `json:"handoff"`
+	}
+	if err := json.Unmarshal(retryW.Body.Bytes(), &retried); err != nil || retried.Handoff.ID != got.Handoff.ID {
+		t.Fatalf("restarted retry created new handoff: %+v err=%v", retried, err)
+	}
+	if len(e.f.starts) != startsBefore {
+		t.Fatalf("restarted retry started another worker: before=%d after=%d", startsBefore, len(e.f.starts))
 	}
 }

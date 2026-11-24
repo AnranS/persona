@@ -1234,6 +1234,16 @@ func (s *Service) todoHandoffRoutes() {
 			apierr.Write(w, status, err)
 			return
 		}
+		if status != 0 && status != http.StatusOK {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			payload := map[string]any{"handoff": res}
+			if code != "" {
+				payload["code"] = code
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+			return
+		}
 		apierr.WriteJSON(w, map[string]any{"handoff": res})
 	})
 }

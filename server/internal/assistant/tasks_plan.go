@@ -178,11 +178,15 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Continues != "" {
 			if prevTodo, ok := s.todoNow(t.Continues); ok {
 				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, t.Launcher)
-				if providerSwitch && asked == "" && !t.Readonly {
-					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok && pred.permission() != "" {
-						t.Permission = pred.permission()
-						cp := t.Permission
-						t.CallerPermission = &cp
+				if providerSwitch {
+					if asked == "" && !t.Readonly {
+						if pred, ok := s.todoPredecessor(ctx, prevTodo); ok && pred.permission() != "" {
+							t.Permission = pred.permission()
+							cp := t.Permission
+							t.CallerPermission = &cp
+						}
+					}
+					if t.Permission != "" || t.Readonly {
 						t.preservePermission = true
 					}
 				}
@@ -214,17 +218,19 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
-			switch {
-			case t.Readonly:
-				if fit.allowAll() {
+			if !t.preservePermission {
+				switch {
+				case t.Readonly:
+					if fit.allowAll() {
+						t.Permission = "bypassPermissions"
+					}
+				case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+					if t.Permission == "" {
+						t.Permission = configuredMode
+					}
+				case fit.allowAllOver(t.Permission):
 					t.Permission = "bypassPermissions"
 				}
-			case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
-				if t.Permission == "" {
-					t.Permission = configuredMode
-				}
-			case fit.allowAllOver(t.Permission):
-				t.Permission = "bypassPermissions"
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
 			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.

@@ -179,7 +179,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 					s.releaseTakenTodo(t.ReuseTodo)
 					continue
 				}
-				if t.HandoffID != "" && t.Permission != "" {
+				if t.HandoffID != "" && (t.Permission != "" || t.Readonly) {
 					t.preservePermission = true
 				}
 			}
