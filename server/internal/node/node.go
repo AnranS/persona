@@ -1535,7 +1535,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.launcherCheckWith(withLauncherPurpose(withStartHost(ctx, p.Host), p.Purpose), p.Name, launcherCheckOpts{model: p.Model,
 			assistantTurn: p.AssistantTurn, effort: p.Effort, conversation: p.Conversation, configDir: p.ConfigDir}), nil
 	case "claude.auth_status": // whether Claude Code is signed in as the launcher runs it, no model request (claudeauth.go)
-		return n.claudeAuthStatus(ctx, p.Name)
+		return n.claudeAuthStatusWith(ctx, p.Name, claudeAuthOpts{purpose: p.Purpose, conversation: p.Conversation, configDir: p.ConfigDir})
 	case "launchers.repair": // the hub's launcher health (docs/server/launcher-health.md)
 		if err := n.runnableLauncher(ctx, p.Name, false); err != nil {
 			return nil, err
