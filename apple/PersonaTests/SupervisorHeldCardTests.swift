@@ -18,7 +18,7 @@ struct SupervisorHeldCardTests {
 
     /// A card of `kind` on `session` ("" for none), created `minute` minutes past eight, `delegating` when held.
     private func card(_ id: String, session: String, kind: String, minute: Int = 0, delegating: Bool? = nil,
-                      manager: String? = nil, foldedUnder: String? = nil) throws -> Interaction {
+                      muted: Bool? = nil, manager: String? = nil, foldedUnder: String? = nil) throws -> Interaction {
         var body: String
         switch kind {
         case "question": body = #","questions":[{"question":"Which port?","options":[{"label":"8080"},{"label":"9090"}]}]"#
@@ -28,6 +28,7 @@ struct SupervisorHeldCardTests {
         default: body = #","tool_name":"Bash","summary":"rmdir build""#
         }
         if let delegating { body += #","delegating":\#(delegating)"# }
+        if let muted { body += #","muted":\#(muted)"# }
         if let manager { body += #","manager":"\#(manager)""# }
         if let foldedUnder { body += #","folded_under":"\#(foldedUnder)""# }
         let created = String(format: "2026-11-10T08:%02d:00Z", minute)
@@ -269,11 +270,46 @@ struct SupervisorHeldCardTests {
         #expect(pet([t], [try card("ix-screen", session: "t", kind: "screen", delegating: false)])
                 == WatchPetStatus(state: .needsYou, count: 1))
 
-        // Mixed held + open user card (or delegating question) still counts the session as needs_you once.
+        // Mixed held + open user card (or non-muted delegating question) still counts the session as needs_you once,
+        // both directly and through `WatchInteractions.forPet` / `WatchGroupRefresh.apply` (while keeping the
+        // delegating question out of `leavingMuted` and the visible watch list).
         let openQ = try card("ix-open", session: "t", kind: "question", minute: 3)
         #expect(pet([t], [heldPerm, openQ]) == WatchPetStatus(state: .needsYou, count: 1))
         let delegatingQ = try card("ix-del-q", session: "t", kind: "question", minute: 4, delegating: true)
         #expect(pet([t], [heldPerm, delegatingQ]) == WatchPetStatus(state: .needsYou, count: 1))
+        #expect(WatchInteractions.leavingMuted([heldPerm, delegatingQ]).isEmpty)
+        #expect(WatchInteractions.forPet([heldPerm, delegatingQ]).map(\.id) == ["ix-perm", "ix-del-q"])
+        #expect(pet([t], WatchInteractions.forPet([heldPerm, delegatingQ])) == WatchPetStatus(state: .needsYou, count: 1))
+
+        // Production watch pipeline (`WatchGroupRefresh.apply` -> visible wrist list + `WatchPet.status`):
+        // a non-muted delegating question stays off the wrist list and never buzzes, yet keeps the session needs_you.
+        let appliedMixed = WatchGroupRefresh.apply(sessions: [t], interactions: [heldPerm, delegatingQ])
+        #expect(appliedMixed.interactions.isEmpty)
+        #expect(WatchGroupRefresh.newHapticUids(seen: [], current: appliedMixed.interactions).isEmpty)
+        #expect(appliedMixed.petInteractions.map(\.id) == ["ix-perm", "ix-del-q"])
+        #expect(pet(appliedMixed.sessions, appliedMixed.petInteractions) == WatchPetStatus(state: .needsYou, count: 1))
+
+        // Contrast: a muted delegating question is excluded from both `leavingMuted` and `forPet`, so a session with
+        // a supervisor-held card plus only a muted delegating question stays held-only (`.working`); without a held
+        // card the `needs_you` session itself is not misclassified as held-only.
+        let mutedDelegatingQ = try card("ix-muted-del-q", session: "t", kind: "question", minute: 5, delegating: true, muted: true)
+        #expect(WatchInteractions.leavingMuted([heldPerm, mutedDelegatingQ]).isEmpty)
+        #expect(WatchInteractions.forPet([heldPerm, mutedDelegatingQ]).map(\.id) == ["ix-perm"])
+        #expect(pet([t], WatchInteractions.forPet([heldPerm, mutedDelegatingQ])) == WatchPetStatus(state: .working, count: 1))
+        let appliedMutedDelegating = WatchGroupRefresh.apply(sessions: [t], interactions: [heldPerm, mutedDelegatingQ])
+        #expect(appliedMutedDelegating.interactions.isEmpty)
+        #expect(pet(appliedMutedDelegating.sessions, appliedMutedDelegating.petInteractions) == WatchPetStatus(state: .working, count: 1))
+        #expect(WatchInteractions.forPet([mutedDelegatingQ]).isEmpty)
+        #expect(pet([t], WatchInteractions.forPet([mutedDelegatingQ])) == WatchPetStatus(state: .needsYou, count: 1))
+
+        // Contrast through `WatchGroupRefresh.apply`: open user card is visible on the wrist and keeps pet needs_you,
+        // while a held-only session leaves the wrist list empty and reads as working under its supervisor.
+        let appliedOpen = WatchGroupRefresh.apply(sessions: [t], interactions: [heldPerm, openQ])
+        #expect(appliedOpen.interactions.map(\.id) == ["ix-open"])
+        #expect(pet(appliedOpen.sessions, appliedOpen.petInteractions) == WatchPetStatus(state: .needsYou, count: 1))
+        let appliedHeldOnly = WatchGroupRefresh.apply(sessions: [t], interactions: [heldPerm])
+        #expect(appliedHeldOnly.interactions.isEmpty)
+        #expect(pet(appliedHeldOnly.sessions, appliedHeldOnly.petInteractions) == WatchPetStatus(state: .working, count: 1))
 
         // Another needs_you session with no card read stays counted, while the held-only session is excluded.
         let other = try session("o")

@@ -82,7 +82,8 @@ final class WatchModel {
     var groups: [String] { configs.keys.sorted { ($0.isEmpty ? 0 : 1, $0) < ($1.isEmpty ? 0 : 1, $1) } }
     var sessions: [Session] = []
     var interactions: [Interaction] = []
-    /// Visible cards plus supervisor-held cards so `WatchPet.status` knows which `needs_you` sessions are held only by their supervisor.
+    /// Non-muted pending cards (including delegating questions) plus supervisor-held cards so `WatchPet.status` knows
+    /// which `needs_you` sessions are held only by their supervisor.
     private var petInteractions: [Interaction] = []
     /// The inbox's Needs You (Feishu messages, mail and connectors' items the AI says need the user), newest first.
     var inbox: [InboxItem] = []
@@ -222,21 +223,14 @@ final class WatchModel {
     }
 
     private func apply(sessions: [Session], interactions: [Interaction], machines: [Machine], at: Date = .now) {
-        // Agents of quiet tasks and their questions are the main conversation's to tell (#1731), by the hub's word.
-        let (sessions, interactions) = QuietTasks.leavingOut(sessions: sessions, interactions: interactions, quiet: \.quiet)
-        // A side session lives in its parent's chat (#7944): no row of its own on the wrist, the parent in its folded state.
-        // The phone's summary is folded already; folding it again changes nothing.
-        let folded = SideFold.fold(sessions, groups: SideFold.rememberedGroups(groups)).listed
-        // A muted agent's or space's card never reaches the wrist (#4360): it is neither shown nor buzzed for.
-        let shown = WatchInteractions.leavingMuted(interactions)
+        let applied = WatchGroupRefresh.apply(sessions: sessions, interactions: interactions,
+                                              sideFoldGroups: SideFold.rememberedGroups(groups))
         // Only a card seen for the first time buzzes: one that vanished with a failed group and came back with it is
         // already in the persisted record (#4369).
-        let freshUids = WatchGroupRefresh.newHapticUids(seen: Set(seenInteractionUids), current: shown)
-        func rank(_ s: Session) -> Int { s.state.priority }
-        self.sessions = folded.filter { $0.state.isLive && !$0.assistant || $0.state == .needsYou || $0.state == .working }
-            .sorted { rank($0) != rank($1) ? rank($0) < rank($1) : $0.sortDate > $1.sortDate }
-        self.interactions = shown
-        self.petInteractions = WatchInteractions.forPet(interactions)
+        let freshUids = WatchGroupRefresh.newHapticUids(seen: Set(seenInteractionUids), current: applied.interactions)
+        self.sessions = applied.sessions
+        self.interactions = applied.interactions
+        self.petInteractions = applied.petInteractions
         if !machines.isEmpty { self.machines = machines }
         lastUpdate = at
         guard !freshUids.isEmpty else { return }
