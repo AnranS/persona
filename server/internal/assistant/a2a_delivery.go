@@ -591,7 +591,7 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 		definite := err != nil
 		if err == nil {
 			request["prompt"] = a2aPrompt(&taskSnap, &first, from, lang, s.a2aLaunchExecutable(ctx, dev, request))
-			err = s.call(ctx, mid, DeviceSessionStart, request, &out)
+			err = s.call(context.WithValue(ctx, placementTaskKey{}, taskID), mid, DeviceSessionStart, request, &out)
 			definite = err != nil && !startResultUnknown(err) && !sendUnknown(err)
 		}
 		keep, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
