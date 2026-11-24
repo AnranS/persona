@@ -1116,9 +1116,9 @@ and the extensions' `agent.needs_you` / `agent.finished` events still leave the 
   again). Every to-do it is shown reads as a device reads it,
   and the list's `counts` are a device's, which count, as numbers, the to-dos it is not shown too. What told a to-do's history stays: a run's link keeps a directory in the
   space when the run's shell leaves it, and a space's unlink, move or void releases such a link rather than delete it.
-  Such a task's outcome is not written into a knowledge-base project's timeline either, where `kb.read` would read it:
-  the line of one that only cannot be told yet waits, is written once the task is told outside the space and is
-  dropped once it is told in it (judged again as the events are; a manager restart in between drops it, and the
+  Such a task's outcome is not written into a knowledge-base project's timeline or worker memory (`memory.jsonl`) either, where `kb.read` would read it:
+  one that only cannot be told yet waits, is written once the task is told outside the space and is
+  dropped once it is told in it (judged again as the events are; a manager restart in between drops it, and a closed task's
   outcome stays in the to-do's decisions).
   A chat's feed (`assistant.ask`) leaves out the same: the items, plans and task cards of such a to-do, a plan with a task in
   the space, every answered card, and the digests that gather many to-dos and cards at once (a routine's `brief`, the
