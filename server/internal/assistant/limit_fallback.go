@@ -20,7 +20,7 @@ import (
 // assistant.limit_fallbacks that can take it, and comes back once the limit resets. Both moves are conversation-switch
 // batches (conversations_switch.go) like any other: durable before-image, epoch fence, busy queue and the logical
 // segment switch with its summary of what went before. What this adds is when they start, that they are FirstTurn
-// batches (the summary always travels with the target's first input, never dropped by an idle acceptance), the one
+// batches (each switch is done only when the target took its first input, which carries the summary), the one
 // message it sends (the hub's own continuation, the auto-continue source, queued behind the forward switch) and the
 // restore at the reset. Nothing here interrupts a turn, and a switch made in between is never overwritten: the
 // restore's fence leaves a conversation someone changed alone.
@@ -32,6 +32,10 @@ const (
 	// limitFallbackRecheck: how long a restore waits again while its original launcher still shows a failure with no
 	// later reset known, or its plan could not be read.
 	limitFallbackRecheck = 15 * time.Minute
+	// A return that lasts less than an hour raises the next return delay until it reaches six hours.
+	limitFallbackRepeatWindow  = time.Hour
+	limitFallbackMaxReturnWait = 6 * time.Hour
+	limitFallbackMaxRepeats    = 4
 	// limitFallbackContinueTries: how many times the continuation is handed over before it is left to the
 	// conversation's next input (which then carries the summary). Its client_msg_id makes every try the same message.
 	limitFallbackContinueTries = 5
@@ -52,6 +56,8 @@ type conversationSwitchFallback struct {
 	// (later while the original launcher still shows a limit).
 	ResetsAt  time.Time `json:"resets_at"`
 	RestoreAt time.Time `json:"restore_at"`
+	// ReturnRepeats counts quick recurrences of this launcher's limit after automatic returns.
+	ReturnRepeats int `json:"return_repeats,omitempty"`
 	// ContinueID is the continuation's client_msg_id. Continued: it was handed over, the owner spoke first, or it
 	// was given up after limitFallbackContinueTries tries.
 	ContinueID    string `json:"continue_id"`
@@ -61,6 +67,47 @@ type conversationSwitchFallback struct {
 	// moved, or nothing left to restore).
 	RestoreBatch string `json:"restore_batch,omitempty"`
 	Done         bool   `json:"done,omitempty"`
+}
+
+// limitFallbackReturnRepeats follows an accepted automatic restore of the same logical conversation and
+// activation. The durable operation's update time marks its acceptance, even if it waited for the owner's
+// first input or the manager restarted before it recorded the switched outcome.
+func limitFallbackReturnRepeats(ctx context.Context, store logicalSwitchStore, state conversationSwitchState, item conversationSwitchItem, now time.Time) int {
+	for _, restore := range slices.Backward(state.Batches) {
+		if restore.RestoreOf == "" || !restore.FirstTurn || len(restore.Items) != 1 {
+			continue
+		}
+		returned := restore.Items[0]
+		if returned.Outcome != conversationSwitchSwitched || returned.Machine != item.Machine ||
+			returned.ConversationID != item.ConversationID || returned.ExpectedEpoch+1 != item.ExpectedEpoch ||
+			returned.Target.Machine != item.Before.Machine || returned.Target.Launcher != item.Before.Launcher {
+			continue
+		}
+		original := slices.IndexFunc(state.Batches, func(batch conversationSwitchBatch) bool {
+			return batch.ID == restore.RestoreOf && batch.Fallback != nil && batch.Fallback.RestoreBatch == restore.ID
+		})
+		if original < 0 {
+			return 0
+		}
+		op, err := store.ConversationSwitch(ctx, returned.Machine, returned.ConversationID, returned.OperationID)
+		if err != nil || op == nil || op.Phase != "accepted" || op.UpdatedAt.IsZero() {
+			return 0
+		}
+		if elapsed := now.Sub(op.UpdatedAt); elapsed < 0 || elapsed >= limitFallbackRepeatWindow {
+			return 0
+		}
+		previous := state.Batches[original].Fallback.ReturnRepeats
+		return min(max(previous, 0), limitFallbackMaxRepeats-1) + 1
+	}
+	return 0
+}
+
+func limitFallbackReturnAt(reset, now time.Time, repeats int) time.Time {
+	if repeats <= 0 {
+		return limitContinueAt(reset, now)
+	}
+	wait := min(limitFallbackMaxReturnWait, limitFallbackRepeatWindow<<min(repeats-1, limitFallbackMaxRepeats-1))
+	return reset.Add(wait).UTC()
 }
 
 // limitFallbacksOf is assistant.limit_fallbacks as it applies: trimmed, without repeats or blanks, in order.
@@ -227,8 +274,9 @@ func (s *Service) limitFallbackStart(ctx context.Context, machine, sid string, r
 		return
 	}
 	item.OperationID, item.Outcome = randomHex(16), conversationSwitchQueued
+	repeats := limitFallbackReturnRepeats(ctx, st, state, item, now)
 	batch := conversationSwitchBatch{ID: randomHex(16), CreatedAt: now.UTC(), Items: []conversationSwitchItem{item}, FirstTurn: true,
-		Fallback: &conversationSwitchFallback{ResetsAt: reset.UTC(), RestoreAt: limitContinueAt(reset, now)}}
+		Fallback: &conversationSwitchFallback{ResetsAt: reset.UTC(), RestoreAt: limitFallbackReturnAt(reset, now, repeats), ReturnRepeats: repeats}}
 	batch.Fallback.ContinueID = limitFallbackContinuePrefix + batch.ID
 	state.Batches = append(state.Batches, batch)
 	// The before-image and operation ID are durable before the switch starts (executeConversationSwitches).
@@ -260,7 +308,7 @@ func (s *Service) conversationSwitchResolver(machine string) conversationSwitchR
 
 // limitFallbacksLocked moves the fallback batches on, after runConversationSwitchesLocked ran their items (with
 // book.mu held; true when state changed): a continuation once its switch has started, a restore once its time came,
-// a fallback whose limit reset before its switch could start called off, and finished ones forgotten after
+// and finished ones forgotten after
 // limitFallbackKeep. A restore batch made here starts on a later pass, after state was saved: the durability
 // boundary of every batch.
 func (s *Service) limitFallbacksLocked(ctx context.Context, state *conversationSwitchState, now time.Time) bool {
@@ -281,10 +329,6 @@ func (s *Service) limitFallbacksLocked(ctx context.Context, state *conversationS
 			continue
 		case conversationSwitchSwitching, conversationSwitchSwitched:
 		default:
-			// Queued behind its conversation's work. Once the limit is over there is nothing to fall back for.
-			if !now.Before(fb.ResetsAt) && s.limitFallbackCallOff(ctx, item) {
-				fb.Done, changed = true, true
-			}
 			continue
 		}
 		if !fb.Continued {
@@ -302,19 +346,17 @@ func (s *Service) limitFallbacksLocked(ctx context.Context, state *conversationS
 	return changed
 }
 
-// limitFallbackCallOff refuses a queued fallback item whose limit reset before its switch could start, when no
-// switch operation was begun for it (a crash after the begin and before the save turns into reconciliation instead).
-func (s *Service) limitFallbackCallOff(ctx context.Context, item *conversationSwitchItem) bool {
-	st, ok := s.store().(logicalSwitchStore)
-	if !ok {
-		return false
+// The forward operation activated the backup at its persisted expected epoch plus one. An explicit switch
+// away and back can select identical settings, but it cannot recreate that epoch. Check at dispatch, including
+// for a restore batch a previous manager version already queued.
+func limitFallbackOwnsEpoch(state *conversationSwitchState, forwardID string, epoch int64) bool {
+	for i := range state.Batches {
+		b := &state.Batches[i]
+		if b.ID == forwardID {
+			return b.Fallback != nil && len(b.Items) == 1 && b.Items[0].Outcome == conversationSwitchSwitched && epoch == b.Items[0].ExpectedEpoch+1
+		}
 	}
-	if op, err := st.ConversationSwitch(ctx, item.Machine, item.ConversationID, item.OperationID); err != nil || op != nil {
-		return false
-	}
-	item.Outcome, item.Reason = conversationSwitchRefused, "the usage limit reset before the switch could start"
-	s.logf("limit fallback %s/%s: %s", item.Machine, short(item.ConversationID), item.Reason)
-	return true
+	return false
 }
 
 // limitFallbackContinueText is the continuation in the owner's language.
@@ -366,7 +408,7 @@ func (s *Service) limitFallbackRestore(ctx context.Context, state *conversationS
 	if h, found := s.launcherHealth(ctx, item.Before.Machine, item.Before.Launcher); found && h.unusable() {
 		next := now.Add(limitFallbackRecheck)
 		if reset, ok := h.limitReset(); ok && reset.After(now) {
-			next = limitContinueAt(reset, now)
+			next = limitFallbackReturnAt(reset, now, fb.ReturnRepeats)
 		}
 		s.logf("limit fallback %s/%s: %s still unusable (%s): back about %s", item.Machine, short(item.ConversationID),
 			item.Before.Launcher, cmp.Or(h.Kind, h.State), next.UTC().Format(time.RFC3339))
@@ -380,6 +422,11 @@ func (s *Service) limitFallbackRestore(ctx context.Context, state *conversationS
 		return true
 	}
 	if actionableConversationSwitchItems(items) == 0 {
+		// While the node is away its session row may also be missing from the plan.
+		if s.limitRestoreNodeOffline(ctx, item.Machine) {
+			fb.RestoreAt = now.Add(limitFallbackRecheck).UTC()
+			return true
+		}
 		fb.Done = true
 		reason := ""
 		if len(items) > 0 {
@@ -398,6 +445,12 @@ func (s *Service) limitFallbackRestore(ctx context.Context, state *conversationS
 	state.Batches = append(state.Batches, restore) // b and fb are not used past here: the append may move the slice
 	s.logf("limit fallback %s/%s: back to %s (batch %s)", item.Machine, short(item.ConversationID), item.Before.Launcher, restore.ID)
 	return true
+}
+
+// A registered but unreachable node can come back. A removed machine is a permanent refusal.
+func (s *Service) limitRestoreNodeOffline(ctx context.Context, machine string) bool {
+	d, found := s.device(ctx, machine)
+	return found && !d.Reachable
 }
 
 // pruneLimitFallbacks forgets finished fallbacks older than limitFallbackKeep, with their restores once those

@@ -68,7 +68,7 @@ Changing trust does not erase context already delivered to a computer or termina
 
 | Capability | Implementation |
 | --- | --- |
-| Ask on the phone | MCP `ask_user` → hub creates a `question` interaction (`tool_name: ask_user`, session is this chat) → existing App question card + push ("Persona Has a Question") → answer returned as tool result. The card waits up to 2 hours (`askUserWait` in `assistant/tools.go`, #9), longer than the Lark nudge's default 60 minutes, so an owner who is away is nudged while it still waits. The turn that asked is blocked on the answer (a message the user sends meanwhile would wait behind it), so when the user writes in the conversation (`UserSpoke`) the question is withdrawn at once: the tool returns "the user wrote a new message instead; it is delivered when you end this turn, so end it", and, with the interaction queue, the card closes as dismissed with `reason: "replied_in_chat"` (Lark: "Replied in the chat"; what the user types next is a message, not a late answer to it). Without the queue (the hub keeps the cards) the question just disappears from the snapshot. The take-back happens when the message is received, before it is sent: if the send then fails, the question is already gone. Only the conversation's own `ask_user` is taken back, not an Agent's card or a permission. The question is not resumable: a manager restart ends it, and the next manager tells the hub each card it ended (`fleet.interaction_resolved`, `restoreInteractions`), so an app that resumed its event stream across a hub switch drops it instead of showing it next to the question asked again (#4568). A card that expires unanswered becomes a to-do waiting for the owner's call (in the to-do list, the live snapshot and the briefing's "Can wait"); the tool says so, and the owner's later decision on it comes to the asking conversation as a new message (`docs/assistant/todos.md`, "Questions nobody answered", #1617). With `wait: false` the tool does not wait: the card is raised, the turn ends, and the answer comes as a message ("Asking without holding the turn" below, #4928). A waiting question that a message from elsewhere is queued behind lets go of the turn after two minutes and becomes such a question, its card unchanged (same section, #7392) |
+| Ask on the phone | MCP `ask_user` → hub creates a `question` interaction (`tool_name: ask_user`, session is this chat) → existing App question card + push ("Persona Has a Question") → answer returned as tool result. The card waits up to 2 hours (`askUserWait` in `assistant/tools.go`, #9), longer than the Lark nudge's default 60 minutes, so an owner who is away is nudged while it still waits. The turn that asked is blocked on the answer (a message the user sends meanwhile would wait behind it), so when the user writes in the conversation (`UserSpoke`) the question is withdrawn at once: the tool returns "the user wrote a new message instead; it is delivered when you end this turn, so end it", and, with the interaction queue, the card closes as dismissed with `reason: "replied_in_chat"` (Lark: "Replied in the chat"; what the user types next is a message, not a late answer to it). Without the queue (the hub keeps the cards) the question just disappears from the snapshot. The take-back happens when the message is received, before it is sent: if the send then fails, the question is already gone. Only the conversation's own `ask_user` is taken back, not an Agent's card or a permission. The question is not resumable: a manager restart ends it, tells the hub each card it ended (`fleet.interaction_resolved`, `restoreInteractions`), and sends the originating conversation one invalidation notice with the interaction ID, a minimal safe summary of the original question, confirmation that nothing was applied, and instructions to create a fresh `ask_user` card if still needed (#4568, #13159). An originating conversation can also withdraw its own pending `ask_user` card when obsolete via `ask_user_withdraw` (with an optional short reason); cross-origin cards and user-owned approval/plan/screen interactions are strictly rejected, and repeated withdrawal of an already-terminal card is idempotent (#13159). A card that expires unanswered becomes a to-do waiting for the owner's call (in the to-do list, the live snapshot and the briefing's "Can wait"); the tool says so, and the owner's later decision on it comes to the asking conversation as a new message (`docs/assistant/todos.md`, "Questions nobody answered", #1617). With `wait: false` the tool does not wait: the card is raised, the turn ends, and the answer comes as a message ("Asking without holding the turn" below, #4928). A waiting question that a message from elsewhere is queued behind lets go of the turn after two minutes and becomes such a question, its card unchanged (same section, #7392) |
 | Push | `notify_user` → APNs (arrives with the App closed), tapping opens this chat; no duplicate "completion" push at the end of the same turn. Also sends to Lark if the Lark bot's "Send notifications to Lark too" is on, and to plugin channels with "Push" on (sent by the assistant itself, `docs/extensions/bots.md`, `docs/extensions/channels.md`). The completion push body is the turn's answer from its first words on, cut to 200 characters: every text of the turn in order, except a passing line of at most two sentences said right before a tool call (`transcript.AnswerParts`, the same rule as the Lark answer), so a report written before a tool call leads the push rather than the short line after it (node `assistantAnswer`, the conversation row's `last_text`) |
 | Chat in Lark | Private chat with the Lark bot = talking in main chat; answers return to Lark, questions / approvals use Lark card buttons (`docs/extensions/bots.md`) |
 | Return on a schedule | `schedule_followup` (`at` once; `every: "30m"` repeats by interval) / `list_followups` / `cancel_followup`; when due, hub sends the prompt (starting with "⏰") into the original chat (`assistant.send` uses `--resume`), or starts a new one on failure |
@@ -77,7 +77,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt. A run into a conversation the owner is talking in waits for them, 5 minutes past its time at most ("Messages from the system wait for the owner") |
 | Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them; the task list is cleared only once that message went, so a failed one is sent again by the next connection (#6306) |
 | Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls follow the session permission mode; assistant conversations default to `bypassPermissions` when no manager or conversation mode is selected |
-| Exact connector batch approval | Opt-in `owner_action_prepare` shows complete canonical connector calls as a durable batch and item cards. An authenticated exact reply or direct Allow grants only those original payloads once; the ordinary connector path consumes each grant before it could open another card. Edited text/recipients, relayed claims and wrong locations execute nothing before a fresh ordinary card. Optional persistent proposals survive deadline/caller/restart until Allow or Deny. Both switches are off by default; no Always or standing grant is created. See [Approval clarification](approval-clarification.md#exact-replies-for-a-connector-batch) |
+| Exact owner-action batch approval | Opt-in `owner_action_prepare` shows complete canonical connector calls and managed built-in before/after changes as durable batch and item cards. An authenticated exact reply or direct Allow grants only those original payloads once. Built-in `persona_settings` writes and profile switch/rollback execute in order at their approved revisions; the first failure stops later grants and reports the partial point. Edited connector text/recipients, relayed claims and wrong locations execute nothing before a fresh ordinary card. Denied or consumed exact built-in calls cannot bypass their durable decision. Optional persistent proposals survive deadline/caller/restart until Allow or Deny. Both switches are off by default; no Always or standing grant is created. See [Approval clarification](approval-clarification.md#exact-replies-for-an-owner-action-batch) |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
 | Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed (an answer that writes out exactly one option, its label then its own description as `label：description`, with `:`, a dash or the description in brackets, quotes or spaces around it, counts as that label, #3929), single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
 | Interrupt, adopt, report | `agent_interrupt`: stop an Agent's current turn immediately, optionally followed by a new instruction (`agent_send` queues behind the turn); `agent_switch`: when the user asks (a subscription's usage limit stopped Agents, say), move a running Claude Code Agent to another launcher on its computer and go on with it, now or not at all (a busy Agent is refused with nothing typed, #5973, `docs/assistant/agent-work.md` "Usage limits"); `agents_switch`: when the user asks, move many running Claude Code Agents to another launcher at once (a preview first, one confirmation; usage-limited ones continue, idle ones wait there, busy ones are queued until their turn ends, stopped ones resume there, #6008); `agent_supervise`: bring an Agent on no open task under the caller's supervision (the main chat, or a direction's lead within its bounds: not an Agent waiting for the user, on another conversation's open task, or busy on work Persona did not start; #12953); the Agents' `report_to_supervisor`: an Agent on a supervised task reports a needed decision, blocker, completion with evidence, or progress into the supervision message. See `docs/assistant/unified-entry.md` ("Supervision", #5112) |
@@ -233,7 +233,7 @@ Knowledge state is files in `~/.persona/data`, the manager's `handles.key` (`~/.
 This is hub's same Postgres, with unchanged keys / tables and no data migration; the assistant connects itself using the same `database_url`. Only it reads / writes these keys and tables; hub doesn't touch them.
 Scheduled-task and finished-task Agent-closing loops belong to the assistant (`Service.Run`, beginning only after first hub connection and handshake).
 
-**Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (a compatibility switch, off by default: new tasks belong to the planning lead or main, and `background_supervisor` names only a legacy conversation finishing older work, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean"), `limit_fallbacks` (empty by default: the launchers a conversation the owner relies on moves to when a usage limit stops it, and back from after the reset; `persona_settings` only, `docs/assistant/agent-work.md` "Usage limits: a backup launcher").
+**Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (a compatibility switch, off by default: new tasks belong to the planning lead or main, and `background_supervisor` names only a legacy conversation finishing older work, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean"), `limit_fallbacks` (empty by default: the launchers a conversation the owner relies on moves to when a usage limit stops it, and back from after the reset; `persona_settings` only, `docs/assistant/agent-work.md` "Usage limits: a backup launcher"), `machine_fallbacks` and `machine_fallback_minutes` (empty by default = off, threshold 10 minutes: ordered backup computers that the main conversation, direction leaders and unbound default scheduled routines fail over to when the primary computer stays offline past the threshold; `persona_settings` only, `docs/assistant/agent-work.md` "Offline computer: automatic machine failover").
 `assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. `assistant.supervision_batch_minutes` is an administrator pin instead: when present, including explicit `0`, it overrides the saved supervision interval; when omitted, the saved setting is unchanged. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
 `GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. A stopped Claude Code process resumes with the current default unless the conversation has an explicit mode; a live process keeps its current mode. An explicit session mode, including `default`, always wins over the manager default. Legacy Claude state and transcript modes without that explicit marker are inherited values, not a pin. Non-Claude launchers keep their legacy `AppMode` / in-memory / transcript precedence and do not receive the manager's resume default, even when their declared modes include it. An unset preference selects the built-in `bypassPermissions` default. Web Settings › Persona and Android's native Assistant settings expose the control; on the web, Direction notes links to the same control and Settings search finds it by either the permission or direction name.
 
@@ -700,8 +700,8 @@ Prompts live in `server/internal/prompts/assistant/` (`docs/assistant/prompts.md
   `schedule_followup` returns to the original chat using the same rules (main chat follows settings, other chats keep their own), not the Agents category (`sendModel` in `assistant/start.go`, hub asks `assistant.send_params`). Scheduled-task chats (morning briefing, etc.) also use the "Main chat" category, following settings per message and follow-up (#1544). The top-bar "Launcher" menu changes only this chat's next message; opening a launcher also allows selecting a model from its model list (the `/model` list),
   sent as message `model`, which hub uses for the execution fingerprint and node process restart; unselected means the launcher default.
   The menu (`?purpose=assistant`) and the check before each message list and accept only launchers that can run the assistant: both use `assistantLaunchers` (`modelProviderCompatible` in `assistant/models_edit.go`; the check is `mainChatFit` in `assistant/launcher_mainchat.go`).
+  A Persona-managed Codex launcher counts like the computer's own Codex since #12569.
   A runtime's launcher counts only when it says `assistant`. A Paseo provider is no shell command, so it would fail every message with "launcher missing".
-  A Persona-managed Codex launcher does not count either: `personad launch` execs `codex` itself, past the `app-server` wrapper the main chat adds, and waits as an interactive Codex.
   A message that picks such a launcher is refused with the reason. A chat left on one moves to the main chat's launcher, and the web chips drop a stale pick and say so.
   When the main chat's configured launcher itself can't run there (gone from the computer, or not one for the assistant), it gives way only to a launcher of the same agent kind (`finishMainChatModel`, #4659): for Claude, plain `claude` first when the computer reported Claude Code and the user did not hide it, then the main chat's list in order; never Codex for Claude or the other way round. A launcher whose latest health check failed (signed out, out of quota) is skipped. The configured model stays when the substitute's model list has it. With no such launcher the message is refused (`assistant-start.launcher_no_substitute`), pointing to Model configuration › Main chat. A hidden launcher is not gone: the configuration that names it keeps running it.
 - **Don't switch while busy** (#1554): while a process answers or has background tasks, changed launcher / model messages still go to that running process (session state records the actual one);
@@ -894,6 +894,7 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   Such a section says so on its header (`- <section>（只列有变化和新增的行，没列的行照旧）：`, "only the changed and new rows are listed, the others stand"; the same note is the first row under a header that itself changed), so the listed rows are never read as all of them; rows that are gone are named by id (`（已移除的行：…）`, "rows removed"), and the rows' order is given (`（行现在的顺序：…）`, "the rows' order now") only when it is not the old order with the new rows last. A section that left the snapshot is named in a closing list (`- 这份快照里已经没有的段落（它们之前的内容作废）：`, "sections this snapshot no longer has; what they said before is void"), where it used to be left standing. So the blocks a conversation has read add up to the snapshot each was made from, byte for byte (`TestContextDeltaBlocksAddUpToTheSnapshot`).
   Sent whole, as before: a section without row ids (one line of items joined by `；`, which their free text may hold too; Inbox follow-ups, which show a title and no id; the knowledge digest, whose rows sit under headings of its own), a section where some row has no id or two share one, and a section that is no shorter told by rows. A line before the snapshot's own sections (what the conversation is, a one-time notice) is never reported gone.
   The open to-do index (`- 开放待办索引…：todo_1「…」；todo_2…`, one line, ids only when the snapshot is short of room) is the exception (#13807): its items each start with a to-do id, so a block of changes lists only the to-dos that came (and, while both snapshots render titles, the items whose text changed) and names the ones that went, with no order list; the count of all open to-dos is its own section (`- 开放待办：共 N 件`). A change of rendering alone (ids only ↔ ids and titles) is not told, so for this section the blocks add up to the same to-dos, not the same bytes. An index whose items cannot be told apart (a title holding `；`) is sent whole. Before, any change to it re-sent all of it, which with 60 open to-dos was every message.
+  A full block uses the same item comparison when the last raw index survives compaction: no additions or removals means no index section, and a change lists only its changed, added, and removed ids. After a restart there is no baseline, so the block omits the index rather than calling every current id new; the separate total still points to `todo_list`. This exception applies only to the global open to-do index, never to the current conversation's own task sections (#15196).
   Measured on two synthetic conversations shaped like the two recorded ones in #9078, rendered by the real templates (`TestContextDeltaBytesBeforeAndAfter`, after #11261 dropped the working-agent row): the 3 blocks after the first went from 3,768 B to 1,605 B, the 12 blocks of the longer one from 41,684 B to 9,701 B; unchanged rows repeated went from 1,752 B and 30,773 B to none.
 - No `--append-system-prompt` remains; Codex `developerInstructions` contains only memory (changes with its index; resumed handling not measured).
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. While the last read took longer than those 1.5 seconds, a message does not wait at all: it goes with the prior snapshot, and the read it starts is there for the next message (otherwise every message after a quiet 45 seconds waited the whole 1.5 seconds for nothing, #8948). A read slower than that is logged (`live snapshot: the read took …`) with the connectors' share, the usual slow source. Time is always current; ended items removed.
@@ -902,7 +903,7 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   Working agents render only their count in the Agents heading (`详情用 agents_list`), and done agents (24 hours) and muted agents render only their counts and the exact `agents_list` filter (`state=done` / `state=muted`) that lists them on demand (#11261); unrelated background session titles and machine-wide background workflow lists stay out of the snapshot, while a task opened from chat still carries its own running workflow on its task row. Needs-you and awaiting-reply agents, results waiting for acceptance, delivery approvals and today's meetings stay detailed.
   Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, scheduled follow-ups the next eight and Inbox follow-ups the next five). Past the budget, sections are trimmed in order, least needed first: waiting agents, daily routines, Inbox follow-ups, scheduled follow-ups, other unread chats, the knowledge digest, unanswered questions, results waiting for verification, the open-to-do index's titles and links (keeping its IDs), tasks, unread agents, approvals.
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`), or says to open the Inbox in the App for Inbox follow-ups: never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
-- The live snapshot puts the open-to-do total and `todo_list` entrance immediately after the time, before Agent details, so a hard cut still leaves a way to find the work. After the urgent Agent lists it carries an ID/title index of up to 100 open to-dos, regardless of origin or age (a question to-do is left to its own snapshot line only while that line shows it; once its ask record is pruned it is listed like any other); beyond that it keeps the total and points to `todo_list`. Under budget pressure titles and links are dropped from this index before the separate task-detail section is omitted. Full task details remain limited to 12, with open work ahead of recent closed conversation tasks. Showing a personal to-do does not enroll it for supervision or start an Agent.
+- The raw hub snapshot puts the open-to-do total and `todo_list` entrance immediately after the time, before Agent details, so a hard cut still leaves a way to find the work. After the urgent Agent lists it carries an ID/title index of up to 100 open to-dos, regardless of origin or age (a question to-do is left to its own snapshot line only while that line shows it; once its ask record is pruned it is listed like any other); beyond that it keeps the total and points to `todo_list`. Under budget pressure titles and links are dropped from this index before the separate task-detail section is omitted. Full task details remain limited to 12, with open work ahead of recent closed conversation tasks. Showing a personal to-do does not enroll it for supervision or start an Agent.
 
 ## Local request source diagnostics
 
@@ -1019,8 +1020,10 @@ process also leaves the message unsent for the existing retry path.
 The idle clock, last actual context and attempt latch are kept in the node's existing Postgres-backed session
 record. User activity resets the clock on receipt, even while a send lock is held. A context reduction also restarts
 the idle interval. Dropping below the token threshold rearms compaction; context must then grow back over it and the
-new interval must elapse. Otherwise there is at most one attempt per idle interval, including failed attempts and
-node restarts. The manager carries this node-owned state opaquely through `db.NodeSession` and the existing
+new interval must elapse. When Claude Code explicitly reports that the summary was empty, the next eligible
+unattended delivery at least five minutes later can try once more. Other failures leave the existing attempt limit in
+place. The attempt and its retry are kept across node restarts. The manager carries this node-owned state
+opaquely through `db.NodeSession` and the existing
 `node_model` settings row, including the policy, idle timestamp, last actual context and attempt latch; no new table
 or migration is needed. A newly observed conversation or a changed policy starts a conservative fresh idle interval rather
 than guessing when the user last spoke.
@@ -1029,7 +1032,8 @@ than guessing when the user last spoke.
 
 The compaction before an idle process is let go (the "Idle compaction" bullet above) is the cheap one: the process is
 still running and the prompt cache, which lasts about an hour, still holds its context, so the summary reads the cache
-and whoever writes next starts from a small context. For the main chat, both of its numbers can be set (#12008):
+and whoever writes next starts from a small context. In the main chat, the session reports whether the compaction
+finished or failed and preserves Claude Code's reason when available. Both release settings can be changed (#12008):
 
 | Setting | Unset | Saved |
 | --- | --- | --- |
@@ -1604,20 +1608,21 @@ explicit user-facing actions still follow the usual visibility rules.
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
   generated quiet-heartbeat acknowledgements and empty turns stay folded. A successful silent finish keeps its round
-  folded unless an explicit user-visible action promoted it. One exception is a routine `conversation_send` report to
-  the main conversation: with folding on, its input and nonblank reply both stay inside the expandable background
-  record, and a normal finished reply sends no push. A P0, a specifically requested result or a decision can still be
-  promoted through the explicit actions above, which keep their existing display and push paths. Final replies in
-  leader conversations and scheduled rounds stay visible as before. Relay delivery, processing and hop/answer
-  behavior are unchanged.
+  folded unless an explicit user-visible action promoted it. The owner can also enable **Fold routine relay replies**
+  in Assistant settings. With both folding switches on, a routine `conversation_send` reply in the main chat stays
+  inside its expandable round and skips the ordinary finished notification. A direct answer or an explicitly promoted
+  report still gets its ordinary treatment even if another conversation has already sent its next input. The manager
+  checks the completed turn for Claude, Codex and runtime chats. Errors, interrupted turns and work waiting on the
+  owner keep their alerts. Leaders and scheduled rounds keep their usual reply display. Delivery and hop/answer
+  processing happen for every relay.
 - **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
   conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
   the rows and their order within a group are unchanged.
 - **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
   on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
-  Needs you look exactly as before. A hub that does not send the field is treated as on. The switch changes presentation
-  and routine main-relay finished-push eligibility only: relay execution, explicit `notify_user` actions and every other
-  push decision are unchanged.
+  Needs you show the expanded view. A hub that omits this field uses the default of on. **Fold routine relay replies**
+  (`assistant.fold_routine_relay_replies`) is saved independently and defaults to off, including on older hubs.
+  A user who previously enabled background folding sees ordinary relay replies until they explicitly enable the new switch.
 
 ## Messages from the system wait for the owner (#4925)
 
@@ -1801,6 +1806,18 @@ operation then read as accepted and the bubble waited for the transcript and wen
   saving a carry reservation for waiting quiet messages stays fail-closed. Nothing is guessed from
   the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
   refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
+- **Per-sender wake cap and deferred wakes** (#13888, #14352, `server/internal/assistant/conversation_fanout.go`,
+  `server/internal/assistant/delayed_waits.go`). To keep one broadcast from waking every leader at once, a sender may
+  immediately wake at most `fanoutWide - 1` (2) distinct conversations within `fanoutWindow` (10 min); a conversation
+  already woken in the window and a `quote` of the owner's request still wake immediately. Wake-intended messages past
+  the cap are kept in `relayState.Later` (`DeferredWake: true`) and get a durable deferred wake in
+  `assistant.delayed_waits` (`conversation_fanout_wake`) at the back of the sender's wake queue. The tool answer states
+  plainly that the message was kept and will wake the receiver automatically in about N minutes. When its window slot
+  opens, the deferred wake counts against the sender's cap, promotes the kept message(s) atomically from `Later` to the
+  back of `relayState.Queue`, and drains it — keeping broadcasts paced over time even across hub restarts (recent wake
+  timestamps are also persisted in `relayState.Fanout`). If the receiver wakes for any other reason first and reads the
+  kept messages, the deferred wake is dropped so it never double-wakes. Messages sent with explicit `wake: false` keep
+  `DeferredWake: false` and are never woken later.
 - **Between conversations.** `conversation_send` to a conversation that cannot take the message now no longer fails:
   the message goes into its relay queue and is tried again under the same `once_id`. A conversation that failed to
   take a relayed message is tried again after `relayRetryGap` (30 s), not on every session list.
@@ -1913,6 +1930,40 @@ manager that connects the computer holds it and sends it once the computer is ba
   (the assistant's, an extension's, the hub token's) carry no `ordered` mark and may go ahead of a person's held
   ones. A manager rolled back to a version without this keeps the rows it was told to hold but neither shows nor
   sends them; the apps were told they go later.
+
+### Starting a new Agent on an offline computer (#10674)
+
+Starting a new Agent (`POST /api/v1/sessions`, without `resume_session_id`) on a paired computer that is offline
+follows the same durable-hold model in `held_operations` (`kind = "start"`, `session_id = ""`,
+`server/internal/devices/held_starts.go`, `server/internal/hub/held_starts.go`, `server/internal/node/start_op.go`):
+
+- **Held after validation.** When a person's full device declaring `agent_start_hold` (`client_hello` or
+  `X-Persona-Features`) sends `POST /api/v1/sessions` with a UUID `X-Persona-Op-Id` targeting a trusted, paired
+  computer that is currently offline, the hub runs static, auth, image-limit, work-session, and trust checks first,
+  then asks the computer's manager to hold the start (`devices.hold_start`). The manager persists the original start
+  payload in Postgres and the hub answers **202** `{"delivered":"later","held_start":{…}}` (saved in `client_ops` so
+  HTTP retries replay the same 202 idempotently). Clients that do not declare `agent_start_hold`, resumes, non-person
+  tokens, or requests without `X-Persona-Op-Id` keep the existing offline failure. At most 50 held starts per computer
+  are allowed (`409 held_start_full`).
+- **List, Retry, Cancel, and live updates.** Full person devices list a computer's held starts with
+  `GET /api/v1/machines/{mid}/held-starts`, retry a failed one with `POST /api/v1/machines/{mid}/held-starts/{op}/retry`,
+  and cancel/delete a waiting or failed one with `DELETE /api/v1/machines/{mid}/held-starts/{op}` (409 while actively
+  starting). Transitions (`waiting`, `starting`, `failed`, `started` with `session_id`, `deleted`) push `held_start`
+  WebSocket events only to full devices declaring `agent_start_hold`.
+- **Replayed once through the real start path.** Once the computer reconnects (configured and listed, with the bus to
+  the hub up), the manager replays each waiting held start once via `devices.replay_held_start` on the hub, running
+  `startSessionWith` fresh (`todoHandoff`, `agentStartParams`, `WorkSession` checks, `NodeInfo.EngineHosts`, start
+  options/speed/goal, `TodoLink`, `h.fresh`, `autoTabName`). Revalidation refusal moves the row to `failed`
+  (`refused`) with the owner-readable reason; a held start waiting 24 hours expires (`expired`); revoking the sending
+  device credential marks it `failed` (`signed_out`, `delete_only: true`). Independent held starts on the same
+  computer do not block each other.
+- **Node-side `op_id` recording and reconciliation.** Every new-Agent `session.start` / `session.start.work` carries
+  `op_id`. Nodes announcing `start_op_id_v1` deduplicate concurrent/repeat `op_id` calls, persist `start_op_id` on the
+  session's state (`state.put` / `state.load`), and answer `start.status {op_id}` (`started` with `session_id`,
+  `pending`, or `unknown`). If a start disconnects mid-flight or the manager restarts while it is `sending`, the row
+  becomes `failed` (`unclear`) and is never blindly auto-retried: reconnect reconciliation checks `start.status` first,
+  completing and linking cleanly with zero duplicates if the session already started, or leaving the decision to the
+  owner (Retry checks once more → `unconfirmed` if still unknown/unsupported, then a second Retry starts it).
 - **Not yet held**: starting a new Agent on an offline computer (#10674) and dispatching a to-do to one (#10675).
 
 ## Availability metrics (#4924)
@@ -2778,7 +2829,8 @@ The manager pulls unfolded pages after a durable source cursor, woken by session
 without subscribing to every chat or requiring an open app. Each sweep reads at most eight pages of a conversation;
 the next sweep continues a long import. A periodic source probe also detects rewrites with unchanged byte counts.
 Notifications are only hints: replaying an old notification cannot restore an abandoned generation. Covered ranges,
-the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
+the known source end and item completeness are distinct; a page answering a cursor past the source's end records
+that end, never the cursor. Missing older ranges fall back to the runtime; a cached
 offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
 empty history. The disposable text-search index can be rebuilt without deleting durable messages.
 Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
@@ -2814,6 +2866,11 @@ moves between engines. The manager stores physical segments, source generations 
 Postgres. Integer transcript cursors compose those ranges; only later segments namespace item IDs. Reads, full/image
 references, live events, subscriptions, reconnect backlog, inventory and the derived search index use that same
 logical projection. Retired tails remain physical history and never shift later offsets.
+A source that renumbers its lines under a new history (agy, when a turn's export replaces its live steps) can leave
+a reader's cursor past its end. The projection reads the source's answer to that cursor as an empty span at the
+source's end, so the page, live event or reconnect backlog still reaches the reader with the conversation's new
+history, and readers, the search index included, start over instead of failing. The search index also starts over
+after a read that the history moved under on every try (#14354).
 
 When configured device entries for one computer are absorbed into another entry, authenticated callbacks resolve
 through the current physical fleet aliases. Durable segment/history keys and the public conversation identity stay
@@ -2841,17 +2898,34 @@ only deletion markers and minimal offline closure identities.
 switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
 target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
 work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
-the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
-rules above remain unchanged. A first-turn batch (`first_turn`, the ones the usage-limit fallback makes,
-`docs/assistant/agent-work.md` "Usage limits: a backup launcher") is never accepted idle: its activated items wait for
-their next input, which carries the handoff, and that input's acceptance or refusal settles them. A late preparation failure cannot return an activated operation to `in_doubt`;
-reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
-after a restart.
+the coordinator accepts the completed switch immediately and keeps its handoff for the conversation's next input
+(#14488): that input goes through the queue, which attaches the handoff once, so the target still learns what went
+before. If real input is pending, the first-turn acceptance/refusal rules above remain unchanged. A first-turn batch
+(`first_turn`, the ones the usage-limit fallback makes, `docs/assistant/agent-work.md` "Usage limits: a backup
+launcher") is never accepted idle: its activated items wait for their next input, which carries the handoff, and that
+input's acceptance or refusal settles them. A late preparation failure cannot return an activated operation to
+`in_doubt`; reconciliation continues from the activated state. The existing history loop and session-list changes wake
+queued items after a restart.
+
+A switch that has not activated its target (`preparing`, `prepared`, or a preparation whose receipt stays unknown,
+`in_doubt` at the expected epoch) is bounded (#15317). Its retries keep the latest failure on the operation; 30 minutes
+after the operation started (`logicalSwitchPrepareLimit`, counted from its creation, so retries and restarts do not
+extend it) the sweep rejects it through the ordinary `rejected` outcome. The source stays active at the same epoch, a
+prepared target is abandoned and closed, the source's node is told it is not retired, and a batch item waiting on it
+becomes `refused` with a reason naming the phase and the last error. The cancel shares the conversation's row lock and
+epoch fence with activation, so an activation that wins is left alone. Activated switches, first-turn delivery and
+ambiguous input delivery are never timed out.
 
 The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
 items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
 than a global default. It only includes completed items whose current epoch and execution still match that batch's
-target. A conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
+target. An item still `switching` whose operation has not activated is restored by cancelling that operation instead:
+only while the conversation is at the item's expected epoch, on its saved before-image, with the operation's source
+still active. The restore item (`cancel`) is saved with its batch before the cancel runs, so a restart finishes it
+once; the restore batch reports it `switched` with a reason, the original item becomes `refused`, and nothing
+is prepared. If the switch activates first (or while the MCP confirmation is open), the item is refused and the switch
+finishes; restore it again afterwards. The usage-limit fallback's automatic restore does not cancel. A
+conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
 default behavior, while a saved empty permission mode restores explicit `default` instead of inheriting the fallback.
 Preview creates neither state nor a phone confirmation; MCP execution uses one existing whole-batch outbound
 confirmation and the caller's space-scoped conversation lookup. Full-role HTTP routes and batch status are documented in
@@ -2867,7 +2941,9 @@ content digest, delivery state and ordering metadata; its duplicate payload and
 transport provenance are removed after the receipt commits. A rejected first
 input that rollback requeues keeps its payload until the restored source accepts
 it. Ambiguous deliveries retain their content for positive-receipt reconciliation.
-Terminal switch records discard their handoff summary. Deleting the logical chat
+Terminal switch records discard their handoff summary, except the one an idle
+acceptance keeps until the conversation's next input is accepted, or a later
+switch is. Deleting the logical chat
 cascades to receipts, segments, inputs and switch context. Physical device aliases
 are locked together during first adoption, preventing concurrent managers from
 creating two logical roots for the same physical chat.

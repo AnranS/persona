@@ -295,7 +295,7 @@ struct TurnChangesTests {
         #expect(reencodedOlder.fold?.changes == nil)
         #expect(reencodedEmpty.fold?.changes == [])
         #expect(reencodedPopulated.fold?.changes == populated.fold?.changes)
-        #expect(ChatCache.folder == "chats-v24")
+        #expect(ChatCache.folder == "chats-v25")
     }
 
     // MARK: - Clipped counts, CRLF, >3 file expansion, and late-arriving cwd

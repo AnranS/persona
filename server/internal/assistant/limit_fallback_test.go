@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The usage-limit fallback (#14435, limit_fallback.go) on the conversation-switch rig: real Postgres, the logical
@@ -238,6 +240,109 @@ func TestLimitFallbackMovesMainToABackupAndBack(t *testing.T) {
 	if !r.s.conversationSwitches.idle {
 		t.Fatal("switch book not idle after the restore")
 	}
+
+	resetAgain := time.Now().Add(2 * time.Hour)
+	limitRow(r, "main-chat", usageLimitTurn(resetAgain))
+	r.s.limitFallbackTurnSettled(ctx, "server", "main-chat")
+	fallbacks, _ = limitFallbackBatches(limitFallbackState(t, r.s))
+	if len(fallbacks) != 2 {
+		t.Fatalf("did not fall back again after the accepted return: %+v", fallbacks)
+	}
+	repeat := fallbacks[1]
+	if repeat.Fallback.ReturnRepeats != 1 || !repeat.Fallback.RestoreAt.Equal(resetAgain.Add(time.Hour)) {
+		t.Fatalf("a quick repeated limit should defer the return an hour past reset: %+v", repeat.Fallback)
+	}
+
+	conversationSwitchTestDrive(t, r.s, repeat.ID, map[string]string{"main-chat": conversationSwitchSwitched})
+	laterReset := time.Now().Add(3 * time.Hour)
+	setLimitHealth(r.s, "sub", laterReset)
+	forceLimitRestoreDue(t, r.s, repeat.ID)
+	conversationSwitchTestStatus(t, r.s, repeat.ID)
+	fallbacks, restores = limitFallbackBatches(limitFallbackState(t, r.s))
+	if len(restores) != 1 || !fallbacks[1].Fallback.RestoreAt.Equal(laterReset.Add(time.Hour)) {
+		t.Fatalf("a later reset should retain the cooldown: %+v, restores=%d", fallbacks[1].Fallback, len(restores))
+	}
+}
+
+type limitFallbackAcceptedStore struct {
+	logicalSwitchStore
+	operation *db.ConversationSwitch
+}
+
+func (s limitFallbackAcceptedStore) ConversationSwitch(context.Context, string, string, string) (*db.ConversationSwitch, error) {
+	return s.operation, nil
+}
+
+func TestLimitFallbackReturnCooldown(t *testing.T) {
+	ctx := context.Background()
+	accepted := time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC)
+	current := conversationExecution{Machine: "server", Launcher: "sub"}
+	restored := conversationSwitchItem{
+		Machine: "server", ConversationID: "main-chat", ExpectedEpoch: 5,
+		Target: current, OperationID: "return-operation", Outcome: conversationSwitchSwitched,
+	}
+	next := conversationSwitchItem{Machine: "server", ConversationID: "main-chat", ExpectedEpoch: 6, Before: current}
+	for _, tc := range []struct {
+		name    string
+		prior   int
+		elapsed time.Duration
+		change  func(*conversationSwitchItem, *conversationSwitchBatch, *db.ConversationSwitch)
+		want    int
+		wait    time.Duration
+	}{
+		{name: "first repeat", elapsed: 3 * time.Minute, want: 1, wait: time.Hour},
+		{name: "second repeat after a restart", prior: 1, elapsed: time.Minute, want: 2, wait: 2 * time.Hour},
+		{name: "third repeat", prior: 2, elapsed: time.Minute, want: 3, wait: 4 * time.Hour},
+		{name: "six hour ceiling", prior: 4, elapsed: time.Minute, want: 4, wait: 6 * time.Hour},
+		{name: "hour on original launcher resets count", prior: 3, elapsed: time.Hour},
+		{name: "clock before the operation", prior: 3, elapsed: -time.Minute},
+		{name: "new owner choice retired that activation", prior: 1, elapsed: time.Minute, change: func(next *conversationSwitchItem, _ *conversationSwitchBatch, _ *db.ConversationSwitch) {
+			next.ExpectedEpoch++
+		}},
+		{name: "other launcher", prior: 1, elapsed: time.Minute, change: func(next *conversationSwitchItem, _ *conversationSwitchBatch, _ *db.ConversationSwitch) {
+			next.Before.Launcher = "another"
+		}},
+		{name: "manual restore", prior: 1, elapsed: time.Minute, change: func(_ *conversationSwitchItem, restore *conversationSwitchBatch, _ *db.ConversationSwitch) {
+			restore.FirstTurn = false
+		}},
+		{name: "without first delivery", prior: 1, elapsed: time.Minute, change: func(_ *conversationSwitchItem, _ *conversationSwitchBatch, op *db.ConversationSwitch) {
+			op.Phase = "active"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fallback := conversationSwitchBatch{ID: "fallback", Fallback: &conversationSwitchFallback{
+				Done: true, RestoreBatch: "restore", ReturnRepeats: tc.prior,
+			}}
+			restore := conversationSwitchBatch{ID: "restore", RestoreOf: fallback.ID, FirstTurn: true,
+				CreatedAt: accepted.Add(-90 * time.Minute), Items: []conversationSwitchItem{restored}}
+			item, operation := next, db.ConversationSwitch{Phase: "accepted", UpdatedAt: accepted}
+			if tc.change != nil {
+				tc.change(&item, &restore, &operation)
+			}
+			// Reload the same JSON the manager keeps in its settings through a restart.
+			raw, err := json.Marshal(conversationSwitchState{Batches: []conversationSwitchBatch{fallback, restore}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state conversationSwitchState
+			if err := json.Unmarshal(raw, &state); err != nil {
+				t.Fatal(err)
+			}
+			now := accepted.Add(tc.elapsed)
+			got := limitFallbackReturnRepeats(ctx, limitFallbackAcceptedStore{operation: &operation}, state, item, now)
+			if got != tc.want {
+				t.Fatalf("repeats = %d, want %d", got, tc.want)
+			}
+			reset := now.Add(time.Hour)
+			wait := limitFallbackReturnAt(reset, now, got).Sub(reset)
+			if tc.wait != 0 && wait != tc.wait {
+				t.Fatalf("wait = %v, want %v", wait, tc.wait)
+			}
+			if tc.wait == 0 && (wait < limitContinueAfter || wait >= limitContinueAfter+limitContinueSpread) {
+				t.Fatalf("ordinary return wait = %v", wait)
+			}
+		})
+	}
 }
 
 func TestLimitFallbackLeavesWhatItShould(t *testing.T) {
@@ -350,6 +455,142 @@ func TestLimitFallbackSkipsALimitedBackupAndKeepsALaterChoice(t *testing.T) {
 	}
 	if a, ok := c.Active(); !ok || a.Launcher != "backup" || a.Model != "picked-model" {
 		t.Fatalf("the later choice was overwritten: %+v", c)
+	}
+}
+
+// A restore is durable before its first live target check. A brief disconnect there can also
+// hide the cached session on later passes. Reconnect must revalidate the same operation.
+func TestLimitFallbackRestoreReconnect(t *testing.T) {
+	for _, after := range []string{"recover", "owner pick", "unregistered launcher"} {
+		t.Run(after, func(t *testing.T) {
+			ctx := context.Background()
+			r, _ := newLimitFallbackRig(t)
+			const id = "main-chat"
+			limitRow(r, id, usageLimitTurn(time.Now().Add(2*time.Hour)))
+			r.s.limitFallbackTurnSettled(ctx, "server", id)
+			fallbacks, _ := limitFallbackBatches(limitFallbackState(t, r.s))
+			if len(fallbacks) != 1 {
+				t.Fatalf("fallbacks: %+v", fallbacks)
+			}
+			forward := fallbacks[0]
+			conversationSwitchTestDrive(t, r.s, forward.ID, map[string]string{id: conversationSwitchSwitched})
+			noSession := func(string, json.RawMessage) (any, error) { return map[string]bool{"ok": false}, nil }
+			if after == "recover" {
+				// A reset can also arrive while the node is already offline and its cached row is missing.
+				r.f.mu.Lock()
+				r.f.down = map[string]bool{"server": true}
+				r.f.nodes[DeviceSessionGet] = noSession
+				r.f.mu.Unlock()
+				forceLimitRestoreDue(t, r.s, forward.ID)
+				conversationSwitchTestStatus(t, r.s, forward.ID)
+				pending, restores := limitFallbackBatches(limitFallbackState(t, r.s))
+				if len(restores) != 0 || pending[0].Fallback.Done || !pending[0].Fallback.RestoreAt.After(time.Now()) {
+					t.Fatalf("restore was not postponed while its node was away: %+v, restores=%+v", pending, restores)
+				}
+				r.f.mu.Lock()
+				delete(r.f.down, "server")
+				delete(r.f.nodes, DeviceSessionGet)
+				r.f.mu.Unlock()
+			}
+			forceLimitRestoreDue(t, r.s, forward.ID)
+			conversationSwitchTestStatus(t, r.s, forward.ID)
+			_, restores := limitFallbackBatches(limitFallbackState(t, r.s))
+			if len(restores) != 1 {
+				t.Fatalf("restores: %+v", restores)
+			}
+			restore := restores[0]
+			item := restore.Items[0]
+			if item.Outcome != conversationSwitchQueued || item.OperationID == "" {
+				t.Fatalf("restore was not queued: %+v", item)
+			}
+
+			// The cached row is still readable. Only the target check sees the disconnect.
+			r.f.mu.Lock()
+			check := r.f.nodes["assistant.segment.check"]
+			r.f.mu.Unlock()
+			r.f.answerNode("assistant.segment.check", func(string, json.RawMessage) (any, error) {
+				r.f.down = map[string]bool{"server": true}
+				if after == "owner pick" {
+					return nil, rpc.ErrClosed
+				}
+				return nil, apierr.ErrOffline
+			})
+			assertQueued := func() {
+				t.Helper()
+				report := conversationSwitchTestStatus(t, r.s, restore.ID)
+				got := conversationSwitchTestItemFor(t, report, id)
+				if got.Outcome != conversationSwitchQueued || got.OperationID != item.OperationID {
+					t.Fatalf("restore lost its queued operation: %+v", got)
+				}
+			}
+			assertQueued()
+			// The node's session list disappears while it remains offline.
+			r.f.answerNode(DeviceSessionGet, noSession)
+			assertQueued()
+			assertQueued()
+
+			r.f.mu.Lock()
+			delete(r.f.down, "server")
+			delete(r.f.nodes, DeviceSessionGet)
+			r.f.nodes["assistant.segment.check"] = check
+			r.f.mu.Unlock()
+			if after == "owner pick" {
+				waitFor(t, "the owner's pick to commit", func() bool {
+					err := r.d.SetConversationPick(ctx, "server", id, item.ExpectedEpoch, "backup", "owner-model", "")
+					if errors.Is(err, db.ErrConversationSwitchBusy) {
+						return false // NOWAIT can overlap the fallback's final logical sweep.
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					return true
+				})
+			}
+			if after == "unregistered launcher" {
+				r.f.answerNode("assistant.segment.check", func(string, json.RawMessage) (any, error) { return segmentTarget{}, nil })
+			}
+			if after == "recover" {
+				// First-turn restores wait for input; the owner's next message accepts the original operation.
+				waitFor(t, "original restore to activate", func() bool {
+					conversationSwitchTestStatus(t, r.s, restore.ID)
+					r.s.logicalSweep(ctx)
+					op, err := r.d.ConversationSwitch(ctx, "server", id, item.OperationID)
+					return err == nil && op != nil && op.Phase == "active"
+				})
+				if err := r.s.call(ctx, "server", DeviceSessionSend, map[string]any{"session_id": id, "text": "continue", "client_msg_id": "owner-reconnected"}, nil); err != nil {
+					t.Fatal(err)
+				}
+				conversationSwitchTestDrive(t, r.s, restore.ID, map[string]string{id: conversationSwitchSwitched})
+			} else {
+				conversationSwitchTestDrive(t, r.s, restore.ID, map[string]string{id: conversationSwitchRefused})
+			}
+			_, restores = limitFallbackBatches(limitFallbackState(t, r.s))
+			if len(restores) != 1 || restores[0].ID != restore.ID || restores[0].Items[0].OperationID != item.OperationID {
+				t.Fatalf("restore replaced or duplicated: %+v", restores)
+			}
+			c, err := r.d.LogicalConversation(ctx, "server", id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			active, ok := c.Active()
+			if !ok || c.Switch != nil {
+				t.Fatalf("unsettled conversation: %+v", c)
+			}
+			switch after {
+			case "recover":
+				if active.Launcher != "sub" || active.Model != "old-model" || len(conversationSwitchTestPreparations(r)) != 2 {
+					t.Fatalf("expected one fallback and one restore: %+v", active)
+				}
+			case "owner pick":
+				if active.Launcher != "backup" || active.Model != "owner-model" {
+					t.Fatalf("owner pick lost: %+v", active)
+				}
+			case "unregistered launcher":
+				if active.Launcher != "backup" {
+					t.Fatalf("unsupported launcher accepted: %+v", active)
+				}
+			}
+		})
 	}
 }
 
