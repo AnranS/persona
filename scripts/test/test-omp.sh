@@ -16,7 +16,7 @@ done
 
 SESSION="persona-test-$$"
 export HERDR_SESSION="$SESSION" # never inherit the pane or server the caller was using
-unset PI_CODING_AGENT_DIR HERDR_CONFIG_PATH # omp and herdr must use only the fresh directories below
+unset PI_CODING_AGENT_DIR HERDR_CONFIG_PATH HERDR_SOCKET_PATH # omp and herdr must use only the fresh directories below
 # Go's caches stay the user's: the temp HOME below would otherwise download and build everything again.
 export GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)" GOPATH="$(go env GOPATH)"
 WORK=$(mktemp -d /tmp/persona-omp-XXXX) || { echo "RESULT fail: no temp directory"; exit 1; }
@@ -32,7 +32,8 @@ cleanup() {
     wait "$watchdog" >/dev/null 2>&1 || true
   fi
   if [ -n "$pid" ]; then
-    kill "$pid" >/dev/null 2>&1 || true
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    kill -KILL "$pid" >/dev/null 2>&1 || true
     wait "$pid" >/dev/null 2>&1 || true
   fi
   herdr --session "$SESSION" server stop >/dev/null 2>&1 || true # by name: never the session you work in
@@ -79,14 +80,22 @@ if ! (cd server && go test -c -tags omplive -o "$WORK/node.test" ./internal/node
 fi
 
 export PERSONA_OMP_LIVE="$WORK"
+WATCHDOG_TIMEOUT="${PERSONA_OMP_WATCHDOG_TIMEOUT:-70}"
+WATCHDOG_GRACE="${PERSONA_OMP_WATCHDOG_GRACE:-5}"
 "$WORK/node.test" -test.run '^TestOmpLiveAttachesToHerdrAndRuntime$' -test.v -test.timeout 65s >"$WORK/live.log" 2>&1 &
 pid=$!
-( sleep 70; kill -TERM "$pid" 2>/dev/null ) & watchdog=$!
+(
+  sleep "$WATCHDOG_TIMEOUT"
+  if kill -TERM "$pid" 2>/dev/null; then
+    sleep "$WATCHDOG_GRACE"
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+) & watchdog=$!
 wait "$pid"
 rc=$?
 pid=""
-kill "$watchdog" 2>/dev/null
-wait "$watchdog" 2>/dev/null # reap it: no "Terminated" line in the output
+kill "$watchdog" 2>/dev/null || true
+wait "$watchdog" 2>/dev/null || true # reap it: no "Terminated" line in the output
 watchdog=""
 
 grep -E '^(=== RUN|--- )| LIVE ' "$WORK/live.log" # t.Logf lines are indented

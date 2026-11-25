@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -52,10 +51,9 @@ func TestOmpEndToEndStartJoinSendExitResume(t *testing.T) {
 	if s, _ := started["session"].(map[string]any); s["session_id"] != id || s["agent"] != "omp" {
 		t.Fatalf("session.start answered %v", started)
 	}
-	// A real session.start keeps the platform's standing instructions beside the user's first prompt.
-	wantPrompt := agentPlatformInstructions(runtime.GOOS, firstPrompt)
+	// A real session.start sends the caller's first prompt unchanged when no agent-rules.md is configured.
 	wantCommand := call("pane.send_input", map[string]any{"pane_id": "w1:p9", "keys": []string{"Enter"},
-		"text": inAgentEnv(n.dir, "omp "+shellQuote(wantPrompt), shellQuote)})
+		"text": inAgentEnv(n.dir, "omp "+shellQuote(firstPrompt), shellQuote)})
 	if got := f.trace("pane.send_input"); len(got) != 1 || got[0] != wantCommand {
 		t.Fatalf("omp launch = %v, want %s", got, wantCommand)
 	}
