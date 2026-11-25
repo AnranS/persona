@@ -1281,3 +1281,271 @@ func TestTodoContextHandoffRefreshesMetadataAfterLockAndStop(t *testing.T) {
 		t.Fatalf("supersedes_id = %q, want %q (refreshed under lock/after stop)", resp.Handoff.SupersedesID, priorID)
 	}
 }
+
+type failingHandoffStore struct {
+	Store
+	todoStore
+	mu                 sync.Mutex
+	rows               map[string]db.TodoContextHandoffRow
+	byOp               map[string]string
+	failUpdateDelivery error
+	failLinkAgent      error
+	linkAttempts       int
+}
+
+func newFailingHandoffStore(base Store, failUpdateDelivery, failLinkAgent error) *failingHandoffStore {
+	if base == nil {
+		base = &memStore{}
+	}
+	return &failingHandoffStore{
+		Store:              base,
+		rows:               map[string]db.TodoContextHandoffRow{},
+		byOp:               map[string]string{},
+		failUpdateDelivery: failUpdateDelivery,
+		failLinkAgent:      failLinkAgent,
+	}
+}
+
+func (f *failingHandoffStore) CreateTodoContextHandoff(_ context.Context, r db.TodoContextHandoffRow) (*db.TodoContextHandoffRow, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	opKey := r.TodoID + "|" + r.OperationID
+	if id, exists := f.byOp[opKey]; exists {
+		cp := f.rows[id]
+		return &cp, false, nil
+	}
+	f.rows[r.ID] = r
+	f.byOp[opKey] = r.ID
+	cp := r
+	return &cp, true, nil
+}
+
+func (f *failingHandoffStore) UpdateTodoContextHandoffDelivery(_ context.Context, id, targetMachine, targetSession, targetAgent, deliveryStatus, deliveryError string, at time.Time) (*db.TodoContextHandoffRow, error) {
+	if f.failUpdateDelivery != nil {
+		return nil, f.failUpdateDelivery
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.rows[id]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	r.TargetMachine = targetMachine
+	r.TargetSession = targetSession
+	r.TargetAgent = targetAgent
+	r.DeliveryStatus = deliveryStatus
+	r.DeliveryError = deliveryError
+	r.UpdatedAt = at
+	f.rows[id] = r
+	cp := r
+	return &cp, nil
+}
+
+func (f *failingHandoffStore) GetTodoContextHandoff(_ context.Context, id string) (*db.TodoContextHandoffRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.rows[id]; ok {
+		cp := r
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *failingHandoffStore) GetTodoContextHandoffByOperation(_ context.Context, todoID, operationID string) (*db.TodoContextHandoffRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id, ok := f.byOp[todoID+"|"+operationID]; ok {
+		cp := f.rows[id]
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *failingHandoffStore) ListTodoContextHandoffs(_ context.Context, todoID string) ([]db.TodoContextHandoffRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []db.TodoContextHandoffRow
+	for _, r := range f.rows {
+		if r.TodoID == todoID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (f *failingHandoffStore) ListTodoDecisions(_ context.Context, _ string, _ bool) ([]db.TodoDecisionRow, error) {
+	return nil, nil
+}
+
+func (f *failingHandoffStore) LinkTodoAgentWithSource(_ context.Context, _, _, _, _, _, _, _, _, _ string, _ time.Time) ([]string, error) {
+	f.mu.Lock()
+	f.linkAttempts++
+	err := f.failLinkAgent
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func TestTodoContextHandoffReviewRegressions(t *testing.T) {
+	t.Run("agents_switch_refuses_and_drops_unresolved_approval", func(t *testing.T) {
+		ft, _ := switchRig(t)
+		pendingRow := agentRow("s1wait0002", "sub", proto.StatusBlocked)
+		pendingRow.PendingInteractions = 1
+		ft.sessions("mac", pendingRow)
+
+		// switchPlan refuses immediately instead of queueing.
+		plan := ft.s.switchPlan(context.Background(), Device{ID: "mac", Name: "Mac", Reachable: true}, pendingRow, switchTarget{Launcher: "work"})
+		if plan.plan != switchRefused || !strings.Contains(plan.why, "unresolved approval") {
+			t.Fatalf("agents_switch plan = %+v, want refused for unresolved approval", plan)
+		}
+
+		// A queued switch whose session later gains an unresolved approval is dropped by runSwitchQueue.
+		ft.s.switchQ.mu.Lock()
+		if ft.s.switchQ.items == nil {
+			ft.s.switchQ.items = map[string]queuedSwitch{}
+		}
+		k := switchKey("mac", "s1wait0002")
+		ft.s.switchQ.items[k] = queuedSwitch{Machine: "mac", Session: "s1wait0002", From: "sub", Launcher: "work", At: time.Now().UTC()}
+		ft.s.switchQ.mu.Unlock()
+
+		ft.s.runSwitchQueue(context.Background(), "mac")
+		ft.s.switchQ.mu.Lock()
+		_, stillQueued := ft.s.switchQ.items[k]
+		ft.s.switchQ.mu.Unlock()
+		if stillQueued {
+			t.Fatal("runSwitchQueue kept a queued switch after session gained an unresolved approval")
+		}
+	})
+
+	t.Run("empty_predecessor_permission_fails_closed_and_recovers_plan_readonly", func(t *testing.T) {
+		// 1) Empty live PermissionMode without plan permission fails closed against bypassPermissions.
+		e, todo, _ := setupHandoffFixture(t, nil, "codex", "codex", "", proto.Session{
+			SessionID:      "agent01",
+			Status:         proto.StatusDone,
+			State:          proto.StateIdle,
+			PermissionMode: "",
+		})
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_empty_perm_esc","launcher":"claude","permission":"bypassPermissions"}`, "")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "permission_escalation") {
+			t.Fatalf("empty live permission allowed escalation: %d %s", w.Code, w.Body.String())
+		}
+
+		// 2) Readonly plan predecessor with empty live PermissionMode recovers "plan" from current plan assignment.
+		ctx := context.Background()
+		e2, todo2, _ := setupHandoffFixture(t, nil, "codex", "codex", "", proto.Session{
+			SessionID:      "agent01",
+			Status:         proto.StatusDone,
+			State:          proto.StateIdle,
+			PermissionMode: "",
+		})
+		roPlan := &TaskPlan{
+			ID:           "plan_ro_1",
+			Conversation: todo2.Origin,
+			State:        "started",
+			Tasks: []PlanTask{{
+				Title:      todo2.Title,
+				Machine:    "box",
+				Cwd:        "/code/app",
+				Launcher:   "codex",
+				Readonly:   true,
+				Permission: "plan",
+				TodoID:     todo2.ID,
+			}},
+		}
+		if err := e2.s.savePlan(ctx, roPlan); err != nil {
+			t.Fatal(err)
+		}
+		e2.s.todos.mu.Lock()
+		e2.s.todos.todos[todo2.ID].PlanID = roPlan.ID
+		e2.s.todos.mu.Unlock()
+		todo2 = todoNow(e2.s, todo2.ID)
+
+		w2 := todoHandoffHTTPReq(t, e2.s, "POST", "/api/v1/todos/"+todo2.ID+"/handoff",
+			`{"operation_id":"op_ro_plan_esc","launcher":"claude","permission":"default"}`, "")
+		if w2.Code != http.StatusConflict || !strings.Contains(w2.Body.String(), "permission_escalation") {
+			t.Fatalf("readonly plan predecessor with empty live PermissionMode allowed default escalation: %d %s", w2.Code, w2.Body.String())
+		}
+	})
+
+	t.Run("target_start_rejected_does_not_release_predecessor_or_advance_supervision_round", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusDone,
+			State:     proto.StateIdle,
+		})
+		e.s.supervise.mu.Lock()
+		roundBefore := e.s.supervise.roundEpochs[todo.ID]
+		e.s.supervise.mu.Unlock()
+		e.f.failStart = &rpc.Error{Code: proto.CodeLauncherMissing, Message: "launcher codex is missing"}
+
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_reject_keep_link","launcher":"codex"}`, "")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "target_start_rejected") {
+			t.Fatalf("expected 409 target_start_rejected, got %d %s", w.Code, w.Body.String())
+		}
+		cur := todoNow(e.s, todo.ID)
+		if len(cur.Agents) == 0 || cur.Agents[0].ReleasedAt != nil {
+			t.Fatalf("target_start_rejected released predecessor link (orphaning to-do): %+v", cur.Agents)
+		}
+		e.s.supervise.mu.Lock()
+		roundAfter := e.s.supervise.roundEpochs[todo.ID]
+		e.s.supervise.mu.Unlock()
+		if roundAfter != roundBefore {
+			t.Fatalf("target_start_rejected bumped supervision round from %d to %d", roundBefore, roundAfter)
+		}
+	})
+
+	t.Run("delivery_record_error_returns_503_with_saved_handoff", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusDone,
+			State:     proto.StateIdle,
+		})
+		fs := newFailingHandoffStore(e.s.store(), errors.New("db write failed"), nil)
+		e.s.setStore(func() Store { return fs })
+		e.f.failStart = &rpc.Error{Code: proto.CodeLauncherMissing, Message: "launcher codex is missing"}
+
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_rec_fail","launcher":"codex"}`, "")
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "handoff_delivery_record_failed") {
+			t.Fatalf("expected 503 handoff_delivery_record_failed, got %d %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Handoff TodoContextHandoff `json:"handoff"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Handoff.ID == "" {
+			t.Fatalf("expected non-empty saved handoff in 503 response, got %s", w.Body.String())
+		}
+	})
+
+	t.Run("link_failure_after_start_returns_503_and_records_delivery_unknown", func(t *testing.T) {
+		e, todo, _ := setupHandoffFixture(t, nil, "claude", "claude", "default", proto.Session{
+			SessionID: "agent01",
+			Status:    proto.StatusDone,
+			State:     proto.StateIdle,
+		})
+		fs := newFailingHandoffStore(e.s.store(), nil, errors.New("link write failed"))
+		e.s.setStore(func() Store { return fs })
+
+		w := todoHandoffHTTPReq(t, e.s, "POST", "/api/v1/todos/"+todo.ID+"/handoff",
+			`{"operation_id":"op_link_fail","launcher":"codex"}`, "")
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "link_failed") {
+			t.Fatalf("expected 503 link_failed, got %d %s", w.Code, w.Body.String())
+		}
+		if fs.linkAttempts < 2 {
+			t.Fatalf("linkAttempts = %d, want retry (>=2)", fs.linkAttempts)
+		}
+		var resp struct {
+			Handoff TodoContextHandoff `json:"handoff"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Handoff.DeliveryStatus != handoffDeliveryUnknown {
+			t.Fatalf("delivery_status = %q, want %q on link failure", resp.Handoff.DeliveryStatus, handoffDeliveryUnknown)
+		}
+	})
+}

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -109,13 +108,23 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
 		// real health detour and its first-detour guard keeps the true original machine (#2271).
 		t.Reroute, t.Placement = nil, nil
+		t.Dispatch = nil // the hub's: written by the start that resolves the tier
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
+		}
 		if t.OwnerStep = strings.TrimSpace(t.OwnerStep); !validOwnerStep(t.OwnerStep) {
 			return "", fmt.Errorf("task %d: owner_step must be empty, %q, %q or %q", i+1, ownerStepMoney, ownerStepOutward, ownerStepIrreversible)
 		}
+		aud, err := todoAudience(t.Audience)
+		if err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		t.Audience = aud
+		t.DirectionID = strings.TrimSpace(t.DirectionID)
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
@@ -225,9 +234,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			if prevTodo, ok := s.todoNow(t.Continues); ok {
 				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, resolvedLauncher)
 				if providerSwitch {
-					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok && pred.permission() != "" {
-						if asked == "" && (!t.Readonly || pred.permission() == "plan") {
-							t.Permission = pred.permission()
+					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok {
+						srcPerm := cmp.Or(pred.permission(), "default")
+						if asked == "" && (!t.Readonly || srcPerm == "plan") {
+							t.Permission = srcPerm
 							cp := t.Permission
 							t.CallerPermission = &cp
 						}
@@ -637,12 +647,6 @@ func (t *PlanTask) checkRole(byLeader bool) error {
 	return nil
 }
 
-// planPushOver takes a plan card's push back once the card is decided anywhere (Start, Don't start, a withdrawal):
-// the hub withdraws the push it sent with the plan's id as its card (Notification.CardID) from the devices it went to,
-// as it does an answered interaction's (#4349), and the apps drop the card. A plan that was never pushed costs a no-op.
-func (s *Service) planPushOver(id string) {
-	if s.hub == nil {
-		return
-	}
-	s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
-}
+// planPushOver: a plan card is decided anywhere (Start, Don't start, a withdrawal). Its push carried the plan's id as
+// its card (Notification.CardID), so the card is over everywhere at once (resolveCard).
+func (s *Service) planPushOver(id string) { s.resolveCard(id) }

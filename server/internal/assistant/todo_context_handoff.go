@@ -529,13 +529,16 @@ func permissionRank(mode string, readonly bool) int {
 }
 
 type todoPredecessorInfo struct {
-	agent   TodoAgent
-	session proto.Session
-	hasSess bool
+	agent        TodoAgent
+	session      proto.Session
+	hasSess      bool
+	planPerm     string
+	planReadonly bool
 }
 
 // todoPredecessor returns the active (or most recently linked) Agent for todo, with its live/decorated
-// session snapshot when available.
+// session snapshot when available, falling back to the to-do's current plan assignment for persisted
+// permission/readonly metadata when the live session's permission mode is empty or unavailable (#12980).
 func (s *Service) todoPredecessor(ctx context.Context, todo Todo) (todoPredecessorInfo, bool) {
 	var picked TodoAgent
 	found := false
@@ -556,6 +559,16 @@ func (s *Service) todoPredecessor(ctx context.Context, todo Todo) (todoPredecess
 		info.session, info.hasSess = c, true
 	} else if c, ok := s.session(ctx, picked.MachineID, picked.SessionID); ok {
 		info.session, info.hasSess = c, true
+	}
+	if strings.TrimSpace(info.session.PermissionMode) == "" {
+		if p, idx, err := s.currentPlanAssignment(ctx, todo); err == nil && p != nil && idx >= 0 && idx < len(p.Tasks) {
+			pt := p.Tasks[idx]
+			info.planPerm = strings.TrimSpace(cmp.Or(pt.StartPermission, pt.Permission))
+			info.planReadonly = pt.Readonly
+			if info.planPerm == "" && info.planReadonly {
+				info.planPerm = "plan"
+			}
+		}
 	}
 	return info, true
 }
@@ -592,7 +605,15 @@ func (p todoPredecessorInfo) cwd() string {
 
 func (p todoPredecessorInfo) permission() string {
 	if p.hasSess {
-		return strings.TrimSpace(p.session.PermissionMode)
+		if m := strings.TrimSpace(p.session.PermissionMode); m != "" {
+			return m
+		}
+	}
+	if p.planPerm != "" {
+		return p.planPerm
+	}
+	if p.planReadonly {
+		return "plan"
 	}
 	return ""
 }
@@ -653,19 +674,22 @@ func (s *Service) checkContinuationBlockers(ctx context.Context, todo Todo, targ
 		}
 	}
 	if isProviderSwitch {
-		if pred, ok := s.todoPredecessor(ctx, todo); ok && pred.hasSess {
+		if pred, ok := s.todoPredecessor(ctx, todo); ok {
 			srcPerm := pred.permission()
-			if srcPerm != "" {
-				srcRank := permissionRank(srcPerm, srcPerm == "plan")
-				dstPerm := strings.TrimSpace(targetPermission)
-				if dstPerm != "" || targetReadonly {
-					dstRank := permissionRank(dstPerm, targetReadonly)
-					if dstRank > srcRank {
-						return handoffBlockerError{
-							code: "permission_escalation",
-							msg: fmt.Sprintf("provider switch cannot raise permissions on to-do %s from %q to %q",
-								todo.ID, srcPerm, cmp.Or(dstPerm, "default")),
-						}
+			srcReadonly := srcPerm == "plan" || pred.planReadonly
+			// Fail closed when predecessor permissions cannot be established from the live session or
+			// persisted plan assignment: treat unknown predecessor mode as "default" (rank 1) so
+			// switching never silently or explicitly escalates to auto/acceptEdits/dontAsk/bypassPermissions.
+			effectiveSrc := cmp.Or(srcPerm, "default")
+			srcRank := permissionRank(effectiveSrc, srcReadonly)
+			dstPerm := strings.TrimSpace(targetPermission)
+			if dstPerm != "" || targetReadonly {
+				dstRank := permissionRank(dstPerm, targetReadonly)
+				if dstRank > srcRank {
+					return handoffBlockerError{
+						code: "permission_escalation",
+						msg: fmt.Sprintf("provider switch cannot raise permissions on to-do %s from %q to %q",
+							todo.ID, effectiveSrc, cmp.Or(dstPerm, "default")),
 					}
 				}
 			}
@@ -1297,7 +1321,9 @@ func (s *Service) prepareOwnerTodoHandoff(ctx context.Context, todo Todo, req to
 	}
 
 	// Safety refusal, unresolved approval, and permission-escalation checks run before anything touches the predecessor.
-	srcPerm := pred.permission()
+	// When the predecessor's permission mode cannot be established, default conservatively to "default" so
+	// target launcher defaults (e.g. Auto Accept) never silently escalate permissions.
+	srcPerm := cmp.Or(pred.permission(), "default")
 	effectivePerm := req.Permission
 	if effectivePerm == "" {
 		effectivePerm = srcPerm
@@ -1474,8 +1500,8 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 	effectivePerm := prep.effectivePerm
 	if freshPred, ok := s.todoPredecessor(ctx, todo); ok {
 		pred = freshPred
-		if req.Permission == "" && pred.permission() != "" {
-			effectivePerm = pred.permission()
+		if req.Permission == "" {
+			effectivePerm = cmp.Or(pred.permission(), "default")
 		}
 	}
 	m := prep.machine
@@ -1492,19 +1518,6 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 	if !created {
 		return &saved, http.StatusOK, "", nil
 	}
-
-	// Release stopped predecessor links into history and reopen the to-do if needed.
-	if err := s.releaseStoppedAgents(ctx, todo.ID, stopped); err != nil {
-		_, _ = s.recordTodoHandoffDelivery(ctx, saved.ID, m.ID, "", targetAgent, handoffDeliveryRejected, err.Error())
-		return &saved, http.StatusServiceUnavailable, "release_failed", err
-	}
-	if todo.DoneAt != nil {
-		if err := s.reopenTodo(ctx, todo.ID); err != nil {
-			_, _ = s.recordTodoHandoffDelivery(ctx, saved.ID, m.ID, "", targetAgent, handoffDeliveryRejected, err.Error())
-			return &saved, http.StatusServiceUnavailable, "reopen_failed", err
-		}
-	}
-	s.startSupervisionRound(ctx, todo.ID)
 
 	taskPrompt := req.Prompt
 	if taskPrompt == "" {
@@ -1539,24 +1552,68 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 	startCancel()
 
 	if startErr != nil {
+		bookCtx, bookCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		defer bookCancel()
 		if startResultUnknown(startErr) || nodeMayHaveTaken(startErr) {
-			updated, _ := s.recordTodoHandoffDelivery(ctx, saved.ID, m.ID, "", targetAgent, handoffDeliveryUnknown, startErr.Error())
+			updated, recErr := s.recordTodoHandoffDelivery(bookCtx, saved.ID, m.ID, "", targetAgent, handoffDeliveryUnknown, startErr.Error())
+			if recErr != nil {
+				s.logf("todo %s: record handoff %s delivery_unknown: %v", todo.ID, saved.ID, recErr)
+				return &saved, http.StatusServiceUnavailable, "handoff_delivery_record_failed", fmt.Errorf("target startup outcome unknown (%v) and recording delivery state failed: %w", startErr, recErr)
+			}
 			return &updated, http.StatusAccepted, "delivery_unknown", nil
 		}
-		updated, _ := s.recordTodoHandoffDelivery(ctx, saved.ID, m.ID, "", targetAgent, handoffDeliveryRejected, startErr.Error())
-		// Definite target startup rejection preserves recoverable task state: the to-do stays open
-		// with its brief, decisions, workspace, and historical links intact so the owner can pick another target.
+		updated, recErr := s.recordTodoHandoffDelivery(bookCtx, saved.ID, m.ID, "", targetAgent, handoffDeliveryRejected, startErr.Error())
+		if recErr != nil {
+			s.logf("todo %s: record handoff %s delivery_rejected: %v", todo.ID, saved.ID, recErr)
+			return &saved, http.StatusServiceUnavailable, "handoff_delivery_record_failed", fmt.Errorf("target startup rejected (%v) and recording delivery state failed: %w", startErr, recErr)
+		}
+		// Definite target startup rejection happens before releasing predecessor links or opening a new
+		// supervision round, so recoverable task state stays intact for choosing another target.
 		return &updated, http.StatusConflict, "target_start_rejected", startErr
 	}
 
+	// Only release predecessor links, reopen, and open a new supervision round once the replacement Agent
+	// has actually started, using a detached bounded context so client disconnects cannot orphan the task.
 	linkCtx, linkCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 	defer linkCancel()
-	if linkErr := s.linkPlanAgent(linkCtx, pt, mid, sid, false); linkErr != nil {
+	if err := s.releaseStoppedAgents(linkCtx, todo.ID, stopped); err != nil {
+		s.logf("todo %s: release stopped predecessor agents after starting %s/%s: %v", todo.ID, mid, short(sid), err)
+		detail := fmt.Sprintf("replacement agent %s/%s started but releasing predecessor links failed: %v", mid, sid, err)
+		if updated, recErr := s.recordTodoHandoffDelivery(linkCtx, saved.ID, mid, sid, cmp.Or(pt.startedAgent, targetAgent), handoffDeliveryUnknown, detail); recErr == nil {
+			return &updated, http.StatusServiceUnavailable, "release_failed", err
+		}
+		return &saved, http.StatusServiceUnavailable, "release_failed", err
+	}
+	if todo.DoneAt != nil {
+		if err := s.reopenTodo(linkCtx, todo.ID); err != nil {
+			s.logf("todo %s: reopen after starting %s/%s: %v", todo.ID, mid, short(sid), err)
+			detail := fmt.Sprintf("replacement agent %s/%s started but reopening to-do failed: %v", mid, sid, err)
+			if updated, recErr := s.recordTodoHandoffDelivery(linkCtx, saved.ID, mid, sid, cmp.Or(pt.startedAgent, targetAgent), handoffDeliveryUnknown, detail); recErr == nil {
+				return &updated, http.StatusServiceUnavailable, "reopen_failed", err
+			}
+			return &saved, http.StatusServiceUnavailable, "reopen_failed", err
+		}
+	}
+	s.startSupervisionRound(linkCtx, todo.ID)
+
+	var linkErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if linkErr = s.linkPlanAgent(linkCtx, pt, mid, sid, false); linkErr == nil {
+			break
+		}
+	}
+	if linkErr != nil {
 		s.logf("todo %s: link handoff agent %s/%s: %v", todo.ID, mid, short(sid), linkErr)
+		detail := fmt.Sprintf("replacement agent %s/%s started but linking to to-do failed: %v", mid, sid, linkErr)
+		if updated, recErr := s.recordTodoHandoffDelivery(linkCtx, saved.ID, mid, sid, cmp.Or(pt.startedAgent, targetAgent), handoffDeliveryUnknown, detail); recErr == nil {
+			return &updated, http.StatusServiceUnavailable, "link_failed", linkErr
+		}
+		return &saved, http.StatusServiceUnavailable, "link_failed", linkErr
 	}
 	updated, err := s.recordTodoHandoffDelivery(linkCtx, saved.ID, mid, sid, cmp.Or(pt.startedAgent, targetAgent), handoffDeliveryAccepted, "")
 	if err != nil {
-		return &saved, http.StatusOK, "", nil
+		s.logf("todo %s: record handoff %s accepted: %v", todo.ID, saved.ID, err)
+		return &saved, http.StatusServiceUnavailable, "handoff_delivery_record_failed", err
 	}
 	return &updated, http.StatusOK, "", nil
 }
