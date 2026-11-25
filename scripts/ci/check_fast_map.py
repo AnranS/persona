@@ -124,7 +124,9 @@ TABLE = (
         (("scripts/app/*android*",), ("android",)),
         (("scripts/test/test_external_service_refs.py",), ("external-refs",)),
         (("scripts/gen/sdk_bundle.py", "scripts/test/test_sdk_bundle.py"), ("sdk-bundle",)),
-        (("scripts/gen/*extension*", "scripts/test/test_extension_schema.py"), ("extension-schema",)),
+        (("scripts/gen/*extension*", "scripts/gen/wiregen/*", "scripts/test/fixtures/wiregen/*",
+          "scripts/test/test_wiregen_typed.py", "scripts/test/test_extension_schema.py"),
+         ("extension-schema",)),
         # Any other script, nested ones included: the seconds-long repository checks.
         (("scripts/*",), ("pr-needs-issue", "extension-schema")),
         (("apple/*",), ("apple",)),
@@ -164,6 +166,14 @@ TABLE = (
         (("server/internal/archguard/central_lists_test.go", "server/internal/archguard/testdata/central_lists/*"),
          ("scripts/test/test_name_freezes.py",)),
         (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
+    ),
+    # The domain slice scaffold (scripts/gen/new_domain_slice.py, #15179): test_new_domain_slice.py compiles and tests what
+    # it writes against the domain kit and the rules, and compares the golden, so a change to any of them runs it.
+    (
+        (("scripts/gen/new_domain_slice.py", "scripts/new_domain_slice.py", "scripts/test/test_new_domain_slice.py",
+          "server/internal/domainkit/*", "server/internal/archguard/domainrules/*",
+          "server/internal/archguard/testdata/scaffold/*", "server/internal/archguard/testdata/domain_layers/*",
+          "server/internal/agentref/*"), ("scripts/test/test_new_domain_slice.py",)),
     ),
     # The Android modules where a dropped result is still a warning (#13024): test_android_return_values.py reads their
     # list in android/build-logic and the call sites it names in the modules' sources.
@@ -217,8 +227,8 @@ TABLE = (
     # they and the prompt-language ratchet import (#12785); test_changed_ratchets.py imports them, and the ratchets'
     # own suites load ratchet_base.py through them (test_prompt_language_ratchet.py copies both). test_ci.py and test_check_fast_inputs.py run server.sh and check-fast.sh with go_trimpath.sh, which composes
     # their GOFLAGS; test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py too, and test_android_sh.py runs
-    # android.sh with it (#11250). check-fast.sh's tests are three files (#11017): its own name picks
-    # test_check_fast.py, and the other two, which import its fixtures, come along. They copy check_fast_compare.py,
+    # android.sh with it (#11250). check-fast.sh's tests are six files (#11017, #14321): its own name picks
+    # test_check_fast.py, and the other five, which import its fixtures, come along. They copy check_fast_compare.py,
     # which names a failure's rerun and compares it with the merge base (#12733), into their temp repositories too,
     # and go_test_partitioned.py with the go_partitions.py it imports, which every Go group runs through (#12765).
     (
@@ -228,21 +238,27 @@ TABLE = (
          ("scripts/release/test_check_bundle_privacy.py", "scripts/test/test_merge_pr_sh.py")),
         (("scripts/operations/pr_watch_merge.py", "scripts/ci/changed_ratchets.py"),
          ("scripts/test/test_merge_pr_sh.py",)),
-        (("scripts/ci/sleep_ratchet.py", "scripts/ci/web_font_ratchet.py"),
+        (("scripts/ci/sleep_ratchet.py", "scripts/ci/web_font_ratchet.py", "scripts/ci/wire_types_ratchet.py"),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py")),
         (("scripts/ci/ratchet_base.py",),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py", "scripts/ci/test_sleep_ratchet.py",
           "scripts/ci/test_web_font_ratchet.py", "scripts/test/test_prompt_language_ratchet.py",
-          "scripts/ci/test_web_module_boundary_ratchet.py")),
+          "scripts/ci/test_web_module_boundary_ratchet.py", "scripts/ci/test_wire_types_ratchet.py")),
         (("scripts/ci/prompt_language_ratchet.py",), ("scripts/test/test_prompt_language_ratchet.py",)),
         (("scripts/ci/web_module_boundary_ratchet.py",), ("scripts/ci/test_web_module_boundary_ratchet.py",)),
+        (("scripts/ci/wire_types_ratchet.py", "scripts/ci/wire_types_baseline.json",
+          "server/internal/archguard/wirecount/*"), ("scripts/ci/test_wire_types_ratchet.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
-        (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py"),
-         ("scripts/test/test_check_fast_guards.py", "scripts/test/test_check_fast_inputs.py")),
+        (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py",
+          "scripts/ci/affected_drift.py"),
+         ("scripts/test/test_check_fast_guards.py", "scripts/test/test_check_fast_inputs.py",
+          "scripts/test/test_check_fast_base.py", "scripts/test/test_check_fast_reports.py",
+          "scripts/test/test_check_fast_callers.py")),
         (("scripts/ci/check_fast_compare.py", "scripts/test/go_test_partitioned.py", "scripts/test/go_partitions.py"),
          ("scripts/test/test_check_fast.py", "scripts/test/test_check_fast_guards.py",
-          "scripts/test/test_check_fast_inputs.py")),
+          "scripts/test/test_check_fast_inputs.py", "scripts/test/test_check_fast_base.py",
+          "scripts/test/test_check_fast_reports.py", "scripts/test/test_check_fast_callers.py")),
     ),
     # test_heavy_slot.py reads CI's lanes, the operations scripts (the watchers among them), their example configs and
     # services, and both watcher skills: one that names a script taking a slot must set PERSONA_HEAVY_SLOTS=0
@@ -257,14 +273,16 @@ TABLE = (
     ),
     # The selections of what a change affects (#11026): CI's lanes (paths.py, tested in test_ci.py and, for the web
     # plan and the lanes a plan names, test_check_fast_inputs.py), check-fast (check-fast.sh and this table, which
-    # check-fast's three test files run) and the watcher's lanes; test_affected_drift.py compares them.
+    # check-fast's six test files run) and the watcher's lanes; test_affected_drift.py compares them.
     (
         (("scripts/ci/paths.py",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py",
                                     "scripts/ci/test_affected_drift.py")),
-        (("scripts/test/check-fast.sh",), ("scripts/ci/test_affected_drift.py",)),
+        (("scripts/test/check-fast.sh", "scripts/ci/affected_drift.py"), ("scripts/ci/test_affected_drift.py",)),
         (("scripts/ci/check_fast_map.py",),
          ("scripts/test/test_check_fast.py", "scripts/test/test_check_fast_guards.py",
-          "scripts/test/test_check_fast_inputs.py", "scripts/ci/test_affected_drift.py")),
+          "scripts/test/test_check_fast_inputs.py", "scripts/test/test_check_fast_base.py",
+          "scripts/test/test_check_fast_reports.py", "scripts/test/test_check_fast_callers.py",
+          "scripts/ci/test_affected_drift.py")),
         (("scripts/operations/pr_watch_verify.py",),
          ("scripts/operations/test_pr_watch.py", "scripts/ci/test_affected_drift.py")),
         (("scripts/operations/pr_watch_*.py",), ("scripts/operations/test_pr_watch.py",)),
@@ -283,7 +301,7 @@ TABLE = (
     # test_wire_schema.py holds every sample the shared fixtures keep for a wire schema to that schema, at any depth;
     # it imports the extension test's validator.
     (
-        (("schema/wire/*", "spec/fixtures/*", "scripts/gen/extension_schema.py",
+        (("schema/wire/*", "spec/fixtures/*", "scripts/gen/extension_schema.py", "scripts/gen/wiregen/*",
           "scripts/test/test_extension_schema.py"), ("scripts/test/test_wire_schema.py",)),
     ),
     # test_todo_fixtures.py holds the to-do page and window fixtures to their READMEs' rules; it also reads the view
