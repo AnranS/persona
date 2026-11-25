@@ -389,8 +389,8 @@ internal fun ModelProfileApplyConfirmPage(
     val describedTargetChanges = remember(drift.targetChanges, profile, catalogPurposes, providers, res) {
         drift.targetChanges.map { describeProfileChange(res, it, profile, catalogPurposes, providers) }
     }
-    val describedActiveDrift = remember(drift.activeDrift, catalogPurposes, providers, res) {
-        drift.activeDrift.map { describeProfileChange(res, it, null, catalogPurposes, providers) }
+    val describedActiveDrift = remember(drift.activeDrift, activeProfile, catalogPurposes, providers, res) {
+        drift.activeDrift.map { describeProfileChange(res, it, activeProfile, catalogPurposes, providers) }
     }
 
     JListPage(
@@ -547,7 +547,7 @@ internal fun ModelProfileApplyConfirmPage(
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                             describedActiveDrift.forEach { change ->
                                 Text(
-                                    text = change.label,
+                                    text = change.target?.let { "${change.label}: $it" } ?: change.label,
                                     style = PersonaTheme.type.bodyStrong,
                                     color = PersonaTheme.palette.ink,
                                 )

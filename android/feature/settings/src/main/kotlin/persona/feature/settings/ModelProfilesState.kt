@@ -512,7 +512,7 @@ internal class ModelProfilesModel(private val api: ModelConfiguration) {
         return try {
             val input = ModelProfileSaveInput.capture(
                 revision = rev,
-                name = profile.displayName,
+                name = profile.name,
                 description = profile.description,
             )
             when (val result = api.saveProfile(profile.id, input)) {
@@ -544,7 +544,7 @@ internal class ModelProfilesModel(private val api: ModelConfiguration) {
         return try {
             val input = ModelProfileSaveInput.capture(
                 revision = rev,
-                name = activeProfile.displayName,
+                name = activeProfile.name,
                 description = activeProfile.description,
             )
             val captured = try {

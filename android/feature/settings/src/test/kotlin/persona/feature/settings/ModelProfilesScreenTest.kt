@@ -348,6 +348,7 @@ class ModelProfilesScreenTest {
         rule.onNode(hasText("Follow default", substring = true) and hasAnyAncestor(hasTestTag("model-profile-apply-drift-list"))).assertIsDisplayed()
         rule.onNode(hasText("Team gateway · Small model") and hasAnyAncestor(hasTestTag("model-profile-apply-drift-list"))).assertIsDisplayed()
         rule.onNode(hasText("Clear to default", substring = true) and hasAnyAncestor(hasTestTag("model-profile-apply-drift-list"))).assertIsDisplayed()
+        rule.onNode(hasText("Main chat: Team gateway · opus-4") and hasAnyAncestor(hasTestTag("model-profile-active-drift-notice"))).assertIsDisplayed()
         rule.onNode(hasText("Answering agents' questions") and hasAnyAncestor(hasTestTag("model-profile-active-drift-notice"))).assertIsDisplayed()
 
         // Cancel returns to detail page cleanly with zero writes.

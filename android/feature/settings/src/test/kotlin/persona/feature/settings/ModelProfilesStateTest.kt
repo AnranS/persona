@@ -277,6 +277,11 @@ class ModelProfilesStateTest {
         assertFalse(captureModel.state.value.conflict)
         assertEquals(5L, captureModel.state.value.view?.revision)
 
+        // Blank profile name is preserved as blank rather than silently replaced with fallback id.
+        val blankNameProfile = sampleProfile.copy(id = "blank_id", name = "")
+        assertTrue(captureModel.capture(blankNameProfile, revision = 5))
+        assertEquals("", capturedInputs.last().second.name)
+
         // 2. captureActiveAndApply succeeds in order: capture active -> apply target
         val ops = mutableListOf<String>()
         val active = sampleProfile.copy(changes = listOf("assistant"))
