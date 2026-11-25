@@ -334,6 +334,10 @@ func TestSecretRunEnvExpiresWithoutRunning(t *testing.T) {
 	r := newSecretRig(t, nil)
 	done := r.call(secretRunEnvArgs)
 	ix := secretRunEnvCard(t, r, done)
+	// Once viewed in the app, the countdown starts and expires it.
+	if !r.s.markInteractionSeen(context.Background(), ix.ID) {
+		t.Fatal("markInteractionSeen returned false")
+	}
 	if out, text := r.outcome(done); out.Status != secretExpired {
 		t.Fatalf("unanswered env card = %s", text)
 	}
