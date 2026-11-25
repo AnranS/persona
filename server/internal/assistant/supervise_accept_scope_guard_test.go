@@ -533,7 +533,7 @@ func TestAcceptScopeGuardTreatsOwnerConfirmOutcomeDecisionAsOpenWait(t *testing.
 			}},
 		},
 	}
-	s.store = func() Store { return st }
+	s.setStore(func() Store { return st })
 	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	t.Cleanup(func() { s.tasks.outcomeRuns.Wait() })
 
