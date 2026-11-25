@@ -33,8 +33,8 @@ const (
 	KindPerson  = "people"
 	KindProject = "projects"
 	KindDoc     = "docs"
-	KindMeeting = "meetings"
-	KindEvent   = "events"
+	KindMeeting = recordingwire.KindMeeting
+	KindEvent   = recordingwire.KindEvent
 )
 
 // Tagging ranks anything in the knowledge base. The AI fills it in; Locked ones were set by hand (the app or a
@@ -202,6 +202,14 @@ type Item struct {
 	Note     string    `json:"note,omitempty"`
 	Seen     time.Time `json:"seen"`
 	Signals  []string  `json:"signals,omitempty"` // kbwire.Signal*: why it concerns the owner, as the source told
+	// The fields below come only from sources that know them (the Lark user sync); kbwire.Item says what each means.
+	// An item without a CanonicalKey is collected exactly as before them (CollectItems).
+	CanonicalKey string             `json:"canonical_key,omitempty"`
+	Aliases      []string           `json:"aliases,omitempty"`
+	Revision     int64              `json:"revision,omitempty"`
+	BodyHash     string             `json:"body_hash,omitempty"`
+	Content      string             `json:"content,omitempty"`
+	Sources      []kbwire.SourceRef `json:"sources,omitempty"`
 	Tagging
 }
 
