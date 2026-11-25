@@ -141,7 +141,7 @@ func TestPrepareNamesTrackKind(t *testing.T) {
 		cats        []string
 	}{
 		{"", trackKindOrchestration, []string{}},
-		{SpaceHealth, trackKindSpace, []string{categoryHealth}},
+		{SpaceHealth, trackKindHealth, []string{categoryHealth}},
 		{"qa-plain", trackKindSpace, []string{}},
 	} {
 		f.prepared = nil
