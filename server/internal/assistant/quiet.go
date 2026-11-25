@@ -41,7 +41,7 @@ type quietNotice struct {
 }
 
 type quietBook struct {
-	sendMu  sync.Mutex // serializes quiet-notice sends so teardown drains in-flight callbacks
+	wg      sync.WaitGroup // tracks armed timers and in-flight quiet-notice callbacks so teardown drains them cleanly
 	mu      sync.Mutex
 	stopped bool
 	pending map[string]*quietNotice // by todo id
@@ -80,6 +80,13 @@ func (s *Service) quietNotify(ctx context.Context, t Todo, machine, state, ask, 
 			b.timers = map[string]*time.Timer{}
 		}
 		id := t.ID
+		if prev := b.timers[id]; prev != nil {
+			delete(b.timers, id)
+			if prev.Stop() {
+				b.wg.Done()
+			}
+		}
+		b.wg.Add(1)
 		b.timers[id] = time.AfterFunc(quietNoticeDelay, func() { s.runQuietNoticeTimer(id) })
 	}
 	b.mu.Unlock()
@@ -99,15 +106,14 @@ func appendOnce(list []string, s string) []string {
 
 func (s *Service) runQuietNoticeTimer(id string) {
 	b := &s.quiet
-	b.sendMu.Lock()
-	defer b.sendMu.Unlock()
+	defer b.wg.Done()
 	b.mu.Lock()
 	stopped := b.stopped
 	b.mu.Unlock()
 	if stopped {
 		return
 	}
-	s.sendQuietNoticeLocked(id)
+	s.sendQuietNotice(id)
 }
 
 // stopQuietTimers stops new quiet-notice timers from arming, disarms pending timers, and drains in-flight callbacks.
@@ -116,36 +122,26 @@ func (s *Service) stopQuietTimers() {
 	b.mu.Lock()
 	b.stopped = true
 	for id, timer := range b.timers {
-		timer.Stop()
 		delete(b.timers, id)
+		if timer.Stop() {
+			b.wg.Done()
+		}
 	}
 	b.mu.Unlock()
-	b.sendMu.Lock()
-	b.mu.Lock()
-	for id, timer := range b.timers {
-		timer.Stop()
-		delete(b.timers, id)
-	}
-	b.mu.Unlock()
-	b.sendMu.Unlock()
+	b.wg.Wait()
 }
 
 // sendQuietNotice puts task id's notice into the main conversation: now, or queued behind its turn.
 func (s *Service) sendQuietNotice(id string) {
 	b := &s.quiet
-	b.sendMu.Lock()
-	defer b.sendMu.Unlock()
-	s.sendQuietNoticeLocked(id)
-}
-
-func (s *Service) sendQuietNoticeLocked(id string) {
-	b := &s.quiet
 	b.mu.Lock()
 	n := b.pending[id]
 	delete(b.pending, id)
 	if timer := b.timers[id]; timer != nil {
-		timer.Stop()
 		delete(b.timers, id)
+		if timer.Stop() {
+			b.wg.Done()
+		}
 	}
 	b.mu.Unlock()
 	if n == nil {
@@ -244,7 +240,14 @@ func (s *Service) queueNotice(id string, n *quietNotice, to string, msg relayMsg
 	if b.timers == nil {
 		b.timers = map[string]*time.Timer{}
 	}
+	if prev := b.timers[id]; prev != nil {
+		delete(b.timers, id)
+		if prev.Stop() {
+			b.wg.Done()
+		}
+	}
 	delay := quietNoticeDelay
+	b.wg.Add(1)
 	b.timers[id] = time.AfterFunc(delay, func() { s.runQuietNoticeTimer(id) })
 	b.mu.Unlock()
 	s.logf("task %s: quiet notice: the relay queue can't be read; trying again in %s", id, delay)

@@ -35,6 +35,7 @@ func newQuietServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	}
 	s, f := newTaskServiceOn(t, st)
 	t.Cleanup(s.stopQuietTimers)
+	f.inbox = newFakeInbox()
 	shortSupervise(t, s)
 	f.mu.Lock()
 	f.hello.Assistant.MachineID = "server"
