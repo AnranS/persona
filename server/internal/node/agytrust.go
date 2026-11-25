@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ var (
 	agyTrustPoll = 300 * time.Millisecond
 )
 
-// agyReadyHint is the hint under agy's input box: the box is up, so no trust dialog is coming.
+// agyReadyHint is the default footer under agy's input box.
 const agyReadyHint = "? for shortcuts"
 
 // agyNoticeDismiss is the line under a notice agy draws above its input box on start, which holds the keyboard.
@@ -61,19 +62,47 @@ func agyTrustKeys(text string) []string {
 	return nil
 }
 
+// agyInputReady recognizes the default footer or the input box agy draws above a custom status line.
+func agyInputReady(text string) bool {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	last := len(lines) - 1
+	if strings.HasPrefix(strings.TrimSpace(lines[last]), agyReadyHint) {
+		return true
+	}
+	// Look for the closing rule at the bottom of the frame or just above the status line. The two rules
+	// span the same width, with a single prompt row between them.
+	for bottom := last; bottom >= 2 && bottom >= last-1; bottom-- {
+		rule := strings.TrimSpace(lines[bottom])
+		if len(rule) < len("────────") || strings.Trim(rule, "─") != "" || strings.TrimSpace(lines[bottom-2]) != rule {
+			continue
+		}
+		prompt := strings.TrimSpace(lines[bottom-1])
+		if prompt == ">" || strings.HasPrefix(prompt, "> ") {
+			return true
+		}
+	}
+	return false
+}
+
 // agyTrustFolder answers agy's trust dialog in pane, if one shows, before the start types its first message. It returns
-// once agy's input box is drawn (its hint) with no dialog and herdr no longer reports status unknown (bounded by
-// agyInitWait), or after agyTrustWait; errors only when ctx ends or keys cannot be sent. herdr reports agy by its
-// process before agy's screen takes the terminal, and agy draws "? for shortcuts" before it finishes loading its model,
-// mode and start notices (#11437, #11345). A start notice over the box is dismissed with one Esc first.
-func (n *Node) agyTrustFolder(ctx context.Context, pane string) error {
+// once the input box is drawn with no dialog and herdr no longer reports status unknown, bounded by agyInitWait
+// and agyTrustWait. herdr can report the process before agy takes the terminal, and agy can draw its input box before
+// it finishes loading its model, mode and notices (#11437, #11345). A start notice over the box gets one Esc first.
+func (n *Node) agyTrustFolder(ctx context.Context, pane string, exit ...*paneStartExit) error {
 	deadline := time.Now().Add(agyTrustWait)
 	var initDeadline time.Time
+	var exited *paneStartExit
+	if len(exit) > 0 {
+		exited = exit[0]
+	}
 	answered := "" // the dialog screen last answered: the same screen is not answered twice
 	dismissed := false
 	for {
 		text, err := n.readPane(ctx, pane, "visible", 40)
 		if err == nil {
+			if err := n.agyStartupFailure(ctx, pane, text, exited); err != nil {
+				return err
+			}
 			if keys := agyTrustKeys(text); keys != nil {
 				initDeadline = time.Time{}
 				if text != answered {
@@ -83,7 +112,7 @@ func (n *Node) agyTrustFolder(ctx context.Context, pane string) error {
 					log.Printf("agy start in pane %s: trusted the folder the start chose (#11424)", pane)
 					answered = text
 				}
-			} else if !screen.Choosing(text) && strings.Contains(text, agyReadyHint) {
+			} else if !screen.Choosing(text) && agyInputReady(text) {
 				// A notice agy shows over its input box on start ("Auto is now the default agent mode … esc to
 				// dismiss", 1.5.13+) swallows typed input until it is dismissed (#11437): Esc once, then the box.
 				if !dismissed && agyStartNotice(text) {
@@ -94,7 +123,7 @@ func (n *Node) agyTrustFolder(ctx context.Context, pane string) error {
 					dismissed = true
 				} else {
 					a, aerr := n.paneAgent(ctx, pane)
-					if aerr != nil || a.Agent != agyAgent || a.AgentStatus != proto.StatusUnknown {
+					if aerr != nil || a == nil || a.Agent != agyAgent || a.AgentStatus != proto.StatusUnknown {
 						return nil
 					}
 					if initDeadline.IsZero() {
@@ -115,6 +144,17 @@ func (n *Node) agyTrustFolder(ctx context.Context, pane string) error {
 		case <-time.After(agyTrustPoll):
 		}
 	}
+}
+
+func (n *Node) agyStartupFailure(ctx context.Context, pane, text string, exited *paneStartExit) error {
+	if reason := startupErrorLine(text, "CLI error:", "error: invalid model selection", "Error: invalid model selection",
+		"Error: Antigravity", "Invalid effort:", "Unknown model:"); reason != "" {
+		return errors.New(reason)
+	}
+	if strings.Contains(text, "Welcome to Antigravity CLI") && strings.Contains(text, "Choose your color scheme") {
+		return errors.New("Antigravity CLI is waiting for first-run setup. Run agy in a terminal on this computer to finish setup.")
+	}
+	return exited.check(ctx, n, pane, "Antigravity")
 }
 
 // agyClearOverlay clears a late-arriving trust dialog or start notice before confirmWorkFirst retypes a dropped first
@@ -155,7 +195,7 @@ func (n *Node) agyWaitOverlayGone(ctx context.Context, pane string, waitReady bo
 		if agyTrustKeys(text) != nil || agyStartNotice(text) {
 			continue
 		}
-		if !waitReady || (!screen.Choosing(text) && strings.Contains(text, agyReadyHint)) {
+		if !waitReady || (!screen.Choosing(text) && agyInputReady(text)) {
 			return nil
 		}
 	}

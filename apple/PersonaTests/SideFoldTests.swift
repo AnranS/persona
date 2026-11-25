@@ -455,4 +455,92 @@ import PersonaWire
         #expect(model.openChat == key("p"))
         #expect(model.sideLanding == SideLanding(parent: key("p"), side: key("chat")))
     }
+
+    @Test func pagedProjectionExcludesOrphanedHeldSidesWhoseParentIsNotInPage() async throws {
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "side-fold-orphan-" + UUID().uuidString))
+        let socket = SyncSocket()
+        let fake = FakeHub()
+        let orphanSideJSON = """
+        {"sessions":[
+          {"machine_id":"box","session_id":"orphan-side","title":"Orphan Side","cwd":"/code/app","status":"idle","state":"unread",
+           "updated_at":"2026-11-15T10:06:00Z","folded_under":"offpage","folded_as":"side","parent_agent_id":"offpage"}
+        ],"has_more":false,"revision":"r1"}
+        """
+        fake.on("GET", "/api/v1/sessions") { _ in Data(orphanSideJSON.utf8) }
+        model.linkHooksForTests = (transport: try #require(fake.client.transport), socket: { socket })
+        model.connectOnly(.demo)
+        defer { model.link("")?.received(HubHello(features: ["sessions_list"])) }
+        socket.deliver?(Data(#"{"type":"hello","features":["sessions_list","sessions_hierarchy","sessions_side_fold"]}"#.utf8))
+
+        // Populate childIndex with a side session belonging to a parent ("offpage") that is NOT in the current page.
+        await model.childIndex.refresh(parent: key("offpage"), api: try #require(model.api("")))
+        #expect(model.childIndex.knownNow(key("offpage")).count == 1)
+
+        // Current paged window only contains parent "p" (not "offpage").
+        let p = try row("p", state: "idle")
+        let list = SessionListModel<Session>(
+            id: { $0.id }, removalID: { $0 },
+            fetch: { _, _, _ in SessionListPage(sessions: [p], remove: nil, hasMore: false, nextCursor: nil, revision: "r1", total: 1) },
+            counts: { _ in SessionListCounts(total: 1, machine: ["box": 1], project: [:], group: [:], state: ["unread": 0], revision: "r1") }
+        )
+        await list.select(SessionListQuery())
+        model.sessionLists.bind(model)
+        model.sessionLists.setForTests(list, group: "")
+
+        let listed = model.sessionLists.sessions
+        #expect(listed.map(\.sessionID) == ["p"])
+        #expect(model.sessionLists.stateCounts?[.unread] == 0)
+    }
+
+    @Test func pagedUnreadCountDoesNotJumpBackWhenNewerPageReflectsSeenBeforeCountsRefresh() async throws {
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "side-fold-counts-snap-" + UUID().uuidString))
+        let socket = SyncSocket()
+        let fake = FakeHub()
+        model.linkHooksForTests = (transport: try #require(fake.client.transport), socket: { socket })
+        model.connectOnly(.demo)
+        defer { model.link("")?.received(HubHello(features: ["sessions_list"])) }
+        socket.deliver?(Data(#"{"type":"hello","features":["sessions_list","sessions_hierarchy","sessions_side_fold"]}"#.utf8))
+
+        let pUnread = try row("p", state: "unread", updated: "2026-11-15T10:00:00Z")
+        let pRead = try row("p", state: "idle", updated: "2026-11-15T10:00:00Z", extra: ["seen_at": "2026-11-15T10:01:00Z"])
+        var pageVersion = 1
+        var countsVersion = 1
+        let list = SessionListModel<Session>(
+            id: { $0.id }, removalID: { $0 },
+            fetch: { _, _, _ in
+                if pageVersion == 1 {
+                    return SessionListPage(sessions: [pUnread], remove: nil, hasMore: false, nextCursor: nil, revision: "r1", total: 1)
+                }
+                return SessionListPage(sessions: [pRead], remove: nil, hasMore: false, nextCursor: nil, revision: "r2", total: 1)
+            },
+            counts: { _ in
+                if countsVersion == 1 {
+                    return SessionListCounts(total: 1, machine: ["box": 1], project: [:], group: [:], state: ["unread": 1], revision: "r1")
+                }
+                return SessionListCounts(total: 1, machine: ["box": 1], project: [:], group: [:], state: ["unread": 0], revision: "r2")
+            }
+        )
+        await list.select(SessionListQuery())
+        model.sessionLists.bind(model)
+        model.sessionLists.setForTests(list, group: "")
+        model.landSessionSummaries([pUnread], group: "")
+
+        // Initial snapshot: counts reports 1 unread.
+        #expect(model.sessionLists.stateCounts?[.unread] == 1)
+
+        // Locally mark p seen -> immediate Unread count drops to 0.
+        model.markSeen(key("p"))
+        #expect(model.sessionLists.stateCounts?[.unread] == 0)
+
+        // Hub page advances to r2 showing p already read, while counts is still at r1 (unread: 1).
+        pageVersion = 2
+        await list.synchronize()
+        // Even though list.rows now has p as idle and counts is still r1, Unread count must stay 0 (no jump back to 1).
+        #expect(model.sessionLists.stateCounts?[.unread] == 0)
+
+        // Once counts catches up to r2 (unread: 0), count remains 0 cleanly.
+        countsVersion = 2
+        await list.reload()
+        #expect(model.sessionLists.stateCounts?[.unread] == 0)
+    }
 }

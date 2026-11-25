@@ -22,6 +22,10 @@ import Observation
     @ObservationIgnored private var countsHints: [String: String?] = [:]
     /// The Agents lists in sight now (`AgentsCoverWatch`): while any is, hints read as they come (`HintWindow`).
     @ObservationIgnored private var inSight = Set<UUID>()
+    /// Hub-counted unread parent rows remembered per group's current `list.counts` snapshot (`countsGeneration` +
+    /// `revision`) so a newer page update that already reflects a local seen mark does not drop the Unread adjustment
+    /// before the separate counts request finishes (#13524).
+    @ObservationIgnored private var unreadAtCounts: [String: (generation: UInt64, revision: String?, parents: [SessionKey: Session])] = [:]
     private var hintWindowLength: Duration { inSight.isEmpty ? HintWindow.length : .zero }
 
     /// An Agents list came into sight or went out of it. Coming in, the reads waiting for their windows go at once: a
@@ -87,7 +91,11 @@ import Observation
         let list = SessionListModel<Session>(id: { $0.id }, removalID: { SessionListIdentity.runtime($0, group: group)?.path },
             fetch: { [weak link] query, cursor, since in
                 guard let link else { throw CancellationError() }
-                return try await link.api.sessionListPage(query, cursor: cursor, since: since)
+                var api = link.api
+                // A filtered root still needs every quick-filter count, not only the selected state's membership.
+                // Its separate counts read clears state below; an unfiltered root can use counts with the page.
+                api.sessionsPageCounts = api.sessionsPageCounts && query.state.isEmpty
+                return try await api.sessionListPage(query, cursor: cursor, since: since)
             }, counts: { [weak link] query in
                 guard let link else { throw CancellationError() }
                 var query = query
@@ -113,6 +121,10 @@ import Observation
             // Whether the list is a window or the whole collection decides where the switcher's counts come from.
             if group == model.hub?.group { model.followNeedsYou() }
         }
+        list.published = { [weak model, weak list] in
+            guard let model, let list else { return }
+            model.keepSeen(in: list)
+        }
         list.outside = { [weak model] rows in model?.landSessionSummaries(rows, group: group) }
         lists[group] = list
         return list
@@ -130,8 +142,13 @@ import Observation
             var seen = Set<SessionKey>()
             var rows = list.rows + sections.filter { $0.key.hub == link.group }.values.flatMap(\.rows)
             if link.foldsSides {
-                // Include held side rows so paged projections and rows fold live side states instead of stale rollups (#13524).
-                rows += model.childIndex.held.values.flatMap { $0 }.filter { $0.group == link.group && SideFold.isSideRow($0) }
+                // Only include held side rows whose folding parent is present in the current paged/section rows (#13524):
+                // an orphaned side held for an open chat, another machine, or a filtered-out parent must not escape folding.
+                let parentKeys = Set(rows.lazy.filter { !$0.assistant && !SideFold.isSideRow($0) }.map(\.key))
+                rows += model.childIndex.held.values.flatMap { $0 }.filter { row in
+                    guard row.group == link.group, SideFold.isSideRow(row), let under = row.foldedUnder else { return false }
+                    return parentKeys.contains(SessionKey(group: row.group, machineID: row.machineID, sessionID: under))
+                }
             }
             return rows.filter { seen.insert($0.key).inserted }
         })
@@ -199,23 +216,50 @@ import Observation
                     if let counts = list.counts { result[filter, default: 0] += counts.state[filter.state!.rawValue] ?? 0 }
                 }
                 // Adjust hub Unread counts for locally seen rows and held side sessions (#13524, web `heldCounts`):
-                // a parent marked seen locally stays counted Unread while any side is unread, and leaves Unread counts
-                // immediately once its held sides are seen.
-                if list.counts != nil {
+                // track hub-counted unread parents against the current `list.counts` snapshot (`countsGeneration` +
+                // `revision`), so a subsequent page update that already reflects the seen mark does not drop the
+                // adjustment before the separate counts read completes.
+                if let counts = list.counts {
                     let folds = link.foldsSides
+                    let groups: Set<String> = folds ? [link.group] : []
+                    let parentKeys = Set(list.rows.lazy.filter { !$0.assistant && !SideFold.isSideRow($0) }.map(\.key))
                     let heldSides = folds
-                        ? heldChildren.values.flatMap { $0 }.filter { $0.group == link.group && SideFold.isSideRow($0) }
+                        ? heldChildren.values.flatMap { $0 }.filter { row in
+                            guard row.group == link.group, SideFold.isSideRow(row), let under = row.foldedUnder else { return false }
+                            return parentKeys.contains(SessionKey(group: row.group, machineID: row.machineID, sessionID: under))
+                        }
                         : []
-                    let hubRows = list.rows.map { row -> Session in
+                    var snapshot = unreadAtCounts[link.group]
+                    if snapshot?.generation != list.countsGeneration || snapshot?.revision != counts.revision {
+                        snapshot = (list.countsGeneration, counts.revision, [:])
+                    }
+                    var hubParents = snapshot?.parents ?? [:]
+                    let currentHubRows = list.rows.compactMap { row -> Session? in
+                        guard !row.assistant, !SideFold.isSideRow(row), !list.seenAdjustedUnreadIDs.contains(row.id) else { return nil }
                         var copy = row
                         if copy.state != .unread, model.seenMark(row.key)?.wasUnread == true { copy.state = .unread }
                         return copy
                     }
-                    let cleared = SideFold.unreadClearedBySeen(hub: hubRows, visible: list.rows + heldSides,
-                                                               groups: folds ? [link.group] : [])
+                    for folded in SideFold.fold(currentHubRows, groups: groups).listed where !folded.assistant && folded.state == .unread {
+                        if hubParents[folded.key] == nil { hubParents[folded.key] = folded }
+                    }
+                    unreadAtCounts[link.group] = (list.countsGeneration, counts.revision, hubParents)
+
+                    let visibleFold = SideFold.fold(list.rows + heldSides, groups: groups)
+                    let visibleByKey = Dictionary(visibleFold.listed.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+                    var cleared = 0
+                    for (parentKey, _) in hubParents {
+                        if let shown = visibleByKey[parentKey] {
+                            if shown.state != .unread { cleared += 1 }
+                        } else if list.query.state == "unread" || list.revision != counts.revision {
+                            cleared += 1
+                        }
+                    }
                     if cleared > 0 {
                         result[.unread] = max(0, (result[.unread] ?? 0) - cleared)
                     }
+                } else {
+                    unreadAtCounts[link.group] = nil
                 }
             } else {
                 let rows = legacyBase(link.group)
@@ -264,6 +308,10 @@ import Observation
         page.changed = { [weak model, weak page] rows in
             guard let model, let page else { return }
             model.landSessionSummaries(rows, group: scope.hub)
+            model.keepSeen(in: page)
+        }
+        page.published = { [weak model, weak page] in
+            guard let model, let page else { return }
             model.keepSeen(in: page)
         }
         page.outside = { [weak model] rows in model?.landSessionSummaries(rows, group: scope.hub) }
@@ -376,39 +424,5 @@ extension AppModel {
             out.append(pending.removeValue(forKey: row.key) ?? row)
         }
         return out
-    }
-}
-
-extension Session {
-    /// Row-only fields are authoritative, but absent chat fields do not mean that background work stopped.
-    func preservingDetails(from old: Session?) -> Session {
-        guard listWaiting != nil, let old else { return self }
-        var row = self
-        row.background = old.background
-        row.subagents = old.subagents
-        row.workflows = old.workflows
-        if !row.assistant, row.undelivered == nil { row.undelivered = old.undelivered }
-        row.queued = old.queued
-        row.ports = old.ports
-        row.permissionMode = old.permissionMode
-        row.bypassAvailable = old.bypassAvailable
-        // The pending choice and the confirmed effort come from the same session snapshot.
-        if row.pendingEffort == nil && old.pendingEffort == nil, row.effort == nil { row.effort = old.effort }
-        row.efforts = old.efforts
-        row.serviceTier = old.serviceTier
-        row.serviceTiers = old.serviceTiers
-        row.ultracode = old.ultracode
-        row.launcher = old.launcher
-        row.suggestion = old.suggestion
-        row.suggestionRisky = old.suggestionRisky
-        row.codexRoute = old.codexRoute
-        row.codexRouteNote = old.codexRouteNote
-        row.runtime = old.runtime
-        row.runtimeFallback = old.runtimeFallback
-        row.modelFallback = old.modelFallback
-        row.modelRestore = old.modelRestore
-        row.compaction = old.compaction
-        row.asks = old.asks
-        return row
     }
 }
