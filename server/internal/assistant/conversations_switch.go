@@ -70,6 +70,8 @@ type conversationSwitchBatch struct {
 	FirstTurn bool `json:"first_turn,omitempty"`
 	// Fallback marks a batch the usage-limit fallback opened (limit_fallback.go).
 	Fallback *conversationSwitchFallback `json:"fallback,omitempty"`
+	// MachineFallback marks a batch automatic cross-machine failover opened (machine_fallback.go).
+	MachineFallback *conversationSwitchMachineFallback `json:"machine_fallback,omitempty"`
 }
 
 type conversationSwitchState struct {
@@ -247,6 +249,11 @@ func (s *Service) planConversationSwitchItem(ctx context.Context, state conversa
 	}
 	item.Before = conversationExecutionNow(machine, row, c)
 	item.Target.Machine = cmp.Or(item.Target.Machine, item.Before.Machine)
+	if require == nil {
+		// advanceLogicalConversation inherits the source permission mode when omitted;
+		// record that same effective mode so restore_batch_id's fence matches the prepared segment.
+		item.Target.PermissionMode = cmp.Or(item.Target.PermissionMode, item.Before.PermissionMode)
+	}
 	if c != nil && c.Switch != nil {
 		return refuse("another logical switch is still running")
 	}
@@ -305,6 +312,9 @@ func (s *Service) planConversationSwitches(ctx context.Context, state conversati
 			continue
 		}
 		require := old.Target
+		if require.PermissionMode == "" {
+			require.PermissionMode = old.Before.PermissionMode
+		}
 		items = append(items, s.planConversationSwitchItem(ctx, state, st, old.Machine, old.ConversationID, old.Before, &require, resolve))
 	}
 	return items, checkConversationSwitchUnique(items)
@@ -384,9 +394,9 @@ func conversationSwitchBusyError(err error) bool {
 	return errors.As(err, &re) && re.Code == assistantwire.CodeConversationBusy
 }
 
-func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitchStore, restore, firstTurn bool, item *conversationSwitchItem) bool {
+func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitchStore, state *conversationSwitchState, batch *conversationSwitchBatch, item *conversationSwitchItem) bool {
 	if item.Outcome == conversationSwitchSwitching {
-		changed, err := s.reconcileConversationSwitchItem(ctx, st, firstTurn, item)
+		changed, err := s.reconcileConversationSwitchItem(ctx, st, batch.FirstTurn, item)
 		if err != nil {
 			s.logf("conversations_switch %s: reconcile: %v", item.OperationID, err)
 			return false
@@ -409,16 +419,40 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 	}
 	if op != nil {
 		item.Outcome = conversationSwitchSwitching
-		_, reconcileErr := s.reconcileConversationSwitchItem(ctx, st, firstTurn, item)
+		_, reconcileErr := s.reconcileConversationSwitchItem(ctx, st, batch.FirstTurn, item)
 		if reconcileErr != nil {
 			s.logf("conversations_switch %s: replay reconcile: %v", item.OperationID, reconcileErr)
 		}
 		return true
 	}
+	// Reconcile an operation already begun even if the reset passed before its batch was saved.
+	if fb := batch.Fallback; fb != nil && !time.Now().Before(fb.ResetsAt) {
+		item.Outcome, item.Reason = conversationSwitchRefused, "the usage limit reset before the switch could start"
+		return true
+	}
+	automaticRestore := batch.RestoreOf != "" && batch.FirstTurn
+	machineFallback := batch.MachineFallback != nil
 	row, known := s.session(ctx, item.Machine, item.ConversationID)
 	if !known || !row.Assistant || row.PaneID != "" || row.IsDeleted() {
-		item.Outcome, item.Reason = conversationSwitchRefused, "the conversation is no longer available"
-		return true
+		// Disconnected nodes can lose their cached row before their next snapshot. An explicit deletion is final.
+		if automaticRestore && !row.IsDeleted() && s.limitRestoreNodeOffline(ctx, item.Machine) {
+			return false
+		}
+		if machineFallback && !row.IsDeleted() && s.machinePhysicallyOffline(ctx, item.Machine) && s.isFailoverEligibleOffline(ctx, item.Machine, item.ConversationID) {
+			row = proto.Session{
+				MachineID:      item.Machine,
+				SessionID:      item.ConversationID,
+				Assistant:      true,
+				Launcher:       item.Before.Launcher,
+				Model:          item.Before.Model,
+				Effort:         item.Before.Effort,
+				PermissionMode: item.Before.PermissionMode,
+			}
+			known = true
+		} else {
+			item.Outcome, item.Reason = conversationSwitchRefused, "the conversation is no longer available"
+			return true
+		}
 	}
 	c, err := st.LogicalConversation(ctx, item.Machine, item.ConversationID)
 	if err != nil {
@@ -430,18 +464,27 @@ func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitc
 		epoch = c.Epoch
 	}
 	current := conversationExecutionNow(item.Machine, row, c)
-	if epoch != item.ExpectedEpoch || !sameConversationExecution(current, item.Before) {
+	if epoch != item.ExpectedEpoch || !sameConversationExecution(current, item.Before) || (automaticRestore && !limitFallbackOwnsEpoch(state, batch.RestoreOf, epoch)) {
 		item.Outcome, item.Reason = conversationSwitchRefused, "the conversation changed independently; its newer settings were left untouched"
 		return true
 	}
 	permission := item.Target.PermissionMode
-	if restore && permission == "" {
+	if batch.RestoreOf != "" && permission == "" {
 		permission = "default"
 	}
 	_, err = s.beginLogicalSwitch(ctx, item.Machine, item.ConversationID, logicalSwitchRequest{
 		OperationID: item.OperationID, ExpectedEpoch: item.ExpectedEpoch, MachineID: item.Target.Machine,
 		Launcher: item.Target.Launcher, Model: item.Target.Model, Effort: item.Target.Effort, PermissionMode: permission,
+		AllowOfflineSource: machineFallback,
 	})
+	// The row can still be cached when the original launcher's live check finds its link down.
+	// Keep this automatic return's durable operation and recheck its epoch and settings on the next pass.
+	if automaticRestore && err != nil {
+		linkErr := busError(err)
+		if errors.Is(linkErr, apierr.ErrOffline) || errors.Is(linkErr, rpc.ErrClosed) {
+			return false
+		}
+	}
 	if conversationSwitchBusyError(err) {
 		item.Outcome = conversationSwitchQueued
 		return false
@@ -468,12 +511,16 @@ func (s *Service) runConversationSwitchesLocked(ctx context.Context, state *conv
 	for bi := range state.Batches {
 		batch := &state.Batches[bi]
 		for ii := range batch.Items {
-			if s.runConversationSwitchItem(ctx, st, batch.RestoreOf != "", batch.FirstTurn, &batch.Items[ii]) {
+			if s.runConversationSwitchItem(ctx, st, state, batch, &batch.Items[ii]) {
 				changed = true
 			}
 		}
 	}
-	if s.limitFallbacksLocked(ctx, state, time.Now()) {
+	now := time.Now()
+	if s.limitFallbacksLocked(ctx, state, now) {
+		changed = true
+	}
+	if s.machineFallbacksLocked(ctx, state, now) {
 		changed = true
 	}
 	return changed
