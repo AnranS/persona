@@ -404,6 +404,40 @@ struct ExtensionEntryListsTests {
         #expect(!page.dirty)
     }
 
+    @Test func setEnabledAndRebuildPreserveSavedDraftAndEntryKeys() async throws {
+        let hub = FakeHub()
+        var enabled = true
+        hub.on("GET", "/api/v1/plugins/example-entries/-/") { _ in
+            Data(Self.makeDetail(maxItems: 4).replacingOccurrences(of: #""enabled": true"#, with: #""enabled": \#(enabled)"#).utf8)
+        }
+        hub.on("PUT", "/api/v1/plugins/example-entries/-/enabled") { _ in
+            enabled.toggle()
+            return Data(Self.makeDetail(maxItems: 4).replacingOccurrences(of: #""enabled": true"#, with: #""enabled": \#(enabled)"#).utf8)
+        }
+
+        let drafts = ExtensionDrafts()
+        let page = ExtensionModel(id: "example-entries", deps: .init(api: { hub.client }, drafts: drafts))
+        await page.load()
+        page.addEntry(to: "accounts")
+        let localKey = try #require(page.entryKeys["accounts"]?[1])
+        page.set(.string("Unsaved"), at: ["accounts", "1", "name"])
+        #expect(page.dirty)
+
+        // Toggling enabled keeps live unsaved edits and their stable entry keys.
+        await page.setEnabled(false)
+        #expect(page.detail?.plugin.enabled == false)
+        #expect(page.value(["accounts", "1", "name"]) == .string("Unsaved"))
+        #expect(page.entryKeys["accounts"] == ["entry_saved", localKey])
+
+        // Rebuilding the model after setEnabled restores the saved draft and its entry keys.
+        let rebuilt = ExtensionModel(id: "example-entries", deps: .init(api: { hub.client }, drafts: drafts))
+        await rebuilt.load()
+        #expect(rebuilt.detail?.plugin.enabled == false)
+        #expect(rebuilt.value(["accounts", "1", "name"]) == .string("Unsaved"))
+        #expect(rebuilt.entryKeys["accounts"] == ["entry_saved", localKey])
+        #expect(rebuilt.dirty)
+    }
+
     @Test func launcherFieldsInsideEntryListsTriggerLauncherLoading() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins/example-entries/-/", json: Self.makeDetail(includeLauncherField: true))

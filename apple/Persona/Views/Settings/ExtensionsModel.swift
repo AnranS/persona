@@ -1013,8 +1013,8 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         defer { changingEnabled = false }
         do {
             guard let api else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-            detail = try await api.setExtension(id, enabled: on, cascade: cascade)
-            error = nil
+            let d = try await api.setExtension(id, enabled: on, cascade: cascade)
+            applyDetail(d, preservingDraft: true)
             disableConfirmation = nil
             disableDialogPresented = false
         } catch let e as APIError where !on && !cascade && e.code == "has_dependents" {
@@ -1042,8 +1042,8 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         defer { changingContribution = nil }
         do {
             guard let api else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-            detail = try await api.setExtensionContribution(id, point: contribution.point, id: contribution.contributionID, enabled: enabled)
-            error = nil
+            let d = try await api.setExtensionContribution(id, point: contribution.point, id: contribution.contributionID, enabled: enabled)
+            applyDetail(d, preservingDraft: true)
         } catch {
             self.error = error.localizedDescription
         }
@@ -1189,6 +1189,28 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         deps.drafts.values[key] = dirty ? .init(config: draft, numbers: numberText, entryKeys: entryKeys) : nil
     }
 
+    private func applyDetail(_ d: HubExtensionDetail, preservingDraft: Bool) {
+        let hasLiveEdits = preservingDraft && detail != nil && (dirty || !numberText.isEmpty)
+        let editing = hasLiveEdits ? draft : nil
+        let numbers = hasLiveEdits ? numberText : nil
+        let liveKeys = hasLiveEdits ? entryKeys : nil
+        let savedDraft = preservingDraft ? draftKey.flatMap { deps.drafts.values[$0] } : nil
+        let kept = editing ?? savedDraft?.config
+        let keptNumbers = numbers ?? savedDraft?.numbers
+        let keptKeys = liveKeys ?? savedDraft?.entryKeys
+        detail = d
+        let nextConfig = kept ?? d.config
+        if let keptKeys, kept != nil {
+            syncNextEntryKey(with: keptKeys)
+            entryKeys = keptKeys
+        } else {
+            entryKeys = keysFor(detail: d, config: nextConfig)
+        }
+        draft = nextConfig
+        numberText = keptNumbers ?? [:]
+        error = nil
+    }
+
     /// Takes the new configuration on save; reloading and non-configuration actions keep the unsaved draft.
     /// `refused` takes the extension's own word when its check stopped the change (`refusal`); without it that is the
     /// page's error.
@@ -1197,25 +1219,7 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         do {
             guard let api else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
             let d = try await call(api)
-            let hasLiveEdits = preservingDraft && detail != nil && dirty
-            let editing = hasLiveEdits ? draft : nil
-            let numbers = hasLiveEdits ? numberText : nil
-            let liveKeys = hasLiveEdits ? entryKeys : nil
-            let savedDraft = preservingDraft ? draftKey.flatMap { deps.drafts.values[$0] } : nil
-            let kept = editing ?? savedDraft?.config
-            let keptNumbers = numbers ?? savedDraft?.numbers
-            let keptKeys = liveKeys ?? savedDraft?.entryKeys
-            detail = d
-            let nextConfig = kept ?? d.config
-            if let keptKeys, kept != nil {
-                syncNextEntryKey(with: keptKeys)
-                entryKeys = keptKeys
-            } else {
-                entryKeys = keysFor(detail: d, config: nextConfig)
-            }
-            draft = nextConfig
-            numberText = keptNumbers ?? [:]
-            error = nil
+            applyDetail(d, preservingDraft: preservingDraft)
             return true
         } catch let e as APIError where e.code == "invalid_config" {
             let field = e.fields["field"] ?? ""
