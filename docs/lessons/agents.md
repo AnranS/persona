@@ -13,6 +13,15 @@
 - Apply `assistantwire.CutOff` (`"API Error:"` prefix check) only when falling back to `Session.LastText`, never to a node-populated `Session.TurnError` (`latestTurnError`): Codex rollouts and runtime bridges report `5xx` errors as plain messages (`unexpected status 503 Service Unavailable`) that do not start with `"API Error:"`.
 - When tracking multi-turn streaks in `transcript.Meta`, copy the streak fields in `Tail.Settle` (`server/internal/transcript/branch.go`) and preserve/merge them in `mergeModelFallback` (`server/internal/node/model_refusal.go`), which otherwise resets `m.turnErr.code` on every `bgScan` merge.
 
+## Codex's `/model` with arguments: confirm from the rollout, and send the effort with a model (2026-11-23, #12572)
+
+- Codex 0.169 and later take `/model <model> --reasoning=<level>` for this session only. `/model <model>` alone does not keep the effort: Codex
+  puts the new model on that model's default level. To keep the user's effort, type it with the model when the new model takes it
+  (`setCodexTerminalSettings` in `server/internal/node/codex_terminal_modes.go`).
+- Confirm the change from the rollout, not the screen: Codex writes `thread_settings_applied` with the thread's `model` and `reasoning_effort` as
+  soon as it applies them, between turns and mid-turn. The screen's `Model changed to …` line can scroll away or be a line from earlier; read the
+  screen only for Codex's refusal, and only lines that are new since the typing (a repeated refusal is printed again below the first).
+
 ## An App update can leave a socket without its server (#13190)
 
 - A Unix socket file proves only that a process bound that path at some point. After the Codex App removed its IPC router, the old `<CODEX_HOME>/ipc/ipc.sock` remained and a file-type check still advertised writable chats. Check that a listener accepts connections, with a short timeout and one probe per home per list, and handle a later connection failure as a normal control refusal.

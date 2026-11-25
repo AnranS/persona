@@ -782,5 +782,6 @@ func (n *Node) codexPaneControls(s *proto.Session, rollout quickMeta) {
 		s.Capabilities.Model = proto.Bool(true)
 	}
 	n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
+	n.codexTerminalRow(id, s, rollout)                   // on the terminal route: typed /model (codex_terminal_modes.go)
 	n.codexSpeedRow(s)
 }
