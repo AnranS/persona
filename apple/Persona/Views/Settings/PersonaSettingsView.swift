@@ -75,14 +75,8 @@ struct PersonaPicker: View {
     /// any avatar lifted the grid and offered Photos and Files.
     private var newCard: some View {
         Group {
-            #if os(macOS)
-            Button { choosingFile = true } label: { newCardLabel }
-                .buttonStyle(.plain)
-                .macBoundedContextMenu { newCardMenu }
-            #else
             Menu { newCardMenu } label: { newCardLabel } primaryAction: { choosingPhoto = true }
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            #endif
         }
         .disabled(uploads.loading)
         .accessibilityLabel(String(localized: "New from Photo"))
@@ -172,8 +166,9 @@ struct PersonaPicker: View {
         let here = store.isOnPhone(p)
         return Button {
             guard !selected else { return }
+            let selection = store.tap(p, api: model.api)
             Task {
-                await store.choose(p, api: model.api)
+                await selection?.value
                 if store.current.id == p.id { Haptics.success() }
             }
         } label: {

@@ -55,6 +55,7 @@ type Facts struct {
 	Kind            string       `json:"kind,omitempty"`
 	SeenAt          *time.Time   `json:"seen_at,omitempty"`
 	PartOf          string       `json:"part_of,omitempty"`
+	After           []string     `json:"after,omitempty"`
 	// Ask is the to-do's own open ask, DecisionReview its decision round and whether the owner chose Don't handle on it.
 	Ask            *Ask            `json:"ask,omitempty"`
 	DecisionReview *DecisionReview `json:"decision_review,omitempty"`
@@ -81,6 +82,8 @@ type Facts struct {
 	Superseded bool `json:"-"`
 	// Loc is the owner's time zone, for a due day; nil is UTC.
 	Loc *time.Location `json:"-"`
+	// TodosV2 gates experimental New To-dos & Tasks projection rules (#14620); false preserves legacy behavior identically.
+	TodosV2 bool `json:"-"`
 }
 
 // Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).
@@ -119,6 +122,9 @@ type DecisionReview struct {
 // Supervision is a supervised task's ledger: the review state, the park that holds it, the reviews (latest last) and
 // the moments that count as activity.
 type Supervision struct {
+	// Supervisor: the conversation that handed it out and supervises it. Its failed starts and the cards it routes are
+	// that conversation's to handle, not the owner's.
+	Supervisor   string     `json:"supervisor,omitempty"`
 	State        string     `json:"state"`
 	Parked       *Parked    `json:"parked,omitempty"`
 	Reviews      []Review   `json:"reviews"`
@@ -129,9 +135,18 @@ type Supervision struct {
 
 // Parked is what a parked task waits for: why, until when, on what kind of thing.
 type Parked struct {
-	Reason    string    `json:"reason"`
-	Until     time.Time `json:"until"`
-	WaitingOn string    `json:"waiting_on"`
+	Reason    string        `json:"reason"`
+	Until     time.Time     `json:"until"`
+	WaitingOn string        `json:"waiting_on"`
+	Evidence  *ParkEvidence `json:"evidence,omitempty"`
+}
+
+// ParkEvidence carries the fields of parked evidence the projection reads (owner-request link and shared-blocker root cause).
+type ParkEvidence struct {
+	Kind          string `json:"kind,omitempty"`
+	Target        string `json:"target,omitempty"`
+	URL           string `json:"url,omitempty"`
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 // Review is one review of the ledger: when, its verdict, its note (a cancellation's why), and a needs_user review's
@@ -153,6 +168,8 @@ type Progress struct {
 type Delivery struct {
 	State string    `json:"state"`
 	At    time.Time `json:"at"`
+	Owner bool      `json:"owner,omitempty"` // an open delivery hold asks the owner to release it
+	Gate  string    `json:"gate,omitempty"`
 }
 
 // PRStatus is an observation of one of the task's PRs.
@@ -177,7 +194,8 @@ const (
 	reviewCancelled = "cancelled"
 	reviewParked    = "parked"
 
-	parkSomeoneElse = "someone_else"
+	parkSomeoneElse   = "someone_else"
+	parkExternalEvent = "external_event"
 
 	outcomeDone   = "done"
 	outcomeCannot = "cannot"
@@ -201,6 +219,10 @@ func (f *Facts) closed() bool {
 	return f.DoneAt != nil && (f.StartError == "" || f.Superseded)
 }
 
+// outsideDecisionRow has its own answer home: part_of associates it with
+// existing work, but does not make the request a step of that work (#8235).
+func outsideDecisionRow(f Facts) bool { return strings.HasPrefix(f.ID, "todo_od_") }
+
 // relate fills in what a to-do's facts take from the rest of the list: its steps (the to-dos whose part_of names it,
 // oldest first) and whether a failed start is superseded (a Superseded already set stays). It returns a new list; the
 // steps it attaches carry no steps of their own (steps are one level deep).
@@ -209,7 +231,7 @@ func relate(list []Facts) []Facts {
 	superseded := supersededFailedStarts(list)
 	steps := map[string][]Facts{}
 	for _, f := range list {
-		if f.PartOf != "" && f.PartOf != f.ID {
+		if f.PartOf != "" && f.PartOf != f.ID && !outsideDecisionRow(f) {
 			f.Steps, f.Superseded = nil, f.Superseded || superseded[f.ID]
 			steps[f.PartOf] = append(steps[f.PartOf], f)
 		}

@@ -5,8 +5,11 @@ import { api, credentialOwner, onCredentialChange } from "./api";
 
 const LEGACY = "persona.agentHideBotmux";
 const PATH = "/agents/display-settings";
-export interface AgentsDisplay { show_botmux: boolean; configured: boolean }
-interface State { value: AgentsDisplay | null; saving: boolean; error?: unknown; retryShow?: boolean }
+/** `sort_by_activity` and `show_filter` are the effective values (saved choice, else the hub's initial default, else off);
+ *  absent from a hub that has not got them, where the Settings switches stay hidden and the list keeps its stable order. */
+export interface AgentsDisplay { show_botmux: boolean; configured: boolean; use_herdr_tab_name?: boolean; sort_by_activity?: boolean; show_filter?: boolean }
+export type DisplayChange = { show_botmux: boolean } | { use_herdr_tab_name: boolean } | { sort_by_activity: boolean } | { show_filter: boolean };
+interface State { value: AgentsDisplay | null; saving: boolean; error?: unknown; change?: DisplayChange }
 let state: State = { value: null, saving: false };
 let revision = 0;
 let reading: Promise<void> | undefined;
@@ -15,7 +18,10 @@ const snapshot = () => state;
 const subscribe = (f: () => void) => { listeners.add(f); return () => { listeners.delete(f); }; };
 const set = (next: State) => { state = next; listeners.forEach((f) => f()); };
 function checked(value: AgentsDisplay): AgentsDisplay {
-  if (typeof value.show_botmux !== "boolean" || typeof value.configured !== "boolean") throw new Error("Invalid Agents display settings");
+  if (typeof value.show_botmux !== "boolean" || typeof value.configured !== "boolean" ||
+    (value.use_herdr_tab_name !== undefined && typeof value.use_herdr_tab_name !== "boolean") ||
+    (value.sort_by_activity !== undefined && typeof value.sort_by_activity !== "boolean") ||
+    (value.show_filter !== undefined && typeof value.show_filter !== "boolean")) throw new Error("Invalid Agents display settings");
   return value;
 }
 function legacyHidden() { try { return localStorage.getItem(LEGACY) === "1"; } catch { return false; } }
@@ -36,9 +42,9 @@ export function refreshAgentsDisplay(): Promise<void> {
       }
       if (mine !== revision) return;
       if (value.configured) forgetLegacy();
-      set(state.retryShow === undefined ? { value, saving: false } : { ...state, value });
+      set(state.change === undefined ? { value, saving: false } : { ...state, value });
     } catch (error) {
-      if (mine === revision && state.retryShow === undefined) set({ ...state, error });
+      if (mine === revision && state.change === undefined) set({ ...state, error });
     }
   })();
   reading = work;
@@ -46,18 +52,19 @@ export function refreshAgentsDisplay(): Promise<void> {
   return work;
 }
 
-export async function saveAgentsDisplay(show: boolean): Promise<void> {
+export async function saveAgentsDisplay(input: boolean | DisplayChange): Promise<void> {
   credentialOwner();
   if (state.saving) return;
   const mine = ++revision;
-  set({ value: state.value, saving: true });
+  const change = typeof input === "boolean" ? { show_botmux: input } : input;
+  set({ value: state.value, saving: true, change });
   try {
-    const value = checked(await api<AgentsDisplay>(PATH, { method: "PUT", json: { show_botmux: show } }));
+    const value = checked(await api<AgentsDisplay>(PATH, { method: "PUT", json: change }));
     if (mine !== revision) return;
     if (value.configured) forgetLegacy();
     set({ value, saving: false });
   } catch (error) {
-    if (mine === revision) set({ ...state, saving: false, error, retryShow: show });
+    if (mine === revision) set({ ...state, saving: false, error });
   }
 }
 
@@ -72,10 +79,40 @@ export function useAgentsDisplay() {
 }
 
 export function retryAgentsDisplay(): Promise<void> {
-  return state.retryShow === undefined ? refreshAgentsDisplay() : saveAgentsDisplay(state.retryShow);
+  return state.change === undefined ? refreshAgentsDisplay() : saveAgentsDisplay(state.change);
 }
+
+// A session-list refresh also refreshes display settings. Rows subscribe to
+// the choice they use so a fresh answer or error with the same choice does not
+// redraw them.
+const botmuxHidden = () => state.value?.show_botmux !== true;
+const herdrTabName = () => state.value?.use_herdr_tab_name === true;
 
 export function useBotmuxHidden(): boolean {
   // An unavailable preference might hide these sessions. Keep the last acknowledged choice.
-  return useAgentsDisplay().value?.show_botmux !== true;
+  return useSyncExternalStore(subscribe, botmuxHidden, botmuxHidden);
+}
+
+export function useHerdrTabName(): boolean {
+  return useSyncExternalStore(subscribe, herdrTabName, herdrTabName);
+}
+
+const sortByActivity = () => state.value?.sort_by_activity === true;
+const showFilter = () => state.value?.show_filter === true;
+export const showFilterNow = showFilter;
+
+/** Settings › Agents › "Sort Agents by recent activity": off until the hub says on (older hubs never do). */
+export function useSortByActivity(): boolean {
+  return useSyncExternalStore(subscribe, sortByActivity, sortByActivity);
+}
+
+/** Settings › Agents › "Show the Filter on the Agents list": off until the hub says on. */
+export function useShowFilter(): boolean {
+  return useSyncExternalStore(subscribe, showFilter, showFilter);
+}
+
+/** Tests: the hub's answer as already read (no request). */
+export function seedAgentsDisplay(value: AgentsDisplay) {
+  revision++;
+  set({ value, saving: false });
 }

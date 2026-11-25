@@ -102,6 +102,27 @@ describe("the providers of an Agent's chat", () => {
     expect(own.models![1].fast).toBeUndefined();
     expect(providers.find((p) => p.id === "gateway")!.unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Codex", to: "Claude Code" }));
   });
+
+  it("switches models and efforts in-place on a Codex thread whose node advertises model capability", () => {
+    const multiCodex: LauncherModels = {
+      agent: "codex",
+      models: [
+        { id: "acme/gpt-5-pro", name: "Acme gpt-5-pro", efforts: ["low", "medium"], default_effort: "medium" },
+        { id: "beta/gpt-5-pro", name: "Beta gpt-5-pro", efforts: ["low", "high", "xhigh"], default_effort: "high" },
+      ],
+    };
+    const s = codex({ status: "working", state: "working", capabilities: { send: true, model: true }, model: "acme/gpt-5-pro", effort: "medium", efforts: ["low", "medium"] });
+    const { providers, state } = sessionPanel(s, launchers, lists({ cx: { list: multiCodex } }));
+    const own = providers.find((p) => p.id === "cx")!;
+    expect(own.unavailable).toBeUndefined();
+    expect(own.typable).toBe(true);
+    expect(state.recommended).toEqual(["cx"]);
+    expect(state.busy).toBeUndefined();
+    expect(pickPlan(s, { provider: "cx", model: "beta/gpt-5-pro", effort: "xhigh" }, () => multiCodex)).toEqual([
+      { model: "beta/gpt-5-pro" },
+      { effort: "xhigh" },
+    ]);
+  });
 });
 
 describe("what a pick sends", () => {
@@ -142,9 +163,12 @@ describe("what a pick sends", () => {
       { id: "future-medium", name: "Future Medium", efforts: ["low", "medium", "high"], default_effort: "medium" },
       { id: "future-high", name: "Future High", efforts: ["low", "medium", "high"], default_effort: "high" },
     ] };
-    expect(pickPlan(agy, { provider: "agy", model: "future-high" }, () => list)).toEqual([{ model: "future-high" }, { effort: "high" }]);
+    expect(pickPlan(agy, { provider: "agy", model: "future-high" }, () => list)).toEqual([{ model: "future-high" }]);
+    expect(pickPlan(agy, { provider: "agy", model: "future-high", effort: "low" }, () => list)).toEqual([{ model: "future-high" }, { effort: "low" }]);
+    expect(pickPlan(agy, { provider: "agy", model: "future-high", effort: "high" }, () => list)).toEqual([{ model: "future-high" }]);
     // its rows have no slider: the variants are the levels
     expect(sessionPanel(agy, [], lists({ agy: { list } })).providers[0].models!.every((m) => m.efforts.length === 0)).toBe(true);
+    expect(sessionPanel({ ...agy, effort: undefined }, [], lists({ agy: { list } })).providers[0].models?.[0].defaultEffort).toBe("medium");
   });
 });
 
@@ -163,6 +187,14 @@ describe("what the pill says", () => {
     expect(pillView(session(), {}).engineLabel).toBeUndefined();
   });
 
+  it("uses the effort encoded by a catalog variant when the session reports only the model", () => {
+    const model = "gemini-4-neon-xhigh";
+    const agy = session({ agent: "agy", launcher: "agy", model, effort: undefined });
+    const list: LauncherModels = { agent: "agy", models: [{ id: model, name: "Gemini 4 Neon (XHigh)", default_effort: "xhigh" }] };
+    expect(pillView(agy, { list })).toMatchObject({ model: "Gemini 4 Neon", effort: "xhigh" });
+    expect(pillView({ ...agy, effort: "medium" }, { list })).toMatchObject({ model: "Gemini 4 Neon", effort: "medium" });
+  });
+
   it("loading or failed only while there is no list; no model before one is known, the default entry's name once read", () => {
     expect(pillView(session({ model: undefined }), { loading: true })).toMatchObject({ loading: true, failed: false });
     expect(pillView(session({ model: undefined }), { loading: true }).model).toBeUndefined();
@@ -171,18 +203,33 @@ describe("what the pill says", () => {
     expect(pillView(session({ model: undefined }), { list: claudeList }).model).toBe("Default (recommended)");
   });
 
-  it("names ids briefly where no list does", () => {
+  it("names ids briefly where no list does, keeping gateway routing prefixes intact", () => {
     expect(modelLabel("claude-opus-5-5")).toBe("opus 5.5");
-    expect(modelLabel("anthropic/claude-opus-5-5")).toBe("opus 5.5");
+    expect(modelLabel("anthropic/claude-opus-5-5")).toBe("anthropic/claude-opus-5-5");
     expect(modelLabel("claude-opus-5-5[1m]")).toBe("opus 5.5 1M");
     expect(modelLabel("claude-fable-5-2[1m]")).toBe("fable 5.2 1M");
     expect(modelLabel("claude-sonnet-5-5[1m]")).toBe("sonnet 5.5 1M");
     expect(modelLabel("claude-opus-5-5-20260101")).toBe("opus 5.5");
     expect(modelLabel("claude-haiku-5-5")).toBe("haiku 5.5");
     expect(modelLabel("gpt-5.5-codex")).toBe("5.5 Codex");
-    expect(modelLabel("vendor/model-x")).toBe("model-x");
+    expect(modelLabel("vendor/model-x")).toBe("vendor/model-x");
+    expect(modelLabel("route-a/gemini-4-carbon")).toBe("route-a/gemini-4-carbon");
+    expect(modelLabel("acme/gpt-5-pro")).toBe("acme/gpt-5-pro");
     expect(currentModelRow(claudeList.models, "CLAUDE-HAIKU-5-5")?.id).toBe("haiku");
     expect(currentModelRow(claudeList.models, "nothing")).toBeUndefined();
+  });
+
+  it("keeps a gateway's echoed route on the pill while still matching the declared row in the panel", () => {
+    const carbonList: LauncherModels = { agent: "claude", models: [{ id: "gemini-4-carbon", name: "Gemini 4 Carbon" }] };
+    const routed = session({ model: "route-a/gemini-4-carbon" });
+    expect(pillView(routed, { loading: true }).model).toBe("route-a/gemini-4-carbon");
+    expect(pillView(routed, { list: carbonList }).model).toBe("route-a/gemini-4-carbon");
+    const { state } = sessionPanel(routed, launchers, lists({ gateway: { list: carbonList } }));
+    expect(state.current).toEqual({ provider: "gateway", model: "gemini-4-carbon", effort: "high" });
+    expect(pickPlan(routed, { provider: "gateway", model: "gemini-4-carbon", effort: "high" }, () => carbonList)).toEqual([]);
+    // A row that explicitly declares the full slash path still uses its own alias.
+    const explicitSlash: LauncherModels = { agent: "claude", models: [{ id: "vendor/model-x", name: "Vendor Model X", custom: true }] };
+    expect(pillView(session({ model: "vendor/model-x" }), { list: explicitSlash }).model).toBe("Vendor Model X");
   });
 
   it("prefers an exact row, then folds a gateway's routed echo or 1M spelling", () => {

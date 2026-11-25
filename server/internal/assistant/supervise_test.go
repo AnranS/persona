@@ -3,7 +3,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,20 +18,22 @@ import (
 var shortSuperviseTimings = superviseTimings{gather: 20 * time.Millisecond, every: 150 * time.Millisecond, urgent: 60 * time.Millisecond}
 
 // shortSupervise makes s's supervision messages come at once and often, for a test. The timings are s's own, not the
-// package's: a digest timer still running after the test ends reads only them, never another test's. The timer is
-// stopped when the test ends.
+// package's: a digest timer still running after the test ends reads only them, never another test's. Pending and
+// in-flight digest timers are stopped and drained when the test ends.
 func shortSupervise(t testing.TB, s *Service) {
 	t.Helper()
 	s.superviseTimes = shortSuperviseTimings
-	t.Cleanup(func() {
-		b := &s.supervise
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if b.timer != nil {
-			b.timer.Stop()
-			b.timer, b.timerAt = nil, time.Time{}
-		}
-	})
+	t.Cleanup(s.stopSuperviseTimers)
+}
+
+// stopSupervisionTimers lets a test drive watch and delivery explicitly. Once
+// stopped, neither scheduling path can arm another digest and any in-flight
+// timer callback finishes before this returns.
+func stopSupervisionTimers(s *Service) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.running.Store(&ctx)
+	s.stopSuperviseTimers()
 }
 
 // The first signal waits superviseGather; after a message, a signal waits superviseEvery (an urgent one
@@ -49,8 +53,8 @@ func TestDigestWait(t *testing.T) {
 		{"first", time.Time{}, []superviseSignal{review}, superviseGather, true},
 		{"gathered", time.Time{}, []superviseSignal{{Kind: sigReview, At: now.Add(-time.Minute)}}, 0, true},
 		{"review after a message", now.Add(-time.Minute), []superviseSignal{review}, superviseEvery - time.Minute, true},
-		{"urgent after a message", now.Add(-time.Minute), []superviseSignal{needs}, superviseUrgentEvery - time.Minute, true},
-		{"the soonest of them", now.Add(-time.Minute), []superviseSignal{review, needs}, superviseUrgentEvery - time.Minute, true},
+		{"decision after a message", now.Add(-time.Minute), []superviseSignal{needs}, superviseGather, true},
+		{"the soonest of them", now.Add(-time.Minute), []superviseSignal{review, needs}, superviseGather, true},
 		{"long after", now.Add(-time.Hour), []superviseSignal{review}, superviseGather, true},
 	} {
 		got, ok := digestWait(now, c.last, c.pending, (&Service{}).superviseTimings())
@@ -74,8 +78,8 @@ func TestSuperviseTimingsOnService(t *testing.T) {
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	short := &Service{superviseTimes: shortSuperviseTimings}
 	got, ok := digestWait(now, now, []superviseSignal{{Kind: sigNeedsYou, At: now}}, short.superviseTimings())
-	if !ok || got != shortSuperviseTimings.urgent {
-		t.Fatalf("digestWait with short timings = %v, %v; want %v, true", got, ok, shortSuperviseTimings.urgent)
+	if !ok || got != shortSuperviseTimings.gather {
+		t.Fatalf("digestWait with short timings = %v, %v; want %v, true", got, ok, shortSuperviseTimings.gather)
 	}
 }
 
@@ -200,7 +204,7 @@ func TestSupervisedTaskRound(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "两种走法：A 先灰度，B 直接全量。你选一个？", 0)
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	for _, want := range []string{"📋 督办", "Agent 停下了，但没做完（要用户决定：问用两种部署走法里的哪一种）", "验收标准：PR 合并到 master；浅色 / 深色截图贴进 PR",
+	for _, want := range []string{"📋 督办", "Agent 停下了，但没做完（要用户决定：问用两种部署走法里的哪一种；用户还没收到", "task_review needs_user", "验收标准用 todo_get 取原文",
 		"A 先灰度，B 直接全量", "signal=idle"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
@@ -363,12 +367,12 @@ func TestTaskHealth(t *testing.T) {
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now}}, "正常"},
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now.Add(-25 * time.Minute)}}, "卡住 25 分钟"},
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateNeedsYou, StateSince: now.Add(-5 * time.Minute)}}, "等回答 5 分钟"},
-		{Todo{Supervision: &Supervision{State: reviewPending}}, nil, "待验收"},
+		{Todo{Supervision: &Supervision{State: reviewPending}}, nil, "已交付·待看"},
 		{Todo{Supervision: &Supervision{State: reviewRework, Round: 2}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now}}, "返工第 2 轮"},
-		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你决定"},
+		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你处理"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}, DoneAt: &done}, nil, "已验收"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}}, nil, "正常"}, // reopened by the user
-		{Todo{Supervision: &Supervision{Waits: &OwnerWait{At: now}}}, nil, "停下等用户拍板，别直接验收"},
+		{Todo{Supervision: &Supervision{Waits: &OwnerWait{At: now}}}, nil, "Agent 停下说要用户拍板：先判断是不是用户的事，别直接验收"},
 	} {
 		if got, _ := taskHealth(c.todo, c.agents, now); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.todo.Supervision, got, c.want)
@@ -491,7 +495,7 @@ func TestGoldenSupervise(t *testing.T) {
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	golden(t, "assistant_snapshot.supervised", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC", Tasks: []prompts.SnapshotTask{
 		{ID: "todo_2", Title: "部署 hub", State: "停着", Health: "等你决定", DoneWhen: 1},
-		{ID: "todo_1", Title: "修登录崩溃", State: "做完了（用户还没看）", Health: "待验收", DoneWhen: 2},
+		{ID: "todo_1", Title: "修登录崩溃", State: "已交付·待看", Health: "已交付·待看", DoneWhen: 2},
 		{ID: "todo_3", Title: "跑 UI 测试", State: "在做", Health: "卡住 35 分钟"},
 		{ID: "todo_4", Title: "迁移数据库", State: "在做", Health: "正常", DoneWhen: 1,
 			Reported: &prompts.SnapshotReport{Kind: "progress", Step: 3, Steps: 5, Text: "在跑迁移脚本", Minutes: 4}},
@@ -500,4 +504,165 @@ func TestGoldenSupervise(t *testing.T) {
 		{ID: "todo_7", Title: "清理旧分支", State: "停着", Orphan: orphanClosed},
 		{ID: "todo_8", Title: "跑回归", State: "停着", Orphan: orphanOffline},
 	}}))
+}
+
+func TestStalledTimeExcludesParkedIntervals(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	firstPark := now.Add(-10 * time.Hour)
+	secondPark := now.Add(-5 * time.Hour)
+	_, _, err := s.updateSupervision(ctx, task.ID, func(v *Supervision) bool {
+		v.State, v.ExpectMinutes = reviewParked, 0
+		v.Reviews = []TaskReview{
+			{At: firstPark, Verdict: reviewParked, ParkEndedAt: secondPark.Add(-3 * time.Minute)},
+			{At: secondPark, Verdict: reviewParked},
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ = s.todoNow(task.ID)
+	s.supervisedWorking(ctx, task)
+	task, _ = s.todoNow(task.ID)
+	v := task.Supervision
+	resumed := v.Reviews[1].ParkEndedAt
+	if resumed.IsZero() || v.parking() != nil {
+		t.Fatalf("did not track the end of the park: %+v", v)
+	}
+	// A later ledger edit must not move the recorded resume time.
+	v.UpdatedAt = resumed.Add(time.Hour)
+	c := proto.Session{MachineID: "box", SessionID: "s1", State: proto.StateWorking, UpdatedAt: firstPark.Add(-2 * time.Minute)}
+	if got := watchSignals(task, []proto.Session{c}, resumed.Add(5*time.Minute)); len(got) != 0 {
+		t.Fatalf("stalled after ten active minutes: %+v", got)
+	}
+	if got := watchSignals(task, []proto.Session{c}, resumed.Add(17*time.Minute)); len(got) != 1 || got[0].Kind != sigStalled || got[0].Minutes != 22 {
+		t.Fatalf("want 22 active minutes, got %+v", got)
+	}
+}
+
+type blockingRelayStore struct {
+	*memStore
+	block   bool
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	onDone  func()
+}
+
+func (b *blockingRelayStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == relayKey {
+		b.mu.Lock()
+		block := b.block
+		b.mu.Unlock()
+		if block {
+			b.once.Do(func() { close(b.started) })
+			<-b.release
+			if b.onDone != nil {
+				b.onDone()
+			}
+			return false, errors.New("injected relay read failure")
+		}
+	}
+	return b.memStore.Setting(ctx, key, out)
+}
+
+func TestStopSuperviseTimersDrainsInFlightRetryAndPreventsRearm(t *testing.T) {
+	t.Run("in_flight_retry_finishes_and_cannot_rearm", func(t *testing.T) {
+		var finished bool
+		st := &blockingRelayStore{
+			memStore: &memStore{},
+			started:  make(chan struct{}),
+			release:  make(chan struct{}),
+			onDone:   func() { finished = true },
+		}
+		s := newServiceOn(t, newFakeHub(), st)
+		s.superviseTimes = shortSuperviseTimings
+		s.relays.mu.Lock()
+		s.relays.loaded = false
+		s.relays.mu.Unlock()
+		st.mu.Lock()
+		st.block = true
+		st.mu.Unlock()
+
+		b := &s.supervise
+		b.mu.Lock()
+		b.init()
+		s.retryDigestLocked(time.Nanosecond)
+		b.mu.Unlock()
+
+		select {
+		case <-st.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry digest timer did not start")
+		}
+
+		drained := make(chan struct{})
+		go func() {
+			defer close(drained)
+			s.stopSuperviseTimers()
+		}()
+		waitFor(t, "stopSuperviseTimers to mark stopped", func() bool {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			return b.stopped
+		})
+		select {
+		case <-drained:
+			t.Fatal("stopSuperviseTimers returned while retry digest callback was still in flight")
+		default:
+		}
+
+		close(st.release)
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stopSuperviseTimers did not finish after callback was released")
+		}
+		if !finished {
+			t.Fatal("callback did not complete before stopSuperviseTimers returned")
+		}
+		b.mu.Lock()
+		timer := b.timer
+		b.mu.Unlock()
+		if timer != nil {
+			t.Fatal("in-flight retry callback re-armed supervise timer after stop")
+		}
+	})
+
+	t.Run("late_timer_callback_noops_after_stop", func(t *testing.T) {
+		called := false
+		st := &blockingRelayStore{
+			memStore: &memStore{},
+			block:    true,
+			started:  make(chan struct{}),
+			release:  make(chan struct{}),
+			onDone:   func() { called = true },
+		}
+		close(st.release)
+		s := newServiceOn(t, newFakeHub(), st)
+		s.relays.mu.Lock()
+		s.relays.loaded = false
+		s.relays.mu.Unlock()
+		s.stopSuperviseTimers()
+		s.runDigestTimer()
+		if called {
+			t.Fatal("late digest timer callback ran after stopSuperviseTimers")
+		}
+	})
+
+	t.Run("stop_quiet_timers_blocks_late_callback_and_rearm", func(t *testing.T) {
+		s, f := newQuietService(t)
+		s.stopQuietTimers()
+		s.quietNotify(context.Background(), Todo{ID: "t1", Title: "甲", Origin: "conv1", Quiet: true}, "box", "done", "", "修好了", nil)
+		s.runQuietNoticeTimer("t1")
+		s.quiet.mu.Lock()
+		nTimers := len(s.quiet.timers)
+		s.quiet.mu.Unlock()
+		if nTimers != 0 || len(f.notices()) != 0 {
+			t.Fatalf("stopped quiet book armed %d timer(s) and sent %d notice(s)", nTimers, len(f.notices()))
+		}
+	})
 }

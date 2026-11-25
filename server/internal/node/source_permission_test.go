@@ -98,6 +98,18 @@ func TestSourcePermissionExternalTranscriptAndGeneration(t *testing.T) {
 		t.Fatalf("wrong profile: %+v", p)
 	}
 	c := n.liveClaudes()[0]
+	modeTranscript(t, home, home, "plan")
+	argv := processArgv
+	t.Cleanup(func() { processArgv = argv })
+	processArgv = func(int) ([]string, error) {
+		return []string{"claude", "--allow-dangerously-skip-permissions"}, nil
+	}
+	if peerSessionClass(n, c, sidA) != peerModeBypass {
+		t.Fatal("owner delivery no longer recognizes bypass-capable plan mode")
+	}
+	if get().Valid() {
+		t.Error("external plan mode supplied a source permission")
+	}
 	if sourceRegistryMatches(c, "linux:impossible") || sourceRegistryMatches(c, "") {
 		t.Error("reused/unknown generation accepted")
 	}
@@ -117,6 +129,9 @@ func TestSourcePermissionDeliveryIsSeparateFromOwnerAndRawParameters(t *testing.
 	inbox := newFakeInbox(t, modeTranscript(t, home, home, proto.ModeBypass))
 	inbox.setMode(peerModeBypass)
 	writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", inbox, nil)
+	if _, err := request(t, n, "node.info", map[string]any{"manager_features": []string{nodeproto.SourcePermissions}}); err != nil {
+		t.Fatal(err)
+	}
 	proof := proto.SourcePermission{At: time.Now(), Session: sidB, Generation: "process-1", Class: peerModeBypass, Digest: proto.SourceCallDigest("agent_send", json.RawMessage(`{}`))}
 	for i, method := range []string{"session.send", nodeproto.SourceSend} {
 		_, err := request(t, n, method, map[string]any{"session_id": sidA, "text": "synthetic report", "source_permission": proof, "from_mode": "bypass"})
@@ -138,6 +153,34 @@ func TestSourcePermissionDeliveryIsSeparateFromOwnerAndRawParameters(t *testing.
 	_, err := request(t, n, nodeproto.SourceSend, map[string]any{"session_id": sidA, "text": "different source class", "source_permission": proof})
 	if refusalCode(err) != peerHeld || !strings.Contains(envelopeHead(t, inbox, 2), `from-mode="prompting"`) {
 		t.Fatalf("class chosen to suit recipient: %v", err)
+	}
+}
+
+func TestSourcePermissionDeliveryRequiresInitialManagerNegotiation(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 100*time.Millisecond)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	inbox := newFakeInbox(t, modeTranscript(t, home, home, proto.ModeBypass))
+	inbox.setMode(peerModeBypass)
+	writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", inbox, nil)
+	reject := func() {
+		t.Helper()
+		proof := proto.SourcePermission{At: time.Now(), Session: sidB, Generation: "process-1", Class: peerModeBypass, Digest: proto.SourceCallDigest("agent_send", json.RawMessage(`{}`))}
+		_, err := request(t, n, nodeproto.SourceSend, map[string]any{"session_id": sidA, "text": "synthetic report", "source_permission": proof})
+		if refusalCode(err) != "source_permissions_not_negotiated" {
+			t.Fatalf("source delivery without negotiated support: %v", err)
+		}
+		if len(inbox.users()) != 0 {
+			t.Fatal("unnegotiated delivery reached the recipient")
+		}
+	}
+	reject()
+	for _, p := range []map[string]any{{}, {"manager_features": []string{nodeproto.SourcePermissions}}} {
+		if _, err := request(t, n, "node.info", p); err != nil {
+			t.Fatal(err)
+		}
+		reject()
 	}
 }
 
@@ -173,6 +216,72 @@ func TestSourcePermissionSocketRebuildsCallerClaims(t *testing.T) {
 	req["session_id"] = sidB
 	if got = ask(req); got["source_permission"] != nil {
 		t.Fatalf("claimed another session: %v", got)
+	}
+}
+
+func TestSourcePermissionA2ASendEndToEndMCPTransport(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("no verified socket peer PID")
+	}
+	if sourceGeneration(os.Getpid()) == "" {
+		t.Skip("peer process generation unavailable")
+	}
+	n, hub := runtimeNode(t)
+	p, _ := fakeAssistant(n, sidA, "default")
+	p.cmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	p.born = time.Now()
+	ask := mcpRelay(t, n, hub)
+	args := json.RawMessage(`{"machine_id":"box","cwd":"/code/app","permission_mode":"default","message_id":"m-e2e-1","text":"Check repo."}`)
+	req := map[string]any{
+		"kind":              "mcp.call",
+		"name":              "a2a_send",
+		"session_id":        sidA,
+		"args":              args,
+		"SOURCE_PERMISSION": map[string]any{"class": "bypass"},
+	}
+	// Managed Claude in "default" produces real live "prompting" attestation, ignoring caller-forged claims.
+	got := ask(req)
+	raw, _ := json.Marshal(got["source_permission"])
+	var proof proto.SourcePermission
+	if err := json.Unmarshal(raw, &proof); err != nil || proof.Class != peerModePrompting || !proof.Matches(sidA, "a2a_send", args) {
+		t.Fatalf("a2a_send default mode attestation = %v (err %v)", got, err)
+	}
+	// Switching the live process to bypassPermissions produces real live "bypass" attestation.
+	p.mu.Lock()
+	p.mode = proto.ModeBypass
+	p.mu.Unlock()
+	got = ask(req)
+	raw, _ = json.Marshal(got["source_permission"])
+	proof = proto.SourcePermission{}
+	if err := json.Unmarshal(raw, &proof); err != nil || proof.Class != peerModeBypass || !proof.Matches(sidA, "a2a_send", args) {
+		t.Fatalf("a2a_send bypass mode attestation = %v (err %v)", got, err)
+	}
+	// Plan mode produces no attestation (fail closed).
+	p.mu.Lock()
+	p.mode = "plan"
+	p.mu.Unlock()
+	if got = ask(req); got["source_permission"] != nil {
+		t.Fatalf("a2a_send in plan mode must omit source_permission: %v", got)
+	}
+	// Claiming another session on a2a_send is pinned to the verified local process session (sidA, never sidB).
+	p.mu.Lock()
+	p.mode = proto.ModeBypass
+	p.mu.Unlock()
+	req["session_id"] = sidB
+	got = ask(req)
+	raw, _ = json.Marshal(got["source_permission"])
+	proof = proto.SourcePermission{}
+	if got["session_id"] != sidA || json.Unmarshal(raw, &proof) != nil || proof.Session != sidA {
+		t.Fatalf("a2a_send claiming sidB must pin to verified peer session sidA (never sidB): %v", got)
+	}
+	if n.sourcePermissionIn([]int{os.Getpid()}, sidB, "a2a_send", args).Valid() {
+		t.Fatal("sourcePermissionIn attested a2a_send for another session")
+	}
+	// Exited process omits source_permission (fail closed).
+	close(p.exited)
+	req["session_id"] = sidA
+	if got = ask(req); got["source_permission"] != nil {
+		t.Fatalf("a2a_send from exited process must omit source_permission: %v", got)
 	}
 }
 

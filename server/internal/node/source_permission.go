@@ -28,7 +28,7 @@ func (n *Node) sourcePermission(c net.Conn, session, name string, args json.RawM
 
 func (n *Node) sourcePermissionIn(pids []int, session, name string, args json.RawMessage) proto.SourcePermission {
 	switch name {
-	case "agent_send", "report_to_supervisor", "task_review", "task_plan", "task_retry", "conversation_send":
+	case "agent_send", "a2a_send", "report_to_supervisor", "task_review", "task_plan", "task_retry", "conversation_send":
 	default:
 		return proto.SourcePermission{}
 	}
@@ -92,7 +92,7 @@ func (n *Node) sourcePermissionIn(pids []int, session, name string, args json.Ra
 		if !sourceRegistryMatches(c, mark) {
 			continue
 		}
-		evidence.Class = peerSessionClass(n, c, session)
+		evidence.Class = permissionClass(peerSessionModeAt(context.Background(), n, c, session))
 		evidence.Generation = fmt.Sprintf("%d/%s", c.pid, mark)
 		// Recheck after reading the transcript: never attest a reused process id.
 		if evidence.Valid() && sourceGeneration(c.pid) == mark {

@@ -81,6 +81,16 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityAssistantPages: the manager keeps the assistant's pages (Dashboards, #15017,
+	// docs/assistant/dashboards.md): the reserved extension -pages in GET /api/v1/extensions/-/ui and its pages, the
+	// dashboards switch in GET/PUT /api/v1/assistant and the assistant_pages event. Only the built-in manager names
+	// it, the switch on or off; the hub lists the assistant_pages feature only while the default manager names it, and
+	// the apps show the switch only then.
+	CapabilityAssistantPages = "assistant_pages"
+	// CapabilityTaskInput: the manager validates and saves structured scheduled prompts.
+	CapabilityTaskInput = "task_input"
+	// CapabilityAssistantSegments promises persistent logical routing and explicit switches.
+	CapabilityAssistantSegments = "assistant_segments"
 	// CapabilityDirectionSessions: the manager files sessions under a direction and reads one direction
 	// (PUT /api/v1/assistant/sessions/{mid}/{sid}/direction, GET /api/v1/assistant/directions/{id}, and the tree's
 	// additive sessions; #11391). The hub lists direction_sessions only while the default manager names it.
@@ -101,6 +111,13 @@ const (
 	// rows). The hub lists the todo_view feature only while every manager whose to-dos it merges names it; until then
 	// clients keep their own rules, and draw a row without `view` as before.
 	CapabilityTodoView = "todo_view"
+	// CapabilityTodoRevision: the manager answers GET /api/v1/todos/revision with a cheap validator for the full list's
+	// to-do writes and stable view classes (#13804). The hub lists todo_revision only while every manager whose to-dos it
+	// merges names it; older and mixed fleets keep reading the complete list after a push.
+	CapabilityTodoRevision = "todo_revision"
+	// TodoRevisionHeader carries the manager's or merged hub's lightweight to-do validator on GET /api/v1/todos and
+	// GET /api/v1/todos/revision. It is separate from the full body's ETag.
+	TodoRevisionHeader = "X-Persona-Todos-Revision"
 	// CapabilityTodoPlaces: the manager answers GET /api/v1/todos/places, the To-dos sidebar's places with the list's
 	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
 	// merges names it.
@@ -121,6 +138,11 @@ const (
 	CapabilityTodoImages = "todo_images"
 )
 
+// ManagerStatus is EventManagerStatus's params: live runtime status a connected manager reports to the hub's roster.
+type ManagerStatus struct {
+	PendingRestart bool `json:"pending_restart"`
+}
+
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
 // ?id=, only the manager the request is for may take it), which carries exactly Size bytes as a body stream
 // (bus.WriteBody) and then closes normally.
@@ -129,16 +151,17 @@ type BodyStream struct {
 	Size int64  `json:"size"`
 }
 
-// The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
-// version, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
+// The methods and events, by direction. The assistant's handshake is manager.hello {id, host, machine_uid?, os, arch,
+// deploy, version, pending_restart?, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
 const (
 	// The assistant calls the hub (Hub).
-	MethodHello    = "manager.hello"
-	MethodDevice   = "device.call"
-	MethodApp      = "app.call"
-	MethodNotify   = "notify.request"
-	MethodSnapshot = "manager.snapshot"
-	EventBroadcast = "ws.broadcast" // one way
+	MethodHello        = "manager.hello"
+	MethodDevice       = "device.call"
+	MethodApp          = "app.call"
+	MethodNotify       = "notify.request"
+	MethodSnapshot     = "manager.snapshot"
+	EventBroadcast     = "ws.broadcast"   // one way
+	EventManagerStatus = "manager.status" // one way: ManagerStatus (live roster status, e.g. pending_restart)
 
 	// The hub calls the assistant (Handler).
 	MethodHTTP = "http.request" // HTTPRequest → HTTPResponse
@@ -171,6 +194,10 @@ const (
 	EventConversationSent = "session.assistant_sent"
 )
 
+// DispatchGuardTools are the assistant tools an opt-in dispatch guard may hide and refuse for an explicitly named
+// conversation. List filtering and call admission use the same names, so a hidden tool is not left callable.
+var DispatchGuardTools = []string{"task_plan", "agent_start", "conversation_new", "conversation_send"}
+
 // Error codes that cross the bus where a Go error would lose its kind (rpc.Error.Code).
 const (
 	CodeNoDevice         = "no_device"         // ErrNoDevice
@@ -179,8 +206,10 @@ const (
 	CodeStaleSnapshot    = "stale_snapshot"    // ErrStaleSnapshot
 	CodeAssistantOffline = "assistant_offline" // the hub has no connection from the assistant
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
-	// failure the assistant tells apart (the agent messages, feishu_cot.go).
+	// failure the assistant tells apart (the agent messages, internal/modules/lark/cot.go).
 	CodeFeishuAPI = "feishu_api"
+	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
+	CodeFeishuSave = "feishu_save"
 	// CodeChatDenied: the hub refused to send into a chat or to reply to a message in one, because the bot may only use
 	// the owner's private chat and the group chats the owner opted in. Nothing was sent.
 	CodeChatDenied = "chat_denied"
@@ -191,8 +220,17 @@ const (
 	// conversation (Data: conversation_agent, launcher, launcher_agent, delivered "none"): the hub answers 409, nothing
 	// was sent, and the conversation keeps its agent (docs/assistant/assistant.md, #4662).
 	CodeLauncherOtherKind = "launcher_other_kind"
+	// CodeConversationBusy: an assistant conversation is at work (a turn, background tasks) and its task-follow-up role
+	// changed, so the message would need a new process with the new role while the old one still works. Nothing was
+	// sent. The hub keeps an owner's message with an id (MethodKeepUndelivered); the manager sends it again once the
+	// conversation is idle, resolving the role again, so it starts on the new role and the old one never gets it.
+	CodeConversationBusy = "busy"
+	// CodeTaskDirectoryMissing distinguishes a missing directory from permission and validation failures.
+	CodeTaskDirectoryMissing = "task_directory_missing"
 	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
 	CodeSupervisionRuntime = "assistant_supervision_runtime"
+	// CodeSupervisionAccount means the engine supports the channel but this account has not enabled it.
+	CodeSupervisionAccount = "assistant_supervision_account"
 	// CodeBodyIncomplete: MethodHTTPStreamed's body did not arrive whole (the relay was not there, broke or carried
 	// another size). Nothing ran: the hub sends the request again as MethodHTTP.
 	CodeBodyIncomplete = "body_incomplete"
@@ -238,6 +276,12 @@ type HTTPResponse struct {
 	Body           []byte                     `json:"body,omitempty"`
 }
 
+const (
+	StarredImportPath        = "/api/v1/assistant/starred/import"
+	StarredImportPreviewPath = StarredImportPath + "/preview"
+	StarredImportBodyMax     = 8 << 20
+)
+
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
@@ -263,11 +307,16 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"POST /api/v1/assistant/directions",
+	"POST /api/v1/assistant/directions/{id}/progress",
 	"GET /api/v1/assistant/dispatch-policy",
 	"PUT /api/v1/assistant/dispatch-policy",
+	"GET /api/v1/assistant/dispatch-guard",
+	"PUT /api/v1/assistant/dispatch-guard",
 	"GET /api/v1/assistant/worker-presets",
 	"GET /api/v1/assistant/start-defaults",
 	"PUT /api/v1/assistant/start-defaults",
+	"POST /api/v1/assistant/start-defaults/preview",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
@@ -289,9 +338,12 @@ var Routes = []string{
 	"GET /api/v1/assistant/tasks",
 	"GET /api/v1/assistant/tasks/cron",
 	"POST /api/v1/assistant/tasks",
+	"POST /api/v1/assistant/tasks/input-context",
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
+	"POST /api/v1/assistant/tasks/{id}/skip-next",
+	"DELETE /api/v1/assistant/tasks/{id}/skip-next",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
 	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
@@ -311,6 +363,12 @@ var Routes = []string{
 	"PUT /api/v1/assistant/saved-prompts/order",
 	"PUT /api/v1/assistant/saved-prompts/{id}",
 	"DELETE /api/v1/assistant/saved-prompts/{id}",
+	"GET /api/v1/assistant/starred",
+	"POST /api/v1/assistant/starred",
+	"DELETE /api/v1/assistant/starred/{id}",
+	"GET " + StarredImportPath,
+	"POST " + StarredImportPreviewPath,
+	"POST " + StarredImportPath,
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
@@ -331,6 +389,12 @@ var Routes = []string{
 	"GET /api/v1/todos/{id}",                // one to-do as the list has it, with its view
 	"GET /api/v1/todos/{id}/images/{image}", // one attached picture's exact bytes (todo_images.go, #11084)
 	"GET /api/v1/todos/{id}/repositories",
+	"GET /api/v1/todos/{id}/backend-workspace",
+	"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
+	"POST /api/v1/todos/{id}/backend-workspace/prepare",
+	"POST /api/v1/todos/{id}/backend-workspace/start",
+	"POST /api/v1/todos/{id}/backend-workspace/cancel",
+	"POST /api/v1/todos/{id}/backend-workspace/cleanup",
 	"GET /api/v1/todos/{id}/workspace-rules",
 	"PUT /api/v1/todos/{id}/workspace-rules",
 	"POST /api/v1/todos/{id}/workspace-naming/preview",
@@ -347,6 +411,9 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"POST /api/v1/decisions",
+	"GET /api/v1/decisions/{id}",
+	"POST /api/v1/decisions/{id}/withdraw",
 	"GET /api/v1/todos/{id}/timeline", // its conversation's rounds (todo_timeline.go, #10465)
 	"POST /api/v1/todos/{id}/decisions",
 	"PATCH /api/v1/todos/{id}/decisions/{did}",
@@ -411,8 +478,22 @@ var Routes = []string{
 	"GET /api/v1/kb/chats/{id}/context",
 	"GET /api/v1/kb/chats/{id}/days/{day}",
 	"GET /api/v1/kb-search",
+	// A project's lessons from accepted tasks (task_lessons_routes.go there, #12295): the owner's apps only.
+	"GET /api/v1/kb/projects/{id}/lessons",
+	"PUT /api/v1/kb/projects/{id}/lessons/{lesson}",
+	"DELETE /api/v1/kb/projects/{id}/lessons/{lesson}",
 	// The assistant's chat search (search_routes.go there, docs/protocol/protocol.md "Assistant chat search", #6282).
 	"GET /api/v1/assistant/search",
+	"GET /api/v1/assistant/history",
+	"PUT /api/v1/assistant/history",
+	"GET /api/v1/assistant/segments",
+	"PUT /api/v1/assistant/segments",
+	"GET /api/v1/assistant/conversations/{id}/segments",
+	"POST /api/v1/assistant/conversations/{id}/switch",
+	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
+	// A batch of those switches (conversations_switch.go there, docs/assistant/assistant.md, #14222).
+	"POST /api/v1/assistant/conversation-switches",
+	"GET /api/v1/assistant/conversation-switches/{batch}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",
@@ -440,7 +521,6 @@ var Routes = []string{
 	// Its photos (meeting_photos.go there, "Phase 3: photos").
 	"POST /api/v1/recordings/{id}/photos",
 	"GET /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos/{n}",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
 	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
 	// one of SocketRoutes.
@@ -451,4 +531,9 @@ var Routes = []string{
 // (extwire.MethodAccept) to the default manager, as it relays the extensions' routes, never as http.request; the
 // manager's extensions layer hands them to the assistant (extmgr.Options.AssistantSocket). The assistant serves exactly
 // these on its socket handler (assistant.Service.ServeSocket).
-var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio"}
+const (
+	A2ARPC  = "POST /api/v1/a2a/{mid}/{sid}/rpc"
+	A2ACard = "GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json"
+)
+
+var SocketRoutes = []string{"GET /api/v1/recordings/{id}/audio", A2ARPC, A2ACard}

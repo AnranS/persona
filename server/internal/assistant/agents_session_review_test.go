@@ -328,7 +328,7 @@ func TestSessionReviewSeedContainsOnlyUserAsksAndRealDiff(t *testing.T) {
 		"Fix the login crash without changing the session API.",
 		"Also add a regression test for landscape.",
 		"login/view.swift", "+if landscape { layout() }", "0a1b2c3",
-		"P0", "path:line", "修复建议", `<review-findings count="N" blocking="M"/>`,
+		"P0", "path:line", "fix suggestion", `<review-findings count="N" blocking="M"/>`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("reviewer seed lacks %q:\n%s", want, prompt)
@@ -546,16 +546,16 @@ func TestSessionReviewPersistenceFailureCleansReviewerAndSnapshot(t *testing.T) 
 		t.Run(stage, func(t *testing.T) {
 			fx := newSessionReviewFixture(t)
 			if stage == "worktree" {
-				fx.node.onSnapshot = func() { fx.ft.st.memStore.failPut = errors.New("snapshot state write failed") }
+				fx.node.onSnapshot = func() { fx.ft.st.setFailPut(errors.New("snapshot state write failed")) }
 			} else {
 				fx.ft.f.onStart = func(_ *fakeHub, _ map[string]any) {
-					fx.ft.st.memStore.failPut = errors.New("reviewer state write failed")
+					fx.ft.st.setFailPut(errors.New("reviewer state write failed"))
 				}
 			}
 			if w := fx.requestReview(t); w.Code != http.StatusServiceUnavailable {
 				t.Fatalf("persistence failure status = %d: %s", w.Code, w.Body)
 			}
-			fx.ft.st.memStore.failPut = nil
+			fx.ft.st.setFailPut(nil)
 			fx.ft.s.sessionReviewTick(context.Background(), time.Now())
 			_, removed := fx.node.cleaned(fx.ft.f)
 			if !slices.ContainsFunc(removed, func(call map[string]any) bool { return call["path"] == reviewCopy && call["force"] == true }) {
@@ -622,13 +622,16 @@ func TestSessionReviewResumeStartsWithoutPromptThenSendsOnce(t *testing.T) {
 }
 
 func TestSessionReviewReadFailureKeepsPendingCard(t *testing.T) {
-	fx := newSessionReviewFixture(t)
+	store := &settingFailing{fleetMem: newFleetMem()}
+	fx := newSessionReviewFixtureOn(t, store)
+	fx.ft.s.fleet.started.Do(func() {})
 	_, reviewer := fx.start(t)
 	finished := fx.finish(t, reviewer, sessionReviewRawReport, sessionReviewDisplayReport)
+	store.setFail(sessionReviewSetting)
+	fx.ft.s.sessionReviews.mu.Lock()
 	fx.ft.s.sessionReviews.loaded = false
-	fx.ft.s.store = func() Store {
-		return &settingFailing{fleetMem: fx.ft.st, fail: map[string]bool{sessionReviewSetting: true}}
-	}
+	fx.ft.s.sessionReviews.mu.Unlock()
+	fx.ft.s.FleetUp(t.Context())
 	still := sessionReviewOneCard(t, fx.ft.s)
 	if still.ID != finished.ID || still.ReviewReport != sessionReviewDisplayReport {
 		t.Fatalf("a store read failure withdrew the pending card: %+v", still)

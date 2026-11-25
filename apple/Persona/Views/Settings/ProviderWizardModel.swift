@@ -39,7 +39,7 @@ enum LauncherName {
             let app = AppModel.shared
             let scope = AssistantSettingsRequestScope(app)
             return .init(api: { scope.api(app) }, features: { app.hubFeatures },
-                         readiness: { app.readiness.current }, landReadiness: { app.readiness.land($0) },
+                         readiness: { app.readiness.current }, landReadiness: { app.readiness.land($0, modelPick: app.assistantMain.flatMap { app.session($0) }?.modelPick) },
                          machines: { scope.machines(app) })
         }
     }
@@ -268,6 +268,21 @@ enum LauncherName {
         maxContext = Self.number(p.maxContext)
         headers = p.headers ?? ""
         env = p.env ?? ""
+    }
+
+    /// Only the user's chosen part of a paste is applied to an existing provider's edit form.
+    func applyPaste(_ draft: ProviderImportDraft, action: ProviderPasteAction) {
+        switch action {
+        case .add:
+            applyImport(draft.provider)
+            if defaultModel.isEmpty { defaultModel = models.first?.id ?? "" }
+        case .merge:
+            var ids = Set(models.map(\.id))
+            models += draft.modelsToAdd.filter { ids.insert($0.id).inserted }
+        case .replaceKey:
+            apiKeyByReference = false
+            apiKey = draft.provider.apiKey ?? ""
+        }
     }
 
     /// A new provider's startup id from an import draft (#5428): the draft's own id when it has one, else one made

@@ -41,6 +41,9 @@ func resumeFile(f *fakeHerdr, cwd string) func() codexStartFile {
 	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+	// A resumed terminal has a composer. Tests for an update, trust dialog, or
+	// startup failure can still replace this screen on their own fake host.
+	f.setScreen("w1:p2", cxReady)
 	var mu sync.Mutex
 	var file codexStartFile
 	f.after(func(c herdrCall) {
@@ -169,9 +172,9 @@ func TestCodexResumeChecksHoldersAgain(t *testing.T) {
 func TestCodexUnconfirmedResumeIsNotStartedAgain(t *testing.T) {
 	n, f, cwd := codexHistoryNode(t)
 	listSessions(t, n)
-	old := codexStartWait
-	codexStartWait = 300 * time.Millisecond
-	t.Cleanup(func() { codexStartWait = old; codexResumes.Delete(startThread) })
+	old := codexResumeWait
+	codexResumeWait = 300 * time.Millisecond
+	t.Cleanup(func() { codexResumeWait = old; codexResumes.Delete(startThread) })
 	f.reset()
 	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))

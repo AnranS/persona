@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   customModel, defaultDetail, defaultLabel, effortChoices, effortRule, fitEffort, followedBinding, forgetCustomModel, launcherAgent, launcherModels, listedModel, listedModes, modelDetail,
-  modelName, modelRows, pickerLauncher, machineLaunchers, providerModels, startPicks, takesEffort, takesTypedModel, tierLeftOut, typedModelOffered, withoutCustom,
+  modelName, modelRows, nativeOmpStart, pickerLauncher, machineLaunchers, providerModels, startPicks, takesEffort, takesTypedModel, tierLeftOut, typedModelOffered, withoutCustom,
   type AgentModel, type LauncherModels,
 } from "./launcher-models";
 
@@ -179,21 +179,41 @@ describe("思考强度", () => {
 
   // A launcher that lists its own permission modes (#8261, Paseo's other providers) takes the efforts its model lists and
   // nothing else: no list, or a model it doesn't list, offers none rather than Claude Code's five.
-  it("a launcher that lists its permission modes takes only the efforts its model lists", () => {
+  it("a launcher that lists its permission modes or runs Codex takes only the efforts its model lists", () => {
     const grok = { name: "grok", agent: "paseo", source: "paseo", permission_modes: ["default", "bypassPermissions"] };
     const list: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true, efforts: ["low", "high"] }, { id: "grok-mini", name: "Grok mini" }] };
+    const codexRich: LauncherModels = { agent: "codex", models: [
+      { id: "gpt-5.5", name: "GPT-5.5", default: true, efforts: ["minimal", "low", "medium", "high", "xhigh"], default_effort: "medium" },
+      { id: "gpt-5.5-plain", name: "GPT-5.5 Plain" },
+      { id: "gpt-5.5-none", name: "GPT-5.5 None", efforts: ["none", "low", "high"] },
+      { id: "gpt-5.5-ultra", name: "GPT-5.5 Ultra", efforts: ["high", "ultra"] },
+    ] };
     expect([effortRule("claude"), effortRule("agy"), effortRule("paseo", grok), effortRule("codex", grok), effortRule("paseo"), effortRule("codex")])
-      .toEqual(["any", "any", "listed", "listed", "none", "none"]);
+      .toEqual(["any", "any", "listed", "listed", "none", "listed"]);
     expect([listedModes(grok), listedModes({ permission_modes: [] }), listedModes(undefined)]).toEqual([["default", "bypassPermissions"], undefined, undefined]);
-    expect([takesEffort("paseo", grok), takesEffort("paseo"), takesEffort("claude")]).toEqual([true, false, true]);
+    expect([takesEffort("paseo", grok), takesEffort("paseo"), takesEffort("claude"), takesEffort("codex")]).toEqual([true, false, true, true]);
     expect(effortChoices(list, "", {}, "listed")).toEqual(["low", "high"]);
     expect(effortChoices(list, "grok-mini", {}, "listed")).toEqual([]);
     expect(effortChoices(list, "typed-id", {}, "listed")).toEqual([]);
     expect(effortChoices(null, "", {}, "listed")).toEqual([]);
     expect(effortChoices(list, "", {}, "none")).toEqual([]);
+    expect(effortChoices(codexRich, "", {}, "listed")).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    expect(effortChoices(codexRich, "gpt-5.5-plain", {}, "listed")).toEqual([]);
+    expect(effortChoices(codexRich, "gpt-5.5-none", {}, "listed")).toEqual(["low", "high"]);
+    expect(effortChoices(codexRich, "gpt-5.5-ultra", {}, "listed")).toEqual(["high", "ultra"]);
+    expect(effortChoices(codexRich, "unlisted-codex", {}, "listed")).toEqual([]);
+    expect(effortChoices(undefined, "gpt-5.5", {}, "listed")).toEqual([]);
     expect(startPicks({ agent: "paseo", list, model: "", effort: "high", launcher: grok })).toEqual({ effort: "high" });
     expect(startPicks({ agent: "paseo", list, model: "", effort: "max", launcher: grok })).toEqual({});
     expect(startPicks({ agent: "paseo", list, model: "", effort: "high" }), "an older computer's launcher: no effort, as before").toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "", effort: "" })).toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5", effort: "" })).toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5", effort: "minimal" })).toEqual({ effort: "minimal" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5", effort: "ultra" })).toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5-none", effort: "none" })).toEqual({ model: "gpt-5.5-none" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5-ultra", effort: "ultra" })).toEqual({ model: "gpt-5.5-ultra", effort: "ultra" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5-plain", effort: "high" })).toEqual({ model: "gpt-5.5-plain" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "unlisted-codex", effort: "high" })).toEqual({ model: "unlisted-codex" });
   });
 });
 
@@ -206,11 +226,13 @@ describe("启动时发什么", () => {
     expect(startPicks({ agent: "claude", list: null, model: "opus", effort: "" })).toEqual({});
   });
 
-  it("sends an effort only to Claude Code and only one the model takes", () => {
+  it("sends an effort only when the launcher takes one and the model reports it", () => {
     expect(startPicks({ agent: "claude", list: claude, model: "gateway/glm-5.3", effort: "high" })).toEqual({ model: "gateway/glm-5.3", effort: "high" });
     expect(startPicks({ agent: "claude", list: claude, model: "haiku", effort: "high" })).toEqual({ model: "haiku" });
     expect(startPicks({ agent: "claude", list: null, model: "", effort: "max" })).toEqual({ effort: "max" });
-    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "high" })).toEqual({ model: "gpt-5.5-codex" });
+    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "high" })).toEqual({ model: "gpt-5.5-codex", effort: "high" });
+    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "max" })).toEqual({ model: "gpt-5.5-codex" });
+    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "" })).toEqual({ model: "gpt-5.5-codex" });
   });
 });
 
@@ -275,6 +297,24 @@ describe("手动输入的模型 ID（#1644）", () => {
     expect(startPicks({ agent: "claude", list: null, model: "acme/coder-9", effort: "" })).toEqual({});
     expect(startPicks({ agent: "traex", list: undefined, model: "acme/coder-9", effort: "" })).toEqual({});
     expect(startPicks({ agent: "claude", list: typed, model: "vendor/model-x", effort: "" })).toEqual({ model: "vendor/model-x" });
+  });
+
+  it("offers a typed omp model only for a new, unlocked start", () => {
+    const list = { agent: "omp", models: [], supports_start_model: true };
+    const pick = { agent: "omp", model: "openai/gpt-5.2", effort: "high", nativeOmp: nativeOmpStart("omp", { name: "omp" }, "herdr") };
+    expect(typedModelOffered("omp", list)).toBe(false);
+    expect(startPicks({ ...pick, list })).toEqual({ model: pick.model });
+    expect(startPicks({ ...pick, list, model: "opus" })).toEqual({ model: "opus" });
+    expect(nativeOmpStart("omp", { name: "alias" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "omp", source: "paseo" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "omp" }, "herdr-core")).toBe(false);
+    expect(nativeOmpStart("codex", { name: "omp" }, "herdr")).toBe(false);
+    expect(startPicks({ ...pick, list: { ...list, locked: "Launcher fixes its model" } })).toEqual({});
+    expect(startPicks({ ...pick, list: null })).toEqual({});
+    expect(startPicks({ ...pick, list: undefined })).toEqual({});
+    expect(startPicks({ ...pick, list: { agent: "omp", models: [{ id: pick.model, name: "Listed" }] } })).toEqual({});
+    expect(startPicks({ ...pick, list: { ...list, supports_start_model: false } })).toEqual({});
+    expect(startPicks({ ...pick, list, model: "two words" })).toEqual({});
   });
 
   it("a typed ID's efforts aren't known: all of them", () => {

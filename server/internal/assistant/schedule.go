@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -52,14 +53,17 @@ type Task struct {
 	FreshEachRun bool           `json:"fresh_each_run,omitempty"`
 	StateNote    *TaskStateNote `json:"state_note,omitempty"`
 	stateRunKey  string
+	// promptRunID is set only on the dispatched snapshot of a reference-only prompt.
+	promptRunID string
 	// runGrantBasis belongs only to the model/task snapshot consumed by this run, never the stored task.
 	runGrantBasis string
 
-	WorkoutID string `json:"workout_id,omitempty"`
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Prompt    string `json:"prompt"`
-	Repeat    string `json:"repeat"` // once / daily / interval / cron
+	WorkoutID        string `json:"workout_id,omitempty"`
+	ID               string `json:"id"`
+	Title            string `json:"title"`
+	Prompt           string `json:"prompt"`
+	PromptSelections bool   `json:"prompt_selections,omitempty"` // owner-approved envelope, never copied from a client Task
+	Repeat           string `json:"repeat"`                      // once / daily / interval / cron
 	// At is the task's next run.
 	At           time.Time `json:"at,omitempty"`
 	Time         string    `json:"time,omitempty"`     // daily: "HH:MM" in the user's time zone
@@ -116,7 +120,7 @@ type Task struct {
 	ModelRevision  int64  `json:"model_revision,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
-	// Space is the space of the conversation that set it up ("health", docs/assistant/health.md): a run that starts a conversation
+	// Space is the space of the conversation that set it up (e.g. "health", docs/assistant/health.md): a run that starts a conversation
 	// starts it there. "" is the assistant's own.
 	Space string `json:"space,omitempty"`
 	// StartGrant: the owner let this schedule's own rounds start some kinds of task without the plan card (#8045,
@@ -139,6 +143,11 @@ type Task struct {
 	// it was kept). Stored, never sent: tasksView sends it as last_run (#10182).
 	StatusRun time.Time `json:"status_run,omitzero"`
 	NextRun   time.Time `json:"next_run,omitempty"`
+	// SkipNextAt is an owner's pending skip of this exact occurrence. Calendar rules also save its zone.
+	SkipNextAt    time.Time `json:"skip_next_at,omitzero"`
+	SkipNextZone  string    `json:"skip_next_zone,omitempty"`
+	SkipNextToken string    `json:"skip_next_token,omitempty"`
+	CanSkipNext   bool      `json:"can_skip_next,omitempty"` // the task view only
 	// A cron task's expression in words in the reader's language and its next runs; set on the view (tasksView), never stored.
 	CronText string      `json:"cron_text,omitempty"`
 	NextRuns []time.Time `json:"next_runs,omitempty"`
@@ -165,6 +174,7 @@ func disabledTransition(old Task, t *Task, now time.Time) {
 // earlier today for one the hub missed while it was down, and recorded "Persona was down and missed the time" (#3816).
 func rearm(old Task, t *Task, now time.Time) {
 	disabledTransition(old, t, now)
+	t.keepSkipFrom(old)
 	if !t.calendar() || !t.Enabled {
 		return
 	}
@@ -206,7 +216,7 @@ func (t Task) kind() string {
 // label is how the task is called in what the assistant reads, titles and the snapshot (Chinese, as the prompts).
 func (t Task) label() string { return t.labelIn(i18n.Default) }
 
-// labelIn is label for people in l (a push): only an untitled follow-up's name is the hub's own text.
+// labelIn uses the person's language for fallback names.
 func (t Task) labelIn(l i18n.Lang) string {
 	if t.Title != "" {
 		return t.Title
@@ -214,7 +224,12 @@ func (t Task) labelIn(l i18n.Lang) string {
 	if t.Repeat == repeatOnce {
 		return i18n.T(l, "assistant-schedule.followup")
 	}
-	return clip(oneLine(t.Prompt), 30)
+	prefix, body := t.promptParts()
+	label := clip(oneLine(body), 30)
+	if label == "" && prefix != "" {
+		return i18n.T(l, "assistant-schedule.task_label")
+	}
+	return label
 }
 
 // done: a once task that already ran.
@@ -292,23 +307,25 @@ type Followup struct {
 
 // ScheduleRun is one entry of the history: a task that ran, failed to start, or was skipped.
 type ScheduleRun struct {
-	TodoProgress       *ScheduleTodoAssessment `json:"todo_progress,omitempty"`
-	Conversation       string                  `json:"conversation,omitempty"` // source / resumed / new
-	ConversationReason string                  `json:"conversation_reason,omitempty"`
-	Execution          *TaskExecution          `json:"execution,omitempty"`
-	ID                 string                  `json:"id"`
-	Kind               string                  `json:"kind"`   // routine / followup (Task.kind)
-	RefID              string                  `json:"ref_id"` // the task's id
-	Title              string                  `json:"title"`
-	Due                time.Time               `json:"due"` // when it was meant to run (the tap for "Run now")
-	At                 time.Time               `json:"at"`  // when it ran
-	Status             string                  `json:"status"`
-	Error              string                  `json:"error,omitempty"`
-	RunIfError         string                  `json:"run_if_error,omitempty"`
-	ConditionSkipped   bool                    `json:"condition_skipped,omitempty"`
-	Manual             bool                    `json:"manual,omitempty"` // "Run now"
-	MachineID          string                  `json:"machine_id,omitempty"`
-	SessionID          string                  `json:"session_id,omitempty"`
+	TodoProgress          *ScheduleTodoAssessment `json:"todo_progress,omitempty"`
+	Conversation          string                  `json:"conversation,omitempty"` // source / resumed / new
+	ConversationReason    string                  `json:"conversation_reason,omitempty"`
+	Execution             *TaskExecution          `json:"execution,omitempty"`
+	CompatibilityFallback string                  `json:"compatibility_fallback,omitempty"`
+	ID                    string                  `json:"id"`
+	Kind                  string                  `json:"kind"`   // routine / followup (Task.kind)
+	RefID                 string                  `json:"ref_id"` // the task's id
+	Title                 string                  `json:"title"`
+	Due                   time.Time               `json:"due"` // when it was meant to run (the tap for "Run now")
+	At                    time.Time               `json:"at"`  // when it ran
+	Status                string                  `json:"status"`
+	Error                 string                  `json:"error,omitempty"`
+	RunIfError            string                  `json:"run_if_error,omitempty"`
+	ConditionSkipped      bool                    `json:"condition_skipped,omitempty"`
+	OwnerSkipped          bool                    `json:"owner_skipped,omitempty"`
+	Manual                bool                    `json:"manual,omitempty"` // "Run now"
+	MachineID             string                  `json:"machine_id,omitempty"`
+	SessionID             string                  `json:"session_id,omitempty"`
 	// Retried: this run is the automatic retry after a failure (so a retry that fails again does not retry forever).
 	Retried bool `json:"retried,omitempty"`
 	// DeliveryUnknown: the send may have reached the agent without a conversation receipt; it also cancels older retries.
@@ -390,7 +407,7 @@ type taskDeletion struct {
 func (sc *schedule) missedRuns(since time.Time) []ScheduleRun {
 	var missed []ScheduleRun
 	for i, r := range sc.runs {
-		if r.At.Before(since) || (r.Status != runFailed && r.Status != runSkipped) || r.Manual || r.ConditionSkipped {
+		if r.At.Before(since) || (r.Status != runFailed && r.Status != runSkipped) || r.Manual || r.ConditionSkipped || r.OwnerSkipped {
 			continue
 		}
 		recovered := false
@@ -563,6 +580,12 @@ func (s *Service) scheduleReadable(ctx context.Context) error {
 // reversible change use a separate slice so a failed write leaves the live list untouched. Runtime outcomes
 // already observed use sc.tasks itself: a storage outage cannot undo work or hide its result.
 func (s *Service) saveLocked(sc *schedule, tasks []Task) error {
+	return s.saveScheduleLocked(sc, tasks, nil)
+}
+
+// A consumed owner skip has both a new task cursor and a history entry. Publish the two only
+// after they were saved together, so a restart cannot execute the skipped occurrence or lose its receipt.
+func (s *Service) saveScheduleLocked(sc *schedule, tasks []Task, ownerSkips []ScheduleRun) error {
 	if !sc.loaded {
 		return errScheduleUnavailable
 	}
@@ -572,7 +595,21 @@ func (s *Service) saveLocked(sc *schedule, tasks []Task) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	dropEditedTaskGrants(sc.tasks, tasks)
-	if st := s.store(); st != nil {
+	if len(ownerSkips) > 0 {
+		runs := append(slices.Clone(sc.runs), ownerSkips...)
+		if len(runs) > maxRuns {
+			runs = slices.Clone(runs[len(runs)-maxRuns:])
+		}
+		st, ok := s.store().(scheduleSkipStore)
+		if !ok {
+			return errScheduleSave
+		}
+		if err := st.PutSettings(ctx, map[string]any{tasksKey: tasks, runsKey: runs}); err != nil {
+			s.logf("save tasks and owner skips: %v", err)
+			return errScheduleSave
+		}
+		sc.runs = runs
+	} else if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, tasksKey, tasks); err != nil {
 			s.logf("save tasks: %v", err)
 			return errScheduleSave
@@ -699,12 +736,19 @@ var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^
 
 func stripScheduleHeader(p string) string {
 	p = strings.TrimSpace(p)
+	prefix, body := taskPromptBody(p)
+	if !scheduleHeader.MatchString(body) {
+		return p
+	}
 	for {
-		loc := scheduleHeader.FindStringIndex(p)
+		loc := scheduleHeader.FindStringIndex(body)
 		if loc == nil {
-			return p
+			if prefix != "" {
+				return strings.TrimSpace(prefix + "\n\n" + body)
+			}
+			return body
 		}
-		p = strings.TrimSpace(p[loc[1]:])
+		body = strings.TrimSpace(body[loc[1]:])
 	}
 }
 
@@ -878,7 +922,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		return "", err
 	}
 	if err := s.setTaskModel(ctx, t.ID, a.Launcher, a.Model, a.Effort); err != nil {
-		_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
+		if !errors.Is(err, errTaskSelectionsOwner) {
+			_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
+		}
 		return "", err
 	}
 	s.broadcastSchedule()
@@ -962,7 +1008,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	if title = strings.TrimSpace(title); title != "" {
 		t.Title = title
 	}
-	t.Prompt = prompt
+	t.setLiteralPrompt(prompt)
 	if push != nil { // left out: it keeps its push
 		t.Push = *push
 	}
@@ -1026,6 +1072,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		sc.mu.Unlock()
 		return "", t.ID, true, err
 	}
+	t.keepSkipFrom(previous)
 	out += stopsAt(*t, loc)
 	err = s.saveLocked(sc, tasks)
 	sc.mu.Unlock()
@@ -1052,7 +1099,8 @@ func copiesRun(r ScheduleRun, title, rawPrompt string) bool {
 	if strings.TrimSpace(title) != "" {
 		return sameText(title, r.Title)
 	}
-	first, _, _ := strings.Cut(strings.TrimSpace(rawPrompt), "\n")
+	_, body := taskPromptBody(strings.TrimSpace(rawPrompt))
+	first, _, _ := strings.Cut(body, "\n")
 	return scheduleHeader.MatchString(first) && strings.HasPrefix(first, "⏰ "+r.Title+"（")
 }
 
@@ -1130,7 +1178,7 @@ func (sc *schedule) noteDeletionLocked(id, sessionID string, now time.Time) {
 	sc.deletedBy[id] = taskDeletion{session: sessionID, at: now}
 }
 
-// describeSchedule lists the tasks of space ("" the assistant's own, "health"): a conversation sees and changes only
+// describeSchedule lists the tasks of space ("" the assistant's own, or a registered space): a conversation sees and changes only
 // its own space's (docs/assistant/health.md).
 func (s *Service) describeSchedule(ctx context.Context, space string) string {
 	loc := s.location(ctx)
@@ -1242,18 +1290,34 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		return "", err
 	}
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
-	if a.ID != "" && needsOwn {
-		// Check before the save: a bad launcher must not leave the rest of the change applied.
+	changesRun := needsOwn || a.Time != "" || a.Weekdays != nil || a.Cron != "" || a.Until != nil ||
+		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil
+	title := strings.TrimSpace(a.Title)
+	requiresOwner := func(t Task) bool {
+		enables := a.Enabled != nil && *a.Enabled && !t.Enabled
+		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
+		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
+	}
+	unchangedRunIf := false
+	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
+		// Refuse before model validation or pre-run command approval. Recheck
+		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
-			if prev.SessionID != "" {
-				return "", errTaskModelNeedsOwnConversation
+			unchangedRunIf = runIf != nil && sameRoutineCheck(prev.RunIf, runIf)
+			if requiresOwner(prev) {
+				return "", errTaskSelectionsOwner
 			}
-			if err := s.validateTaskModel(ctx, a.ID, a.Launcher, a.Model, a.Effort); err != nil {
-				return "", err
+			if needsOwn {
+				if prev.SessionID != "" {
+					return "", errTaskModelNeedsOwnConversation
+				}
+				if err := s.validateTaskModel(ctx, a.ID, a.Launcher, a.Model, a.Effort); err != nil {
+					return "", err
+				}
 			}
 		}
 	}
-	if runIf != nil {
+	if runIf != nil && !unchangedRunIf {
 		approved, err := s.approveRoutineCheck(ctx, machine, self, runIf)
 		if err != nil {
 			return "", err
@@ -1275,15 +1339,23 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			return "", fmt.Errorf("no task %q (list_followups lists them)", a.ID)
 		}
 		t = sc.tasks[i]
+		if requiresOwner(t) {
+			sc.mu.Unlock()
+			return "", errTaskSelectionsOwner
+		}
+		if unchangedRunIf && !sameRoutineCheck(t.RunIf, runIf) {
+			sc.mu.Unlock()
+			return "", errors.New("run_if changed while the routine was being updated; retry the update")
+		}
 		old = t
 	} else {
 		t = Task{ID: "rt_" + randomHex(4), Repeat: repeatDaily, Enabled: true, Space: space, CreatedBy: "assistant", CreatedAt: time.Now().UTC()}
 	}
 	if a.Title != "" {
-		t.Title = strings.TrimSpace(a.Title)
+		t.Title = title
 	}
 	if a.Prompt != "" {
-		t.Prompt = stripScheduleHeader(a.Prompt)
+		t.setLiteralPrompt(stripScheduleHeader(a.Prompt))
 	}
 	if a.Time != "" || a.Weekdays != nil {
 		t.Repeat = repeatDaily
@@ -1315,22 +1387,28 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	if a.FreshEachRun != nil {
 		t.FreshEachRun = *a.FreshEachRun
 	}
-	if err := bindScheduleTodo(&t, a.TodoID); err != nil {
-		sc.mu.Unlock()
-		return "", err
+	if t.PromptSelections {
+		// Only a pause may have changed. Preserve the saved run settings,
+		// including an elapsed end time.
+		disabledTransition(old, &t, now)
+	} else {
+		if err := bindScheduleTodo(&t, a.TodoID); err != nil {
+			sc.mu.Unlock()
+			return "", err
+		}
+		applyUntil(&t, end, hasUntil, clearUntil)
+		dropStaleUntil(&t, hasUntil, now)
+		isolateScheduledConversation(&t, mayBeMain)
+		if err := s.checkTaskSourceRestore(ctx, old, t); err != nil {
+			sc.mu.Unlock()
+			return "", err
+		}
+		if err := checkTask(&t, now); err != nil {
+			sc.mu.Unlock()
+			return "", err
+		}
+		rearm(old, &t, now)
 	}
-	applyUntil(&t, end, hasUntil, clearUntil)
-	dropStaleUntil(&t, hasUntil, now)
-	isolateScheduledConversation(&t, mayBeMain)
-	if err := s.checkTaskSourceRestore(ctx, old, t); err != nil {
-		sc.mu.Unlock()
-		return "", err
-	}
-	if err := checkTask(&t, now); err != nil {
-		sc.mu.Unlock()
-		return "", err
-	}
-	rearm(old, &t, now)
 	tasks := slices.Clone(sc.tasks)
 	if i < 0 {
 		tasks = append(tasks, t)
@@ -1343,7 +1421,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		return "", err
 	}
 	if err := s.setTaskModel(ctx, t.ID, a.Launcher, a.Model, a.Effort); err != nil {
-		if i < 0 {
+		if i < 0 && !errors.Is(err, errTaskSelectionsOwner) {
 			_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
 		}
 		return "", err
@@ -1496,7 +1574,11 @@ func weekdayText(ds []int) string {
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
+	s.runModuleJobs(ctx)
+	go s.a2aLoop(ctx)
+	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
+	go s.healthReminders(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
 		s.logf("recover interrupted task starts: %v", err)
@@ -1504,29 +1586,36 @@ func (s *Service) Run(ctx context.Context) {
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
 	s.recoverApprovalJournals(recoverCtx)
 	cancel()
-	go s.delayedWaitsRecoveryLoop(ctx) // usage-limit retries and task receipt rechecks left by the previous manager
-	go s.taskCloseLoop(ctx)            // the agents of finished tasks (tasks_close.go)
-	go s.superviseLoop(ctx)            // the tasks the main conversation follows up (supervise_signals.go)
-	go s.workLoop(ctx)                 // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
-	go s.replyLoop(ctx)                // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)                // the Lark bot's cards left unanswered (feishu_nudge.go)
-	go s.sourceReportLoop(ctx)         // the reports back to where a todo was asked (todo_source.go)
-	go s.remindLoop(ctx)               // the todos' reminders (todo_plan.go)
-	go s.urgentLoop(ctx)               // urgent calls' retries and reminders (urgent_call_loop.go)
-	go s.channelLoop(ctx)              // the channels' runs that lost their watcher (channels.go)
-	go s.kbLoop(ctx)                   // the knowledge base (kb.go)
-	go s.kbHistoryLoop(ctx)            // importing chats' older history into it, off by default (kbhistory/history.go)
-	go s.memoryDreamLoop(ctx)          // consolidating assistant memory, off by default
-	go s.memoryMergeLoop(ctx)          // telling the user what the node merged into the one memory (memory_merge.go)
-	go s.viewActionLoop(ctx)           // durable card reply outbox
-	go s.acceptLoop(ctx)               // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
-	go s.admissionQueueLoop(ctx)       // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
+	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager
+	go s.failedStartBatchRecoveryLoop(ctx) // deferred leader failures, including when every failed to-do is closed
+	go s.taskCloseLoop(ctx)                // the agents of finished tasks (tasks_close.go)
+	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
+	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
+	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
+	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (the lark module's nudge.go)
+	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
+	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
+	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
+	go s.attentionLoop(ctx)                // the attention mode's end (attention.go)
+	go s.channelLoop(ctx)                  // the channels' runs that lost their watcher (channels.go)
+	go s.kbLoop(ctx)                       // the knowledge base (kb.go)
+	go s.kbHistoryLoop(ctx)                // importing chats' older history into it, off by default (kbhistory/history.go)
+	go s.memoryDreamLoop(ctx)              // consolidating assistant memory, off by default
+	go s.memoryMergeLoop(ctx)              // telling the user what the node merged into the one memory (memory_merge.go)
+	go s.viewActionLoop(ctx)               // durable card reply outbox
+	go s.pagesLoop(ctx)                    // the taps on pages and the pages' upkeep (pages_actions.go)
+	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
+	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
-	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
-	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
-	go s.searchLoop(ctx)       // the chat search index (search_index.go)
-	go s.undeliveredLoop(ctx)  // the owner's messages that could not go in (undelivered.go)
+	go s.healthLoop(ctx)         // each machine's launchers (launcher_health.go)
+	go s.repoMirrorSyncLoop(ctx) // opt-in low-frequency managed bare repository mirrors (repo_mirrors.go)
+	go s.instructionsLoop(ctx)   // the CLAUDE.md on the assistant's machine (start.go)
+	go s.searchLoop(ctx)         // the chat search index (search_index.go)
+	go s.historyLoop(ctx)        // durable assistant history, on by default
+	go s.undeliveredLoop(ctx)    // the owner's messages that could not go in (undelivered.go)
+	go s.captureLoop(ctx)        // sorting and filing quick captures (capture_sort.go)
+	go s.healthTellLoop(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 }
@@ -1588,6 +1677,9 @@ func (s *Service) nextDue(ctx context.Context, now time.Time) time.Time {
 		if until, ok := sc.held[t.ID]; ok && until.After(now) {
 			n = until // held for the owner (runDue): looked at again when the hold ends
 		}
+		if t.skipMatches(loc) && (n.IsZero() || t.SkipNextAt.Before(n)) {
+			n = t.SkipNextAt // consume even if the conversation is held; retry if the durable write failed
+		}
 		if !n.IsZero() && (next.IsZero() || n.Before(next)) {
 			next = n
 		}
@@ -1621,11 +1713,21 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 		return h > 0
 	}
 	var due []dueTask
-	var skipped []ScheduleRun
+	var skipped, ownerSkips []ScheduleRun
 	changed := false
 	tasks := slices.Clone(sc.tasks)
 	for i := range tasks {
 		t := &tasks[i]
+		if !t.SkipNextAt.IsZero() {
+			switch {
+			case !t.skipMatches(loc):
+				t.clearSkip()
+				changed = true
+			case !t.SkipNextAt.After(now):
+				ownerSkips = append(ownerSkips, t.consumeOwnerSkip(s.lang(ctx)))
+				changed = true
+			}
+		}
 		if !t.Enabled {
 			continue
 		}
@@ -1740,7 +1842,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 		kept = append(kept, t)
 	}
 	if changed {
-		if err := s.saveLocked(sc, kept); err != nil {
+		if err := s.saveScheduleLocked(sc, kept, ownerSkips); err != nil {
 			sc.mu.Unlock()
 			return // none of this batch was consumed: leave it due for the next turn
 		}
@@ -1751,6 +1853,9 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 	}
 	for _, r := range skipped {
 		s.recordRun(r)
+	}
+	if len(ownerSkips) > 0 {
+		s.snapshotOld()
 	}
 	s.broadcastSchedule()
 	for _, d := range due {
@@ -1769,7 +1874,9 @@ func (s *Service) recordRun(r ScheduleRun) string {
 	if r.TodoProgress != nil && (r.Status == runSkipped || r.Status == runFailed && r.SessionID == "") {
 		r.TodoProgress = &ScheduleTodoAssessment{TodoID: r.TodoProgress.TodoID, State: "not_run", Reason: r.Error}
 	}
-	r.ID = "run_" + randomHex(4)
+	if r.ID == "" {
+		r.ID = "run_" + randomHex(4)
+	}
 	sc, err := s.lockedSchedule(context.Background())
 	if err != nil {
 		s.logf("schedule run %s %s not recorded: %v", r.Kind, r.RefID, err)
@@ -1890,11 +1997,13 @@ func taskMessageSource(t Task) *proto.MessageSource {
 	if t.Repeat == repeatOnce {
 		kind = proto.SourceFollowup
 	}
-	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label(), Push: t.Push}
+	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label(), Push: t.Push, ScheduleRunID: t.promptRunID}
 }
 
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	policy := taskExecutionPolicyOf(s.hello(context.Background()))
+	ctx := devicewire.WithTaskExecutionWait(devicewire.WithTaskExecutionEvidence(context.Background()))
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute+policy.wait)
 	defer cancel()
 	loc, kb := s.location(ctx), s.kbReady(ctx)
 	run := ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: due.UTC(), At: time.Now().UTC(), Manual: manual, Status: runOK,
@@ -1918,7 +2027,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
-	legacyExecution := t.SessionID == "" && t.Space == "" && t.StartGrant == nil &&
+	legacyExecution := policy.legacyFallback && t.SessionID == "" && t.Space == "" && t.StartGrant == nil &&
 		t.ExecutionMachineID == "" && t.Cwd == "" && model.override == (ModelBinding{})
 	fresh := t.startsFresh()
 	if fresh {
@@ -1954,6 +2063,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	draftHandedOff := false
 	startRun := func(m *Device) {
 		draftHandedOff = true
+		taskRunCompatibilityEvidence(ctx, &run)
 		s.startScheduledRun(run, t, m)
 	}
 	if t.Repeat != repeatOnce {
@@ -1975,6 +2085,17 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
+	t, trainingDay := s.workoutPromptNow(ctx, t)
+	if trainingDay != "" {
+		if ref, ok := s.trainingChat(ctx, trainingDay); ok {
+			t.MachineID, t.SessionID = ref.MachineID, ref.SessionID
+		}
+	}
+	if prefix, body := t.promptParts(); prefix != "" && strings.TrimSpace(body) == "" {
+		// Identical titles and references can occur in consecutive runs in the same chat.
+		run.ID = "run_" + randomHex(12)
+		t.promptRunID = run.ID
+	}
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
 	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
 	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant. Not a
@@ -1986,8 +2107,12 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// A follow-up the assistant scheduled for itself is a turn of that conversation: it keeps the
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
-			params := taskSourceParams(t, taskPrompt(t, due, now, loc, manual, kb, false), sourceCwd)
-			err := s.sendModel(ctx, t.MachineID, t.SessionID, params, s.lang(ctx))
+			params, err := s.taskSourceParams(ctx, t, taskPrompt(t, due, now, loc, manual, kb, false), sourceCwd, s.lang(ctx))
+			if err == nil {
+				if err := s.validateTaskSelections(ctx, t.MachineID, t.SessionID, params, t.PromptSelections); err != nil {
+					return s.failTaskRun(ctx, t, run, err, false)
+				}
+			}
 			unsent := err != nil // model preparation has not sent the task's message
 			if err == nil {
 				s.noteRound(m.ID, t.SessionID, t.ID, t.runGrantBasis, time.Now()) // before it is sent: its turn may plan at once (schedule_grant.go)
@@ -2019,6 +2144,8 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if err != nil {
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
+	s.logf("task %s resolved execution: retried=%t launcher=%q model=%q effort=%q task_model=%t task_effort=%t", t.ID, retried,
+		ex.Launcher, ex.Model, ex.Effort, model.override.Model != "", model.override.Effort != "")
 	here, launcher := ex.MachineID, ex.Launcher
 	ex.LegacyCompatible = legacyExecution && !proto.IsExternalLauncher(launcher)
 	t.PermissionMode = ex.PermissionMode
@@ -2029,6 +2156,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		if err != nil {
 			return s.failTaskRun(ctx, t, run, err, false)
 		}
+		ex.Cwd = s.resolvedTaskCwd(ctx, here, ex.Cwd)
 	}
 	run.Execution = &ex
 	if clean && s.launcherAgent(ctx, here, launcher) != "claude" {
@@ -2066,7 +2194,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			preparationFailed := err != nil // no task text has been sent while building the model parameters
 			if err == nil {
 				s.noteRound(m.ID, t.RunSessionID, t.ID, t.runGrantBasis, time.Now())
-				if err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params); err != nil {
+				if err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params, t.PromptSelections); err != nil {
 					s.endRound(m.ID, t.RunSessionID, t.ID)
 				}
 			}
@@ -2105,6 +2233,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	s.noteRound(sess.MachineID, sess.SessionID, t.ID, t.runGrantBasis, time.Now().Add(-roundEarly)) // sent already: its prompt is older
 	s.logf("task %s ran %s after its time (new conversation %s, kept for the next runs)", t.ID, lateness(due, time.Now()), short(sess.SessionID))
 	s.adoptConversation(t.ID, sess.MachineID, sess.SessionID, sess.Launcher, ex)
+	if trainingDay != "" {
+		s.keepTrainingChat(ctx, trainingDay, SessionRef{MachineID: sess.MachineID, SessionID: sess.SessionID}, run.ConversationReason == "source_unavailable")
+	}
 	s.titleFixed(sess.MachineID, sess.SessionID, time.Now(), titleTask, t.label()) // "MMDD | scheduled | task name", the same for every run in it
 	var m *Device
 	if d, ok := s.device(ctx, sess.MachineID); ok {
@@ -2123,9 +2254,12 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 // be told a profile, whose conversations are all in that one. Only Claude Code has profiles: the node refuses a
 // config_dir for Codex or a runtime's conversation every time, so theirs are resumed as before, also one the node lists
 // with no agent: it says so before starting anything, and the run goes on in it without the profile (#6884).
-func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map[string]any) error {
+func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map[string]any, promptSelections bool) error {
 	if c, ok := s.session(ctx, machine, sid); ok && signedOut(c) && (c.Agent == "" || c.Agent == "claude") {
 		params["config_dir"] = meetingProfile
+	}
+	if err := s.validateTaskSelections(ctx, machine, sid, params, promptSelections); err != nil {
+		return err
 	}
 	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
 	if _, asked := params["config_dir"]; asked && (nodeOutdated(err) || profileRefused(err)) {
@@ -2135,17 +2269,54 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	return err
 }
 
+// notifyScheduleFailed hands a failed non-briefing scheduled run to its supervisor or the main conversation
+// instead of pushing to the owner. Owner-subscribed briefings (Facts/Report) and environments with no
+// supervisor or main conversation keep pushing to the owner.
+func (s *Service) notifyScheduleFailed(ctx context.Context, t Task, run ScheduleRun, m *Device, body string) {
+	l := s.lang(ctx)
+	name := t.labelIn(l)
+	if !t.Facts && !t.Report {
+		if to, ok := s.scheduleFailureTarget(ctx, t); ok {
+			title := i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name})
+			text := fmt.Sprintf("%s (task=%s run=%s)\n%s", title, t.ID, run.ID, body)
+			if _, kept := s.keepRelayLater(to, relayMsg{
+				From:      cardScheduleFailed,
+				FromTitle: title,
+				Tool:      cardScheduleFailed,
+				Text:      text,
+				At:        time.Now().UTC(),
+			}); kept {
+				s.publish(ctx)
+			}
+			return
+		}
+	}
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
+	}
+	n := Notification{
+		SessionID: run.SessionID,
+		Title:     i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}),
+		Body:      body,
+	}
+	if m != nil {
+		n.Subtitle, n.DeviceID = m.Name, m.ID
+	}
+	src := cardScheduleFailed
+	if t.Facts || t.Report {
+		src = cardBriefFallback
+	}
+	s.push(withCard(ctx, src), n)
+}
+
 // oneOffFailed keeps the failure notice even when delivery is unknown and retrying is unsafe.
 func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	if t.Repeat != repeatOnce || run.Manual {
 		return
 	}
-	l := s.lang(ctx)
-	name := t.labelIn(l)
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(l)
-	}
-	s.push(ctx, Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: clip(oneLine(run.Error), 300)})
+	body := clip(oneLine(run.Error), 300)
+	s.notifyScheduleFailed(ctx, t, run, nil, body)
 }
 
 // oneOffNotStarted handles confirmed pre-delivery failures; Facts/Report runs use the fixed-facts fallback first.
@@ -2154,14 +2325,16 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 // nothing else, the follow-up the user counted on was gone without a word (#5030). The user is told, as a run whose turn
 // failed is (watchScheduledRun), and it is tried once more after runRetryDelay, as the task is then (deleted: not). A
 // failed retry is told too, and not tried again. A repeating task runs again at its next time and has its streak notice
-// (#4658); Run now is answered in the app.
-func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun) {
-	if t.Facts || t.Report {
-		s.briefNotStarted(ctx, t, run)
+// (#4658); Run now is answered in the app. Deterministic configuration refusals keep the failure notice but do not
+// retry the unchanged parameters automatically.
+func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun, cause error) {
+	retry := !taskConfigurationRefusal(cause)
+	if (t.Facts || t.Report) && s.briefingOn() {
+		s.briefNotStarted(ctx, t, run, retry)
 		return
 	}
 	s.oneOffFailed(ctx, t, run)
-	if t.Repeat != repeatOnce || run.Manual || run.Retried {
+	if !retry || t.Repeat != repeatOnce || run.Manual || run.Retried {
 		return
 	}
 	delay := runRetryDelay
@@ -2217,10 +2390,11 @@ func (s *Service) tellWaitingSkip(ctx context.Context, t Task, m Device) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(l)
+	// the lock screen does not name a task whose name says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name, t.RunSessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
 	}
-	s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
+	s.push(withCard(ctx, cardScheduleSkipped), Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
 		Title: i18n.T(l, "assistant-schedule.waiting_skipped", i18n.Args{"name": name}), Body: i18n.T(l, "assistant-schedule.waiting_skipped_body")})
 }
 
@@ -2322,21 +2496,20 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	full := text
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
-	briefing := t.Facts || t.Report
+	briefing := (t.Facts || t.Report) && s.briefingOn()
 	streak := s.updateRun(run, runFailed, text, briefing)
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
-	name := t.labelIn(s.lang(ctx))
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(s.lang(ctx))
-	}
 	if briefing {
 		s.briefFallback(ctx, run, t, m)
 	} else if !streak { // the streak notice already said it failed, with this reason
-		s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
+		s.notifyScheduleFailed(ctx, t, run, &m, text)
 	}
 	if run.Retried {
 		return
+	}
+	if s.hasPendingTransientWake(m.ID, run.SessionID) {
+		return // never schedule a second prompt while in-conversation transient recovery is still pending
 	}
 	if hasSession {
 		if failedSession.TurnError == "" {
@@ -2346,28 +2519,39 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 			return // the unavailable refusal fallback needs the user's recovery, never an automatic replay
 		}
 	}
-	if reset, turn, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {
-		// A subscription's usage limit (docs/assistant/agent-work.md "Usage limits"): a retry before it resets is
-		// refused at once. The conversation that goes on by itself then needs none; otherwise the retry waits for the
-		// reset, however long that is — the watcher's time is for the turn, not for this.
-		if resumes {
+	now := time.Now()
+	if rec := s.runRecovery(ctx, m.ID, run.SessionID, failedSession, hasSession, full, now); rec.ok {
+		// A subscription's usage limit or a terminal provider failure with an advertised future recovery time:
+		// a retry before recovery is likely to fail again. A conversation that goes on by itself after a usage
+		// limit needs none; otherwise the retry waits durably for the recovery window — the watcher's timeout
+		// is for the turn, not for this.
+		if rec.resumes {
 			s.logf("task %s run %s: its conversation goes on by itself once the usage limit resets at %s: not retried", t.ID, run.ID,
-				reset.UTC().Format(time.RFC3339))
+				rec.at.UTC().Format(time.RFC3339))
 			return
 		}
-		now := time.Now()
-		wait := s.limitRetryWait(reset, now)
-		s.logf("task %s run %s: the usage limit resets at %s: retried in %s", t.ID, run.ID, reset.UTC().Format(time.RFC3339), wait.Round(time.Second))
-		w := delayedWait{ID: "limit_" + run.ID, Kind: delayedScheduledRetry, At: now.Add(wait),
-			Retry: &scheduledLimitRetry{Run: run, RunOf: run.of, MachineName: m.Name, LimitTurn: turn}}
+		wait := s.limitRetryWait(rec.at, now)
+		waitID := "limit_" + run.ID
+		if rec.usageLimit {
+			s.logf("task %s run %s: the usage limit resets at %s: retried in %s", t.ID, run.ID, rec.at.UTC().Format(time.RFC3339), wait.Round(time.Second))
+		} else {
+			waitID = "retry_" + run.ID
+			s.logf("task %s run %s: provider recovery advertised at %s: retried in %s", t.ID, run.ID, rec.at.UTC().Format(time.RFC3339), wait.Round(time.Second))
+		}
+		retryRun := run
+		if retryRun.MachineID == "" {
+			retryRun.MachineID = m.ID
+		}
+		w := delayedWait{ID: waitID, Kind: delayedScheduledRetry, At: now.Add(wait),
+			Retry: &scheduledLimitRetry{Run: retryRun, RunOf: run.of, MachineName: m.Name, LimitTurn: rec.turn}}
 		persisted := false
-		if s.store != nil && s.store() != nil {
+		if s.store() != nil {
 			pctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
 			err := s.persistScheduledRetry(pctx, w)
 			cancel()
 			persisted = err == nil
 			if err != nil {
-				s.logf("task %s run %s: persist usage-limit retry: %v", t.ID, run.ID, err)
+				s.logf("task %s run %s: persist delayed retry: %v", t.ID, run.ID, err)
 			}
 		}
 		// Keep this watcher (and its state-draft ownership) until the retry finishes, just as the old in-memory wait did.
@@ -2383,6 +2567,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 			return
 		case <-time.After(delay):
 		}
+	}
+	if s.hasPendingTransientWake(m.ID, run.SessionID) {
+		return
 	}
 	// The failure push sends the user to the task's page; by now they may have switched it off, deleted it or changed
 	// its prompt. The retry goes by what the schedule holds now, not by the copy the run started with: that copy ran
@@ -2402,25 +2589,77 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	}
 }
 
-// runLimit: the run's conversation (sid on machine) stopped on a subscription's usage limit whose reset is known
-// (text: its turn's error), the end of that turn (the conversation's updated_at), and whether its CLI said it goes on
-// by itself then. As the lists have the conversation (the node's record, else Claude Code's words when they name a time
-// zone, decorateLimit), else as the node has it.
-func (s *Service) runLimit(ctx context.Context, machine, sid, text string) (reset, turn time.Time, resumes, ok bool) {
+type scheduledRecovery struct {
+	at         time.Time
+	turn       time.Time
+	resumes    bool
+	usageLimit bool
+	ok         bool
+}
+
+// runRecovery resolves whether the failed scheduled turn carries either a subscription/gateway usage-limit reset or a
+// trustworthy future recovery time from a terminal provider failure. It preserves the raw node session's recovery
+// timestamps before decorateLimit strips non-usage-limit metadata, and returns the failed turn's UpdatedAt so a later
+// turn during the wait cancels the retry.
+func (s *Service) runRecovery(ctx context.Context, machine, sid string, raw proto.Session, hasRaw bool, text string, now time.Time) scheduledRecovery {
+	if !hasRaw || (raw.TurnErrorResetsAt == nil && raw.ModelFallback == nil) {
+		if ns, ok := s.nodeSession(machine, sid); ok {
+			if !hasRaw {
+				raw, hasRaw = ns, true
+			} else {
+				if raw.TurnErrorResetsAt == nil {
+					raw.TurnErrorResetsAt = ns.TurnErrorResetsAt
+				}
+				if raw.ModelFallback == nil {
+					raw.ModelFallback = ns.ModelFallback
+				}
+			}
+		}
+	}
 	c, found := s.decoratedSession(machine, sid)
 	if !found {
-		c, _ = s.session(ctx, machine, sid)
+		if hasRaw {
+			c = raw
+		} else {
+			c, _ = s.session(ctx, machine, sid)
+		}
 	}
 	if strings.TrimSpace(c.TurnError) == "" {
 		c.TurnError = text // Claude Code's error is its last words: an older node's raw session has no turn error
 	}
-	turn = c.UpdatedAt
-	if c.UpdatedAt.IsZero() {
-		c.UpdatedAt = time.Now()
+	turn := c.UpdatedAt
+	if turn.IsZero() && hasRaw {
+		turn = raw.UpdatedAt
 	}
-	decorateLimit(&c)
-	reset, ok = usageLimitReset(c)
-	return reset, turn, ok && c.TurnErrorResumes, ok
+	anchor := turn
+	if anchor.IsZero() {
+		anchor = now
+	}
+	decorated := c
+	if decorated.UpdatedAt.IsZero() {
+		decorated.UpdatedAt = anchor
+	}
+	decorateLimit(&decorated)
+	if reset, ok := usageLimitReset(decorated); ok {
+		return scheduledRecovery{at: reset, turn: turn, resumes: decorated.TurnErrorResumes, usageLimit: true, ok: true}
+	}
+	errText := strings.TrimSpace(text)
+	if errText == "" {
+		errText = strings.TrimSpace(c.TurnError)
+	}
+	if at, ok := providerRecoveryAt(raw, decorated, errText, anchor, now); ok {
+		return scheduledRecovery{at: at, turn: turn, ok: true}
+	}
+	return scheduledRecovery{}
+}
+
+// hasPendingTransientWake reports whether in-conversation transient recovery still has an active wake for (machine, sid).
+func (s *Service) hasPendingTransientWake(machine, sid string) bool {
+	if machine == "" || sid == "" {
+		return false
+	}
+	e, exists := s.workEntry([2]string{machine, sid})
+	return exists && e.WakeAt != nil && e.Work.On == proto.WaitTransient && e.Work.RetiredAt == nil
 }
 
 // limitRetryWait is how long the retry of a run a usage limit stopped waits: until a minute or so after the reset
@@ -2512,8 +2751,19 @@ func silentRun(items []proto.Item, t Task, ran bool) bool {
 	if !silentTurn(items) {
 		return false
 	}
-	if ask, _ := turnExchange(items); !runAsk(ask, t.Prompt) {
-		return false
+	if t.promptRunID != "" {
+		// splitLastTurn starts at the latest unqueued prompt when one is present.
+		item := items[0]
+		source := prompts.ItemSource(item)
+		if item.Role != "user" || item.Kind != proto.KindText || item.Queued || item.ClientMsgID != "" || item.From != "" ||
+			source == nil || source.ScheduleRunID != t.promptRunID || (source.Kind != proto.SourcePatrol && source.Kind != proto.SourceFollowup) {
+			return false
+		}
+	} else {
+		_, body := t.promptParts()
+		if ask, _ := turnExchange(items); !runAsk(ask, body) {
+			return false
+		}
 	}
 	if ran {
 		return true
@@ -2743,13 +2993,17 @@ func (s *Service) forgetConversation(ctx context.Context, id string) (Task, bool
 // task's own conversation, which has had all that (and the knowledge-base hint) already; it is told the earlier
 // runs are above instead. The task's prompt is always there: it may have been edited, or compacted away.
 func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, continued bool) string {
+	prefix, body := t.promptParts()
 	r := prompts.TaskRun{Label: t.label(), TodoID: t.TodoID, Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
-		Prompt: t.Prompt, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
+		Prompt: body, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
 	if r.Interval {
 		r.Every = everyText(t.EveryMinutes)
 	}
 	if late := now.Sub(due); !manual && !t.calendar() && late > 2*time.Minute {
 		r.Late = humanDuration(late)
+	}
+	if prefix != "" {
+		return prefix + "\n\n" + prompts.RenderTaskRun(r)
 	}
 	return prompts.RenderTaskRun(r)
 }
@@ -2810,6 +3064,7 @@ func (s *Service) tasksView(ctx context.Context, keep func(Task) bool) []Task {
 	loc, lang := s.location(ctx), s.requestCtxLang(ctx)
 	machine := s.settings(ctx).MachineID
 	now := time.Now()
+	_, supportsSkip := s.store().(scheduleSkipStore)
 	sc.mu.Lock()
 	tasks := slices.Clone(sc.tasks)
 	sc.mu.Unlock()
@@ -2819,6 +3074,14 @@ func (s *Service) tasksView(ctx context.Context, keep func(Task) bool) []Task {
 			continue
 		}
 		t.NextRun = t.next(now, loc)
+		if !t.skipMatches(loc) {
+			t.clearSkip()
+		}
+		t.CanSkipNext = supportsSkip && t.skippableOccurrence(t.NextRun, now)
+		if !t.SkipNextAt.IsZero() {
+			t.CanSkipNext = supportsSkip && t.SkipNextAt.After(now)
+		}
+		t.SkipNextZone = "" // only the scheduler needs the zone in which the owner marked the skip
 		if t.Repeat == repeatCron {
 			if r, err := parseCron(t.Cron); err == nil {
 				t.CronText = r.text(lang)
@@ -2858,12 +3121,48 @@ func (s *Service) taskView(ctx context.Context, id string) (Task, bool) {
 	return Task{}, false
 }
 
+// Clients that omit cron may represent an existing cron task as a one-off.
+// Keep its saved rule in both input discovery and the eventual edit.
+func keepLegacyCronRule(saved Task, draft *Task, hasCron bool) {
+	if !hasCron && saved.Repeat == repeatCron {
+		draft.Repeat, draft.Cron, draft.At = saved.Repeat, saved.Cron, saved.At
+		draft.Time, draft.Weekdays, draft.EveryMinutes = "", nil, 0
+	}
+}
+
+// decodeTaskEdit fills sparse requests from the editable fields of the saved task.
+func decodeTaskEdit(raw map[string]json.RawMessage, old Task) (Task, error) {
+	fields := map[string]any{
+		"title": old.Title, "prompt": old.Prompt, "repeat": old.Repeat, "enabled": old.Enabled,
+		"at": old.At, "time": old.Time, "weekdays": old.Weekdays, "every_minutes": old.EveryMinutes,
+		"cron": old.Cron, "permission_mode": old.PermissionMode, "session_id": old.SessionID,
+	}
+	for name := range raw {
+		delete(fields, strings.ToLower(name))
+	}
+	for name, value := range raw {
+		fields[name] = value
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return Task{}, err
+	}
+	var in Task
+	err = json.Unmarshal(encoded, &in)
+	return in, err
+}
+
 // editTask applies what the app changed (the hub's own fields and where runs go are kept; SessionID can only be
 // cleared, to run in a new conversation each time). Push and Until are kept: the routes set them only when the
 // body has them. A missing Until unmarshals as zero and would wipe a stored end time; null clears it.
 func editTask(old, in Task, now time.Time) Task {
 	t := old
-	t.Title, t.Prompt, t.Repeat, t.Enabled = in.Title, in.Prompt, in.Repeat, in.Enabled
+	t.Title, t.Repeat, t.Enabled = in.Title, in.Repeat, in.Enabled
+	// An old client may echo the approved prompt when saving metadata. Any
+	// replacement is literal unless the owner uses the structured route.
+	if in.Prompt != old.Prompt {
+		t.setLiteralPrompt(in.Prompt)
+	}
 	t.Time, t.Weekdays, t.EveryMinutes, t.Cron = in.Time, in.Weekdays, in.EveryMinutes, in.Cron
 	t.PermissionMode = in.PermissionMode
 	t.Launcher, t.Model, t.Effort = "", "", ""
@@ -2889,12 +3188,19 @@ func editTask(old, in Task, now time.Time) Task {
 }
 
 func (s *Service) scheduleRoutes() {
+	s.taskInputRoutes()
 	s.handle("GET /api/v1/assistant/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.scheduleReadable(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"tasks": s.tasksView(i18n.With(r.Context(), s.requestLang(r)), nil)})
+		tasks := s.tasksView(i18n.With(r.Context(), s.requestLang(r)), nil)
+		if !fullRole(r) {
+			for i := range tasks {
+				tasks[i].CanSkipNext, tasks[i].SkipNextToken = false, ""
+			}
+		}
+		apierr.WriteJSON(w, map[string]any{"tasks": tasks})
 	})
 	// A cron expression checked before it is saved: what it is in words and when it runs next, in the user's time zone;
 	// 400 with what is wrong.
@@ -2938,6 +3244,10 @@ func (s *Service) scheduleRoutes() {
 		delete(raw, "run_if")
 		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		ignoreTaskStateNote(raw)
+		if err := readStructuredTaskPrompt(raw); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {
@@ -2945,9 +3255,16 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		t := editTask(Task{ID: "task_" + randomHex(4), CreatedAt: now.UTC()}, in, now)
+		if _, rich := raw["structured_prompt"]; rich {
+			t.PromptSelections = true
+		}
 		t.SessionID, t.Push, t.Inbox, t.RunIf = "", push, inbox, runIf
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
+			return
+		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // a track of its own (schedule_space.go)
+			writeTaskSpaceError(w, err)
 			return
 		}
 		applyUntil(&t, end, hasUntil, clearUntil)
@@ -2964,6 +3281,10 @@ func (s *Service) scheduleRoutes() {
 		edit, err := s.prepareTaskExecutionEdit(r.Context(), Task{}, &t, raw)
 		if err != nil {
 			writeTaskExecutionError(w, err)
+			return
+		}
+		if err := s.validateTaskInput(r.Context(), t, edit.record); err != nil {
+			apierr.Call(w, err)
 			return
 		}
 		if err := s.commitTaskExecutionEdit(r.Context(), nil, t, edit); err != nil {
@@ -3011,23 +3332,30 @@ func (s *Service) scheduleRoutes() {
 		}
 		old := sc.tasks[i]
 		sc.mu.Unlock()
-		var in Task
-		encoded, _ := json.Marshal(raw)
-		if err := json.Unmarshal(encoded, &in); err != nil {
-			apierr.Write(w, 400, err)
+		if err := readStructuredTaskPrompt(raw); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if _, has := raw["cron"]; !has && old.Repeat == repeatCron {
-			// An app that does not know cron tasks keeps the task's rule (an older iOS app reads one as a one-off,
-			// Android and the web send its repeat back without the expression).
-			in.Repeat, in.Cron, in.At, in.Time, in.Weekdays, in.EveryMinutes = old.Repeat, old.Cron, old.At, "", nil, 0
+		in, err := decodeTaskEdit(raw, old)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
 		}
+		_, hasCron := raw["cron"]
+		keepLegacyCronRule(old, &in, hasCron)
 		t := editTask(old, in, now)
+		if _, rich := raw["structured_prompt"]; rich {
+			t.PromptSelections = true
+		}
 		if hasRunIf {
 			t.RunIf = runIf
 		}
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
+			return
+		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // moved to another track (schedule_space.go)
+			writeTaskSpaceError(w, err)
 			return
 		}
 		push, has, err := pushIn(raw)
@@ -3058,16 +3386,26 @@ func (s *Service) scheduleRoutes() {
 		}
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
-		isolateScheduledConversation(&t, mayBeMain)
 		if err := checkTask(&t, now); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
 		rearm(old, &t, now)
+		// A metadata edit keeps the approved source even when the hub
+		// cannot currently tell whether that conversation is the main chat.
+		if !t.PromptSelections || taskInputEditNeedsValidation(old, t) {
+			isolateScheduledConversation(&t, mayBeMain)
+		}
 		edit, err := s.prepareTaskExecutionEdit(r.Context(), old, &t, raw)
 		if err != nil {
 			writeTaskExecutionError(w, err)
 			return
+		}
+		if t.PromptSelections && (edit.record != nil || taskInputEditNeedsValidation(old, t)) {
+			if err := s.validateTaskInput(r.Context(), t, edit.record); err != nil {
+				apierr.Call(w, err)
+				return
+			}
 		}
 		if err := s.commitTaskExecutionEdit(r.Context(), &old, t, edit); err != nil {
 			writeTaskExecutionCommitError(w, err)
@@ -3079,6 +3417,8 @@ func (s *Service) scheduleRoutes() {
 	})
 	s.handle("DELETE /api/v1/assistant/tasks/{id}", s.deleteTaskRoute)
 	s.handle("POST /api/v1/assistant/tasks/{id}/run", s.runTaskRoute)
+	s.handle("POST /api/v1/assistant/tasks/{id}/skip-next", s.skipNextRoute)
+	s.handle("DELETE /api/v1/assistant/tasks/{id}/skip-next", s.skipNextRoute)
 	s.handle("POST /api/v1/assistant/tasks/{id}/fresh", func(w http.ResponseWriter, r *http.Request) {
 		t, ok, err := s.forgetConversation(r.Context(), r.PathValue("id"))
 		if err != nil {
@@ -3156,6 +3496,13 @@ func (s *Service) scheduleRoutes() {
 			} else {
 				rearm(Task{}, &t, now)
 			}
+			// Only the task endpoint can change the run settings of a task
+			// whose saved prompt has selections, including replacing that prompt.
+			if prev.PromptSelections && taskInputEditNeedsValidation(prev, t) {
+				sc.mu.Unlock()
+				apierr.Write(w, http.StatusBadRequest, errTaskSelectionsOwner)
+				return
+			}
 			out = append(out, t)
 		}
 		err = s.saveLocked(sc, out)
@@ -3197,15 +3544,18 @@ func (s *Service) deleteTaskRoute(w http.ResponseWriter, r *http.Request) {
 	apierr.WriteJSON(w, map[string]any{"ok": true})
 }
 
-// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
-func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	sc, err := s.lockedSchedule(r.Context())
+// errTaskNotFound is returned by runTaskNow when no scheduled task has the given id.
+var errTaskNotFound = i18n.Err("assistant-schedule.gone")
+
+// runTaskNow starts scheduled task id immediately at now: a one-off is marked done, a repeating task keeps its
+// schedule. Returns errScheduleUnavailable / errScheduleSave on storage failure, errTaskNotFound when id is missing,
+// or errTaskBusy when the task's last run is still active.
+func (s *Service) runTaskNow(ctx context.Context, id string, now time.Time) (proto.Session, error) {
+	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, err)
-		return
+		return proto.Session{}, err
 	}
-	i := sc.indexLocked(r.PathValue("id"))
+	i := sc.indexLocked(id)
 	var t Task
 	if i >= 0 {
 		t = sc.tasks[i]
@@ -3218,22 +3568,31 @@ func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.saveLocked(sc, tasks); err != nil {
 			sc.mu.Unlock()
-			apierr.Write(w, http.StatusServiceUnavailable, err)
-			return
+			return proto.Session{}, err
 		}
 	}
 	sc.mu.Unlock()
 	if i < 0 {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
-		return
+		return proto.Session{}, errTaskNotFound
 	}
 	s.broadcastSchedule()
-	sess, err := s.runTask(t, now, now, true, false)
-	if errors.Is(err, errTaskBusy) {
+	return s.runTask(t, now, now, true, false)
+}
+
+// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
+func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.runTaskNow(r.Context(), r.PathValue("id"), time.Now())
+	switch {
+	case errors.Is(err, errScheduleUnavailable), errors.Is(err, errScheduleSave):
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	case errors.Is(err, errTaskNotFound):
+		apierr.Write(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, errTaskBusy):
 		apierr.Write(w, http.StatusConflict, i18n.Err("assistant-schedule.busy_wait"))
 		return
-	}
-	if err != nil {
+	case err != nil:
 		apierr.Call(w, err)
 		return
 	}

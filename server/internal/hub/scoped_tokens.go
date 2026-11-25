@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -22,20 +23,8 @@ func (h *Hub) scopedPublicSession(machine, session string) bool {
 		return false
 	}
 	s, ok := m.session(session)
-	return ok && !healthSession(&s)
+	return ok && !spaceSession(&s)
 }
-
-// Match the relayed Agents routes at their concrete method-qualified patterns.
-var scopedRelayedAgentRoutes = func() *http.ServeMux {
-	mux := http.NewServeMux()
-	for pattern := range extwire.RouteScopes {
-		_, path, _ := strings.Cut(pattern, " ")
-		if path == "/api/v1/agents" || strings.HasPrefix(path, "/api/v1/agents/") {
-			mux.HandleFunc(pattern, http.NotFound)
-		}
-	}
-	return mux
-}()
 
 // scopedDeviceRoute uses the same registered route pattern as extension
 // authorization. A scoped device can receive only scopes for Agent integration.
@@ -45,8 +34,8 @@ func (h *Hub) scopedDeviceRoute(r *http.Request) string {
 	}
 	_, pattern := h.apiMux.Handler(r)
 	switch pattern {
-	case "/api/v1/agents", "/api/v1/agents/":
-		_, pattern = scopedRelayedAgentRoutes.Handler(r)
+	case assistantwire.A2ARPC, assistantwire.A2ACard:
+		return assistantwire.ScopeA2A
 	case "GET /api/v1/interactions/history", "POST /api/v1/interactions/{id}/reanswer":
 		// Stored answers have no pending card to prove their visibility or kind here.
 		return ""
@@ -60,7 +49,7 @@ func (h *Hub) scopedDeviceRoute(r *http.Request) string {
 
 func deviceAgentScope(scope string) bool {
 	switch scope {
-	case extwire.ScopeAgentsRead, extwire.ScopeAgentsControl, extwire.ScopeAgentsPermissionMode:
+	case extwire.ScopeAgentsRead, extwire.ScopeAgentsControl, extwire.ScopeAgentsPermissionMode, assistantwire.ScopeA2A:
 		return true
 	default:
 		return false
@@ -165,7 +154,7 @@ func (c *client) scopedSocketFrame(data []byte) []byte {
 		}
 		summaries := make([]scopedSessionSummary, 0, len(rows))
 		for _, row := range rows {
-			if !healthSession(&row) && !row.Archived {
+			if !spaceSession(&row) && !row.Archived {
 				summaries = append(summaries, scopedSessionSummary{row.SessionID, row.MachineID, row.Title, row.Agent, row.Status})
 			}
 		}

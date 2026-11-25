@@ -15,19 +15,22 @@ import { optionDisplay, permissionDetail } from "../lib/tool-detail";
 import { cardToolName } from "../lib/turns";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { homeOverview, paneRoute, type TabGroup } from "../lib/herdr-tree";
+import { heldAsWorking, userCards } from "../lib/supervisor-held";
 import { agentLabel } from "../lib/mentions";
 import { hubLabel, machineWithHub } from "../lib/mesh";
 import { isPending, machineErrorText } from "../lib/add-computer";
 import { machineDeployment } from "../lib/machine-deploy";
-import { classifyConnection } from "../lib/node-health";
+import { classifyConnection } from "../lib/connection-failure";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useScopedAgentListStatus, useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { getSession, useStore, withTaskRows } from "../lib/store";
 import { retryAgentList } from "../lib/sessions";
-import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
+import { checkOutbox, discardOutbox, entryReason, heldOnComputer, outboxEntry, queueToSession, retryOutbox, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
 import { lazyPage } from "../lib/lazy-page";
+import { overviewActions, type ActionableComputer, type ActionableOutbox } from "../lib/overview-actions";
+import { useRoster } from "../lib/managers";
 import { sessionLauncher } from "../lib/model-switch";
 import { effortTitle } from "../lib/session-actions";
 import { modelList, pillView, useModelLists } from "../lib/session-models";
@@ -35,7 +38,7 @@ import { heldDelivery, makeSessionLookup, orphanedLine, TODO_TONE_CLASS } from "
 import { todoLook } from "../lib/todo-wait-reason";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
-import { Button, Collapse, cx, EASE, IconButton, Loading, useNow } from "../ui/atoms";
+import { Button, Collapse, cx, EASE, IconButton, Loading, toast, useNow } from "../ui/atoms";
 import { RecommendedTag } from "../ui/RecommendedTag";
 import { Tag } from "./assistant/parts";
 import { StatusMark } from "../ui/StatusMark";
@@ -43,6 +46,7 @@ import { Icon } from "../ui/icons";
 import { MarkSeenDialog } from "./AgentMenus";
 import { answeredLookup, answeredSessions } from "./assistant/answered-lookup";
 import { resolve } from "./chat/Interactions";
+import { deleteFailed } from "./chat/OutboxBubbles";
 import { OverviewArrangeButton } from "./extensions/ExtensionSlots";
 import { OverviewBody, type OverviewSections } from "./OverviewBody";
 import { OverviewSummaryBoundary } from "./OverviewSummaryBoundary";
@@ -62,11 +66,18 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   useTapGuardView(overviewTapSurface, currentViewId());
   // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
   const machines = useScopedMachines();
-  const interactions = useScopedInteractions();
+  const scopedCards = useScopedInteractions();
+  // the cards that are the user's: one a task's supervisor holds is its until it passes it up (lib/supervisor-held.ts),
+  // so Needs you neither lists nor counts it, and its agent, waiting on nothing else, is listed Working (as the counts say)
+  const interactions = useMemo(() => userCards(scopedCards), [scopedCards]);
   const answered = useStore((s) => s.answered);
   // a card answered here moves its agent out of "Stuck" at once, not at the hub's next push (#4286)
   const agentSessions = useScopedAgentSessions();
-  const sessions = useMemo(() => answeredSessions(agentSessions, interactions, answered), [agentSessions, interactions, answered]);
+  const sessions = useMemo(() => heldAsWorking(answeredSessions(agentSessions, interactions, answered), scopedCards), [agentSessions, interactions, scopedCards, answered]);
+  const outbox = useStore((s) => s.outbox);
+  const roster = useRoster();
+  const actionable = useMemo(() => overviewActions({ outbox, sessions: agentSessions, machines, roster }), [outbox, agentSessions, machines, roster]);
+  const needsCount = interactions.length + actionable.count;
   const loaded = useStore((s) => s.loaded);
   // connected, the hub's first answers are still on their way: "Loading", not "Connecting to the hub"
   const online = useStore((s) => s.conn === "online");
@@ -88,7 +99,6 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     }
     return byMachine;
   }, [list, whole, hubAgentCounts, agentSessions]);
-  const now = useNow(5000, counts.working > 0 || counts.waiting > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
@@ -102,7 +112,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   const todos = useScopedTodos();
   const taskRows = useStore((s) => s.taskRows);
   // read as the Tasks page reads them: a card answered here moves its task at once too
-  const tasks = useMemo(() => homeTasks(todos, answeredLookup(withTaskRows(makeSessionLookup(agentSessions), taskRows), interactions, answered)), [todos, agentSessions, taskRows, interactions, answered]);
+  const tasks = useMemo(() => homeTasks(todos, answeredLookup(withTaskRows(makeSessionLookup(agentSessions), taskRows), scopedCards, answered)), [todos, agentSessions, taskRows, scopedCards, answered]);
   const name = (mid: string) => machineWithHub(mid, machines);
   const [confirmSeen, setConfirmSeen] = useState<Session[] | null>(null);
   const markAll = <MarkAllSeen count={unread.length} onClick={() => setConfirmSeen(unread)} />;
@@ -124,6 +134,14 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   useScrollMemory(scroller, "/overview");
   // Overview being arranged (#9745, #10905): the order of its cards and sections, which are hidden, how wide a card is
   const [arranging, setArranging] = useState(false);
+
+  const [machineSectionReady, setMachineSectionReady] = useState(() => OverviewMachineSection.ready());
+  useEffect(() => {
+    if (!loaded || machines.length === 0 || machineSectionReady) return;
+    let alive = true;
+    void OverviewMachineSection.preload().then(() => { if (alive) setMachineSectionReady(true); }, () => {});
+    return () => { alive = false; };
+  }, [loaded, machines.length, machineSectionReady]);
 
   // Overview's own sections, above the cards by default (#11147), each what it draws (nothing while it has no rows): the user may move them,
   // and hide the ones whose rows don't need them (#10905, views/OverviewBody.tsx)
@@ -155,9 +173,9 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     </Group>
   );
   const sections: OverviewSections = {
-    // the headline counts agents, this counts cards: say so when one agent has several cards waiting
-    needs_you: loaded && (interactions.length > 0 || held.length > 0) && (
-      <Group title={stateName("needs_you")} count={interactions.length} hint={new Set(interactions.map(homeKey)).size < interactions.length ? t("home.needs_you_hint") : undefined} grid="cards">
+    // the headline counts agents; this counts each visible request, failed send or unavailable computer once
+    needs_you: loaded && (needsCount > 0 || held.length > 0) && (
+      <Group title={stateName("needs_you")} count={needsCount} hint={new Set(interactions.map(homeKey)).size < interactions.length ? t("home.needs_you_hint") : undefined} grid="cards">
         {withHeld(interactions, held).map(({ ix, held: h }, i, rows) => {
           const s = sessions.find((x) => x.machine_id === ix.machine_id && x.session_id === ix.session_id);
           const title = ix.session_title || (s ? sessionTitle(s) : ix.cwd || t("home.session"));
@@ -194,6 +212,8 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
             </Collapse>
           );
         })}
+        {actionable.outbox.map((item, i) => <FailedOutboxRow key={item.key} item={item} i={interactions.length + i} machine={name(item.mid)} />)}
+        {actionable.computers.map((item, i) => <ComputerActionRow key={item.key} item={item} i={interactions.length + actionable.outbox.length + i} machines={machines} />)}
       </Group>
     ),
     waiting_on_computer: loaded && groups.needs.length > 0 && (
@@ -207,7 +227,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
       <Group
         title={t("home.tasks")}
         count={tasks.total}
-        right={tasks.total > tasks.rows.length && <a href={href({ name: "todos" })} onClick={(e) => onLinkClick(e, { name: "todos" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.tasks_all")}</a>}
+        right={tasks.total > tasks.rows.length && <a href={href({ name: "todos" })} onClick={(e) => onLinkClick(e, { name: "todos" })} className="touch-hit text-[12px] text-ink-3 hover:text-ink-2">{t("home.tasks_all")}</a>}
         grid="tasks"
       >
         {tasks.rows.map((r) => (
@@ -222,14 +242,14 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
         {groups.working.length > 0 && (
           <Group title={stateName("working")} count={groups.working.length} grid>
             {groups.working.map((g, i) => (
-              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{g.lead.state_since ? shortDuration(now - Date.parse(g.lead.state_since)) : ""}</When>} />
+              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<Since iso={g.lead.state_since} />} />
             ))}
           </Group>
         )}
         {groups.waiting.length > 0 && (
           <Group title={stateName("bg_waiting")} count={groups.waiting.length} grid>
             {groups.waiting.map((g, i) => (
-              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{g.lead.state_since ? shortDuration(now - Date.parse(g.lead.state_since)) : ""}</When>} />
+              <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<Since iso={g.lead.state_since} />} />
             ))}
           </Group>
         )}
@@ -243,20 +263,22 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
         grid
       >
         {groups.unread.map((g, i) => (
-          <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<When>{ago(g.lead.updated_at) || stateName("done")}</When>} footer={sessionCan(g.lead, "send") ? <ContinueAction s={g.lead} title={sessionTitle(g.launcher ?? g.sessions[0]!)} several={g.sessions.length > 1} /> : undefined} />
+          <GroupTask key={g.key} g={g} i={i} machine={name(g.lead.machine_id)} pill={<Ago iso={g.lead.updated_at} />} footer={sessionCan(g.lead, "send") ? <ContinueAction s={g.lead} title={sessionTitle(g.launcher ?? g.sessions[0]!)} several={g.sessions.length > 1} /> : undefined} />
         ))}
       </Group>
     ),
     computers: loaded && machines.length > 0 && (
-      <OverviewSummaryBoundary fallback={computerRows}>
-        <Suspense fallback={computerRows}>
-          <OverviewMachineSection Section={Group} machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
-        </Suspense>
-      </OverviewSummaryBoundary>
+      machineSectionReady ? (
+        <OverviewSummaryBoundary fallback={computerRows}>
+          <Suspense fallback={computerRows}>
+            <OverviewMachineSection Section={Group} machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
+          </Suspense>
+        </OverviewSummaryBoundary>
+      ) : computerRows
     ),
   };
   // with nothing to do, after Unread's place whether it is drawn or not: all is quiet, or how to add a computer
-  const quietCard = loaded && quiet && interactions.length === 0 && held.length === 0 && (noMachines || list === "loaded") && (
+  const quietCard = loaded && quiet && needsCount === 0 && held.length === 0 && (noMachines || list === "loaded") && (
     <div className="flex flex-col items-start gap-3 rounded-card bg-surface p-4 shadow-card">
       <span className={cx("flex size-8 items-center justify-center rounded-full", noMachines ? "bg-field text-ink-2" : "bg-green-tint text-green")}>
         <Icon name={noMachines ? "machine" : "check"} size={15} stroke={noMachines ? undefined : 2.6} />
@@ -294,7 +316,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                   too; the counts sentence stays out of it, or each agent's start and finish would be read out again */}
               <p className={cx("min-w-0 text-[13.5px] text-ink-2", !failed && "flex-1")}>
                 <span role="status">{lineState}</span>
-                {!lineState && (quiet ? (noMachines ? t("home.no_machines_summary") : t("home.all_quiet")) : summary(counts, interactions.length))}
+                {!lineState && (quiet && needsCount === 0 ? (noMachines ? t("home.no_machines_summary") : t("home.all_quiet")) : summary(counts, needsCount))}
               </p>
               {failed && <Button size="sm" icon="retry" onClick={retryAgentList}>{t("home.retry")}</Button>}
               {loaded && markAllAt === "summary" && markAll}
@@ -369,7 +391,8 @@ function taskAgentLine({ agents, lead }: Pick<HomeTask, "agents" | "lead">, mach
 }
 
 // One task on the overview: its title (opens the task), its status, the stage bar with its PR, and what holds its
-// delivery, then who works on it (taskAgentLine). The PR link is beside the title link, not inside it.
+// delivery, then who works on it (taskAgentLine). The PR link is beside the title link, not inside it. On a touch
+// screen the title link's overlay spans the card, so a tap anywhere on it opens the task; the PR link sits above it.
 function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) => string }) {
   const { todo, status } = task;
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
@@ -381,15 +404,15 @@ function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) =>
   const { who, more } = taskAgentLine(task, machine);
   const line = [held && t(`todos.delivery_${held.state}`), who].filter(Boolean).join(" · ");
   return (
-    <div className="flex h-full flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card" data-task={todo.id}>
+    <div className="flex h-full flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card pointer-coarse:relative pointer-coarse:isolate" data-task={todo.id}>
       <div className="flex min-w-0 items-center gap-2">
-        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink hover:underline">
+        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink hover:underline pointer-coarse:after:absolute pointer-coarse:after:inset-0 pointer-coarse:after:z-[1] pointer-coarse:after:content-['']">
           {todo.title}
         </a>
         {todo.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
         <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[look.tone])} data-testid="task-status">{look.label}</span>
       </div>
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} done={todo.stage_done} />
       {/* the lines under the stage bar sit at the card's bottom, so a row of cards of one height lines up */}
       {(line || orphan) && (
         <div className="mt-auto flex flex-col gap-2">
@@ -413,13 +436,31 @@ function TaskCard({ task, machine }: { task: HomeTask; machine: (mid: string) =>
   );
 }
 
-function Pill({ children }: { children: React.ReactNode }) {
-  return <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap text-attention">{children}</span>;
+// On a phone's width the pill and the title share what the row leaves them, the pill never wider than its words: its
+// words are cut only where they are wider than the title would be (the full words stay its tooltip and the link's name).
+function Pill({ children }: { children: string }) {
+  return (
+    <span title={children} className="inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap text-attention max-sm:min-w-0 max-sm:flex-1 max-sm:max-w-max">
+      <span className="truncate">{children}</span>
+    </span>
+  );
 }
 
 /** When a row last changed or how long it has worked: quiet text, its badge already says the state. */
 function When({ children }: { children: React.ReactNode }) {
   return <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">{children}</span>;
+}
+
+/** How long a row has been in its state, on its own 5 s clock: the page around it does not re-render with each tick. */
+function Since({ iso }: { iso?: string }) {
+  const now = useNow(5000, Boolean(iso));
+  return <When>{iso ? shortDuration(now - Date.parse(iso)) : ""}</When>;
+}
+
+/** When a finished row last changed, read at each render and moved on by its own half-minute clock, as `Since` is. */
+function Ago({ iso }: { iso?: string }) {
+  useNow(30_000, Boolean(iso));
+  return <When>{ago(iso) || stateName("done")}</When>;
 }
 
 /** A row's place as small tags, without one that only repeats the title: a tab is often named after its agent's first
@@ -606,6 +647,77 @@ function AnsweredLine({ ix, body }: { ix: Interaction; body: Resolution }) {
         <Icon name="check" size={13} stroke={2.6} className="shrink-0" />
         <span className="truncate">{t("home.answered", { answer })}</span>
       </p>
+    </div>
+  );
+}
+
+/** A failed message is its own action, beside the Agent's request cards. The title opens the same session as chat;
+ * the buttons call the very operations its bubble uses, including Check for an uncertain send and Delete's Undo toast. */
+function FailedOutboxRow({ item, i, machine }: { item: ActionableOutbox; i: number; machine: string }) {
+  const { mid, sid, session, entry } = item;
+  const [busy, setBusy] = useState(false);
+  const running = useRef(false);
+  const run = async (action: () => Promise<unknown>) => {
+    if (running.current) return;
+    running.current = true;
+    setBusy(true);
+    try {
+      await action();
+    } finally {
+      running.current = false;
+      setBusy(false);
+    }
+  };
+  const reason = entryReason(entry) || t("home.outbox_reason_unknown");
+  const title = sessionTitle(session);
+  return (
+    <div data-actionable-outbox={`${mid}/${sid}/${entry.id}`}>
+      <TaskRow
+        i={i}
+        state="needs_you"
+        to={{ name: "session", mid, sid }}
+        title={title}
+        tags={rowTags(title, [machine, session.space_name, tabLabel(session)])}
+        detail={t(entry.inDoubt ? "home.outbox_uncertain" : "home.outbox_failed", { reason })}
+        pill={<Pill>{t(entry.inDoubt ? "chat-outboxbubbles.check" : "home.not_sent")}</Pill>}
+        actions={
+          <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-10.5">
+            {entry.inDoubt ? (
+              <Button testId="outbox-check" busy={busy} onClick={() => void run(async () => {
+                if (await checkOutbox(mid, sid, entry.id) === "unknown") toast(t(heldOnComputer(entry) ? "lib-outbox.still_held" : "lib-outbox.still_unknown"), "info");
+              })}>{t("chat-outboxbubbles.check")}</Button>
+            ) : (
+              <>
+                {entry.clearable !== undefined && <Button testId="outbox-clear" busy={busy} onClick={() => void run(() => retryOutbox(mid, sid, entry.id, entry.clearable))}>{t("chat-outboxbubbles.clear_and_send")}</Button>}
+                <Button testId="outbox-retry" busy={busy} onClick={() => void run(() => retryOutbox(mid, sid, entry.id))}>{t("chat-outboxbubbles.retry")}</Button>
+              </>
+            )}
+            <Button testId="outbox-delete" tone="quiet" disabled={busy} onClick={() => deleteFailed(mid, sid, entry.id)}>{t("chat-outboxbubbles.delete")}</Button>
+          </div>
+        }
+      />
+    </div>
+  );
+}
+
+/** The computer's existing setup or detail page owns confirmation, connection instructions and Reconnect. This row only
+ * explains why the computer is here and opens that page; it never reconnects on Overview's behalf. */
+function ComputerActionRow({ item, i, machines }: { item: ActionableComputer; i: number; machines: Machine[] }) {
+  const { machine: m, setup } = item;
+  const to: Route = setup ? { name: "machines" } : { name: "machine", mid: m.id };
+  const reason = machineErrorText(m.error_code) || classifyConnection(m)?.title || t("home.offline");
+  return (
+    <div data-actionable-computer={m.id}>
+      <TaskRow
+        i={i}
+        state="needs_you"
+        to={to}
+        title={m.name}
+        tags={rowTags(m.name, [hubLabel(m, machines)])}
+        detail={setup ? t("home.computer_setup_detail") : t("home.computer_offline_detail", { reason })}
+        pill={<Pill>{setup ? t("home.setup_needed") : t("home.offline")}</Pill>}
+        actions={<div className="flex px-3 pb-2 pl-10.5"><Button testId="computer-open" onClick={() => navigate(to)}>{t("home.open_setup")}</Button></div>}
+      />
     </div>
   );
 }

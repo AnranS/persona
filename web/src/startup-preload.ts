@@ -3,13 +3,15 @@
 // size. It lives here, with no imports of the client code, so the config
 // can load it and a test can check it against src/i18n/index.ts: the languages it has catalogs for (LANGS) and how it
 // picks one (preferredLanguage) must stay the same as the client's.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 import { startupMatcher } from "./i18n/startup-keys";
+import { MODULE_SWITCH_KEY } from "./core/module-switch";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -28,10 +30,25 @@ export function localeDirs(dir: string): Record<string, string[]> {
 export interface PreloadFiles {
   shared: string[];
   app: string[];
-  screen: string[];
+  /** The modules' pages of their own (core/module-host.ts `standalonePages`), by their address' first segment: the
+   *  module (left out while this browser switched it off, core/module-switch.ts) and its standalone.tsx's files. */
+  standalone: Record<string, { module: string; files: string[] }>;
   catalogs: Record<string, string>;
   /** language subtag → language code (each _meta.json's matches) */
   matches: Record<string, string>;
+}
+
+/** The modules' pages of their own (core/module-host.ts `standalonePages`), read from each src/modules/<id>/module.ts as
+ *  eslint.modules.config.mjs reads `needs`: each address segment with its module, whose code is its standalone.tsx. */
+export function standalonePages(dir = fileURLToPath(new URL("./modules/", import.meta.url))): { base: string; module: string }[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(join(dir, e.name, "module.ts")))
+    .flatMap((e) => {
+      const list = /\bstandalonePages:\s*\[([^\]]*)\]/.exec(readFileSync(join(dir, e.name, "module.ts"), "utf8"))?.[1];
+      if (list === undefined) return [];
+      if (!existsSync(join(dir, e.name, "standalone.tsx"))) throw new Error(`startup-preload: module "${e.name}" names standalonePages but has no standalone.tsx`);
+      return [...list.matchAll(/["']([a-z][a-z0-9-]*)["']/g)].map((m) => ({ base: m[1]!, module: e.name }));
+    });
 }
 
 /** The script: it adds a modulepreload (or style preload) link for the preferred language's catalog and the page's files. */
@@ -57,8 +74,15 @@ export function preloadScript(files: PreloadFiles): string {
   }
   var base = new URL(document.baseURI).pathname;
   var path = location.pathname.indexOf(base) === 0 ? location.pathname.slice(base.length - 1) : location.pathname;
-  var screen = /^\\/screen\\/[^/]/.test(path);
-  [files.catalogs[lang]].concat(files.shared, screen ? files.screen : files.app).forEach(add);
+  var seg = /^\\/([^/]+)\\/[^/]/.exec(path);
+  var own = seg && Object.prototype.hasOwnProperty.call(files.standalone, seg[1]) ? files.standalone[seg[1]] : null;
+  if (own) {
+    try {
+      var off = JSON.parse(localStorage.getItem(${JSON.stringify(MODULE_SWITCH_KEY)}) || "[]");
+      if (Array.isArray(off) && off.indexOf(own.module) >= 0) own = null;
+    } catch (e) {}
+  }
+  [files.catalogs[lang]].concat(files.shared, own ? own.files : files.app).forEach(add);
 })();`;
 }
 
@@ -268,7 +292,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 475,635 B, zh-Hans 476,595 B to 476,620 B). The budget moves by the same 25 B.
 // #6563: the minutes' summary card adds 85 B to each language (ja 478,898 B on fd8c988b6 to 478,983 B; en 475,201 B to
 // 475,286 B, zh-Hans 476,188 B to 476,273 B): the Knowledge page's first stylesheet (the card's tints and grid,
-// views/knowledge/minutes-overview.css) named in the app's preload map, and Button passing aria-controls and aria-label
+// modules/recording/minutes-overview.css) named in the app's preload map, and Button passing aria-controls and aria-label
 // (a topic's Show N more names its topic). The budget moves by the same 85 B, keeping that 31 B room.
 // #6662: the paged Agents list under the complete list's title row, grouping bar and quick filters (By to-do / By
 // status sections, the to-do names, the quick filters' hub keys, the quiet Load more line, the ⋯'s sorts ordering its
@@ -426,7 +450,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
 // #11040: main had 29 B of ja room. The voice call's UI (its bar, the thread's captions, the ended row and the dialog on
-// why a call cannot start: views/chat/voice/VoiceCall.tsx, loaded with the call's code) and 97 of the 101 voice strings
+// why a call cannot start: modules/voice/chat/VoiceCall.tsx, loaded with the call's code) and 97 of the 101 voice strings
 // left the first screen, and startup entries only lazy chunks read (chat-navrail but target_failed, the
 // chat-interactions fields and input toggle, assistant-history.sidebar, agentspage.new_agent) went to the rest of the
 // catalog: ja 482,497 B to 477,736 B (en 479,378 B to 474,739 B, zh-Hans 480,224 B to 475,592 B), measured in one
@@ -470,6 +494,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // scrolling to it, its heading counting the cards shown (views/extensions/ExtensionSlots.tsx). 63 B in ja, measured in
 // one environment against main cacd8d75a6 (ja 480,670 B to 480,733 B; en 477,744 B to 477,807 B, zh-Hans 478,482 B to
 // 478,545 B). Main had 2,810 B of room, so the budget is this ja size plus those 2,810 B.
+// #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
+// (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 356 B in each
+// language, measured in one environment against main baacfe89c6 (ja 480,552 B to 480,908 B; en 477,626 B to 477,982 B,
+// zh-Hans 478,364 B to 478,720 B); the setting's row and words load with Settings. Main had 2,928 B of room (a budget of
+// 483,480 B), which is kept, so the budget moves by these 356 B, to this ja size plus those 2,928 B.
+// Merged with #9778, the budget adds both feature deltas (63 B + 356 B) to the previous 483,480 B limit.
 // #10905: Overview's own sections arranged with the extensions' cards add 323 B in ja, measured in one environment
 // against main 1e34873c71 (ja 483,878 B to 484,201 B; en 480,952 B to 481,265 B, zh-Hans 481,673 B to 482,012 B): the
 // sections' ids and their place in the arrangement, Needs you and Stuck never hidden (lib/overview-cards.ts),
@@ -480,7 +510,82 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // lib/start-page.ts). The sections' bars and their names while arranging, and what a change writes, are the editor's
 // chunk (views/extensions/OverviewArrange.tsx, lib/overview-edit.ts).
 // This branch keeps the existing 482,526 B limit with the same measurement.
-export const FIRST_SCREEN_BUDGET = 482_526;
+// #11442: phone fixes add 739 B in ja, measured in one environment against main 989b48a766 (ja 482,305 B to 483,044 B;
+// en 479,417 B to 480,159 B, zh-Hans 480,166 B to 480,922 B): toasts held only by a mouse pointer and a sheet's focused
+// field kept in view above the keyboard (ui/atoms.tsx), Back closing the search palette and the composer's overlays
+// (lib/back-close.ts), the header on a gone tab's and an ambiguous link's page (App.tsx), a waiting card's field kept
+// unfolded and in sight with Android's keyboard (lib/viewport.ts, views/chat/ChatView.tsx), and the classes behind the
+// keyboard-aware palette and dock, the attachment ✕'s corner reach and Overview's task-card overlay (styles.css).
+// Where the toasts sit on a phone is a chunk of its own (ui/toast-lift.tsx) a narrow screen loads after the shell.
+// Main had 221 B of room, so the budget is this ja size plus those 221 B.
+// Preserve the backend workspace branch ceiling.
+// #11511: phone fixes add 272 B in ja, measured in one environment against main bb39eb7e10 (ja 482,369 B to 482,641 B;
+// en 479,515 B to 479,787 B, zh-Hans 480,246 B to 480,518 B): Conversation tasks in ⋯ on a phone and the chat's pills'
+// touch targets, with the Loading earlier row drawn over the top padding (views/chat/ChatView.tsx), and the Agents
+// page's scroll kept on Back with its title row's and By to-do rows' touch boxes (views/Sidebar.tsx,
+// views/SidebarTree.tsx). Main had 157 B of room, so the budget is this ja size plus those 157 B (482,798 B).
+// #10822: Colored sidebar icons, an Appearance choice off by default: the choice's store and the built-in pages' colors
+// (lib/sidebar-icons.ts), read where the sidebar draws its pages, and the style a colored icon takes. 172 B in each
+// language, measured in one environment against main 8df9e781b0 (ja 482,711 B to 482,883 B; en 479,826 B to 479,998 B,
+// zh-Hans 480,595 B to 480,767 B); the setting's row and words load with Settings. The budget is main's 482,798 B
+// ceiling plus those 172 B.
+// #11838: the sidebar's To-dos badge reads the To-dos page's own inputs through one hook the page shares
+// (lib/todo-owner-needs.ts: the to-dos' Agents with the list's task rows and cards answered here, and one minute
+// clock), and ownerNeeds keeps why each to-do counts. 88 B in each language, measured in one environment against main
+// 136308faf5 (ja 482,906 B to 482,994 B; en 479,979 B to 480,067 B, zh-Hans 480,757 B to 480,845 B); the rows' mark
+// and its words load with the To-dos page. The budget is main's 482,970 B ceiling plus those 88 B.
+// #11804 + #11820: Antigravity queue/send-now runtime copy and launcher-scoped Assistant sign-in guidance add
+// 85 B to the ja first screen (ja 483,143 B, en 480,233 B, zh-Hans 480,987 B). The budget is main's 483,058 B
+// ceiling plus those 85 B.
+// #11825: A prepaid balance row in the sidebar's usage strip (views/UsageBars.tsx, lib/usage-windows.ts): the provider's
+// amount and currency for an official DeepSeek launcher, with no bar; the popover's longer words load with it. 260 B in
+// ja, measured in one environment against main c4459e56f3 (ja 482,994 B to 483,254 B; en 480,067 B to 480,344 B,
+// zh-Hans 480,845 B to 481,098 B), from a 483,058 B ceiling. Merged with #11804 + #11820 (main fc31360177), the two
+// changes share bytes: the row adds 25 B to that main's ja size, measured in one environment (ja 483,143 B to
+// 483,168 B; en 480,233 B to 480,258 B, zh-Hans 480,987 B to 481,012 B). The budget is the merged ja size.
+// #7524: Starred adds 610 B in ja against 4dc8a1ee44 (483,143 B to 483,753 B) for the route, compact index,
+// start-page availability, sidebar and message identity. The snapshots, their operations and deep-link paging
+// load on demand. The bound leaves 37 B above the measured ja size.
+// Merged, the two changes add 25 B + 610 B to their shared 483,143 B ja baseline, giving 483,778 B;
+// #7524's 37 B of room is kept on top.
+// #11979 (in-session model/effort switching in lib/model-switch.ts on main) raised the ja first screen by 80 B
+// (en 481,036 B, ja 483,895 B, zh-Hans 481,759 B).
+// #12038: the sidebar's Starred count/access has a small summary store of its own. Per-message identity and marks
+// belong to the lazy message controls, not the first screen. ja 483,895 B to 483,788 B; the budget stays 483,815 B.
+// #12034's delivery closeout gate row lives in the lazy-loaded Settings page and adds 0 B, so the budget stays too.
+// #12055: an Agent's page opened from inside another page keeps that page's sidebar row lit (lib/persona-nav.ts
+// sidebarRoute), and a briefing's waiting and later rows open their chat in the app: 101 B more in ja on its base.
+// Merged, #12038's 107 B reduction covers #12055's 101 B increase, so main's 483,815 B budget stays.
+// #12090: the offline face's own outline and shadow tokens (the dark disc keeps its ink outline) add 48 B in ja
+// (and in en and zh-Hans) against main 86ff5c5259.
+// #11801: stable structural sidebar ordering adds 343 B in ja against main 0009fe34d6 (ja 483,664 B to 484,007 B;
+// en 480,757 B to 481,104 B, zh-Hans 481,491 B to 481,816 B). Keep main's 199 B of room above the new ja size.
+// #8236: a conversationless direction stays visible and opens only its actual outside Agent, while a targetless one is
+// a non-link (lib/direction-names.ts, lib/direction-tree.ts, views/Sidebar.tsx and views/SidebarRows.tsx). This adds
+// 285 B in each language, measured in one environment against main c04291e493 after merging it (ja 484,098 B to
+// 484,383 B; en 481,251 B to 481,536 B, zh-Hans 481,974 B to 482,259 B). Main had 108 B of room, so the budget is
+// main's 484,206 B ceiling plus those 285 B.
+// #13846: the module host serves the chat slots, Settings categories and card renderers (core/ChatSlots.tsx, the
+// served fields and the hub flag rule in core/module-host.ts, their places in views/chat/ChatView.tsx, Composer.tsx and
+// Interactions.tsx). 799 B in ja, measured in one environment against main 7be9a71cc (ja 484,445 B to 485,244 B; en
+// 481,786 B to 482,585 B, zh-Hans 482,421 B to 483,220 B). Main had 46 B of room, so the budget is main's 484,491 B
+// ceiling plus those 799 B. The web half of #13431 takes voice's first-screen parts off with the move into a module.
+// #13021: main ec2563b7d7 itself measures ja 484,587 B (en 481,938 B, zh-Hans 482,579 B), 96 B over the 484,491 B
+// above. The question rail's marks add 141 B in ja (en 141 B, zh-Hans 141 B): the rail now drawn on a touch screen for
+// Persona's chats, the marks' state in ChatView and the lazy import of views/chat/QuestionMarksHost.tsx (the rules and
+// read marks moved out of the first screen into that chunk, which took 808 B off the first version). ja 484,728 B;
+// 10 B of room on top. Merged with #13846, the voice module's first-screen reduction leaves room for these 141 B,
+// so the budget stays at #13846's 485,290 B ceiling.
+// #13803: mount-once long-chat windowing adds 200 B to the ja first screen, measured in one environment against main at
+// 464c1b17b3 (ja 484,433 B to 484,633 B; en 481,792 B to 481,992 B, zh-Hans 482,418 B to 482,618 B). The near-viewport
+// observer, searchable estimated placeholders and synchronous scroll compensation start with the chat; rich bodies stay
+// deferred. The budget moves by the same 200 B, keeping the 58 B of room main had. Merged with #13846, the measured
+// first screens are ja 485,259 B, en 482,600 B and zh-Hans 483,235 B; the budget keeps #13846's 46 B of room rather
+// than adding the whole separate allowance again.
+// #14398: the Agents list's ⋯ menu toggles "按最近更新排序" and "显示筛选" (sidebar.sort_activity, sidebar.show_list_filter;
+// the sidebar namespace is first-screen whole) add 77 B to the ja first screen, measured with origin/main 1ad9a001e6
+// merged: en 482,711 B, ja 485,382 B, zh-Hans 483,352 B. The budget moves by the same 77 B plus 10 B of room.
+export const FIRST_SCREEN_BUDGET = 485_392;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -710,7 +815,13 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // the kept height and the lazy registration of ViewBody10.tsx (whose chunk name it embeds), and the launcher sections
 // (ExtensionView.tsx's chunk) gain the owner's context provider; the canvas itself (about 8 KB) loads on intent with
 // the first view that has a graph. Main had 1,437 B of room; the budget stays.
-export const IDLE_TIER_BUDGET = 46_063;
+// And 12 B for the Agents list's Filter switch (#13727): the idle Palette's "Filter Agents list" row (palette/
+// SavedSearchesDialog.tsx) draws only while Settings > Agents has the list's Filter on (useShowFilter), which is the
+// tier's whole growth: this tree merged with main measured 46,065 B against the 46,063 B budget, 2 B over. 10 B of room on top.
+// And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
+// quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
+// #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
+export const IDLE_TIER_BUDGET = 46_101;
 
 const gzip = promisify(gzipCompress);
 

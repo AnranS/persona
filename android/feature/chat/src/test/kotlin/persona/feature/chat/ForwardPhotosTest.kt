@@ -38,6 +38,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import persona.core.contracts.ImagePayload
 import persona.core.contracts.Interaction
 import persona.core.contracts.Item
 import persona.core.contracts.Machine
@@ -222,27 +223,45 @@ class ForwardPhotosTest {
             assertTrue(text, text.contains("<persona-context kind=\"forward\""))
             assertTrue(text, text.contains("My own words"))
             assertTrue(text, text.contains("Review these"))
-            assertEquals(expectedPaths.sorted(), messageModel(text, user = true).images)
+            assertEquals(expectedPaths.sorted(), messageModel(text, user = true).images.sorted())
             assertEquals(expectedPhotos, expectedPaths.size)
         }
     }
 
-    private fun existingChat(target: ForwardTarget) {
-        val scenario = Scenario(if (target == ForwardTarget.Persona) "persona" else "agent", count = 5)
-        scenario.show(target)
-        // The composer has four places: the fifth source photo is never even read.
-        assertEquals(scenario.paths.take(4), scenario.files.reads.map { it.third })
-        assertTrue(scenario.files.reads.all { it.first == source.machineId && it.second == source.cwd })
-        scenario.awaitAttachments(4)
-        assertEquals(4, scenario.composer.attachments.count { it.image })
-        assertEquals(4, scenario.uploads.calls.size)
-        assertTrue(scenario.uploads.calls.all { it.first == (target as? ForwardTarget.Chat)?.key || target == ForwardTarget.Persona && it.first == persona.key })
-        assertEquals((0..3).map { "$it.png" }, scenario.composer.attachments.map { it.name })
-        assertFalse(scenario.composer.attachments.any { "4.png" in it.name })
-        scenario.send(expectedPhotos = 4)
+    @Test fun cancellationWhileRestoringAForwardRemovesItsPartiallyStagedPhotos() {
+        val folder = File(context.cacheDir, "chat-captures")
+        val before = folder.list().orEmpty().toSet()
+        val result = runCatching {
+            kotlinx.coroutines.runBlocking {
+                forwardedPhotos(context, listOf("ok.png", "cancel.png"), read = { path ->
+                    if (path == "cancel.png") {
+                        assertTrue(folder.list().orEmpty().toSet().size > before.size)
+                        throw kotlinx.coroutines.CancellationException("left the picker")
+                    }
+                    ImagePayload(data = "aGVsbG8=", mime = "image/png")
+                })
+            }
+        }
+        assertTrue(result.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+        assertEquals(before, folder.list().orEmpty().toSet())
     }
 
-    @Test fun existingAgentOnAnotherComputerReadsAttachesAndSendsOnlyFourPhotos() = existingChat(ForwardTarget.Chat(agent.key))
+    private fun existingChat(target: ForwardTarget) {
+        val scenario = Scenario(if (target == ForwardTarget.Persona) "persona" else "agent", count = 21)
+        scenario.show(target)
+        // Default hub image_limits.per_message is 20: the 21st source photo is never even read.
+        assertEquals(scenario.paths.take(20), scenario.files.reads.map { it.third })
+        assertTrue(scenario.files.reads.all { it.first == source.machineId && it.second == source.cwd })
+        scenario.awaitAttachments(20)
+        assertEquals(20, scenario.composer.attachments.count { it.image })
+        assertEquals(20, scenario.uploads.calls.size)
+        assertTrue(scenario.uploads.calls.all { it.first == (target as? ForwardTarget.Chat)?.key || target == ForwardTarget.Persona && it.first == persona.key })
+        assertEquals((0..19).map { "$it.png" }, scenario.composer.attachments.map { it.name })
+        assertFalse(scenario.composer.attachments.any { "20.png" in it.name })
+        scenario.send(expectedPhotos = 20)
+    }
+
+    @Test fun existingAgentOnAnotherComputerReadsAttachesAndSendsUpToHubLimitPhotos() = existingChat(ForwardTarget.Chat(agent.key))
 
     @Test fun personaReadsAttachesAndSendsForwardedPhotos() = existingChat(ForwardTarget.Persona)
 

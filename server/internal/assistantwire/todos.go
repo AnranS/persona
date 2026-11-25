@@ -8,6 +8,15 @@ import (
 
 // ---- the todos (the assistant's, docs/assistant/todos.md) ----
 
+// todoRoutes are the to-dos' relayed routes listed since the central Routes literal (bus.go) closed; the hub relays
+// them like Routes.
+var todoRoutes = []string{
+	"GET /api/v1/todos/revision",    // the pushed read's cheap validator (todo_revision.go, #13804)
+	"POST /api/v1/todos/reorganize", // batch reorganization without interrupting running Agents (todo_reorganize.go, #14704)
+}
+
+func init() { Routes = append(Routes, todoRoutes...) }
+
 // TodoReport is what the hub shows of the todos: active links, display-only completed ownership and the agents kept
 // quiet (#1731: no pushes, badges or Live
 // Activity; those of quiet tasks open or done in the last week). Small, whole every time.
@@ -86,4 +95,8 @@ const (
 	MethodTodoLink = "assistant.todo_link"
 	// EventTodoSpaceRenamed: TodoSpaceRenamed, one way.
 	EventTodoSpaceRenamed = "todos.space_renamed"
+	// CodeSendInDoubt: a to-do's message or answer that failed while its words may be with its Agent already
+	// (delivered "unknown") or are, with what followed failed ("yes"), #10465. Never retryable: a client checks its op
+	// id, or looks at the to-do, instead of sending the words again.
+	CodeSendInDoubt = "send_in_doubt"
 )

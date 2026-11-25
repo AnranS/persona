@@ -121,6 +121,16 @@ func RenderAgentLimitContinue(language string) string {
 	return render("agents/limit_continue", struct{ Language string }{language})
 }
 
+// LimitFallbackMarker starts agents/limit_fallback_continue in every language: ParseInjected knows it by this line.
+const LimitFallbackMarker = "<persona-limit-fallback />"
+
+// RenderLimitFallbackContinue is what the manager sends a conversation a usage limit stopped, once it moved the
+// conversation to a backup launcher (agents/limit_fallback_continue, docs/assistant/agent-work.md "Usage limits: a
+// backup launcher"). It goes in as the backup's first turn, after the switch's summary of what went before.
+func RenderLimitFallbackContinue(language string) string {
+	return render("agents/limit_fallback_continue", struct{ Language string }{language})
+}
+
 // AgentAnswer is the user's answers to the hub's decision card, sent on to the agent (agents/answer).
 type AgentAnswer struct {
 	Language string // Owner language; empty preserves legacy Chinese bytes.
@@ -186,7 +196,12 @@ type AgentDelegate struct {
 	Rules    string // the user's own rules, trimmed: manager.json agents.delegate.rules
 }
 
-func RenderAgentDelegate(d AgentDelegate) string { return render("agents/delegate", d) }
+func RenderAgentDelegate(d AgentDelegate) string {
+	if d.Language == "zh-Hans" || d.Language == "简体中文" {
+		d.Language = ""
+	}
+	return render("agents/delegate", d)
+}
 
 // AgentDelegateInput is the question to decide on and what is known around it (agents/delegate_input).
 type AgentDelegateInput struct {
@@ -243,6 +258,15 @@ type DispatchTask struct {
 
 func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
 
+type A2AMessage struct {
+	ID, Sender, State, Text string
+	Language                string
+	Executable              string // a verified node executable, encoded as a JSON string, never shell code
+	Request                 bool
+}
+
+func RenderA2AMessage(t A2AMessage) string { return render("agents/a2a_message", t) }
+
 // TaskSuccessor is the first message of an agent Persona starts for a task whose agents have all stopped (#4754): who
 // worked on it before and its last reply, then the user's message on the task (agents/task_successor).
 type TaskSuccessor struct {
@@ -255,9 +279,17 @@ type TaskSuccessor struct {
 
 func RenderTaskSuccessor(t TaskSuccessor) string { return render("agents/task_successor", t) }
 
+// TaskLeader is what the task leader's note knows of how its Agent reaches its tools.
+type TaskLeader struct {
+	// Terminal: the assignment's verified entry is the terminal one (TaskHandoff.Terminal), named in the handoff note
+	// before this one; the note then says how task_plan and task_review run through it (#12136). False keeps the text
+	// an Agent with the Persona MCP gets.
+	Terminal bool
+}
+
 // RenderTaskLeader is what follows the prompt of a task whose agent is a task leader (agents/task_leader, #3656): that it
 // can hand direct workers to task_plan and how their reports reach it.
-func RenderTaskLeader() string { return render("agents/task_leader", struct{}{}) }
+func RenderTaskLeader(l TaskLeader) string { return render("agents/task_leader", l) }
 
 // RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
 func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
@@ -269,12 +301,20 @@ func RenderTaskFiles(language string) string {
 	return render("agents/task_files", struct{ Language string }{language})
 }
 
+func RenderWorkspaceRepositories(rows, language string) string {
+	return render("agents/workspace_repositories", struct{ Rows, Language string }{rows, language})
+}
+
 // TaskHandoff describes the scoped entries the assignment's actual launcher can use.
 type TaskHandoff struct {
 	Language   string // the caller's reply language; empty keeps the existing default
 	MCP        bool   // the selected launcher has the existing scoped Persona MCP tools
 	Executable string // a verified node executable, encoded as a JSON string, never shell code
 }
+
+// Terminal: the entry rendered is the terminal one (`personad tool` through the verified Executable), not the MCP
+// tools, which win when both are known (agents/task_handoff).
+func (h TaskHandoff) Terminal() bool { return !h.MCP && h.Executable != "" }
 
 func RenderTaskHandoff(h TaskHandoff) string { return render("agents/task_handoff", h) }
 

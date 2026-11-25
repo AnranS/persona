@@ -37,9 +37,10 @@ import (
 // terminal or put on a command line.
 
 type managedLaunchers struct {
-	mu   sync.Mutex
-	byID map[string]proto.ManagedLauncher // the catalog: a withheld entry has no secrets
-	full map[string]proto.ManagedLauncher // what was pulled of the withheld ones, at their Rev
+	mu    sync.Mutex
+	byID  map[string]proto.ManagedLauncher // the catalog: a withheld entry has no secrets
+	full  map[string]proto.ManagedLauncher // what was pulled of the withheld ones, at their Rev
+	infer []proto.Launcher                 // sorted Claude launcher projection for inferLauncher, rebuilt on catalog change
 	// pull lets one pull of a name go out at a time (the others wait and use it).
 	pull sync.Map // name → *sync.Mutex
 }
@@ -55,9 +56,11 @@ func (n *Node) setManaged(list []proto.ManagedLauncher) {
 		l.Withheld = false
 		m[l.Name] = l
 	}
+	infer := buildManagedInferLaunchers(m)
 	n.managed.mu.Lock()
-	n.managed.byID, n.managed.full = m, nil
+	n.managed.byID, n.managed.full, n.managed.infer = m, nil, infer
 	n.managed.mu.Unlock()
+	forgetOfflineScan() // cached transcript rows include the launcher's context window
 }
 
 // setCatalog is launchers.catalog: the providers in this computer's scope. What was pulled stays while the provider is
@@ -70,7 +73,9 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			continue
 		}
 		m[l.Name] = l
-		if l.Withheld && l.Pushed() {
+		// A pushed provider is kept ahead of a start. So is an agy one whatever its delivery: the Antigravity
+		// companion runs all the time and takes its key at start (agyProviderEnv), so on demand is now (#13871).
+		if l.Withheld && (l.Pushed() || l.AgentType() == "agy") {
 			prefetch = append(prefetch, l.Name)
 		}
 	}
@@ -81,8 +86,11 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			full[name] = f
 		}
 	}
-	n.managed.byID, n.managed.full = m, full
+	infer := buildManagedInferLaunchers(m)
+	n.managed.byID, n.managed.full, n.managed.infer = m, full, infer
 	n.managed.mu.Unlock()
+	forgetOfflineScan()
+	n.syncAgyProvider()
 	if len(prefetch) > 0 {
 		go func() {
 			for _, name := range prefetch {
@@ -92,6 +100,7 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 				}
 				cancel()
 			}
+			n.syncAgyProvider()
 		}()
 	}
 }
@@ -342,11 +351,10 @@ var agentSystemDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 // node puts claude. commonNodePaths looks there after agentSystemDirs; a test points it elsewhere with them (#6257).
 var distroNodeDir = "/usr/bin"
 
-// claudeExecutable finds claude: PATH first, then the usual install spots. A node started by launchd (macOS) has a
-// minimal PATH that misses /opt/homebrew/bin, and nothing in `personad launch`'s own path adds it.
-func agentExecutable(bin string) (string, error) {
+// agentExecutableOnDisk finds a CLI on PATH or in the usual install locations without running shell startup files.
+func agentExecutableOnDisk(bin string) string {
 	if p, err := exec.LookPath(bin); err == nil {
-		return p, nil
+		return p
 	}
 	home := userHome()
 	var candidates []string
@@ -361,9 +369,11 @@ func agentExecutable(bin string) (string, error) {
 		filepath.Join(home, ".claude", "local", bin),
 		filepath.Join(home, ".volta", "bin", bin),
 	)
-	nvmDirs, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", bin))
-	sort.Sort(sort.Reverse(sort.StringSlice(nvmDirs)))
-	candidates = append(candidates, nvmDirs...)
+	for _, dir := range nvmVersionsDirs(home) {
+		paths, _ := filepath.Glob(filepath.Join(dir, "*", "bin", bin))
+		slices.Reverse(paths)
+		candidates = append(candidates, paths...)
+	}
 	for _, np := range commonNodePaths() {
 		candidates = append(candidates, filepath.Join(filepath.Dir(np), bin))
 	}
@@ -374,10 +384,16 @@ func agentExecutable(bin string) (string, error) {
 		}
 		seen[p] = true
 		if st, err := os.Stat(p); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-			return p, nil
+			return p
 		}
 	}
+	return ""
+}
 
+func agentExecutable(bin string) (string, error) {
+	if p := agentExecutableOnDisk(bin); p != "" {
+		return p, nil
+	}
 	agentExecutableMu.Lock()
 	cached := agentExecutableCache[bin]
 	agentExecutableMu.Unlock()
@@ -392,19 +408,12 @@ func agentExecutable(bin string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := loginShell(ctx, "command -v "+shellQuote(bin))
-	if out, err := cmd.Output(); err == nil {
-		lines := strings.Split(strings.TrimSpace(terminalEscapes.ReplaceAllString(string(out), "")), "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if filepath.IsAbs(line) {
-				if st, err := os.Stat(line); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-					agentExecutableMu.Lock()
-					agentExecutableCache[bin] = line
-					agentExecutableMu.Unlock()
-					return line, nil
-				}
-			}
+	if path := shellAgentPath(ctx, bin); path != "" {
+		if st, err := os.Stat(path); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
+			agentExecutableMu.Lock()
+			agentExecutableCache[bin] = path
+			agentExecutableMu.Unlock()
+			return path, nil
 		}
 	}
 
@@ -417,7 +426,47 @@ func agentExecutable(bin string) (string, error) {
 	return "", fmt.Errorf("%s not found in PATH or the usual install locations (node service environment; add its bin directory to PATH and restart the node, or symlink into ~/.local/bin)", bin)
 }
 
+func shellAgentPath(ctx context.Context, bin string) string {
+	const begin, end = "\x01persona-agent-path-begin\x01", "\x01persona-agent-path-end\x01"
+	script := `if __persona_agent_path=$(builtin command -v ` + shellQuote(bin) + `); then
+  builtin printf '\001persona-agent-path-begin\001%s\001persona-agent-path-end\001' "$__persona_agent_path"
+fi`
+	out, err := launcherShellOutput(ctx, script)
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		return ""
+	}
+	// An rc child can hold stdout open even when the lookup never ran. Require its completed result.
+	_, body, began := strings.Cut(string(out), begin)
+	path, _, ended := strings.Cut(body, end)
+	if !began || !ended || strings.ContainsAny(path, "\r\n") || !filepath.IsAbs(path) {
+		return ""
+	}
+	return path
+}
+
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
+
+// A managed model probe can skip the user's rc file when Claude and its interpreter are already available.
+// Otherwise run the original shell command so it gets the launcher and PATH established by the user's setup.
+func canProbeManagedClaudeDirectly() bool {
+	if runtime.GOOS == "windows" {
+		return true // keep the Windows executable and wrapper handling in Launch
+	}
+	claude := agentExecutableOnDisk("claude")
+	if claude == "" {
+		return false
+	}
+	dir, needsNode := launcherNodeDir(claude)
+	if dir != "" {
+		return true
+	}
+	if !needsNode {
+		// An arbitrary wrapper may depend on tools added by the user's shell.
+		return nativeExecutable(claude)
+	}
+	_, err := exec.LookPath("node")
+	return err == nil
+}
 
 // Launch is `personad launch [--ticket <ticket>] <name> [claude args…]`: the managed launcher's settings from the
 // local node, a hand-off's values with a ticket (secretenv.go), then claude.
@@ -446,6 +495,9 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		// whose version the node checked. An older node sends neither: no catalog, as before.
 		CodexCatalogURL   string `json:"codex_catalog_url"`
 		CodexCatalogCodex string `json:"codex_catalog_codex"`
+		// the node's PERSONA_MODEL_SOURCE_HOSTS, which a pane's shell need not carry (adoptSourceHosts). An older node
+		// does not send it: the process's own, as before.
+		ModelSourceHosts string `json:"model_source_hosts"`
 	}
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return err
@@ -510,7 +562,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
-	env = withoutEnv(env, []string{codexBypassEnv})
+	env = withoutEnv(env, []string{codexBypassEnv, managedModelProbeEnv})
 	if agent == "codex" {
 		// The provider wrapper is another native process boundary. Resolve npm's
 		// shim too; never let cmd.exe parse the first message on this final hop.
@@ -518,6 +570,17 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		if err != nil {
 			return fmt.Errorf("%s %w", codexStartError, err)
 		}
+	}
+	if agent == "codex" {
+		home, _ := os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		if err := guardCodexWritableSymlinks(ctx, argv, env, cwd, home); err != nil {
+			return err
+		}
+		if hosts := adoptSourceHosts(resp.ModelSourceHosts); hosts != "" {
+			env = append(withoutEnv(env, []string{modelhttp.SourceHostsEnv}), hosts)
+		}
+		argv, env = codexModelSource(argv, env, cwd, home)
 	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)
 	if agent == "codex" {
@@ -773,7 +836,16 @@ func launchExec(agent, exe string, argv, env []string) (string, []string, []stri
 		return sandbox.NewStatusReason("node-doctor.sandbox_unmanaged_agent", i18n.Args{"agent": agent})
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad launch: "+format+"\n", a...) }
-	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, append([]string{exe}, rest...), env, logf)
+	command := append([]string{exe}, rest...)
+	if agent == "claude" && os.Getenv(managedModelProbeEnv) == "1" {
+		if dir, _ := launcherNodeDir(exe); dir != "" {
+			// Only the probe needs this interpreter. Keep the child environment's PATH order for every other command.
+			exe = filepath.Join(dir, "node")
+			command = append([]string{exe}, command...)
+			argv = command
+		}
+	}
+	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, command, env, logf)
 	if wrapped[0] == exe {
 		return exe, argv, env, st
 	}
@@ -815,6 +887,9 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	}
 	if mergesNoProxy(l) {
 		out["no_proxy_merge"] = n.userNoProxy(l)
+	}
+	if hosts := strings.TrimSpace(os.Getenv(modelhttp.SourceHostsEnv)); hosts != "" && l.AgentType() == "codex" {
+		out["model_source_hosts"] = hosts // a pane's shell need not carry the node's allowlist (adoptSourceHosts)
 	}
 	return out
 }

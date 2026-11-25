@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/knowledgeuihost"
 	"github.com/nwverse/persona/server/internal/mcptoolgolden"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,7 +19,12 @@ import (
 // file. docs/assistant/prompts.md: regenerate with UPDATE_GOLDEN=1, which also deletes the goldens of removed tools.
 // The connectors', Cua's and ego's are the manager's (extmgr's connector_tools goldens, its answer to
 // extensions.hub_call connector_tools); the hub lists them with its own and the assistant's, in the same order.
+// This is the full built-in-module list. Core-only keeps its separate no-module contract in assistant's module tests,
+// not this golden: a core-only Service cannot expose knowledge-history or Health tools.
 func TestGoldenMCPTools(t *testing.T) {
+	if !knowledgeuihost.InBuild(moduleswitch.Set{}) {
+		t.Skip("the complete MCP goldens need the built-in knowledge UI and Health modules")
+	}
 	checked := func(tools []proto.Tool) []proto.Tool {
 		assertNoEmptyToolEnums(t, tools)
 		assertToolSchemaTypes(t, tools)
@@ -58,6 +65,18 @@ func TestGoldenMCPTools(t *testing.T) {
 	manager("assistant_with_imessage")
 	mcptoolgolden.CheckVariant(t, dir, "assistant_with_imessage", "assistant", assistantTools, checked(h.mcpTools(true)))
 	mcptoolgolden.CheckList(t, dir, "agent", checked(h.mcpTools(false)))
+}
+
+// The whole-list goldens the per-tool files replaced (#11252). A branch written before the split that merges main can
+// keep or recreate them while the per-tool files stay stale (#11475), so their return fails here with the fix.
+func TestNoWholeListMCPToolGoldens(t *testing.T) {
+	old, err := filepath.Glob(filepath.Join("testdata", "prompts", "mcp_tools.*.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range old {
+		t.Errorf("%s is a whole-list golden replaced by %s/<list>/<tool>.golden (#11252): delete it, then rerun UPDATE_GOLDEN=1 go test ./internal/hub -run TestGoldenMCPTools so the tool your branch changed is in its own file", f, mcptoolgolden.Dir)
+	}
 }
 
 func assertNoEmptyToolEnums(t *testing.T, tools []proto.Tool) {

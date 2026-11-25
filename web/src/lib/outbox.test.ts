@@ -176,7 +176,8 @@ describe("sending from another page", () => {
       .mockResolvedValueOnce(response({ ok: true, delivered_as: "relayed", relay_reason: "busy" }))
       .mockResolvedValueOnce(response({ ok: true, delivered_as: "relayed", relay_reason: "plugin_unconfirmed" }))
       .mockResolvedValueOnce(response({ ok: true, delivered_as: "user_input" }))
-      .mockResolvedValueOnce(response({ ok: true, delivered_as: "relayed", relay_reason: "no_plugin" })));
+      .mockResolvedValueOnce(response({ ok: true, delivered_as: "relayed", relay_reason: "no_plugin" }))
+      .mockResolvedValueOnce(response({ ok: true, delivered_as: "relayed", relay_reason: "plugin_outdated" })));
     expect(await sendToSession("m", "s", { text: "可以合并" })).toBe(true);
     expect(toast).toHaveBeenLastCalledWith(t("lib-outbox.relayed_busy"), "info");
     expect(await sendToSession("m", "s", { text: "合并吧" })).toBe(true);
@@ -185,6 +186,9 @@ describe("sending from another page", () => {
     expect(await sendToSession("m", "s", { text: "合并" })).toBe(true); // in as your input: nothing to say
     expect(await sendToSession("m", "s", { text: "好" })).toBe(true); // no plugin there: it always used the inbox
     expect(toast).not.toHaveBeenCalled();
+    // busy, and the session's plugin is from before busy delivery: reopening the session fixes it
+    expect(await sendToSession("m", "s", { text: "继续" })).toBe(true);
+    expect(toast).toHaveBeenLastCalledWith(t("lib-outbox.relayed_old_plugin"), "info");
   });
 
   it.each(retryPrompts)("keeps $kind after a refusal and retries as another operation without changing its intent", async ({ text }) => {
@@ -850,6 +854,53 @@ describe("messages kept across a reload", () => {
     undo(); // there already: no second copy
     expect(outbox()["m/s"]).toHaveLength(2);
     expect(discardOutbox("m", "s", "gone")).toBeUndefined();
+  });
+
+  it("keeps attached images in memory across same-tab navigation without persisting image bytes to localStorage", () => {
+    const imgs = [
+      { mime: "image/jpeg", data: "AAAA" },
+      { mime: "image/png", data: "BBBB" },
+    ];
+    const at = Date.now();
+    restoreOutbox("m", "s");
+    keepOutgoing("m/s", { id: "img-msg", text: "Check these two screenshots", images: imgs, at });
+    acceptOutgoing("m/s", "img-msg", at);
+    const saved = JSON.parse(store.get("outbox-msg:m/s/img-msg")!);
+    expect(saved.images).toBe(2);
+    expect(store.get("outbox-msg:m/s/img-msg")).not.toContain("AAAA");
+    expect(store.get("outbox-msg:m/s/img-msg")).not.toContain("BBBB");
+
+    // Client-side switch away and back (same tab: in-memory images survive).
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "img-msg", text: "Check these two screenshots", state: "sent", images: imgs }]);
+
+    // Once settled by the transcript echo, both localStorage and in-memory images are cleaned up.
+    settleOutbox("m", "s", [{ id: "echo-1", client_msg_id: "img-msg", text: "Check these two screenshots", images: [] }]);
+    expect(outbox()["m/s"]).toBeUndefined();
+    expect(store.size).toBe(0);
+
+    // After a full page reload (in-memory cleared), an unconfirmed message with images still reports lost images.
+    keepOutgoing("m/s", { id: "img-reload", text: "Lost after reload", images: imgs, at, state: "sending" });
+    reload();
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "img-reload", images: [], state: "failed", restored: true, error: t("lib-outbox.not_confirmed_images") }]);
+  });
+
+  it("preserves an image-only message across same-tab navigation without writing to localStorage", () => {
+    const imgs = [{ mime: "image/jpeg", data: "CCCC" }];
+    const at = Date.now();
+    restoreOutbox("m", "s");
+    keepOutgoing("m/s", { id: "img-only", text: "", images: imgs, at });
+    acceptOutgoing("m/s", "img-only", at);
+    expect(store.size).toBe(0);
+
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "img-only", text: "", state: "sent", images: imgs }]);
+
+    settleOutbox("m", "s", [{ id: "echo-only", client_msg_id: "img-only", text: "", images: [{}] }]);
+    expect(outbox()["m/s"]).toBeUndefined();
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toBeUndefined();
   });
 });
 

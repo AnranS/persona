@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
 
 // When herdr's server restarts it restores its panes and, once a client attaches, resumes the agents in them with its
@@ -25,25 +27,32 @@ import (
 // the restored pane's shell like herdr's own (so ~/.zshrc launchers work). Agents that the user starts in a terminal
 // are never touched: herdr resumes them as before. The user's herdr config is not changed. herdr keeps the command
 // across later session reports with another id (checked against v0.9.5), so a Claude that moved to a new session
-// (/clear) is reported again from its SessionStart hook.
+// (/clear) is reported again from its SessionStart hook. herdr before 0.9.2 answers the report ok and drops
+// resume_argv: on such a server nothing is reported, the node says once why, and a new server (an upgrade) is told
+// (#11792). An Agent such a restart resumed bare is listed off its launcher (offlauncher.go).
 
 // resumeSource is the reporter Persona sends resume_argv as (a custom source: herdr's own integration keeps its own).
 const resumeSource = "custom:persona"
 
 // agentLaunch is what an agent in a pane was started with, to start it again the same way.
 type agentLaunch struct {
+	Source modelhttp.Source `json:"model_source,omitzero"`
+
+	AdditionalDirs                   []string `json:"additional_dirs,omitempty"`
 	TaskInstructionFile              string
 	TaskInstructions                 string
 	Agent                            string // "claude" (empty means claude), "codex", "traex", "pi"
 	Launcher, Settings, Hooks, Model string
 	Effort                           string // a work agent's explicit effort, empty for its default
+	Mode                             string // an agy's permission mode (agyModeFlags), empty in a record from before it
 	Display                          string // the live replies plugin's directory, "" for none (liveRepliesPlugin)
 	Plugins                          bool   // claude loads plugins: Persona's plugin directory and office rule
 	ID                               string
 	AgyConversation                  string // native ID verified for this pane, separate from the Persona row ID
-	// Server is the herdr server instance (herdr.Client.ServerID) that last took the resume command; "" before. A
-	// pane whose server changed since (a restart, a live handoff, an upgrade from a herdr older than 0.9.2, which
-	// ignored resume_argv) is reported again by backfillResume.
+	// Server is the herdr server instance (herdr.Client.ServerID) that last took the resume command, or that was
+	// found too old to keep one (herdrDropsResume); "" before. A pane whose server changed since (a restart, a live
+	// handoff, an upgrade from a herdr older than 0.9.2, which ignored resume_argv) is reported again by
+	// backfillResume.
 	Server string
 }
 
@@ -53,13 +62,16 @@ type claudeLaunch = agentLaunch
 // quoting with q.
 func (n *Node) claudeCommandLine(spec claudeLaunch, args string, q func(string) string) string {
 	cmd := n.launcherCommandQ(spec.Launcher, q) + " " + args
+	for _, dir := range spec.AdditionalDirs {
+		cmd += " --add-dir " + q(dir)
+	}
 	if spec.Settings != "" {
 		cmd += " --settings " + q(spec.Settings)
 	}
 	if spec.TaskInstructionFile != "" {
 		cmd += " --append-system-prompt-file " + q(spec.TaskInstructionFile)
 	}
-	cmd += " --mcp-config " + q(filepath.Join(n.dir, "mcp.json")) + " --allowedTools " + q(n.agentAllowedTools(spec.Plugins))
+	cmd += " --mcp-config " + q(n.agentMCPConfig()) + " --allowedTools " + q(n.agentAllowedTools(spec.Plugins))
 	if spec.Model != "" {
 		cmd += " --model " + q(spec.Model)
 	}
@@ -93,7 +105,10 @@ func dquote(s string) string {
 // environment (agentenv.go). ok is false when the command cannot be said without an apostrophe (a path with one in
 // it): herdr would refuse it.
 func (n *Node) claudeResumeArgv(spec claudeLaunch, id string) (argv []string, ok bool) {
-	cmd := withHerdrAgent(resumeHerdrAgent("claude"), n.claudeCommandLine(spec, "--resume "+id, dquote))
+	if validModes("", spec.Effort) != nil {
+		return nil, false
+	}
+	cmd := withHerdrAgent(resumeHerdrAgent("claude"), n.claudeCommandLine(spec, "--resume "+id+modeFlags("", spec.Effort), dquote))
 	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if !resumeSayable(cmd) || !validID(id) {
 		return nil, false
@@ -104,11 +119,82 @@ func (n *Node) claudeResumeArgv(spec claudeLaunch, id string) (argv []string, ok
 // maxResumeArgv is herdr's limit on a resume_argv's total length (agent_resume.rs, v0.9.5).
 const maxResumeArgv = 8192
 
+// resumeArgvMinHerdr is the first herdr that keeps a reported resume_argv. An older server answers the report ok and
+// drops the field, so its restart resumes the agent with herdr's bare `claude --resume <id>` (#11792).
+var resumeArgvMinHerdr = [3]int{0, 9, 2}
+
+// herdrDropsResume: v, the version a herdr server answers ping with, is older than resumeArgvMinHerdr. A server that
+// names no version is not taken to drop it: its command is reported as before.
+func herdrDropsResume(v string) bool {
+	return versionAtLeast(v, [3]int{}) && !versionAtLeast(v, resumeArgvMinHerdr)
+}
+
+// warnDroppedResume says once per herdr server (its ServerID) that it drops resume commands, which only an upgrade of
+// herdr on this computer changes.
+func (n *Node) warnDroppedResume(server, version string) {
+	n.mu.Lock()
+	seen := n.droppedResume[server]
+	if n.droppedResume == nil {
+		n.droppedResume = map[string]bool{}
+	}
+	n.droppedResume[server] = true
+	n.mu.Unlock()
+	if !seen {
+		n.logf("herdr resume: herdr %s drops resume commands (they need herdr %d.%d.%d or later): after a herdr restart the agents "+
+			"Persona started in it resume bare (claude --resume <id>), off their launchers, until herdr is upgraded",
+			version, resumeArgvMinHerdr[0], resumeArgvMinHerdr[1], resumeArgvMinHerdr[2])
+	}
+}
+
 // resumeSayable reports whether herdr takes cmd as eval's argument: no apostrophe, no control character (both make
 // herdr answer invalid_resume_argv) and within herdr's length limit, counting "eval".
 func resumeSayable(cmd string) bool {
 	return !strings.Contains(cmd, "'") && len("eval")+len(cmd) <= maxResumeArgv &&
 		strings.IndexFunc(cmd, unicode.IsControl) < 0
+}
+
+// Keep alias credentials out of herdr's persisted command. A restore reads the
+// launcher's words again and hands them to the same resolver as a file-based start.
+func (n *Node) herdrCodexLauncher(name string) string {
+	launcherCache.Lock()
+	words := launcherCache.codex[name]
+	launcherCache.Unlock()
+	if len(words) == 0 {
+		if _, managed := n.managedLauncher(name); managed {
+			return dquote(n.bin) + " launch " + dquote(name)
+		}
+		if name == "codex" {
+			return "codex" // codex-start resolves the stock CLI even before discovery
+		}
+	}
+	if name == "codex" && len(words) == 1 && (words[0] == "codex" || filepath.IsAbs(words[0])) {
+		return dquote(words[0])
+	}
+	// Rediscover custom launcher words in the marked shell on restore.
+	return "--launcher " + dquote(name)
+}
+
+func herdrCodexRestore(args []string) (codexStartFile, error) {
+	if len(args) >= 2 && args[0] == "--launcher" {
+		name := args[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		env := append(codexPaneEnv(&herdrHost{}), codexStartMarker)
+		out, err := scanLaunchers(ctx, env...)
+		if err != nil {
+			return codexStartFile{}, err
+		}
+		_, launchers, _, _ := mergeLaunchers(string(out))
+		words := launchers[name]
+		if len(words) == 0 {
+			if name != "codex" {
+				return codexStartFile{}, fmt.Errorf("%s Codex launcher %q not found", codexStartError, name)
+			}
+			words = []string{"codex"} // a function or PATH entry only the marked shell sees
+		}
+		args = append(words, args[2:]...)
+	}
+	return codexStartFile{Argv: args, Agent: herdrAgentName("codex")}, nil
 }
 
 // agentResumeArgv is the resume_argv for an agent Persona started (Claude, Codex, a compatible CLI, pi, the Cursor
@@ -132,15 +218,21 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 		}
 		return []string{"eval", cmd}, true
 	}
-	cmd := withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+codexTaskFlags(spec.TaskInstructions)+" resume "+id)
-	if _, program, ok := workAgent(kind); ok {
+	var cmd string
+	if kind == "codex" {
+		cmd = dquote(n.bin) + " codex-start --herdr-resume " + n.herdrCodexLauncher(spec.Launcher) + codexTaskFlags(spec.TaskInstructions) + " resume " + id
+	} else if _, program, ok := workAgent(kind); ok {
 		launcher := spec.Launcher
 		resumeID := id
+		model := spec.Model
 		if kind == agyAgent {
 			launcher = n.launcherCommandQ(launcher, dquote)
 			resumeID = spec.AgyConversation
+			model = agyEffortModel(model, spec.Effort)
 		}
-		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort), resumeID))
+		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, model, spec.Effort, spec.Mode), resumeID))
+	} else {
+		cmd = withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+codexTaskFlags(spec.TaskInstructions)+" resume "+id)
 	}
 	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if !resumeSayable(cmd) || (!validID(id) && !runtimeIDRe.MatchString(id)) {
@@ -167,9 +259,14 @@ func (n *Node) holdResume(ctx context.Context, launch host.Launcher, pane, id st
 		return
 	}
 	spec.ID = id
+	var agyConv string
+	if spec.Agent == agyAgent {
+		n.ensureAgyHooksForLaunch() // agyhooks.go (#13950): ensure hooks exist for resumed agy panes
+		agyConv = n.agyConversation(id, pane)
+	}
 	n.mu.Lock()
 	if spec.Agent == agyAgent {
-		spec.AgyConversation = n.agyConversationLocked(id, pane)
+		spec.AgyConversation = agyConv
 	}
 	if n.launches == nil {
 		n.launches = map[string]claudeLaunch{}
@@ -192,20 +289,22 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 	if cur, ok := n.launches[pane]; ok {
 		spec = cur
 	}
+	n.mu.Unlock()
 	reportID := spec.ID
 	if spec.Agent == agyAgent {
-		spec.AgyConversation = n.agyConversationLocked(spec.ID, pane)
+		spec.AgyConversation = n.agyConversation(spec.ID, pane)
 		if spec.AgyConversation != "" {
 			reportID = spec.AgyConversation
 		}
+		n.mu.Lock()
 		if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID {
 			// What is reported is what the pane resumes: kept, so the server is recorded below and backfill does not
 			// report the same conversation again.
 			cur.AgyConversation = spec.AgyConversation
 			n.launches[pane] = cur
 		}
+		n.mu.Unlock()
 	}
-	n.mu.Unlock()
 	argv, ok := n.agentResumeArgv(spec, spec.ID)
 	if !ok {
 		if spec.Agent == ompAgent && n.ompKnownFile(spec.ID) == "" {
@@ -222,16 +321,26 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 		agentName = "claude"
 	}
 	server := h.serverID(ctx, host.ParsePane(pane)) // before the report: a server that replaces this one meanwhile is newer
+	settled := func() {
+		n.mu.Lock()
+		if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID && cur.AgyConversation == spec.AgyConversation {
+			cur.Server = server
+			n.launches[pane] = cur
+		}
+		n.mu.Unlock()
+	}
+	if v := h.serverVersion(ctx, host.ParsePane(pane)); herdrDropsResume(v) {
+		// It would answer ok and keep nothing. Settled against this server all the same, so the server an upgrade
+		// brings (a new one) is given the command (backfillResume).
+		n.warnDroppedResume(server, v)
+		settled()
+		return
+	}
 	if err := h.PaneReportResume(ctx, host.ParsePane(pane), resumeSource, agentName, reportID, argv); err != nil {
 		n.logf("herdr resume: %s (%s): %v", pane, spec.ID, err)
 		return
 	}
-	n.mu.Lock()
-	if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID && cur.AgyConversation == spec.AgyConversation {
-		cur.Server = server
-		n.launches[pane] = cur
-	}
-	n.mu.Unlock()
+	settled()
 }
 
 // resumeOnSessionStart follows a Persona-started Claude to its new session (/clear, /resume in it): herdr would
@@ -280,6 +389,12 @@ func (n *Node) backfillResume(agents []host.Agent) {
 	var work []todo
 	var recheck []held
 	var reports []string
+	agyByPane := map[string]string{}
+	for _, a := range agents {
+		if a.Agent == agyAgent && a.PaneID != "" && host.ParsePane(a.PaneID).Kind == host.Herdr {
+			agyByPane[a.PaneID] = n.agyConversation(otherSession(a), a.PaneID)
+		}
+	}
 	n.mu.Lock()
 	for _, a := range agents {
 		if a.PaneID == "" || host.ParsePane(a.PaneID).Kind != host.Herdr {
@@ -292,7 +407,7 @@ func (n *Node) backfillResume(agents []host.Agent) {
 		var agy string
 		if a.Agent == agyAgent {
 			id = otherSession(a)
-			agy = n.agyConversationLocked(id, a.PaneID)
+			agy = agyByPane[a.PaneID]
 		} else if !validID(id) {
 			continue
 		}
@@ -366,7 +481,7 @@ func (n *Node) backfillResume(agents []host.Agent) {
 			if w.kind == "claude" || w.kind == "" {
 				settings, hooks := n.claudeStartSettings(ctx, w.st.Launcher, "claude", w.st.Cwd)
 				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks),
-					TaskInstructionFile: w.st.TaskInstructionFile, Model: w.st.Model, Plugins: n.claudeLoadsPlugins(ctx), ID: w.id}
+					TaskInstructionFile: w.st.TaskInstructionFile, Model: n.claudeModelArg(w.st.Launcher, w.st.Model), Effort: w.st.ModelEffort, Plugins: n.claudeLoadsPlugins(ctx), ID: w.id}
 			} else {
 				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Model: w.st.Model, Effort: w.st.ModelEffort, ID: w.id, AgyConversation: w.agy, TaskInstructions: codexKeptTaskInstructions(w.st)}
 			}

@@ -92,6 +92,7 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
   await loadPages();
+  await loadPages();
 });
 
 afterEach(() => {

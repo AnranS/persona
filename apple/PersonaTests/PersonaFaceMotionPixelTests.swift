@@ -1,4 +1,3 @@
-#if os(iOS) || os(visionOS)
 import SwiftUI
 import Testing
 import UIKit
@@ -198,7 +197,13 @@ import UIKit
         defer { capture.close() }
         let expected = try await capture.pixels(original)
         let actual = try await capture.pixels(hosted)
-        #expect(expected.bytes == actual.bytes, Comment(rawValue: "single static host control: \(difference(expected, actual))"))
+        Self.expectControl(difference(expected, actual), "single static host control")
+    }
+
+    /// A static host draws what the face draws. iOS 26 rounds some edge pixels of the two by up to 2 per channel, and
+    /// not on every run (#11621); a shifted, rescaled or missing piece differs by far more.
+    private static func expectControl(_ diff: Difference, _ name: String, sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(diff.maximum <= 2, Comment(rawValue: "\(name): \(diff)"), sourceLocation: sourceLocation)
     }
 
     @Test func unchangedFractionalFaceInsideOneStaticHostControlsTheHostingPath() async throws {
@@ -210,7 +215,7 @@ import UIKit
         let expected = try await capture.pixels(original)
         let actual = try await capture.pixels(hosted)
         print("PersonaFaceMotion fractional static-host control: \(difference(expected, actual))")
-        #expect(expected.bytes == actual.bytes, Comment(rawValue: "fractional static host control: \(difference(expected, actual))"))
+        Self.expectControl(difference(expected, actual), "fractional static host control")
     }
 
     @Test func fixedRockKeepsTheBodyPivotStationary() throws {
@@ -300,4 +305,3 @@ private struct StaticHostedFace: UIViewRepresentable {
         CGSize(width: face.size, height: face.size)
     }
 }
-#endif

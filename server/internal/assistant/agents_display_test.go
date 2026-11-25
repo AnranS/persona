@@ -38,13 +38,17 @@ func TestAgentsDisplayDefaultsRolesAndMigration(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &got)
 		return w.Code, got
 	}
-	if code, got := call("GET", "", roleAnswer); code != 200 || !got.ShowBotmux || got.Configured {
+	if code, got := call("GET", "", roleAnswer); code != 200 || !got.ShowBotmux || got.Configured || got.UseHerdrTabName {
 		t.Fatalf("default: %d %+v", code, got)
 	}
 	if code, _ := call("PUT", `{"show_botmux":false}`, roleAnswer); code != http.StatusForbidden {
 		t.Fatal(code)
 	}
-	for _, body := range []string{`{}`, `{"show_botmux":null}`, `{"show_botmux":"false"}`, `nope`} {
+	if code, _ := call("PUT", `{"use_herdr_tab_name":true}`, roleAnswer); code != http.StatusForbidden {
+		t.Fatal(code)
+	}
+	for _, body := range []string{`{}`, `{"show_botmux":null}`, `{"show_botmux":"false"}`, `{"use_herdr_tab_name":"true"}`,
+		`{"use_herdr_tab_name":null}`, `{"use_herdr_tab_name":true,"show_botmux":false}`, `{"use_herdr_tab_name":true,"only_if_unset":true}`, `nope`} {
 		if code, _ := call("PUT", body, roleFull); code != 400 {
 			t.Fatalf("%s: %d", body, code)
 		}
@@ -71,6 +75,32 @@ func TestAgentsDisplayDefaultsRolesAndMigration(t *testing.T) {
 	got, err := other.readAgentsDisplay(context.Background())
 	if err != nil || !got.ShowBotmux || !got.Configured {
 		t.Fatalf("second service: %+v %v", got, err)
+	}
+}
+
+func TestAgentsDisplayHerdrNamePersistsAcrossServices(t *testing.T) {
+	database := todoTestDB(t)
+	a, _ := navigationService(t, database)
+	b, _ := navigationService(t, database)
+	ctx := context.Background()
+	path := "/api/v1/agents/display-settings"
+	if a.useHerdrTabName(ctx) || b.useHerdrTabName(ctx) {
+		t.Fatal("herdr names should be opt-in")
+	}
+	if w := boardCall(a, "PUT", path, `{"use_herdr_tab_name":true}`, roleFull); w.Code != 200 {
+		t.Fatalf("enable: %d %s", w.Code, w.Body)
+	}
+	if got, err := b.readAgentsDisplay(ctx); err != nil || !got.UseHerdrTabName || !got.ShowBotmux || got.Configured {
+		t.Fatalf("saved name preference affected the botmux default: %+v %v", got, err)
+	}
+	if w := boardCall(b, "PUT", path, `{"show_botmux":false,"only_if_unset":true}`, roleFull); w.Code != 200 || !a.useHerdrTabName(ctx) {
+		t.Fatalf("botmux migration lost the name preference: %d %s", w.Code, w.Body)
+	}
+	if w := boardCall(b, "PUT", path, `{"use_herdr_tab_name":false}`, roleFull); w.Code != 200 {
+		t.Fatalf("disable: %d %s", w.Code, w.Body)
+	}
+	if got, err := a.readAgentsDisplay(ctx); err != nil || got.UseHerdrTabName || got.ShowBotmux || !got.Configured {
+		t.Fatalf("saved opt-out: %+v %v", got, err)
 	}
 }
 func TestAgentsDisplayConcurrentMigration(t *testing.T) {
@@ -178,5 +208,58 @@ func TestAgentsDisplayDatabaseConcurrentMigration(t *testing.T) {
 	got, err = a.readAgentsDisplay(ctx)
 	if err != nil || !got.Configured || !got.ShowBotmux {
 		t.Fatalf("concurrent explicit lost: %+v %v", got, err)
+	}
+}
+
+// The list's sort and Filter switches (docs/protocol/protocol.md "Agents display settings"): off unless manager.json's
+// agents section turns them on; a saved choice, either way, wins over that initial value.
+func TestAgentsDisplaySortAndFilterSwitches(t *testing.T) {
+	on := true
+	st := &agentsDisplayStore{settingsBoardStore: newSettingsBoardStore()}
+	s, _ := navigationService(t, st)
+	call := func(s *Service, method, body, role string) (int, agentsDisplay) {
+		t.Helper()
+		w := boardCall(s, method, "/api/v1/agents/display-settings", body, role)
+		var got agentsDisplay
+		_ = json.Unmarshal(w.Body.Bytes(), &got)
+		return w.Code, got
+	}
+	if code, got := call(s, "GET", "", roleAnswer); code != 200 || got.SortByActivity || got.ShowFilter {
+		t.Fatalf("no config, nothing saved: %d %+v", code, got)
+	}
+	for _, body := range []string{`{"sort_by_activity":true}`, `{"show_filter":true}`} {
+		if code, _ := call(s, "PUT", body, roleAnswer); code != http.StatusForbidden {
+			t.Fatalf("%s: %d", body, code)
+		}
+	}
+	for _, body := range []string{`{"sort_by_activity":"yes"}`, `{"show_filter":null}`, `{"sort_by_activity":true,"show_filter":true}`,
+		`{"sort_by_activity":true,"show_botmux":false}`, `{"sort_by_activity":true,"only_if_unset":true}`} {
+		if code, _ := call(s, "PUT", body, roleFull); code != 400 {
+			t.Fatalf("%s: %d", body, code)
+		}
+	}
+	if code, got := call(s, "PUT", `{"sort_by_activity":true}`, roleFull); code != 200 || !got.SortByActivity || got.ShowFilter || got.Configured || !got.ShowBotmux {
+		t.Fatalf("sort on: %d %+v", code, got)
+	}
+	if code, got := call(s, "PUT", `{"show_filter":true}`, roleFull); code != 200 || !got.SortByActivity || !got.ShowFilter {
+		t.Fatalf("filter on: %d %+v", code, got)
+	}
+	other, _ := navigationService(t, st)
+	if got, err := other.readAgentsDisplay(context.Background()); err != nil || !got.SortByActivity || !got.ShowFilter {
+		t.Fatalf("second service: %+v %v", got, err)
+	}
+
+	// manager.json's initial values: used until the user saves, and an explicit "off" beats an initial "on".
+	fresh := &agentsDisplayStore{settingsBoardStore: newSettingsBoardStore()}
+	c, hub2 := navigationService(t, fresh)
+	hub2.hello.Agents.SortByActivity, hub2.hello.Agents.ShowFilter = &on, &on
+	if code, got := call(c, "GET", "", roleAnswer); code != 200 || !got.SortByActivity || !got.ShowFilter || got.Configured {
+		t.Fatalf("configured default: %d %+v", code, got)
+	}
+	if code, got := call(c, "PUT", `{"sort_by_activity":false}`, roleFull); code != 200 || got.SortByActivity || !got.ShowFilter {
+		t.Fatalf("explicit off lost to the config: %d %+v", code, got)
+	}
+	if code, got := call(c, "GET", "", roleAnswer); code != 200 || got.SortByActivity || !got.ShowFilter {
+		t.Fatalf("explicit off after reload: %d %+v", code, got)
 	}
 }

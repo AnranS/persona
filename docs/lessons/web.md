@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## A folder of trees names its repository, it is not one (#13453)
+
+Path inference keys a tree in a folder kept apart from its repository (herdr's `~/.herdr/worktrees/<repository>/<tree>`)
+by that folder. Nothing is checked out there, so a Repo section keyed by it never meets the repository's own section,
+which Git keys by the main checkout. When a tree was removed after its work merged, or has not been read yet, Git places
+none of its Agents, and the repository showed as a second section with its name. Treat such a folder as naming its
+repository, and resolve it against what Git placed on the same computer: another tree of that folder, else the one
+section of that name. When either is ambiguous, keep it apart. A fixture where every session carries `repo_root` never
+reaches this fallback, so test sessions with a removed tree's bare `cwd`. Check the folder is at the computer's home: a
+cwd in a folder of a repository's own tree (`/code/app/.worktrees/feature/src`) has the same shape, and joining by the
+tree's name moved its Agent into an unrelated repository's section.
+
 ## A folded launcher must retain its identity (#10249)
 
 When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
@@ -216,6 +228,11 @@ screen 49 B over its budget. Words the live screen needs only once it is connect
 dynamically (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
 catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
 on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
+
+Since #14404 the live screen is the screen-share module's page of its own (`web/src/modules/screen-share/standalone.tsx`):
+its namespaces (`screen-share-*`) are the module's catalog, loaded before its code, so they are in no first screen at all.
+What that file imports statically still runs without waiting for the rest of the catalog, so a core key it reads must be
+in the startup list; the build still names one that is not.
 
 ## A mouse event sent again comes out on whole pixels (#5729)
 
@@ -912,7 +929,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - **Usage totals belong to the complete report scope** (#1567): bind accepted data and request status to the machine, range, model and launcher. Keep selector catalogs separately while another scope loads or fails; they are navigation options, not evidence of that scope's totals. Show current failures with retry, and label retained same-scope data as potentially stale. A scope cleanup alone does not order overlapping polls: ignore superseded success, error, unsupported and completion handlers even when transport cancellation arrives late. Exercise the actual component through the REST client with deferred synthetic fetch responses, including machine changes and empty launcher encoding.
 
 - **A `seen` the page only sends is lost without a word** (#6493): the web sent `{"type":"seen"}` on open and drew whatever the hub pushed next. `send` drops the message while the socket is still connecting (opening a chat link, a reload, a tab coming back after its socket went quiet), a half-open socket swallows it, and the next list still says Unread: the green dot stays after reading. Mark it seen locally at once and keep the mark until the hub's own rows say it was recorded (a later `seen_at`), with an HTTP retry after 5 s and a resend after hello (`lib/seen-outbox.ts`, the app's `SeenOutbox`). Hold the mark in the store's `set` so every way rows come in (pushes, paged-list pages, HTTP answers) is drawn seen, and hold it in `SessionRow` too: the paged sidebar draws the list's own rows, not the store's. The mock hub always takes the socket's `seen` and pushes back at once, so a plain mock run does not show this; rewrite or drop frames with `page.routeWebSocket` to check it.
+- **A mark the hub recorded still holds the lists that have not read since** (#12766): the page reads several lists of the same agents, each on its own hints and at most once in two seconds (the chat's lookup, the store's list, the sidebar's root list, a filtered list, the groups' counts). Letting a seen mark go as soon as the first of them showed `seen_at` recorded put the sidebar's row, still the one read before the look, back to green until its own list read: up to two seconds on a fleet whose working agents hint all the time. Keep the recorded mark for a while (`SEEN_SETTLE_MS`), held only against rows that still carry the old `seen_at`, and drop it at once when a row shows a new turn, work or a question. The plain mock hides it (every list reads at once): bump a working agent every 300 ms (`/mock/bump?what=last`) so each list reads on its own window.
+- **Correct a count only against the rows of the same read** (#12766): the hub's Unread counts still count an agent the page holds seen until a read after the record. Subtract a held agent only when it is among rows that came in the same answer as those counts (`sessions_page_counts`: the root list's or a filtered list's own page, published in one `SessionList` update since then; without the feature the hub's counts are left as they are); a separate counts read (a grouping while Lark-bot sessions are hidden) against another list's older rows took the agent off twice, one too few for up to two seconds, and one newer row against older counts put it back for a moment. Counts read on their own are read on every hint and follow the hub within one round trip.
 - **Do not compare the page's own `seen_at` with the hub's**: "Mark all as seen" writes a local `seen_at` into its copy, which would read as "recorded" and drop the mark before the hub ever had it. Remember the value written and ignore it.
+- **A folded unread dot can belong to a side session**: before debugging the seen outbox, compare the parent's own `state` and `seen_at` with `children.sides_unread`. A roots page can return an idle parent in its Unread filter, and the sidebar can draw its folded dot next to the parent's own completion line. Read the folded children with `parent_session_id` to find the unread key. Viewing the parent records only the parent's key; a side is seen when its own chat is viewed. Since #13496 the parent's row names the unread side and opens it, so the user can tell the two cases apart too; a row whose dot stays with no such line is the bug to chase.
+- **A row that reads rows for itself keeps reading until the hub agrees** (#13496): the sidebar's parent row reads its side rows to name an unread one, and they are what clears its dot at once when that side is seen. Mounting the reader only while the row looks Unread would drop those rows the moment they clear it, and the row would fall back to the hub's older `sides_unread` for a round trip (green again). Keep it on the hub's rollup (or the held rows) instead, and draw nothing while it agrees with the page.
 - **Mark a turn that ends while the chat is shown in the same update that brings it**: a React effect on the session's state runs after the green frame is drawn (and was the only path that re-marked). The store knows which chats are on screen (`viewSession`) and marks them inside `set` while the tab is visible.
 
 - A paging fallback must change its data source as well as its component (#6362). `useAgentSessions` exposes only the bounded window on paging hubs, and those hubs suppress full socket snapshots. Pins and groups require a query-free complete `/sessions` read, refreshed by invalidation hints and scoped to the fallback's lifetime. Test a pin beyond the first page without injecting a full socket list. Bulk actions must also accept displayed rows absent from the detail cache: iterating only cached rows silently skips them. Overlay changed local details without replacing newer HTTP rows with unchanged old cache entries.
@@ -1361,6 +1382,10 @@ A workspace row has separate disclosure, selection and action controls. When mer
 
 The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
 
+## Split a sidebar summary from a lazy message index (#12038)
+
+A compact index shared by the sidebar and every message can put the message menu's identity map and per-message subscriptions on the first screen even when its writes are lazy. Give the sidebar a small count/access store and let the lazy message controls own the full index. Do not remove read-only markers or duplicate request logic to save bytes. Measure the production bundle: merely moving translation keys or splitting type files may add bytes instead of reducing them.
+
 ## Archive refusals must roll back optimistic removal (#4277)
 
 A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
@@ -1504,3 +1529,33 @@ Keep the legacy key on read/write failure and guard delayed reads with a save an
 credential generation. Filtering must consume the acknowledged shared value in
 both complete and paged lists before grouping/counts; a quick filter must never
 turn the display preference back on as a side effect.
+
+## Live turn clock ownership stays on the live line (#12446)
+
+A foreground dock timer flag in `ChatContext` invalidates every historical exchange when a turn starts or ends,
+even through memoized rows. Carry it as a prop only on live transcript lines (including live children of an opened
+background round). Compare message-action renders for starting and ending separately against different history
+lengths, and retain the single-timer tests for Agent and Persona chats.
+
+## Same-address history replacements need a route snapshot change (#12055)
+
+`history.replaceState` can change a drill-down's origin while leaving its URL unchanged. Calling the router's listeners is
+not enough when `useRoute` snapshots only `location.pathname + location.search`: React sees the same snapshot and keeps the
+old sidebar highlight. Snapshot a router revision that advances on every actual navigation, including same-address replace,
+and test the visible row as well as the cleared `handoff` state. A component that copied that origin into `useState` still
+keeps the old way-back strip, so read the current entry when the revision changes. Keep an explicit sidebar reselection as
+a replace, not a push, so it cannot add a duplicate history entry.
+
+- A standalone Vite component screenshot fixture still needs the production language-catalog and page-token plugins, plus the text-scale PostCSS transform. Loading the raw locale metadata as a catalog fails before React renders. Initialize localization before importing the component and capture browser page errors so a missing table reports its initialization error instead of only a selector timeout.
+
+## Two projections of one tree need one flat rule (#13454)
+
+By repo builds a repository's rows two ways: from the hosts' workspace catalog, and from sessions alone where no host
+lists the place. The session-only projection drew a lone main checkout flat (`showsWorktreeLevel`), but a catalog
+workspace always kept its level, so a folder with a herdr workspace read `notes › notes › Agents` while the same folder
+without one read `notes › Agents`; every Agent row under it then ended with `<repository> › <tree>`, a third copy of
+the headings' names. Give both projections the same rule: a level that only repeats its heading's name is left out, and
+the heading takes the row's marks and menu. A host that does not say which workspace is the main checkout (herdr has no
+`is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
+order the tree: actions keep reading what the host said. Guess only for a host that names no project: a desktop app's
+project lists each of its folders as its own `project_path`, so the section's first folder wore the home mark (#14497).

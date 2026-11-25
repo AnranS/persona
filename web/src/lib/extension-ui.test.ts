@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, edgeLabels, extensionSettingsHref, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
+  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, edgeLabels, extensionSettingsHref, extensionTrackRoute, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
   percent, placesOf, pointText, readView, refreshDelay, renderUI, seriesColors, stackedShare, submitValues, thinLabels, toneOf, uiContext, uiIcon, uiPlaces, UI_VERSION, type UIPlace, type UIView,
 } from "./extension-ui";
 
@@ -78,6 +78,11 @@ describe("画一页", () => {
     expect(outcome({ view })).toMatchObject({ view, reload: false });
     expect(outcome({ open_url: "https://example.com/keys" })).toMatchObject({ reload: false, url: "https://example.com/keys" });
     expect(outcome({ open_url: "http://example.com/keys" })).toMatchObject({ reload: false, url: undefined });
+    expect(extensionTrackRoute("persona://tracks/computer-example/reading/session-example")).toEqual({ name: "persona", mid: "computer-example", sid: "session-example" });
+    expect(extensionTrackRoute("persona://tracks/computer-example/health/session-example")).toBeUndefined();
+    expect(extensionTrackRoute("persona://settings/extensions/example")).toBeUndefined();
+    expect(extensionTrackRoute("https://example.com/tracks/computer-example/reading/session-example")).toBeUndefined();
+    expect(outcome({ open_url: "persona://tracks/computer-example/reading/session-example" })).toHaveProperty("track");
   });
   it("hides a section the extension says is not its gateway (404 unsupported), and only that", () => {
     expect(isUnsupported(new ApiError(404, "not my gateway", { code: "unsupported" }))).toBe(true);
@@ -161,7 +166,7 @@ describe("UI 版本 2：上下文", () => {
     vi.stubGlobal("navigator", { language: "zh-CN" });
     const c = uiContext({ machine: "m1", size: "compact" });
     expect(c).toMatchObject({ platform: "web", ui_version: UI_VERSION, locale: "zh-CN", machine: "m1", size: "compact" });
-    expect(UI_VERSION).toBe(10);
+    expect(UI_VERSION).toBe(12);
     expect(c.tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(uiContext()).not.toHaveProperty("launcher");
     expect(uiContext({ launcher: "work" }).launcher).toBe("work");
@@ -364,5 +369,13 @@ describe("单类目的 stacked bar 画横向分段条（#5386）", () => {
   });
   it("keeps a zero-value part aligned with the other shares", () => {
     expect(stackedShare({ kind: "bar", stacked: true, series: [onePoint("a", 0), onePoint("b", 100)] })?.map((p) => p.ratio)).toEqual([0, 1]);
+  });
+  it("keeps shares proportional when the sum of finite values overflows", () => {
+    expect(stackedShare({ kind: "bar", stacked: true, series: [onePoint("a", Number.MAX_VALUE), onePoint("b", Number.MAX_VALUE)] })?.map((p) => p.ratio)).toEqual([0.5, 0.5]);
+  });
+  it("rejects non-finite values and empty points", () => {
+    expect(stackedShare({ kind: "bar", stacked: true, series: [onePoint("a", Number.NaN), onePoint("b", 1)] })).toBeNull();
+    expect(stackedShare({ kind: "bar", stacked: true, series: [onePoint("a", Number.POSITIVE_INFINITY), onePoint("b", 1)] })).toBeNull();
+    expect(stackedShare({ kind: "bar", stacked: true, series: [{ name: "a", points: [] }, onePoint("b", 1)] })).toBeNull();
   });
 });

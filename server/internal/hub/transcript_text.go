@@ -65,6 +65,8 @@ func localizedItem(l i18n.Lang, it proto.Item) (proto.Item, bool) {
 		set(&it.Text, modelRefusalText(l, it.ModelRefusal))
 	case it.Kind == proto.KindNotice && it.Task != nil:
 		set(&it.Text, taskNoteText(l, it.Task, it.Text))
+	case it.Kind == proto.KindNotice && it.Wake && it.Text == transcript.BackgroundTaskUpdate:
+		set(&it.Text, tt(l, "task_updated"))
 	case it.Kind == proto.KindNotice:
 		set(&it.Text, noticeText(l, it.Text))
 	case it.Kind == proto.KindText && it.Role == "user" && it.From == transcript.PersonaPeer && it.Text == transcript.StoppedFromPhone:
@@ -135,11 +137,15 @@ func noticeText(l i18n.Lang, s string) string {
 		return tt(l, "schedule_fired")
 	case strings.HasPrefix(s, transcript.PaseoScheduleNotice+"："):
 		return tt(l, "schedule_fired_what", i18n.Args{"what": strings.TrimPrefix(s, transcript.PaseoScheduleNotice+"：")})
-	case s == i18n.T(i18n.Default, "node-engine.agy_pane_integration"):
+	case s == i18n.T(i18n.Default, "node-engine.agy_pane_integration"), s == legacyAgyPaneNotice:
 		return i18n.T(l, "node-engine.agy_pane_integration")
 	}
 	return s
 }
+
+// legacyAgyPaneNotice is the pane notice an older node writes (before #13763 it pointed only at herdr's integration):
+// shown in the reader's language as the current one.
+const legacyAgyPaneNotice = "你仍可发送消息和使用终端。herdr 确认此窗格对应的对话后，Persona 就会显示该对话。如果尚未安装集成，请运行 herdr integration install antigravity-cli。"
 
 // runtimeResultText is a tool result in l when a runtime bridge wrote words of its own into it (transcript.Runtime*):
 // a cancelled call's, and a failed command's exit code after its output; the output itself stays as it is.
@@ -225,7 +231,7 @@ func taskNoteText(l i18n.Lang, n *proto.TaskNote, text string) string {
 	}
 	key, args := taskNoteHead(n)
 	if key == "" {
-		if text == "后台任务有更新" {
+		if text == transcript.BackgroundTaskUpdate {
 			return tt(l, "task_updated")
 		}
 		return text

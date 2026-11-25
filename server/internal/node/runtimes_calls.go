@@ -17,8 +17,8 @@ import (
 // claimMethods are the calls that ask the connected runtimes about a session nobody claimed yet: what the apps do
 // with a session they show (open it, page it, send to it, stop it).
 var claimMethods = map[string]bool{"session.send": true, "session.items": true, "session.item": true, "session.image": true,
-	"session.visualization": true,
-	"session.watch":         true, "session.info": true, "session.interrupt": true}
+	"session.visualization": true, "session.fork": true,
+	"session.watch": true, "session.info": true, "session.interrupt": true}
 
 // awayReads are the calls the node answers itself for a session of a runtime that is away whose conversation is a
 // Claude transcript here (runtimeaway.go): its content, its info and the watch of its transcript.
@@ -56,7 +56,8 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		if awayReads[method] && n.runtimeTranscript(id) != "" {
 			return nil, nil // the node reads the transcript (n.file), as it does while the runtime lists the session
 		}
-		if claimMethods[method] || method == "session.rename" || method == "session.close" || method == "session.rewind" || method == "session.archive" || method == "session.unarchive" {
+		if claimMethods[method] || method == "session.rename" || method == "session.close" || method == "session.rewind" || method == "session.archive" || method == "session.unarchive" ||
+			method == "session.queue.edit" || method == "session.queue.send_now" {
 			return nil, errRuntimeAway(label)
 		}
 		return nil, nil // unwatching and the like: nothing to refuse
@@ -138,23 +139,25 @@ func errRuntimeUnsupported(label, what string) error {
 
 // runtimeCallParams are the parameters of a hub call about a runtime's session that the node looks at.
 type runtimeCallParams struct {
-	Force          bool          `json:"force"`
-	SessionID      string        `json:"session_id"`
-	Text           string        `json:"text"`
-	Images         []proto.Image `json:"images"`
-	SinceSeq       int           `json:"since_seq"`
-	History        string        `json:"history"`
-	FoldWork       bool          `json:"fold_work"`
-	BeforeSeq      int           `json:"before_seq"`
-	LazyImages     bool          `json:"lazy_images"`
-	UserInputs     bool          `json:"user_inputs"`
-	AfterSeq       *int          `json:"after_seq"`
-	ThroughSeq     int           `json:"through_seq"`
-	Title          *string       `json:"title"`
-	ItemID         string        `json:"item_id"`
-	PermissionMode string        `json:"permission_mode"`
-	Effort         string        `json:"effort"`
-	Model          string        `json:"model"`
+	MessageSource  *proto.MessageSource `json:"message_source"`
+	A2AWakeOnSend  bool                 `json:"a2a_wake_on_send"`
+	Force          bool                 `json:"force"`
+	SessionID      string               `json:"session_id"`
+	Text           string               `json:"text"`
+	Images         []proto.Image        `json:"images"`
+	SinceSeq       int                  `json:"since_seq"`
+	History        string               `json:"history"`
+	FoldWork       bool                 `json:"fold_work"`
+	BeforeSeq      int                  `json:"before_seq"`
+	LazyImages     bool                 `json:"lazy_images"`
+	UserInputs     bool                 `json:"user_inputs"`
+	AfterSeq       *int                 `json:"after_seq"`
+	ThroughSeq     int                  `json:"through_seq"`
+	Title          *string              `json:"title"`
+	ItemID         string               `json:"item_id"`
+	PermissionMode string               `json:"permission_mode"`
+	Effort         string               `json:"effort"`
+	Model          string               `json:"model"`
 }
 
 // runtimeHandle serves a hub call for a session a runtime lists; handled is false for methods that are not about one
@@ -200,7 +203,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	switch method {
 	case "session.items":
 		if p.UserInputs {
-			index, err := n.runtimeUserInputs(ctx, p.SessionID, func(params any) (json.RawMessage, error) { return call("session.items", params) })
+			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, func(params any) (json.RawMessage, error) {
+				return call("session.items", params)
+			})
 			return index, err, true
 		}
 		out, err := call("session.items", params)
@@ -208,6 +213,8 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		out = n.echoedRaw(p.SessionID, out, "items") // echo.go
+		out = n.toolViews.attachRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
+		out = n.ttft.annotateRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
 		if !p.FoldWork || p.AfterSeq != nil || p.ThroughSeq > 0 {
 			return out, nil, true
 		}
@@ -230,6 +237,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		return page, nil, true
 	case "session.image", "session.item", "session.visualization":
 		out, err := call(method, params)
+		if method == "session.item" && err == nil {
+			out = n.toolViews.attachItemRaw(p.SessionID, out)
+		}
 		return out, err, true
 	case "session.watch":
 		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, p.History, rpc.ConnContext(ctx))
@@ -246,7 +256,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		n.runtimes.unwatch(p.SessionID)
 		_, err := call("session.unwatch", map[string]any{"session_id": p.SessionID})
 		return okResult(err), err, true
-	case "session.send":
+	case "session.send", proto.MethodSessionSendUnseen:
 		if !caps.Send {
 			return nil, errRuntimeUnsupported(label, "从手机发消息"), true
 		}
@@ -257,8 +267,21 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		}
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		var retry *echoRecord
+		var previous *sendRecord
+		if method == proto.MethodSessionSendUnseen {
+			check := n.checkEcho(ctx, p.SessionID, opts.ClientMsgID)
+			switch check.state {
+			case proto.EchoSeen:
+				return map[string]any{"ok": true}, nil, true
+			case proto.EchoKnownUnseen:
+				retry, previous = &check.record, check.previous
+			default:
+				return nil, echoUnconfirmed(), true
+			}
+		}
 		var said json.RawMessage // what the runtime answered: it may say the message only queued behind the turn
-		err := n.sends.once(opts.ClientMsgID, func() error {
+		err := n.sends.onceReplacing(opts.ClientMsgID, previous, func() error {
 			var after echoAfter
 			if opts.ClientMsgID != "" {
 				after = echoAfter{seq: n.runtimes.lastPushed(p.SessionID), in: echoInRuntime}
@@ -266,10 +289,39 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 					after = n.echoBase(p.SessionID)
 				}
 			}
-			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
-				out, err := call("session.send", map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images,
-					"client_msg_id": opts.ClientMsgID})
+			if retry != nil {
+				// As sendUnseen: another send can start a turn while this retry waits for the input lock.
+				unlock, err := n.inputTurn(ctx, p.SessionID)
+				if err != nil {
+					return echoUnconfirmed()
+				}
+				defer unlock()
+				check := n.readEcho(ctx, p.SessionID, opts.ClientMsgID)
+				if check.state == proto.EchoSeen {
+					return nil
+				}
+				if check.state != proto.EchoKnownUnseen || !check.record.SentAt.Equal(retry.SentAt) {
+					return echoUnconfirmed()
+				}
+				retry, after = &check.record, check.after
+			}
+			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, p.MessageSource, retry, func() error {
+				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
+					return err
+				}
+				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images, "client_msg_id": opts.ClientMsgID}
+				if p.A2AWakeOnSend {
+					input["a2a_wake_on_send"] = true
+				}
+				sentAt := time.Now()
+				n.ttft.arm(p.SessionID, sentAt, "")
+				finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
+				out, err := call(method, input)
+				finishAgy(err, false)
 				said = out
+				if (err != nil && !maybeDelivered(err)) || (err == nil && runtimeAnswerFlag(out, "queued")) {
+					n.ttft.disarm(p.SessionID, sentAt)
+				}
 				return err
 			})
 		})
@@ -283,7 +335,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, errRuntimeUnsupported(label, "中断"), true
 		}
 		// A runtime that waited for the turn to end says so (settled); one that only asked it to stop does not.
+		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		out, err := call("session.interrupt", map[string]any{"session_id": p.SessionID})
+		finishAgy(err, runtimeAnswerFlag(out, "settled"))
 		return withFlag(okResult(err), out, "settled"), err, true
 	case "session.close":
 		if !caps.Close {
@@ -296,7 +350,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		if p.Force {
 			closeParams["force"] = true
 		}
+		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		_, err := call("session.close", closeParams)
+		finishAgy(err, true)
 		return okResult(err), err, true
 	case "session.archive", "session.unarchive":
 		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
@@ -335,6 +391,22 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); h.agent() == agyAgent && ok {
+					if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+						info["swarm_workers"] = workers
+					}
+				}
+				if h.agent() == agyAgent {
+					if s.ContextTokens > 0 || s.OutputTokens > 0 {
+						info["context_tokens"] = int(s.ContextTokens)
+						info["output_tokens"] = s.OutputTokens
+						delete(info, "usage_unknown")
+					}
+					n.resolveAgyContextWindow(&s)
+					if bd := s.ContextBreakdown(); bd != nil {
+						info["context_breakdown"] = bd
+					}
+				}
 			}
 		}
 		// Not in its list (an older session it still has): what the node knows without the list.
@@ -352,8 +424,29 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		}
 		_, err := call("session.modes", map[string]any{"session_id": p.SessionID, "permission_mode": p.PermissionMode, "effort": p.Effort, "model": p.Model})
 		return okResult(err), err, true
-	case "session.queue.edit", "session.queue.send_now":
-		return nil, errRuntimeUnsupported(label, "这个操作"), true
+	case "session.queue.edit":
+		if !caps.QueueEdit || strings.Contains(p.SessionID, subagentSep) {
+			return nil, errRuntimeUnsupported(label, "这个操作"), true
+		}
+		var edit struct {
+			Keep json.RawMessage `json:"keep"`
+		}
+		if err := json.Unmarshal(params, &edit); err != nil {
+			return nil, err, true
+		}
+		out, err := call(method, map[string]any{"session_id": p.SessionID, "keep": edit.Keep})
+		return out, err, true
+	case "session.queue.send_now":
+		if !caps.QueueSendNow || strings.Contains(p.SessionID, subagentSep) {
+			return nil, errRuntimeUnsupported(label, "这个操作"), true
+		}
+		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
+		_, err := call(method, map[string]any{"session_id": p.SessionID})
+		finishAgy(err, false)
+		if err != nil {
+			return nil, err, true
+		}
+		return map[string]any{"sent": true}, nil, true
 	}
 	return nil, nil, false
 }
@@ -440,15 +533,15 @@ func okResult(err error) any {
 // into the node's ok result, when it is set.
 func withFlag(res any, answer json.RawMessage, flag string) any {
 	m, ok := res.(map[string]any)
-	if !ok || len(answer) == 0 {
-		return res
+	if ok && runtimeAnswerFlag(answer, flag) {
+		m[flag] = true
 	}
+	return res
+}
+
+func runtimeAnswerFlag(answer json.RawMessage, flag string) bool {
 	var a map[string]json.RawMessage
-	if json.Unmarshal(answer, &a) != nil || string(a[flag]) != "true" {
-		return res
-	}
-	m[flag] = true
-	return m
+	return len(answer) != 0 && json.Unmarshal(answer, &a) == nil && string(a[flag]) == "true"
 }
 
 func isRPCError(err error) bool {

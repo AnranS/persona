@@ -35,12 +35,24 @@ type layout struct {
 // the agents it gave last. A host that is not running (host.ErrNotRunning: herdr-core without its socket) answered: it
 // has no agents.
 func (n *Node) refreshHosts(ctx context.Context, only ...host.Host) error {
-	return n.refreshHostInventory(ctx, false, only...)
+	return n.refreshHostInventoryWithFailures(ctx, false, nil, only...)
+}
+
+// refreshHostsWithFailures refreshes only (or every host when empty) and reports which host kinds failed to answer.
+// host.ErrNotRunning counts as an answer (not a failure).
+func (n *Node) refreshHostsWithFailures(ctx context.Context, only ...host.Host) (map[string]bool, error) {
+	failed := map[string]bool{}
+	err := n.refreshHostInventoryWithFailures(ctx, false, failed, only...)
+	return failed, err
 }
 
 // refreshHostInventory retains the display's tolerant refresh by default. An
 // update evidence producer must request every host and reject cached fallbacks.
 func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...host.Host) error {
+	return n.refreshHostInventoryWithFailures(ctx, strict, nil, only...)
+}
+
+func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool, failed map[string]bool, only ...host.Host) error {
 	if n.sessionScope != nil {
 		if strict {
 			return errors.New("scoped node cannot attest complete host inventory")
@@ -118,6 +130,9 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		if o.err != nil {
 			if firstErr == nil {
 				firstErr = o.err
+			}
+			if failed != nil {
+				failed[o.kind] = true
 			}
 			o.agents = n.hostAgents[o.kind]
 		} else {
@@ -485,55 +500,43 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.resolve(m, contested) // the owner of every session live in two hosts (ownership.go)
 	// Codex panes: the thread named in the title (what the pane shows now: a /resume in Codex changes it), else what
-	// herdr's codex integration or our own start said; only then, after every pane that could be told has its
-	// thread, the newest rollout in the directory nobody else has.
-	var unnamed []host.Agent
+	// herdr's Codex integration or our own start said. An unidentified Codex in a herdr tab has its own waiting row.
+	var unnamed, manual []host.Agent
+	if n.codices != nil {
+		n.codices.paneReads.retain(codex)
+	}
+	paneDeadline := time.Now().Add(codexHomeListWait)
 	for _, a := range codex {
-		if w := n.codexWaitOf(a.PaneID); w != nil {
-			// Opened with no first message (codex_waiting.go): its row until its thread is attached, which only the look
-			// does. What herdr's integration and the pane's title name are noted for it, never taken as is.
-			named, titled := "", n.codexTitleThread(a)
-			if sid := a.SessionID(); sid != "" {
-				home := n.codexPaneHome(a.PaneID)
-				named = n.codexPublicID(home, mainThread(home, sid))
-			}
+		w := n.codexWaitOf(a.PaneID)
+		n.mu.Lock()
+		bound := n.panes[a.PaneID]
+		n.mu.Unlock()
+		reported := a.SessionID()
+		if w == nil && reported == "" && isCodexWaitID(bound) {
+			m[bound] = a
+			continue
+		}
+		look, ok := n.codexPaneIdentity(a, bound, w != nil, m, paneDeadline)
+		if w != nil {
 			n.mu.Lock()
-			w.herdr, w.titled = named, titled
+			w.herdr, w.titled = look.named, look.titled
 			n.mu.Unlock()
 			m[w.id] = a
 			continue
 		}
-		home := n.codexPaneHome(a.PaneID)
-		reported := a.SessionID() // what the host says the pane runs now, not what the node remembers of the pane
-		id := reported
-		if id != "" {
-			id = mainThread(home, id) // a subagent's id stands for its conversation
+		if !ok {
+			continue // an unreadable or ambiguous owner cannot drive this pane
 		}
-		sub := id != reported
-		if id == "" {
-			n.mu.Lock()
-			id = n.panes[a.PaneID]
-			n.mu.Unlock()
-		}
-		if named, claimed := n.codexByTitle(a, id, m); named != "" {
-			id = named
-		} else if claimed {
-			id = "" // the title names another pane's thread: keeping the stale reported one would misroute this row
-		} else if _, match, ok := codexTitleName(a.Title); ok && (reported == "" ||
-			(!sub && threadTitle(home, id) != "" && !threadFormerlyNamed(home, id, match))) {
-			// An unrecognised current title must not reuse a stale pane binding either, nor a thread the host named
-			// that the index knows under another name (a /resume in Codex since). A reported thread the index has no
-			// name for is not contradicted by a name the index lacks, so the host's word stands: left out, the pane
-			// was listed nowhere and its thread only as its app-server's row, with no terminal (#7538). Nor is a
-			// reported subagent contradicted by its conversation's name, which is not the name of the thread reported,
-			// nor a renamed thread by the name the index gave it before (a rename on the app-server the title missed).
-			id = ""
-		}
-		if id != "" {
-			id = n.codexPublicID(home, id)
-		}
+		id := look.id
 		if _, taken := m[id]; id == "" || taken {
-			unnamed = append(unnamed, a)
+			kind := host.ParsePane(a.PaneID).Kind
+			if kind == host.Herdr || kind == host.HerdrCore {
+				if a.PaneID != "" && reported == "" && bound == "" && a.AgentStatus != proto.StatusOffline {
+					manual = append(manual, a)
+				}
+			} else {
+				unnamed = append(unnamed, a)
+			}
 			continue
 		}
 		m[id] = a
@@ -569,6 +572,29 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	defer n.mu.Unlock()
 	if n.engEpoch != epoch {
 		return false
+	}
+	for id, a := range m {
+		if isCodexWaitID(id) && n.panes[a.PaneID] != id {
+			// The look for threads won a concurrent refresh. Follow the current binding, including a pane that left.
+			delete(m, id)
+			if bound := n.panes[a.PaneID]; bound != "" && !liveTaken(m, bound) {
+				m[bound] = a
+			}
+		}
+	}
+	for _, a := range manual {
+		if n.codexStarting[a.PaneID] || n.state.isLoading() {
+			continue // the app's start, or the manager's stored binding, has the identity for this pane
+		}
+		if bound := n.panes[a.PaneID]; bound != "" {
+			if !liveTaken(m, bound) {
+				m[bound] = a // another refresh already created its row or attached its thread
+			}
+			continue
+		}
+		w := n.watchManualCodexLocked(a)
+		m[w.id] = a
+		moved = append(moved, func() { n.saveManualCodexWait(w) })
 	}
 	// A pane that now runs another session than it did: rare, and the first thing to look at when a session drops off
 	// the live list while its agent runs (#5463: a tmux worker took its manager's pane).
@@ -609,9 +635,29 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			}
 		}
 	}
+	for pane, thread := range n.codexManual {
+		if m[thread].PaneID != pane {
+			delete(n.codexManual, pane)
+			if n.panes[pane] == thread {
+				delete(n.panes, pane)
+			}
+		}
+	}
 	for fallback, alias := range n.idAlias {
 		if !live[alias.pane] {
 			delete(n.idAlias, fallback) // its pane is gone: nothing is left to point at
+		}
+	}
+	for pane := range n.agyBound {
+		a, ok := m[otherSession(host.Agent{Agent: agyAgent, PaneID: pane})]
+		if !ok || a.Agent != agyAgent || a.PaneID != pane {
+			delete(n.agyBound, pane)
+		}
+	}
+	for pane, r := range n.agyReports { // a pane whose agent is gone, or that no engine lists any more
+		row, listed := agyRowOfPane(m, pane)
+		if listed && row.Agent != agyAgent || !listed && time.Since(r.at) > agyReportGrace {
+			delete(n.agyReports, pane)
 		}
 	}
 	// herdr's omp integration reports the session file: what resuming a stopped one needs (ompresume.go).

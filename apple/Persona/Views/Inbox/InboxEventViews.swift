@@ -711,9 +711,6 @@ struct InboxChainSection: View {
             .task(id: CutChain(key: item.key, count: item.chainCount)) { await readWhole() }
             .sheet(item: $todo) { r in
                 NavigationStack { TodoDetailView(todoID: r.id).sheetDone { todo = nil } }
-                #if os(macOS)
-                .macSheet()
-                #endif
             }
         }
     }
@@ -1027,7 +1024,7 @@ struct InboxSourcePage: View {
         case .document:
             InboxDocDetailView(item: item)
         case .connector:
-            InboxConnectorDetailView(item: item)
+            InboxConnectorDetailView(item: item, manager: model.itemManager(item.manager))
         case .moment:
             if let moment = item.moment {
                 LarkMomentsPostView(postID: moment.postID, pushed: true, manager: model.linkManager(item.manager))

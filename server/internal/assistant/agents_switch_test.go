@@ -91,8 +91,11 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 		t.Errorf("limited: %v", got)
 	}
 	for _, c := range nodeCalls(ft.f) {
-		if p := callParams(t, c); c.Method == DeviceSessionSend && (p["switch_now"] != true || !strings.Contains(p["text"].(string), prompts.RenderAgentLimitContinue(""))) {
-			t.Errorf("continuation: %v", p)
+		if p := callParams(t, c); c.Method == DeviceSessionSend {
+			if p["switch_now"] != true || !strings.Contains(p["text"].(string), prompts.RenderAgentLimitContinue("")) {
+				t.Errorf("continuation: %v", p)
+			}
+			requireAutoContinueSource(t, p)
 		}
 	}
 	if got := callsFor(ft.f, "s2idle0001"); strings.Join(got, ",") != "session.modes,session.switch" {
@@ -210,6 +213,11 @@ func TestAgentsSwitchQueueSurvivesARestart(t *testing.T) {
 	if got := waitCallsFor(t, again.f, "s1busy0001", 2); strings.Join(got, ",") != "session.modes,session.send" {
 		t.Fatalf("after the restart: %v", got)
 	}
+	for _, c := range nodeCalls(again.f) {
+		if c.Method == DeviceSessionSend {
+			requireAutoContinueSource(t, callParams(t, c))
+		}
+	}
 }
 
 // stoppedRow is a Claude Code agent on mac on launcher that nothing runs now; persona: Persona started it.
@@ -296,5 +304,42 @@ func TestSwitchQueueListedReadsLoadedUnderItsLock(t *testing.T) {
 		}()
 		s.switchQueueListed("mac")
 		<-loaded
+	}
+}
+
+// agents_switch to the launcher an off_launcher agent was started on (#11792) switches it back there, while an agent
+// that does run on that launcher is still refused as being on it already.
+func TestAgentsSwitchBackOntoTheLauncherAnAgentRunsOff(t *testing.T) {
+	ft, _ := switchRig(t)
+	off := agentRow("s1off00001", "kimi", proto.StatusIdle)
+	off.StartedByPersona, off.OffLauncher = true, true
+	ft.sessions("mac", off, agentRow("s2there001", "kimi", proto.StatusIdle))
+	res, err := batchSwitch(ft, map[string]any{"launcher": "kimi", "agents": []map[string]any{
+		{"machine": "mac", "session_id": "s1off00001"}, {"machine": "mac", "session_id": "s2there001"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "1 switched,") || !strings.Contains(res, "1 refused") || !strings.Contains(res, "runs on kimi already") {
+		t.Fatalf("answer:\n%s", res)
+	}
+	if got := callsFor(ft.f, "s1off00001"); strings.Join(got, ",") != "session.modes,session.switch" {
+		t.Errorf("off its launcher: %v", got)
+	}
+	if got := callsFor(ft.f, "s2there001"); len(got) != 0 {
+		t.Errorf("on it already, reached its node: %v", got)
+	}
+
+	// Working, it is queued, and switched back when its turn ends, not dropped as running there already.
+	busy := agentRow("s3offbusy1", "kimi", proto.StatusWorking)
+	busy.StartedByPersona, busy.OffLauncher = true, true
+	ft.sessions("mac", busy)
+	if res, err := batchSwitch(ft, map[string]any{"launcher": "kimi", "agents": []map[string]any{{"machine": "mac", "session_id": "s3offbusy1"}}}); err != nil || !strings.Contains(res, "1 queued") {
+		t.Fatalf("busy, off its launcher: %v\n%s", err, res)
+	}
+	idle := busy
+	idle.Status, idle.State = proto.StatusIdle, proto.StateIdle
+	ft.sessions("mac", idle)
+	if got := waitCallsFor(t, ft.f, "s3offbusy1", 2); strings.Join(got, ",") != "session.modes,session.switch" {
+		t.Fatalf("at the end of its turn: %v", got)
 	}
 }

@@ -204,11 +204,15 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
             send(session, text, clientMessageId, clearDraft, null, null)
-        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) {
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
+            send(session, text, clientMessageId, clearDraft, launcher, model, null)
+        override suspend fun send(
+            session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?, via: String?,
+        ) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
                 checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(
-                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model)
+                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model, via)
             }
         }
         override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) {
@@ -229,6 +233,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false
+        }
+        override suspend fun retryRefused(session: SessionKey, code: String) = gate.withLock {
+            groupOf(session.machineId)?.data?.messages?.retryRefused(GroupKeys.rawKey(session), code) ?: 0
         }
         override suspend fun confirm(clientMessageId: String, delivered: Boolean) = gate.withLock {
             owner(clientMessageId)?.messages?.confirm(clientMessageId, delivered) ?: false
@@ -283,13 +290,15 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         paired.value = false
         app.showHub(null)
         mutableState.value = ConnectionState.Revoked
-        scope.launch { runCatching { dataStore.publish(null) } }
+        scope.launch { val _ = runCatching { dataStore.publish(null) } }
     }
 
     /** Opens every group the registry lists (the first read migrates a single pairing); false when there is none. */
     private suspend fun restoreLocked(): Boolean {
         val document = dataStore.registry()
         dataStore.sweep()
+        val activeScopes = document.groups.flatMap { group -> group.hubs.map { it.pairing.path } + group.storage.path }.toSet()
+        val _ = runCatching { persona.feature.chat.PersistentContinuationReceiptStore.of(app).retainScopes(activeScopes) }
         applyLocked(document)
         return document.groups.isNotEmpty()
     }
@@ -347,6 +356,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         ways.retain(emptySet())
         pairedTunnels.value = emptyMap()
         dataStore.eraseAll()
+        val _ = runCatching { persona.feature.chat.PersistentContinuationReceiptStore.of(app).clearScope(null) }
         registry.value = GroupsDocument()
         dataStore.publish(null)
         app.pairings.clear()
@@ -407,6 +417,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }
         if (erase.isNotEmpty()) {
             mutableGroups.value = kept
+            val _ = runCatching {
+                persona.feature.chat.PersistentContinuationReceiptStore.of(app).clearScopes(erase.map { it.scope.path })
+            }
             try { dataStore.erase(erase) } catch (_: Exception) { Log.w("ConnectionRuntime", "Erasure deferred until restart") }
         }
         val pairedHubs = document.groups.flatMap { group -> group.hubs.map { it.hubId } }.toSet()
@@ -449,6 +462,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
                 if (!unsent.isEmpty) target.adopt(unsent)
                 val change = dataStore.change { it.completeMove(move.storage) }
                 registry.value = change.document
+                val _ = runCatching {
+                    persona.feature.chat.PersistentContinuationReceiptStore.of(app).clearScopes(change.erase.map { it.scope.path })
+                }
                 dataStore.erase(change.erase)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { Log.w("ConnectionRuntime", "Cannot move a merged group's messages yet; kept for a retry") }

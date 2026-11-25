@@ -18,6 +18,9 @@ func listKeyFmt(list []proto.Session) string {
 		if h := s.Hierarchy; h != nil {
 			fmt.Fprintf(&b, "lineage:%q/%d\n", h.AskingParentSessionID, unixOf(&h.StartedAt))
 		}
+		if a := s.Aliases(); len(a) > 0 {
+			fmt.Fprintf(&b, "aliases:%q\n", a)
+		}
 		if s.Activity != "" {
 			fmt.Fprintf(&b, "activity:%s/%d\n", s.Activity, unixOf(s.ActivityAt))
 		}
@@ -42,11 +45,18 @@ func listKeyFmt(list []proto.Session) string {
 		if s.Model != "" || s.PermissionMode != "" || s.Effort != "" {
 			fmt.Fprintf(&b, "modes:%q/%q/%q\n", s.Model, s.PermissionMode, s.Effort)
 		}
+		if s.PendingEffort != nil {
+			fmt.Fprintf(&b, "pending-effort:%q/%v\n", *s.PendingEffort, s.EffortChangeFailed)
+		}
+		if s.OffLauncher {
+			b.WriteString("off-launcher\n")
+		}
 		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, capsFmt(s.Capabilities), s.Attached, s.CodexRoute, s.CodexRouteNote)
 		for _, t := range s.Background {
 			b.WriteString(t.ID + ",")
 		}
-		b.WriteString(fmt.Sprint(s.BackgroundWaiting) + "\n")
+		b.WriteString(fmt.Sprint(s.BackgroundWaiting) + ",")
+		b.WriteString(fmt.Sprint(uint32(s.BackgroundStalledSince)) + "\n")
 		for _, t := range s.BackgroundEnded() {
 			fmt.Fprintf(&b, "ended:%s/%s/%d\n", t.ID, t.Status, unixOf(t.EndedAt))
 		}
@@ -197,6 +207,7 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"space_kind":        func(s *proto.Session) { s.SpaceKind = "codex_app" },
 		"asking_parent":     func(s *proto.Session) { s.SetAskingParentSessionID("parent-public") },
 		"started_at":        func(s *proto.Session) { s.SetStartedAt(at.Add(-time.Hour)) },
+		"aliases":           func(s *proto.Session) { s.SetAliases([]string{"agy-w1-p1"}) }, // #14395
 
 		"session_id":              func(s *proto.Session) { s.SessionID = "s2" },
 		"status":                  func(s *proto.Session) { s.Status = proto.StatusDone },
@@ -235,6 +246,7 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"effort":                  func(s *proto.Session) { s.Effort = "low" },
 		"model":                   func(s *proto.Session) { s.Model = "claude-opus-5" },        // #6334
 		"permission_mode":         func(s *proto.Session) { s.PermissionMode = "plan" },        // #6334
+		"off_launcher":            func(s *proto.Session) { s.OffLauncher = true },             // #11792
 		"effort_alone":            func(s *proto.Session) { s.Efforts, s.Effort = nil, "max" }, // #6334
 		"efforts":                 func(s *proto.Session) { s.Efforts = []string{"low", "medium", "high"} },
 		"efforts_none":            func(s *proto.Session) { s.Efforts = nil },
@@ -280,7 +292,8 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 			s.Subagents = []proto.Subagent{{ID: "a1", Running: true, UpdatedAt: act.Add(9 * time.Second)}}
 		},
 		"subagent_new":       func(s *proto.Session) { s.Subagents = append(s.Subagents, proto.Subagent{ID: "a2"}) },
-		"background_waiting": func(s *proto.Session) { s.BackgroundWaiting = !s.BackgroundWaiting }, // #6045
+		"background_waiting": func(s *proto.Session) { s.BackgroundWaiting = !s.BackgroundWaiting },        // #6045
+		"background_stalled": func(s *proto.Session) { s.BackgroundStalledSince = proto.UnixTime32Of(at) }, // #13744
 		// a new call shows at once (#5602), not with the next 10 s of updated_at
 		"subagent_step": func(s *proto.Session) {
 			s.Subagents = []proto.Subagent{{ID: "a1", Running: true, UpdatedAt: at, Steps: 1, LastTool: &proto.WorkflowTool{ID: "toolu_1", Name: "Read"}}}
@@ -402,5 +415,17 @@ func TestListKeyModelCapability(t *testing.T) {
 	}
 	if key(nil) == key(proto.CanModes(false)) || key(proto.CanModes(false)) == key(proto.CanModes(true)) {
 		t.Fatal("model capability change was lost")
+	}
+}
+
+func TestListKeyQueuedEffort(t *testing.T) {
+	rows := []proto.Session{{SessionID: "s1", Status: proto.StatusIdle, Effort: "low"}}
+	base := listKey(rows)
+	rows[0].PendingEffort = new("high")
+	pending := listKey(rows)
+	rows[0].EffortChangeFailed = true
+	failed := listKey(rows)
+	if base == pending || pending == failed || failed != listKeyFmt(rows) {
+		t.Fatal("the effort choice and its failure must each change the session list key")
 	}
 }

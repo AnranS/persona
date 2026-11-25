@@ -68,12 +68,15 @@ struct AgentsListMenu: View {
     }
 
     @StoredValue("dev.machineFilter") private var machineFilter = ""
-    @StoredValue(HubFilter.key) private var hubFilter = ""
+    @StoredValue(HubFilter.key) private var storedHubFilter = ""
+    /// The group the list shows when narrowed: the current hub's (`HubFilter.shown`, #11657).
+    private var hubFilter: String { HubFilter.shown(storedHubFilter, current: model.hub?.group) }
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     /// The grouping the list shows: a stored By To-do is By Project on a hub without todos (`DevGrouping.resolved`).
     private var shownGrouping: DevGrouping { DevGrouping.resolvedNow(grouping) }
     private var groupingChoice: Binding<DevGrouping> { Binding(get: { shownGrouping }, set: { grouping = $0 }) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
+    @StoredValue("dev.showEmptyWorkspaces") private var showEmptyWorkspaces = false
     #if os(iOS)
     /// The rows' style or Compact List (#2530), as Settings › Appearance › Layout sets it.
     private let display = AgentListDisplayChoice()
@@ -137,12 +140,23 @@ struct AgentsListMenu: View {
                 }
             }
             if model.isMultiHub {
-                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only.
-                Picker("hub", selection: Binding(get: { hubFilter }, set: { hubFilter = $0; machineFilter = "" })) {
+                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only. That
+                // group is the current hub (#11657): picking it here makes it current, so Persona's sidebar, the Inbox and
+                // the hub's settings show it too; All Hubs leaves the current hub as it is.
+                Picker("hub", selection: Binding(get: { hubFilter }, set: { pick in
+                    storedHubFilter = pick
+                    machineFilter = ""
+                    if let g = HubFilter.group(pick) { model.selectHub(g) }
+                })) {
                     Label("All Hubs", systemImage: Theme.Icon.hubGroup).tag("")
                     ForEach(model.groupIDs, id: \.self) { g in
                         Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(HubFilter.value(g))
                     }
+                }
+            }
+            if shownGrouping == .repo {
+                Toggle(isOn: $showEmptyWorkspaces) {
+                    Label("Show empty workspaces", systemImage: Theme.Icon.folder)
                 }
             }
             Button(actions.showingHidden ? String(localized: "Hide directory matches") : String(localized: "Show hidden sessions")) {
@@ -248,10 +262,7 @@ struct AgentRowMenu: View, Equatable {
         #endif
         // The session as it is when an item is tapped (all of it: Hand to Persona sends its last line).
         let now = { model.latest(key) }
-        #if os(macOS)
-        MacOpenInWindowButton(key: key)
-        Divider()
-        #elseif os(visionOS)
+        #if os(visionOS)
         VisionOpenInWindowButton(key: key)
         Divider()
         #endif
@@ -265,13 +276,11 @@ struct AgentRowMenu: View, Equatable {
             Button { model.markSeen(key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
         }
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            if takeoverAvailable {
-                Button { if let s = now() { actions.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
-            }
-            if continueAvailable {
-                Button { if let s = now() { actions.continueInNewSession(s) } } label: { Label("Continue in a new session", systemImage: Theme.Icon.compose) }
-            }
+        if takeoverAvailable {
+            Button { if let s = now() { actions.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
+        }
+        if continueAvailable {
+            Button { if let s = now() { actions.continueInNewSession(s) } } label: { Label("Continue in a new session", systemImage: Theme.Icon.compose) }
         }
         #endif
         if renamable {

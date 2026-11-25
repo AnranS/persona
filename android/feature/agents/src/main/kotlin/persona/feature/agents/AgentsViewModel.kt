@@ -4,13 +4,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.contracts.api.ResolveOutcome
 import persona.core.domain.answer.*
+import persona.core.domain.sort.canAnswerInteraction
 import persona.core.domain.sort.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import persona.core.designsystem.Haptic
 import persona.core.designsystem.ListTapMotion
 import persona.core.designsystem.ListTapMotionKind
+import persona.feature.chat.InteractionReply
+import persona.feature.chat.InteractionSubmission
+import persona.feature.chat.classifyInteractionFailure
+import persona.feature.chat.isCommandInputPermission
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -81,7 +87,7 @@ internal class AgentsViewModel(
     val appBuild: Long = 1L,
     machineManagement: MachineManagement? = null,
     /** The phone's hub groups: a request is answered through its own group's connection (AgentGroups.kt stateFor). */
-    private val hubGroups: persona.core.contracts.api.HubGroups = persona.core.contracts.api.HubGroups.None,
+    internal val hubGroups: persona.core.contracts.api.HubGroups = persona.core.contracts.api.HubGroups.None,
     /**
      * Where [page] is built: the app passes [kotlinx.coroutines.Dispatchers.Default], so sorting, filtering and counting
      * every session on each push stays off the main thread. Empty (the caller's thread) keeps tests synchronous.
@@ -111,6 +117,9 @@ internal class AgentsViewModel(
         repository.refresh()
     } }
     private val operations = bindings?.operations?.let { AgentOperationsState(it, preferences.hubCache) }
+    internal val sessions: SessionsRepository get() = repository
+    internal val operationsApi: AgentOperations? get() = bindings?.operations
+    val hasOperations: Boolean get() = operations != null
     val operationState = operations?.state ?: MutableStateFlow(AgentOperationsSnapshot())
     /**
      * Every Agents list on screen (#9600). A foldable's overlay and the page underneath can both be composed
@@ -176,6 +185,8 @@ internal class AgentsViewModel(
     private var previousContext: List<Any?>? = null
     private val _delivery = MutableStateFlow<Map<String, RequestDelivery>>(emptyMap())
     val delivery = _delivery.asStateFlow()
+    private val _commandInputErrors = MutableStateFlow<Map<String, InteractionReply>>(emptyMap())
+    val commandInputErrors = _commandInputErrors.asStateFlow()
     private val _requestHistory = MutableStateFlow<List<Interaction>>(emptyList())
     val requestHistory = _requestHistory.asStateFlow()
     private val _refreshing = MutableStateFlow(false)
@@ -293,7 +304,11 @@ internal class AgentsViewModel(
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
             .map { Machine(it) } // named by the list as not updated yet (AgentsScreen.kt)
         val admittedMachines = machines.mapTo(mutableSetOf()) { it.id }
-        val requested = settings.copy(grouping = prefs.grouping, sort = prefs.sort, workspaces = workspaces.filter { it.machineId in admittedMachines })
+        val rawGrouping = settings.pendingGrouping ?: localPrefs.grouping
+        val initialFolded = if (foldsAuthority == rawGrouping || settings.query.isNotEmpty())
+            settings.folded else localPrefs.folds[prefs.grouping].orEmpty()
+        val requested = settings.copy(grouping = prefs.grouping, sort = prefs.sort, folded = initialFolded,
+            workspaces = workspaces.filter { it.machineId in admittedMachines })
         // A paged search already matched the words on the hub, including matches outside the truncated row summary.
         val projection = if (pagination.paged) requested.copy(query = AgentQuery.parse(requested.query).conditions) else requested
         val all = scopedAgentList(rows, knownMachines, prefs, projection.copy(quick = AgentQuickFilter.All, kept = emptySet()),
@@ -351,12 +366,15 @@ internal class AgentsViewModel(
         else {
             val counts = status.counts
             val machineCounts = status.machineCounts
+            // A parent marked seen locally stays counted Unread while a side is unread; once held sides are seen, drop immediately (#13524).
+            val clearedUnread = unreadClearedBySeen(projected.sessions, projected.sessions.map { it.listSession(projected.preferences).session })
             val quickCounts = AgentQuickFilter.entries.associateWith { filter ->
                 when (filter) {
                     // The hub counts them among working and apart too (#6045): Working leaves them out, as iOS.
                     AgentQuickFilter.Feishu -> counts.larkGroups(projected.list.counts)
                     AgentQuickFilter.BackgroundWaiting -> counts.backgroundWaiting
                     AgentQuickFilter.Working -> ((counts.state[AgentState.Working.wire] ?: 0) - counts.backgroundWaiting).coerceAtLeast(0)
+                    AgentQuickFilter.Unread -> ((counts.state[AgentState.Unread.wire] ?: 0) - clearedUnread).coerceAtLeast(0)
                     else -> filter.state?.let { counts.state[it.wire] ?: 0 }
                         ?: if (filter == AgentQuickFilter.All) counts.total else projected.list.counts[filter] ?: 0
                 }
@@ -499,6 +517,8 @@ internal class AgentsViewModel(
                 }
                 previous = pending
                 _delivery.update { RequestDeliveries.prune(it, pending) }
+                val pendingIds = pending.mapTo(mutableSetOf()) { it.id }
+                _commandInputErrors.update { errors -> errors.filterKeys { it in pendingIds } }
             }
         }
         if (operations != null) {
@@ -585,7 +605,14 @@ internal class AgentsViewModel(
         // (PinsStore.swift:131, :139, :163). A later tap, or a grouping saved by someone else, stays.
         val epoch = stamp(ListTapMotionKind.Layout)
         previous = null
-        settings.update { it.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group) }
+        val previousAuthority = foldsAuthority
+        val previousFolded = settings.value.folded
+        val targetFolds = page.value.preferences.folds[group].orEmpty()
+        foldsAuthority = group
+        settings.update { current ->
+            if (current.query.isEmpty()) current.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group, folded = targetFolds)
+            else { stashedFolds = targetFolds; current.copy(kept = emptySet(), tapEpoch = epoch, pendingGrouping = group) }
+        }
         localChange {
             try {
                 preferences.grouping(group)
@@ -594,9 +621,11 @@ internal class AgentsViewModel(
             catch (e: Exception) {
                 if (settings.value.pendingGrouping == group) {
                     val back = stamp(ListTapMotionKind.Layout)
+                    foldsAuthority = previousAuthority
                     settings.update { current ->
                         if (current.pendingGrouping != group) current
-                        else current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null)
+                        else if (current.query.isEmpty()) current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null, folded = previousFolded)
+                        else { stashedFolds = previousFolded; current.copy(kept = emptySet(), tapEpoch = back, pendingGrouping = null) }
                     }
                 }
                 throw e
@@ -646,6 +675,14 @@ internal class AgentsViewModel(
             else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName))
         }
     }
+    fun renameUnified(session: Session, name: String) {
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!edit.changed) return
+        change(session.machineId, R.string.agents_notice_renamed) {
+            if (renamer != null) renamer.renameUnified(session, name)
+            else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName), unified = true)
+        }
+    }
     fun renameSpace(session: Session, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty() || trimmed == session.spaceName) return
@@ -667,6 +704,29 @@ internal class AgentsViewModel(
     /** Still running and closable from here, in a terminal pane or a runtime's (not closed elsewhere since a confirmation opened). */
     fun closable(session: Session): Boolean = page.value.sessions.firstOrNull { it.key == session.key }
         ?.let { it.isLive && it.canClose } ?: page.value.sessions.isEmpty()
+    /** "Branch to new chat": copies the session into a new one, refreshes the list and opens the branched session (#12996). */
+    fun fork(session: Session, onOpened: (SessionKey) -> Unit) = sendOperation("fork:${session.key.path}") {
+        val ops = operations ?: return@sendOperation
+        if (hubGroups.groups.value.stateFor(session.machineId, connection.state.value) != ConnectionState.Online) {
+            _notice.value = AgentText(persona.feature.chat.R.string.chat_menu_fork_failed,
+                persona.core.designsystem.UiText.of(persona.core.designsystem.R.string.designsystem_reason_unreachable))
+            _haptics.tryEmit(Haptic.Attention)
+            return@sendOperation
+        }
+        try {
+            val newId = ops.fork(session)
+            try { repository.refresh() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {}
+            _notice.value = AgentText(persona.feature.chat.R.string.chat_menu_forked)
+            _haptics.tryEmit(Haptic.Success)
+            onOpened(SessionKey(session.machineId, newId))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            val cause = (e as? AgentOperationFailure)?.cause ?: e
+            _notice.value = AgentText(persona.feature.chat.R.string.chat_menu_fork_failed,
+                persona.core.designsystem.operationFeedback(cause).text)
+        }
+    }
     /** "Join live": join a Codex app-server thread live; the list refreshes after it. */
     fun attach(session: Session) = change(session.machineId, R.string.agents_notice_attached) { it.attach(session) }
     /** Stop its turn from the list (iOS's row menu Interrupt): felt once it went through. */
@@ -751,6 +811,8 @@ internal class AgentsViewModel(
     }
     /** The grouping whose stored folds [settings] holds; folds are read again only when it changes (#4338 A6). */
     private var foldsGrouping: AgentGrouping? = null
+    /** The raw grouping ([AgentListSettings.pendingGrouping] or stored grouping) that [settings]'s fold set is authoritative for. */
+    @Volatile private var foldsAuthority: AgentGrouping? = null
     /** The list's folds while a search opens them ([query]). */
     private var stashedFolds: Set<String>? = null
 
@@ -760,21 +822,29 @@ internal class AgentsViewModel(
             preferences.snapshots(pairingScope).collect { prefs ->
                 if (prefs.grouping == foldsGrouping) return@collect
                 foldsGrouping = prefs.grouping
+                val pending = settings.value.pendingGrouping
+                if (pending != null && pending != prefs.grouping) return@collect
                 val stored = prefs.folds[prefs.grouping].orEmpty()
                 if (settings.value.query.isEmpty()) settings.update { it.copy(folded = stored) } else stashedFolds = stored
+                foldsAuthority = prefs.grouping
             }
         }
     }
 
+    private fun markFoldsAuthoritative() {
+        foldsAuthority = settings.value.pendingGrouping ?: foldsGrouping ?: page.value.preferences.grouping
+    }
+
     /** Keeps the current grouping's folds on this phone; a search's are not kept. */
     private fun saveFolds() {
-        val grouping = foldsGrouping ?: return
+        val grouping = settings.value.pendingGrouping ?: foldsGrouping ?: return
         if (settings.value.query.isNotEmpty()) return
         val folded = settings.value.folded
         localChange { preferences.folds(grouping, folded) }
     }
 
     fun fold(group: AgentListGroup) {
+        markFoldsAuthoritative()
         // Section fold and a quiet space (ChatsView.swift:1168, :2595, :3114, :3214, :3237).
         writeTap(ListTapMotionKind.State) { current ->
             if (group.parent == "quiet") current.copy(
@@ -795,11 +865,13 @@ internal class AgentsViewModel(
         saveFolds()
     }
     fun fold(machine: AgentMachineGroup) {
+        markFoldsAuthoritative()
         // ChatsView.swift:1168, the computer's section
         writeTap(ListTapMotionKind.State) { it.copy(folded = if (machine.folded) it.folded - machine.id else it.folded + machine.id) }
         saveFolds()
     }
     fun foldAll(fold: Boolean) {
+        markFoldsAuthoritative()
         // Collapse All / Expand All (AgentsMenus.swift:125, :128), Theme.Motion.standard.
         previous = null
         writeTap(ListTapMotionKind.State) { it.copy(
@@ -951,8 +1023,7 @@ internal class AgentsViewModel(
     fun answer(interaction: Interaction, action: AnswerAction, draft: AnswerDraft = AnswerDraft(), fullPlanRead: Boolean = false) {
         val latest = interactions.pending.value.firstOrNull { it.id == interaction.id } ?: return
         if (latest != interaction || latest.expired(Instant.now()) || RequestDeliveries.locks(_delivery.value[interaction.id])) return
-        // A session whose source does not approve (a Codex thread not joined live) is answered on the computer.
-        if (page.value.sessions.firstOrNull { it.key == latest.sessionKey }?.canApprove == false) {
+        if (page.value.sessions.firstOrNull { it.key == latest.sessionKey }?.canAnswerInteraction(latest) == false) {
             _notice.value = AgentText(R.string.agents_notice_approve_blocked); return
         }
         if (hubGroups.groups.value.stateFor(latest.machineId, connection.state.value) != ConnectionState.Online) {
@@ -960,10 +1031,15 @@ internal class AgentsViewModel(
         }
         val result = AnswerBuilder.build(latest, action, draft, AnswerContext(fullPlanRead = fullPlanRead))
         val resolution = result.resolution ?: return
+        _commandInputErrors.update { it - latest.id }
         _delivery.update { it + (interaction.id to RequestDelivery.Sending) }
         viewModelScope.launch {
             try {
-                val outcome = interactions.resolveOutcome(interaction.id, resolution)
+                val outcome = resolution.ownerApprovalPhrase?.let { phrase ->
+                    interactions.replyOwnerApproval(latest, phrase)
+                    ResolveOutcome()
+                } ?: interactions.resolveOutcome(interaction.id, resolution,
+                    handoffCard = interaction.isSecretHandoff && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution
                 // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).
@@ -974,6 +1050,17 @@ internal class AgentsViewModel(
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
                 throw e
             } catch (e: Exception) {
+                if (latest.isCommandInputPermission) {
+                    val problem = classifyInteractionFailure(e, keepUnconfirmedReason = true)
+                    if (!problem.withdraw) {
+                        _commandInputErrors.update { it + (latest.id to problem) }
+                        if (problem.submission == InteractionSubmission.Refused) {
+                            _delivery.update { it + (latest.id to RequestDelivery.Retry) }
+                            problem.submission.haptic?.let(_haptics::tryEmit)
+                            return@launch
+                        }
+                    }
+                }
                 // A lost acknowledgement must never cause an automatic duplicate approval.
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
                 answerFailureHaptic(e)?.let(_haptics::tryEmit)

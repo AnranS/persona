@@ -25,7 +25,7 @@ const (
 	MethodChannelUnbound = "channels.unbound"
 	// MethodFeishuMessage: FeishuMessage → {}: the owner's message in the Feishu bot's private chat, taken.
 	MethodFeishuMessage = "feishu.message"
-	// MethodFeishuAction: FeishuAction → the card callback's answer (feishubot.CardResponse): the owner pressed one
+	// MethodFeishuAction: FeishuAction → the card callback's answer (botcard.CardResponse): the owner pressed one
 	// of the bot's cards. Feishu waits 3 seconds for it.
 	MethodFeishuAction = "feishu.card_action"
 	// MethodFeishuView: {} → FeishuView, what GET /api/v1/bots/feishu shows of the bot's chat.
@@ -78,7 +78,7 @@ const (
 	// for a send that may be made again (a retried morning brief): the same key lands once, and a reply under it is
 	// not dropped as a repeat of another with the same words. It may be made of letters, digits, ":", "_" and "-" only
 	// (anything else is ignored, as if none was given) and is cut to 46 characters; without one a reply's key is made
-	// of its parent and content. no_detour? makes a reply whose parent was withdrawn or deleted fail (feishubot.MessageGone
+	// of its parent and content. no_detour? makes a reply whose parent was withdrawn or deleted fail (botcard.MessageGone
 	// tells why) in place of going into the chat as a message of its own.
 	// chat_id? names another chat to send into (and to fall back to when the parent was withdrawn) and in_thread? puts
 	// a reply in the parent's thread; the hub refuses any chat but the owner's private chat and the group chats the
@@ -94,6 +94,16 @@ const (
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
+	// FeishuCardCreate: {card} → {card_id}: a card entity (CardKit) made of the card (JSON 2.0); FeishuPost sends it with
+	// botcard.CardEntityContent(card_id) as its card, and FeishuUpdateCard still updates that message whole.
+	FeishuCardCreate = "feishu.card_create"
+	// FeishuCardUpdate: {card_id, card, sequence} → {}: the whole card written into an entity. FeishuCardStream:
+	// {card_id, element, text, sequence} → {}: an element's whole text streamed into it (feishubot.StreamClosed tells
+	// one that stopped streaming). FeishuCardSettings: {card_id, streaming, sequence} → {}: its streaming turned on or
+	// off. A write's sequence must be larger than the entity's last; errors carry Feishu's code.
+	FeishuCardUpdate   = "feishu.card_update"
+	FeishuCardStream   = "feishu.card_stream"
+	FeishuCardSettings = "feishu.card_settings"
 	// FeishuPin: {message_id, exclusive?} → {}: one of the bot's messages in the owner's private chat pinned there;
 	// exclusive takes off the other pins the bot made in that chat (never the owner's own) (#1961, the workbench).
 	FeishuPin = "feishu.pin"
@@ -103,7 +113,7 @@ const (
 	// FeishuCotCreate: {reply_to?, chat_id?, in_thread?} → {cot_id, message_id}: an agent message (the open
 	// platform's message_cot, a collapsible process) under the message replied to, in its topic when in_thread is set.
 	FeishuCotCreate = "feishu.cot_create"
-	// FeishuCotAppend: {cot_id, message_id, events: [feishubot.CotEvent]} → {}.
+	// FeishuCotAppend: {cot_id, message_id, events: [botcard.CotEvent]} → {}.
 	FeishuCotAppend = "feishu.cot_append"
 	// FeishuCotComplete: {cot_id, message_id, reason: done | error} → {}: one that will not get its RUN_FINISHED.
 	FeishuCotComplete = "feishu.cot_complete"
@@ -113,7 +123,9 @@ const (
 	// FeishuMessages: {message_id} → {items: [feishubot.Item]}: a message read back (a quote; a merged forward with
 	// the messages in it).
 	FeishuMessages = "feishu.messages"
-	// FeishuResource: {message_id, key, kind} → {data, mime}: an image of a message the bot received (at most 3 MB).
+	// FeishuResource: {message_id, key, kind, machine_id, as_file?} → {data, mime} for an image at most 3 MiB,
+	// or {path, mime, name} saved on the machine from the same download (over 3 MiB or as_file),
+	// or {too_large: true, name} above the 50 MiB file limit. Save failures carry CodeFeishuSave.
 	FeishuResource = "feishu.resource"
 	// FeishuSave: {message_id, key, kind, name, machine_id} → {path}: a file (or a large image) of a message saved on
 	// a machine (its temp directory, like the apps' uploads), at most 50 MB.
@@ -181,13 +193,30 @@ type FeishuMessage struct {
 	Action string          `json:"action,omitempty"`
 	// From says where the hub took the message from when it is not the owner's private chat or a topic of a group the
 	// owner opted in: FeishuFromElsewhere is the owner's "@bot /ai …" in a group that is not opted in (#6146), the only
-	// thing the hub lets through from one. "" for the usual two.
+	// thing the hub lets through from one; FeishuFromRead is the owner's "@bot /read …" from any group (#11803). "" for
+	// the usual two.
 	From string `json:"from,omitempty"`
 }
 
+// OwnerApprovalProof is the hub-authenticated location and exact text of an
+// owner's direct reply. It is returned only after the matching one-use owner
+// action is consumed; the assistant still has to bind ParentID to the exact
+// pending proposal card and compare Text with the configured affirmative word.
+type OwnerApprovalProof struct {
+	MessageID string `json:"message_id"`
+	ParentID  string `json:"parent_id"`
+	ChatID    string `json:"chat_id"`
+	Text      string `json:"text"`
+}
+
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's
-// "@bot /ai …" and nothing else. The assistant opens a to-do for it in the home topic group, or in the owner's private chat when there is none (assistant/feishu_elsewhere.go).
+// "@bot /ai …" and nothing else. The assistant opens a to-do for it in the home topic group, or in the owner's private chat when there is none (modules/lark/elsewhere.go).
 const FeishuFromElsewhere = "elsewhere"
+
+// FeishuFromRead is FeishuMessage.From of the owner's "@bot /read <task>" from a group chat, opted in or not (#11803):
+// the assistant reads the group as the owner, then does the task, and answers under that message
+// (modules/lark/read.go). The hub lets it through only with the read_group switch on.
+const FeishuFromRead = "read"
 
 // FeishuAction is feishu.card_action's params: card.action.trigger's event as Feishu sent it (the owner's press), and
 // the owner's action for the card it presses (InteractionsResolve).
@@ -264,6 +293,9 @@ type FeishuFeatures struct {
 	AnswerNewCard bool `json:"answer_new_card"`
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message beside the progress card.
 	TopicCot bool `json:"topic_cot"`
+	// ReadGroup: "@bot /read <task>" from the owner in a group reads the group before the task (#11803,
+	// FeishuFromRead).
+	ReadGroup bool `json:"read_group"`
 }
 
 // FeishuStatus is feishu.status's answer.

@@ -14,6 +14,7 @@ const (
 	ScopeAgentsPermissionMode    = extwire.ScopeAgentsPermissionMode
 	ScopeAgentsRead              = extwire.ScopeAgentsRead
 	ScopeAssistantAsk            = extwire.ScopeAssistantAsk
+	ScopeSpaces                  = extwire.ScopeSpaces
 	ScopeCallPrefix              = extwire.ScopeCallPrefix
 	ScopeInboxRead               = extwire.ScopeInboxRead
 	ScopeInboxWrite              = extwire.ScopeInboxWrite
@@ -21,29 +22,42 @@ const (
 	ScopeKBWrite                 = extwire.ScopeKBWrite
 	ScopeSentRead                = extwire.ScopeSentRead
 	ScopeMachinesRead            = extwire.ScopeMachinesRead
+	ScopeMachinesPair            = extwire.ScopeMachinesPair
+	ScopeBrowserRun              = extwire.ScopeBrowserRun
 	ScopeNotify                  = extwire.ScopeNotify
+	ScopePushGrading             = extwire.ScopePushGrading
 	ScopeTodosRead               = extwire.ScopeTodosRead
 	ScopeTodosWrite              = extwire.ScopeTodosWrite
+	ScopeDecisionsRaise          = extwire.ScopeDecisionsRaise
 	ScopeLeadersRead             = extwire.ScopeLeadersRead
+	ScopeLeadersWrite            = extwire.ScopeLeadersWrite
 	ScopeAssistantDispatchPolicy = extwire.ScopeAssistantDispatchPolicy
 	ScopeAssistantStartDefaults  = extwire.ScopeAssistantStartDefaults
+	ScopeDispatchGuard           = extwire.ScopeDispatchGuard
 	ScopeModels                  = extwire.ScopeModels
 	ScopeAssistantRead           = extwire.ScopeAssistantRead
 	ScopeAssistantMemoryRead     = extwire.ScopeAssistantMemoryRead
+	ScopeAssistantEntriesRead    = extwire.ScopeAssistantEntriesRead
 	ScopeTranscription           = extwire.ScopeTranscription
+	ScopeMarketRefreshOwn        = extwire.ScopeMarketRefreshOwn
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
-	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead,
-	ScopeTodosRead, ScopeTodosWrite, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeModels, ScopeTranscription}
+	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeMachinesPair, ScopeBrowserRun, ScopeNotify, ScopePushGrading, ScopeAssistantAsk, ScopeSpaces, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
+	ScopeTodosRead, ScopeTodosWrite, ScopeDecisionsRaise, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
+	ScopeTranscription, ScopeMarketRefreshOwn}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
-// that gets one of every scope instead) has scope s: all but the ones an extension gets only when its manifest names
-// them, agents.permission_mode and assistant.start_defaults (which can raise what task Agents spend: a preset, effort
-// max, ultracode), so neither comes to an extension installed the old way without the owner agreeing to it.
+// that gets one of every scope instead) has scope s. Scopes whose authority must be agreed to by name are left out:
+// agents.permission_mode, push.grading (which changes how pushes are graded),
+// assistant.start_defaults (which can raise what task Agents spend), decisions.raise (which can
+// interrupt the owner with a new decision), dispatch.guard (which changes which conversations may hand work out),
+// machines.pair (which can issue one-time pairing links for new pending computers),
+// browser.run (which runs scripts in a paired computer's browser), and
+// market.refresh_own (which spends the source marketplace's API quota).
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsPermissionMode && s != ScopeAssistantStartDefaults
+	return s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn && s != ScopeSpaces
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
@@ -61,17 +75,26 @@ var scopeTitles = map[string]string{
 	ScopeAgentsControl:           "scope_agents_control",
 	ScopeAgentsPermissionMode:    "scope_agents_permission_mode",
 	ScopeMachinesRead:            "scope_machines_read",
+	ScopeMachinesPair:            "scope_machines_pair",
+	ScopeBrowserRun:              "scope_browser_run",
 	ScopeNotify:                  "scope_notify",
+	ScopePushGrading:             "scope_push_grading",
 	ScopeAssistantAsk:            "scope_assistant_ask",
+	ScopeSpaces:                  "scope_spaces",
 	ScopeTodosRead:               "scope_todos_read",
 	ScopeTodosWrite:              "scope_todos_write",
+	ScopeDecisionsRaise:          "scope_decisions_raise",
 	ScopeLeadersRead:             "scope_leaders_read",
+	ScopeLeadersWrite:            "scope_leaders_write",
 	ScopeAssistantDispatchPolicy: "scope_assistant_dispatch_policy",
 	ScopeAssistantStartDefaults:  "scope_assistant_start_defaults",
+	ScopeDispatchGuard:           "scope_dispatch_guard",
 	ScopeModels:                  "scope_models",
 	ScopeAssistantRead:           "scope_assistant_read",
 	ScopeAssistantMemoryRead:     "scope_assistant_memory_read",
+	ScopeAssistantEntriesRead:    "scope_assistant_entries_read",
 	ScopeTranscription:           "scope_transcription",
+	ScopeMarketRefreshOwn:        "scope_market_refresh_own",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

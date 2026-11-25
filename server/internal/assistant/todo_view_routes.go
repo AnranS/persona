@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -24,10 +25,12 @@ import (
 // the same bytes and the list's ETag (#9590) holds while nothing changes. The manager names CapabilityTodoView and
 // CapabilityTodoPlaces in its hello; the hub adds the counts and places of several managers up.
 
-// todosList is GET /api/v1/todos's answer: the rows, each with its view, and the list's counts.
+// todosList is GET /api/v1/todos's answer: the rows, each with its view, the list's counts,
+// and optional todos_v2 shared external blockers.
 type todosList struct {
-	Todos  []listedTodo             `json:"todos"`
-	Counts assistantwire.TodoCounts `json:"counts"`
+	Todos          []listedTodo               `json:"todos"`
+	Counts         assistantwire.TodoCounts   `json:"counts"`
+	SharedBlockers []projection.SharedBlocker `json:"shared_blockers,omitempty"`
 }
 
 // listedTodos are the to-dos as GET /api/v1/todos lists them, newest created first: each formatted, with its decision
@@ -168,7 +171,8 @@ func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []
 func (s *Service) todoViewRoutes() {
 	// GET /api/v1/todos/{id}: one to-do as GET /api/v1/todos lists it, its view included, and what the paper shows of
 	// its history (todoItemDetail; an extension's token as todoTimelineOf reads it) → {"todo": row, "rounds",
-	// "rounds_total", "recap"?, "results"?}; an unknown id 404 todo_not_found.
+	// "rounds_total", "recap"?, "results"?}; an unknown id 404 todo_not_found, as is one an extension is not shown
+	// (todoScoped).
 	s.handle("GET /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {

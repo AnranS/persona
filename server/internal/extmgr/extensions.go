@@ -19,6 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
@@ -210,6 +213,9 @@ type extensions struct {
 	// (extension_autoupgrade.go).
 	markets  markets
 	upgrades extensionUpgrades
+	// upgradeBackups are the snapshots of data taken before automatic upgrades, held until each one is known to stay
+	// (extension_upgrade_backup.go).
+	upgradeBackups pendingBackups
 	// ops are the installs, upgrades and uninstalls in progress or just over (extension_operations.go).
 	ops extensionOps
 	// auth is the last sign-in status of the extensions that sign in (extension_auth.go).
@@ -241,13 +247,21 @@ type extensions struct {
 	voiceGatewaySent string
 	// hubRelay is how a relayed manager's extensions reach the hub's API (hub_relay.go).
 	hubRelay hubRelay
+	// moduleSwitch is the manager's run-time module switch (Options.Modules), given when it made the extensions.
+	moduleSwitch moduleswitch.Set
 }
 
 // newExtensions is the registry with hub.json's plugins: a bad entry is logged and skipped. Built-in and installed ones
 // join when the hub attaches its database (attachExtensions).
 func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)) *extensions {
+	return newExtensionsWith(dir, cfgs, logf, moduleswitch.Set{})
+}
+
+// newExtensionsWith is newExtensions under the manager's run-time module switch: a hub.json entry that runs a
+// switched-off module's program is not taken over by its built-in extension.
+func newExtensionsWith(dir string, cfgs []ExtensionConfig, logf func(string, ...any), modules moduleswitch.Set) *extensions {
 	root := extensionsRoot(dir, logf)
-	ps := &extensions{dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
+	ps := &extensions{moduleSwitch: modules, dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
 		stats: newExtensionMetrics(), resolves: checkLimiter{most: secretResolvesMost, window: secretResolveWindow}}
 	// The hub's lines about an extension go into its log too (the host's own go there through the spec's Observe).
 	ps.logf = func(format string, args ...any) {
@@ -267,7 +281,7 @@ func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)
 		case ps.reg.Get(c.ID) != nil || ps.voice != nil && ps.voice.ID == c.ID:
 			logf("plugin %q: skipped (duplicate id)", c.ID)
 			continue
-		case ps.voice == nil && takesOverVoice(c):
+		case ps.voice == nil && takesOverVoice(ps.modules(), c):
 			// `personad voice`: the built-in voice extension under this id (attachExtensions, voice_extension.go).
 			taken := c
 			ps.voice, socket, kind = &taken, filepath.Join(ps.root, c.ID+".sock"), "voice"
@@ -458,7 +472,7 @@ func (s hubSealer) Open(sealed string) (string, error) { return s.h.openKey(seal
 // registers the connectors plugins contribute (startConnectors calls it between the hub's own connectors and Start).
 func (h *Manager) attachExtensions(ctx context.Context) {
 	if h.extensions == nil {
-		h.extensions = newExtensions(h.dataDirOrTemp(), nil, h.logf)
+		h.extensions = newExtensionsWith(h.dataDirOrTemp(), nil, h.logf, h.modules())
 	}
 	ps := h.extensions
 	ps.h, ps.ctx = h, ctx
@@ -498,8 +512,10 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	if err := reg.AddBuiltinTranslated(iphoneManifest(h), "", false, iphoneTranslations()); err != nil { // the same, for paired iPhones (iphone.go)
 		h.logf("plugin iphone: %v", err)
 	}
-	if err := reg.AddBuiltin(imessageManifest(h), "", false); err != nil { // which Mac's Messages (imessage_extension.go)
-		h.logf("plugin imessage: %v", err)
+	if m := imessageManifest(h); m != nil { // which Mac's Messages (imessage_extension.go); none without the module
+		if err := reg.AddBuiltin(m, "", false); err != nil {
+			h.logf("plugin imessage: %v", err)
+		}
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
 	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
@@ -548,8 +564,12 @@ func (h *Manager) startExtensions(ctx context.Context) {
 // changed is the registry's news: the plugin runs again as it is now; one just upgraded that fails to come up is
 // rolled back.
 func (ps *extensions) changed(c extension.Change) {
+	memorySourcesChanged() // the memory sources are read again at the next assembly (memory_sources.go)
 	if ps.h != nil && ps.h.opts.TranscriptionChanged != nil {
 		defer ps.h.opts.TranscriptionChanged()
+	}
+	if ps.h != nil && ps.h.opts.TracksChanged != nil {
+		defer ps.h.opts.TracksChanged()
 	}
 	ctx := ps.ctx
 	if ctx == nil {
@@ -585,7 +605,22 @@ func (ps *extensions) changed(c extension.Change) {
 	ps.kept.forgetProvider(c.ID) // and give other values, or none
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
+		if c.Old != nil && c.Old.Full != nil && ps.h.avatars != nil {
+			for _, api := range c.Old.Full.APIs() {
+				if api.Prefix == "lark" {
+					ps.h.avatars.Drop(larkAvatarCache(c.ID))
+				}
+			}
+			for _, source := range c.Old.Full.Messaging() {
+				ps.h.avatars.Drop(messagingAvatarCache(source.ID))
+			}
+		}
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
+		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
+		// starts as a third party's with no grant.
+		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
+		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
 			ps.logf("plugin %s removed: its hand-off rules were not: %v", c.ID, err)
 		} else if n > 0 {
@@ -667,30 +702,53 @@ func (ps *extensions) changed(c extension.Change) {
 }
 
 // watchUpgrade rolls an upgraded plugin back when it does not come up (only one that runs by itself or for a
-// connector that is on: a plugin started by calls is not started for this), and says whether it did and why.
+// connector that is on: a plugin started by calls is not started for this, unless it declares upgrade.health_check),
+// or when its upgrade.health check fails, and says whether it did and why. The snapshot of its data taken before an
+// automatic upgrade goes back with the old version (extension_upgrade_backup.go).
 func (ps *extensions) watchUpgrade(ctx context.Context, id string) (rolledBack bool, why string) {
+	key := ps.reg.StorageKeyOf(id)
+	p := ps.reg.Get(id)
+	to := ""
+	checks := false
+	if p != nil {
+		to = p.Record.Version
+		checks = p.Manifest.UpgradeHealthCheck()
+	}
+	defer ps.upgradeBackups.drop(key, to) // kept on disk; only the hold on this version's backup ends
 	hp := ps.get(id)
 	if hp == nil || hp.proc == nil {
 		return false, ""
 	}
 	wctx, cancel := context.WithTimeout(ctx, host.ReadyWithin+5*time.Second)
 	defer cancel()
+	onCall := hp.proc.Spec().OnCall
 	for wctx.Err() == nil {
-		state, why := hp.proc.Status()
-		switch state {
-		case host.StateRunning:
+		if ps.get(id) != hp {
 			return false, ""
-		case host.StateError:
-			ps.logf("plugin %s: the new version does not come up (%s): back to the one before", id, why)
-			if _, err := ps.reg.Rollback(ctx, id, "hub"); err != nil {
-				ps.logf("plugin %s: rollback: %v", id, err)
+		}
+		ch := hp.proc.Changes()
+		state, why := hp.proc.Status()
+		switch {
+		case state == host.StateRunning, state == host.StateStopped && checks && onCall:
+			if !checks {
 				return false, ""
 			}
-			return true, why
+			why := ps.upgradeHealth(wctx, id, hp)
+			if why == "" || ps.get(id) != hp || ctx.Err() != nil {
+				return false, ""
+			}
+			ps.logf("plugin %s: the new version fails its health check (%s): back to the one before", id, why)
+			return ps.rollBackUpgrade(ctx, id, hp, why)
+		case state == host.StateError:
+			if ps.get(id) != hp || ctx.Err() != nil {
+				return false, ""
+			}
+			ps.logf("plugin %s: the new version does not come up (%s): back to the one before", id, why)
+			return ps.rollBackUpgrade(ctx, id, hp, why)
 		}
 		select {
 		case <-wctx.Done():
-		case <-hp.proc.Changes():
+		case <-ch:
 		}
 	}
 	return false, ""
@@ -767,6 +825,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	default:
 		spec, err := ps.spec(ctx, p, hp)
 		if err != nil {
+			ps.logf("plugin %s: %v", id, err)
 			hp.status, hp.err = host.StateError, err.Error()
 			break
 		}
@@ -832,7 +891,7 @@ func (hp *hubExtension) setProxy(id string) {
 			if res.Header.Get("Cache-Control") == "" {
 				res.Header.Set("Cache-Control", "no-store")
 			}
-			return nil
+			return addLarkAvatarResponse(res)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Cache-Control", "no-store")
@@ -898,9 +957,10 @@ func (ps *extensions) spec(ctx context.Context, p *extension.Extension, hp *hubE
 
 // specOf is spec with only the old names of the extension's variables (PERSONA_PLUGIN_*).
 func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hubExtension) (host.Spec, error) {
+	var settingsEpoch *uint64
 	if ps.reg != nil {
-		if snapshot := ps.reg.SnapshotExact(p.Record.ID); snapshot != nil {
-			p = snapshot
+		if snapshot, epoch := ps.reg.SnapshotExactWithSettingsEpoch(p.Record.ID); snapshot != nil {
+			p, settingsEpoch = snapshot, &epoch
 		}
 	}
 	m := p.Manifest
@@ -933,6 +993,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if c.Command != "" {
 			command := expandHome(c.Command)
 			if extension.IsBuiltinCommand(command) {
+				if len(c.Args) > 0 && builtinext.ProgramOff(ps.modules(), c.Args[0]) {
+					return s, errModuleProgramOff(c.Args[0])
+				}
 				command = selfExecutable()
 			}
 			s.Command, s.Args, s.Dir = command, c.Args, expandHome(c.Dir)
@@ -985,6 +1048,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 				return s, i18n.Err("hub-extensions.no_program", i18n.Args{"platform": runtime.GOOS + "-" + runtime.GOARCH})
 			}
 			if extension.IsBuiltinCommand(cmd) {
+				if len(rt.Args) > 0 && builtinext.ProgramOff(ps.modules(), rt.Args[0]) {
+					return s, errModuleProgramOff(rt.Args[0])
+				}
 				s.Command = selfExecutable()
 			} else {
 				s.Command = filepath.Join(p.Dir, filepath.FromSlash(cmd))
@@ -1029,6 +1095,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			if err != nil {
 				return s, err
 			}
+			if settingsEpoch != nil && ps.reg.SettingsMoved(id, *settingsEpoch) {
+				return s, extension.ErrSettingsMoved
+			}
 			b, _ := json.Marshal(secrets)
 			s.Env = append(s.Env, "PERSONA_PLUGIN_CONFIG="+string(ps.reg.Config(p)), "PERSONA_PLUGIN_SECRETS="+string(b))
 		}
@@ -1038,6 +1107,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		secrets, err := ps.programSecrets(ctx, id)
 		if err != nil {
 			return extension.InitializeParams{}, err
+		}
+		if settingsEpoch != nil && ps.reg.SettingsMoved(id, *settingsEpoch) {
+			return extension.InitializeParams{}, extension.ErrSettingsMoved
 		}
 		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version}
 		if p.Record.Remote == nil { // paths on the manager's machine, for the program it runs
@@ -1054,10 +1126,22 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if ps.h != nil {
 			tz, locale = ps.h.userTZName(), string(ps.h.userLang())
 		}
+		var inboxVisibility json.RawMessage
+		if ps.h != nil && ps.h.cfg != nil {
+			visibility := ps.h.cfg.Inbox.Visibility
+			if err := validateInboxVisibilityCapabilities(visibility, p.Full.Connectors()); err != nil {
+				return extension.InitializeParams{}, err
+			}
+			inboxVisibility = inboxVisibilityForConnectors(visibility, p.Full.Connectors())
+		}
+		config, err := inboxVisibilityInitializeConfig(ps.reg.Config(p), inboxVisibility)
+		if err != nil {
+			return extension.InitializeParams{}, err
+		}
 		params := extension.InitializeParams{Hub: extension.HubInfo{Build: build, ExtensionPoints: extension.PointVersions(), Role: role, Timezone: tz,
 			Locale:       locale,
 			Capabilities: extension.HubCapabilities()}, Extension: info,
-			Config: ps.reg.Config(p), Secrets: secrets, Granted: p.Record.Granted, Active: map[string][]string{}}
+			Config: config, InboxVisibility: inboxVisibility, Secrets: secrets, Granted: p.Record.Granted, Active: map[string][]string{}}
 		if ps.h != nil && !ps.h.builtin() {
 			params.Hub.Manager = ps.h.opts.ManagerID
 		}
@@ -1134,8 +1218,12 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
-		case "assistant.conversations", "assistant.messages", "assistant.memory": // assistant.read, assistant.memory.read (extension_assistant_read.go)
+		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
+		case "machines.pair_link", "machines.status": // machines.pair / machines.read (extension_machines.go)
+			return ps.extensionMachinesCall(ctx, id, method, params)
+		case "browser.machines", "browser.run": // browser.run (extension_browser.go)
+			return ps.extensionBrowserCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio, assistantwire.MethodTranscriptionFinish,
@@ -1170,7 +1258,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if rest, ok := strings.CutPrefix(method, channel.Namespace+"."); ok && ps.h != nil {
 			return ps.h.extensionChannelCall(id, rest, params)
 		}
-		if method == "quota.http" || method == "gateway.http" {
+		if method == "quota.http" || method == "gateway.http" || method == "usage.http" {
 			return ps.quotaHTTP(ctx, id, params)
 		}
 		if (method == "gateway.launchers" || method == "gateway.open") && ps.h != nil {
@@ -1508,4 +1596,10 @@ func (ps *extensions) connectorSwitched(ctx context.Context, id string, on bool)
 	}
 	ps.logf("plugin %s: restarted for its connector %s switched %s", owner, id, state)
 	ps.apply(ctx, owner)
+}
+
+// errModuleProgramOff: an extension runs `personad <name>`, a module's program, and the manager's `modules` setting has
+// that module switched off (builtinext.ProgramOff), so it does not start, as in a build without the module.
+func errModuleProgramOff(name string) error {
+	return i18n.Err("hub-extensions.module_program_off", i18n.Args{"name": name})
 }

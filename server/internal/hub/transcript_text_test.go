@@ -12,11 +12,16 @@ import (
 
 func TestAgyPaneNoticeLocalization(t *testing.T) {
 	const key = "node-engine.agy_pane_integration"
-	notice := proto.Item{ID: "agy#0", Seq: 1, Role: "system", Kind: proto.KindNotice, Text: i18n.T(i18n.Default, key)}
-	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
-		got := localizedItems(lang, []proto.Item{notice})[0].Text
-		if got != i18n.T(lang, key) || !strings.Contains(got, "herdr integration install antigravity-cli") {
-			t.Errorf("%s: unexpected pane notice %q", lang, got)
+	for _, text := range []string{i18n.T(i18n.Default, key), legacyAgyPaneNotice} { // an older node's words too
+		notice := proto.Item{ID: "agy#0", Seq: 1, Role: "system", Kind: proto.KindNotice, Text: text}
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			if lang == i18n.ZhHans && text == legacyAgyPaneNotice {
+				continue // Chinese items pass through as written: an older node's notice stays until it updates
+			}
+			got := localizedItems(lang, []proto.Item{notice})[0].Text
+			if got != i18n.T(lang, key) || !strings.Contains(got, "personad node doctor") || !strings.Contains(got, "agy-hooks") {
+				t.Errorf("%s: unexpected pane notice %q", lang, got)
+			}
 		}
 	}
 }
@@ -232,6 +237,21 @@ func TestLocalizedRuntimeBridgeLines(t *testing.T) {
 		"runtime_canceled": transcript.RuntimeCanceled, "runtime_exit_code": transcript.RuntimeExitHead + "3" + transcript.RuntimeExitTail} {
 		if got := tt(i18n.ZhHans, key, i18n.Args{"error": "x", "code": "3"}); got != zh {
 			t.Errorf("%s: zh-Hans %q, the bridges write %q", key, got, zh)
+		}
+	}
+}
+
+func TestLocalizedAgyWakeNotice(t *testing.T) {
+	items := []proto.Item{
+		{Role: "system", Kind: proto.KindNotice, Text: transcript.BackgroundTaskUpdate, Wake: true},
+		{Role: "system", Kind: proto.KindNotice, Text: transcript.BackgroundTaskUpdate},
+	}
+	for lang, want := range map[i18n.Lang]string{
+		i18n.En: "A background task has an update", i18n.Ja: "バックグラウンドタスクに更新があります", i18n.ZhHans: transcript.BackgroundTaskUpdate,
+	} {
+		got := localizedItems(lang, items)
+		if got[0].Text != want || !got[0].Wake || got[1].Text != transcript.BackgroundTaskUpdate {
+			t.Errorf("%s: %+v", lang, got)
 		}
 	}
 }

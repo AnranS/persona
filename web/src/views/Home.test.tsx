@@ -25,7 +25,7 @@ vi.mock("../lib/store", async (importOriginal) => {
 });
 vi.mock("../lib/sessions", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/sessions")>();
-  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions), interactions: fake.interactions.length }), useAgentListStatus: () => ({ status: fake.list, whole: fake.list === "loaded" && !fake.partial }) };
+  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions, fake.interactions), interactions: fake.interactions.length }), useAgentListStatus: () => ({ status: fake.list, whole: fake.list === "loaded" && !fake.partial }) };
 });
 
 // the extensions' overview cards are not this test's
@@ -227,13 +227,21 @@ describe("the overview", () => {
     expect(html).not.toMatch(/>。<\/p>/);
   });
 
-  it.each([{ state: "online", online: true }, { state: "offline", online: false }])("keeps the ready state with an existing $state computer and no agents", ({ online }) => {
-    const html = render([], [], { machines: [{ ...mac, online }] });
+  it("keeps the ready state with an existing online computer and no agents", () => {
+    const html = render([], [], { machines: [mac] });
     expect(html).toContain("一切就绪");
     expect(html).toContain("所有 Agent 都在等你");
     expect(buttonLabels(html)).toContain("新建 Agent");
     expect(html).not.toContain("还没有电脑");
     expect(buttonLabels(html)).not.toContain("打开机器页");
+  });
+
+  it("makes an offline computer actionable instead of calling the page all set (#12561)", () => {
+    const html = render([], [], { machines: [{ ...mac, online: false }] });
+    expect(html).not.toContain("一切就绪");
+    expect(html).toContain('data-actionable-computer="mac"');
+    expect(html).toContain("有 1 件事等你处理");
+    expect(buttonLabels(html)).toContain("新建 Agent");
   });
 
   it("keeps an agent that only waits in the background out of 工作中, in its own section with the clock (#10938)", () => {
@@ -513,6 +521,42 @@ describe("tasks in progress", () => {
   });
 });
 
+describe("a card the task's supervisor holds (lib/supervisor-held.ts)", () => {
+  const dialog = { question: "Do you want to proceed?", detail: "rmdir build", options: [{ key: "1", label: "Yes" }, { key: "2", label: "No" }] };
+  const screen = (sid: string, o: Partial<Interaction> = {}) => ({ id: `screen-${sid}`, machine_id: "mac", session_id: sid, kind: "screen", dialog, ...o }) as Interaction;
+  const needsCount = (html: string) => html.match(/>需要你<\/h2><span[^>]*>(\d+)</)?.[1];
+
+  it("is neither listed nor counted in Needs you, and offers no Yes / No; its agent is listed Working", () => {
+    const a = agent(1, 0, "needs_you", { title: "清理构建目录" });
+    const html = render([a], [screen(a.session_id, { delegating: true })]);
+    expect(heading(html, "需要你")).toBe(-1);
+    expect(html).not.toContain("rmdir build");
+    expect(buttonLabels(html)).not.toContain("Yes");
+    expect(buttonLabels(html)).not.toContain("No");
+    expect(html).not.toContain("1 个 Agent 需要你");
+    // waiting on the supervisor, not stuck on the user
+    expect(heading(html, "卡住了，要你去看")).toBe(-1);
+    expect(heading(html, "工作中")).toBeGreaterThan(-1);
+    expect(html).toContain("清理构建目录");
+  });
+
+  it("leaves the agent's other card in Needs you, counted once", () => {
+    const a = agent(1, 0, "needs_you");
+    const html = render([a], [screen(a.session_id, { delegating: true }), { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction]);
+    expect(needsCount(html)).toBe("1");
+    expect(html).toContain("swift test");
+    expect(html).not.toContain("rmdir build");
+  });
+
+  it("an unheld terminal dialog is listed, counted and answered on its row as before", () => {
+    const a = agent(1, 0, "needs_you");
+    const html = render([a], [screen(a.session_id)]);
+    expect(needsCount(html)).toBe("1");
+    expect(html).toContain("rmdir build");
+    expect(buttonLabels(html)).toEqual(expect.arrayContaining(["Yes", "No"]));
+  });
+});
+
 it("opens an explicitly sessionless request and offers its quick answers", () => {
   const html = render([], [{ id: "script-request", machine_id: "mac", session_id: "", kind: "permission", tool_name: "personad_ask", summary: "Publish the draft?" }]);
   expect(html).toContain('href="/requests/script-request"');
@@ -532,4 +576,16 @@ it("holds a row's answers while an answer to its card is on its way, given here 
   op.finish({});
   await sent;
   expect(held(render([], [card]))).toEqual([false, false]);
+});
+
+it("lets a card's kicker yield to its title on a phone, its words whole in its tooltip (#11442)", () => {
+  const a = agent(1, 0, "needs_you");
+  const html = render([a], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction]);
+  const words = t("todos.kicker_permission");
+  const m = new RegExp(`<span title="${words}" class="([^"]*)"><span class="truncate">${words}</span></span>`).exec(html);
+  expect(m, "the kicker pill").toBeTruthy();
+  const classes = m![1]!.split(" ");
+  // on a phone it grows from an equal start with the title, only up to its words; wider, it stays its words' width
+  expect(classes).toEqual(expect.arrayContaining(["shrink-0", "max-sm:min-w-0", "max-sm:flex-1", "max-sm:max-w-max"]));
+  expect(classes.filter((c) => /^(?:flex-|grow|basis-|max-w-|min-w-)/.test(c))).toEqual([]);
 });
