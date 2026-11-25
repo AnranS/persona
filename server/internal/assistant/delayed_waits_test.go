@@ -277,7 +277,7 @@ func (st *compareGateStore) CompareSetting(ctx context.Context, key string, revi
 
 func TestScheduledRetryRechecksCancellationAfterClaim(t *testing.T) {
 	st := withDelayedWaitCAS(&memStore{})
-	first, n, w := newDelayedRetryFixture(t, st)
+	s, n, w := newDelayedRetryFixture(t, st)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	gate := &compareGateStore{Store: st}
@@ -288,14 +288,14 @@ func TestScheduledRetryRechecksCancellationAfterClaim(t *testing.T) {
 		}
 		return nil
 	}
-	first.setStore(func() Store { return gate })
+	s.setStore(func() Store { return gate })
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		first.runScheduledLimitRetry(context.Background(), w, true)
+		s.runScheduledLimitRetry(context.Background(), w, true)
 	}()
 	<-started
-	setTasks(first, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
+	setTasks(s, Task{ID: "p", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false})
 	close(release)
 	<-done
 	if got := n.sent(); got != 0 {
