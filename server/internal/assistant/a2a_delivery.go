@@ -484,18 +484,18 @@ func (s *Service) a2aLaunchExecutable(ctx context.Context, dev Device, params ma
 		if m.AgentType() == "claude" || m.AgentType() == "agy" {
 			return ""
 		}
-		return s.nodeExecutableJSON(ctx, dev.ID)
+		return s.nodeExecutable(ctx, dev.ID)
 	}
 	if fit, ok := s.a2aLaunchAgent(ctx, dev.ID, launcher); ok {
 		if !isTerminalLauncherSource(fit.source, fit.agent) || fit.agent == "claude" {
 			return ""
 		}
-		return s.nodeExecutableJSON(ctx, dev.ID)
+		return s.nodeExecutable(ctx, dev.ID)
 	}
 	if a2aKnownRuntimeLauncher(launcher) {
 		return ""
 	}
-	return s.nodeExecutableJSON(ctx, dev.ID)
+	return s.nodeExecutable(ctx, dev.ID)
 }
 
 func (s *Service) a2aLaunchAgent(ctx context.Context, machine, launcher string) (startAgent, bool) {
