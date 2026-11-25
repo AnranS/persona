@@ -11,6 +11,11 @@ const calls = `${directory}/calls.jsonl`
 const loaded = new Set()
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
 const server = createServer(async (req, res) => {
+  // Agent port discovery probes listeners with GET /; it is not a native call and must not kill the fake.
+  if (req.method !== 'POST') {
+    res.writeHead(404).end('{"message":"Unknown native method"}')
+    return
+  }
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
   const params = JSON.parse(Buffer.concat(chunks).toString())
@@ -68,6 +73,15 @@ const server = createServer(async (req, res) => {
     while (JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).holdErrors) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
+    if (snapshot.stepsUnavailable) {
+      res.writeHead(503).end('{"message":"Native service unavailable"}')
+      return
+    }
+    // Like agy for a conversation another process created: no steps until it is loaded.
+    if (snapshot.stepsRequireLoad && !loaded.has(params.cascadeId)) {
+      res.end('{}')
+      return
+    }
     res.end(JSON.stringify({ steps: (snapshot.trajectory.steps || []).slice(params.stepOffset) }))
     return
   }
@@ -113,13 +127,21 @@ const server = createServer(async (req, res) => {
   res.writeHead(404).end('{"message":"Unknown native method"}')
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-const openService = () => writeFileSync(log, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+const openService = () => {
+  writeFileSync(log, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+  writeFileSync(`${directory}/service-port`, String(server.address().port))
+}
 if (!JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).lazyService) openService()
 const input = createInterface({ input: process.stdin })
 let prompts = 0
+let heldPrompt
 input.on('line', (line) => {
   const req = JSON.parse(line)
   appendFileSync(calls, JSON.stringify({ worker: process.pid, ...req }) + '\n')
+  if (req.method === 'session/cancel' && heldPrompt) {
+    heldPrompt()
+    heldPrompt = undefined
+  }
   if (req.id === undefined) return
   if (req.method === 'session/list') openService()
   const snapshot = JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8'))
@@ -128,12 +150,13 @@ input.on('line', (line) => {
     const plan = snapshot.promptPlan[prompts++] || {}
     const sessionId = req.params.sessionId
     const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } })
+    if (plan.thinking) update({ sessionUpdate: 'agent_thought_chunk', content: { text: plan.thinking } })
     const tool = { sessionUpdate: 'tool_call_update', toolCallId: 'test-tool', status: 'completed' }
     if (plan.toolStart) {
       update({ sessionUpdate: 'tool_call', toolCallId: 'test-tool', name: 'run_command', status: 'in_progress' })
       update(tool)
     }
-    if (plan.reply) update({ sessionUpdate: 'agent_message_chunk', content: { text: plan.reply } })
+    if (plan.reply && !plan.exportOnly) update({ sessionUpdate: 'agent_message_chunk', content: { text: plan.reply } })
     if (plan.tool && !plan.toolStart) update(tool)
     if (plan.lateTool) setTimeout(() => update(tool), plan.lateTool)
     if (plan.export || plan.flushReply) {
@@ -141,32 +164,35 @@ input.on('line', (line) => {
       let index = readFileSync(transcript, 'utf8').trim().split('\n').length
       const now = new Date().toISOString()
       const created_at = plan.wholeSeconds ? now.replace(/\.\d{3}Z$/, 'Z') : now
-      const append = (type, content, fields = {}) => appendFileSync(transcript,
-        JSON.stringify({ type, content, step_index: index++, status: 'DONE', created_at, ...fields }) + '\n')
+      const append = (type, fields) => appendFileSync(transcript,
+        JSON.stringify({ type, ...fields, step_index: index++, status: 'DONE', created_at }) + '\n')
       if (plan.flushReply) {
-        append('USER_INPUT', plan.flushReply.prompt)
-        append('PLANNER_RESPONSE', plan.flushReply.reply)
+        append('USER_INPUT', { content: plan.flushReply.prompt })
+        append('PLANNER_RESPONSE', { content: plan.flushReply.reply })
       }
       if (plan.export) {
-        append('USER_INPUT', (plan.planMode ? '/plan ' : '') + req.params.prompt[0].text)
+        append('USER_INPUT', { content: (plan.planMode ? '/plan ' : '') + req.params.prompt[0].text })
         if (plan.undatedStep) appendFileSync(transcript,
           JSON.stringify({ type: 'SYSTEM_MESSAGE', content: 'System notice.', step_index: index++, status: 'DONE' }) + '\n')
-        if (plan.error) append('ERROR_MESSAGE', plan.error)
-        if (plan.reply) {
+        if (plan.error) append('ERROR_MESSAGE', { content: plan.error })
+        if ((plan.reply !== undefined && !plan.streamOnly) || plan.thinking || plan.calls) {
           let content = plan.reply
-          const fields = {}
-          if (plan.truncateReply) {
+          const extra = {}
+          if (plan.reply && plan.truncateReply) {
             const { head, tail } = plan.truncateReply
             const omitted = Buffer.byteLength(plan.reply) - Buffer.byteLength(head) - Buffer.byteLength(tail)
             content = `${head}<truncated ${omitted} bytes>${tail}`
-            fields.truncated_fields = ['content']
+            extra.truncated_fields = ['content']
           }
-          append('PLANNER_RESPONSE', content, fields)
+          append('PLANNER_RESPONSE', { content, thinking: plan.thinking, tool_calls: plan.calls, ...extra })
         }
       }
     }
     if (plan.error && !plan.export) return send({ id: req.id, error: { code: -32000, message: plan.error } })
-    return send({ id: req.id, result: { stopReason: 'end_turn' } })
+    const finish = () => send({ id: req.id, result: { stopReason: plan.stopReason || 'end_turn' } })
+    if (plan.holdForCancel) heldPrompt = finish
+    else finish()
+    return
   }
   if (req.method === 'session/prompt' && snapshot.promptError) {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32000, message: snapshot.promptError } }) + '\n')
