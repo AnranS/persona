@@ -58,8 +58,10 @@ func (p briefTaskPort) Location(ctx context.Context) *time.Location { return p.s
 func (p briefTaskPort) FleetReady() bool                            { return p.s.fleetReady() }
 
 func (p briefTaskPort) FeishuPushesOn(ctx context.Context) bool {
-	feat, ready := p.s.feishuFeatures(ctx)
-	return ready && feat.Pushes
+	st, err := p.s.chat().Status(ctx)
+	ready := err == nil && st.Ready
+	p.s.larkModule().WorkbenchOn(st.Features, ready)
+	return ready && st.Features.Pushes
 }
 
 func (p briefTaskPort) BoardRows(ctx context.Context, lang, web string, now time.Time) []modapi.BriefBoardRow {
@@ -72,12 +74,16 @@ func (p briefTaskPort) AskCopy(todoID, lang string) (modapi.BriefAsk, bool) {
 		return modapi.BriefAsk{}, false
 	}
 	l := i18n.Lang(lang)
+	var delivery *TodoDelivery
+	if t, ok := p.s.todoNow(todoID); ok {
+		delivery = currentDelivery(t)
+	}
 	return modapi.BriefAsk{
 		Changed:       a.Changed,
 		Conclusion:    a.Conclusion,
 		Outcome:       a.Outcome,
 		Recommend:     a.Recommend,
-		Verdict:       verdictText(l, &a),
+		Verdict:       verdictText(l, &a, delivery),
 		RecommendText: recommendText(l, &a),
 		Decide:        decideAsk(&a),
 	}, true
@@ -235,15 +241,33 @@ func (p briefTodoPort) TodoTitle(id string) (string, bool) {
 	return t.Title, true
 }
 
-func (p briefTodoPort) StalePRFollowups(ctx context.Context, at time.Time) []modapi.BriefPRFollowup {
+func (p briefTodoPort) StalePRFollowups(ctx context.Context, at time.Time, lang string) []modapi.BriefPRFollowup {
 	fups := p.s.stalePRFollowups(ctx, at)
-	out := make([]modapi.BriefPRFollowup, len(fups))
-	for i, fup := range fups {
-		out[i] = modapi.BriefPRFollowup{
-			TodoID: fup.TodoID,
-			PRURL:  fup.PRURL,
-			State:  fup.State,
+	if len(fups) == 0 {
+		return nil
+	}
+	_ = p.s.ensureTodosLoaded(ctx)
+	l := i18n.Lang(lang)
+	out := make([]modapi.BriefPRFollowup, 0, len(fups))
+	for _, fup := range fups {
+		title := fup.TodoID
+		if t, ok := p.s.todoNow(fup.TodoID); ok {
+			title = t.Title
 		}
+		row := modapi.BriefPRFollowup{
+			TodoID:         fup.TodoID,
+			Title:          title,
+			PRURL:          fup.PRURL,
+			State:          fup.State,
+			WatchStatus:    fup.EffectiveWatchStatus(),
+			WatchReason:    fup.WatchReason,
+			LastObservedAt: fup.LastObservedAt,
+			WatchUpdatedAt: fup.WatchUpdatedAt,
+		}
+		if fup.IsUnwatched() {
+			row.Note = prFollowupUnwatchedNote(l, fup)
+		}
+		out = append(out, row)
 	}
 	return out
 }
@@ -465,7 +489,10 @@ func (p briefDeliveryPort) SendFallback(ctx context.Context, req modapi.BriefFal
 	card.Buttons(s.openButton(ctx, req.Device.ID, req.Run.SessionID))
 	cards := splitBriefAnswerCards(card, plain, req.Header)
 
-	if feat, ready := s.feishuFeatures(ctx); ready && feat.Pushes {
+	st, err := s.chat().Status(ctx)
+	ready := err == nil && st.Ready
+	s.larkModule().WorkbenchOn(st.Features, ready)
+	if ready && st.Features.Pushes {
 		mirror := &mirrorSend{
 			l: l, cards: cards,
 			target: botTarget{Kind: targetPersona, MachineID: req.Device.ID, SessionID: req.Run.SessionID},

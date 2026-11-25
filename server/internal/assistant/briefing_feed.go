@@ -19,9 +19,10 @@ import (
 const feedBrief = modapi.FeedKindBrief
 
 type (
-	briefBody          = modapi.BriefBody
-	briefBodyNorthStar = modapi.BriefBodyNorthStar
-	briefBodyRow       = modapi.BriefBodyRow
+	briefBody           = modapi.BriefBody
+	briefBodyNorthStar  = modapi.BriefBodyNorthStar
+	briefBodyRow        = modapi.BriefBodyRow
+	briefBodyPRFollowup = modapi.BriefPRFollowup
 )
 
 func (s *Service) briefRoutes() {

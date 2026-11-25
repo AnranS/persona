@@ -108,14 +108,14 @@ func (r *runner) Body(f *modapi.BriefSnapshot, title string) modapi.BriefBody {
 	}
 	if r.todos != nil {
 		briefCtx, briefCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		for _, fup := range r.todos.StalePRFollowups(briefCtx, f.At) {
-			fupTitle := fup.TodoID
-			if t, ok := r.todos.TodoTitle(fup.TodoID); ok {
-				fupTitle = t
+		for _, fup := range r.todos.StalePRFollowups(briefCtx, f.At, f.Lang) {
+			if fup.Title == "" {
+				fup.Title = fup.TodoID
+				if t, ok := r.todos.TodoTitle(fup.TodoID); ok {
+					fup.Title = t
+				}
 			}
-			b.PRFollowups = append(b.PRFollowups, modapi.BriefPRFollowup{
-				TodoID: fup.TodoID, Title: fupTitle, PRURL: fup.PRURL, State: fup.State,
-			})
+			b.PRFollowups = append(b.PRFollowups, fup)
 		}
 		briefCancel()
 	}

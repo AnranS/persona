@@ -47,7 +47,7 @@ type TaskPort interface {
 type TodoPort interface {
 	OpenProgressTodos(ctx context.Context) []BriefTodoProgress
 	TodoTitle(id string) (string, bool)
-	StalePRFollowups(ctx context.Context, at time.Time) []BriefPRFollowup
+	StalePRFollowups(ctx context.Context, at time.Time, lang string) []BriefPRFollowup
 }
 
 // InboxPort reads open follow-up Inbox signals for the model-only briefing sections.
@@ -445,12 +445,17 @@ type BriefDayRecording struct {
 	Recap       *BriefDayRecap
 }
 
-// BriefPRFollowup is one stale post-closure PR subscription.
+// BriefPRFollowup is one stale or unwatched post-closure PR subscription.
 type BriefPRFollowup struct {
-	TodoID string `json:"todo_id"`
-	Title  string `json:"title"`
-	PRURL  string `json:"pr_url"`
-	State  string `json:"state,omitempty"`
+	TodoID         string     `json:"todo_id"`
+	Title          string     `json:"title"`
+	PRURL          string     `json:"pr_url"`
+	State          string     `json:"state,omitempty"`
+	WatchStatus    string     `json:"watch_status,omitempty"`
+	WatchReason    string     `json:"watch_reason,omitempty"`
+	LastObservedAt *time.Time `json:"last_observed_at,omitempty"`
+	WatchUpdatedAt *time.Time `json:"watch_updated_at,omitempty"`
+	Note           string     `json:"note,omitempty"`
 }
 
 // BriefSnapshot is what one run of a routine with facts on says, as it was when the run started.

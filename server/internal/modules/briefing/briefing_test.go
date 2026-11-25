@@ -210,7 +210,7 @@ type fakeTodos struct {
 
 func (f *fakeTodos) OpenProgressTodos(context.Context) []modapi.BriefTodoProgress { return f.open }
 func (f *fakeTodos) TodoTitle(id string) (string, bool)                           { v, ok := f.titles[id]; return v, ok }
-func (f *fakeTodos) StalePRFollowups(context.Context, time.Time) []modapi.BriefPRFollowup {
+func (f *fakeTodos) StalePRFollowups(context.Context, time.Time, string) []modapi.BriefPRFollowup {
 	return f.followups
 }
 
