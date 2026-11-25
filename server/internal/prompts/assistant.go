@@ -112,8 +112,12 @@ type AssistantHealthClaudeMD struct {
 	StateDir string
 	// HealthDir is the health space's directory name in StateDir: "" is the built-in manager's "health", another's
 	// "health-<id>" (identity.HealthDirName).
-	HealthDir string
-	Language  string
+	HealthDir      string
+	Language       string
+	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Strength       bool
+	Protein        bool
+	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }
 
 func RenderAssistantHealthClaudeMD(d AssistantHealthClaudeMD) string {
@@ -328,10 +332,13 @@ type SnapshotProfile struct {
 	Unreadable, Gone bool
 }
 
-// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
-// launcher's), and when to use it.
+// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on first ("" model or effort: the
+// launcher's), how many other candidates follow it (the hub picks among them at dispatch), the older names it answers
+// to, and when to use it.
 type SnapshotTier struct {
 	Name, Launcher, Model, Effort, Speed, PermissionMode, Description string
+	More                                                              int
+	Aliases                                                           []string
 }
 
 // Snapshot is the live context a starting assistant gets in its system prompt.
@@ -909,8 +916,8 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
-	// PushGrading: the owner's push grading switch is on: a card is never handed to the user on a timeout, and ask_escalate
-	// pushes only what is the owner's alone (why_owner).
+	// PushGrading: the owner's push grading switch is on: ask_escalate pushes only what is the owner's alone (why_owner).
+	// No card is handed to the user on a timeout either way.
 	PushGrading bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
@@ -935,6 +942,7 @@ type SuperviseEntry struct {
 	Ask             string              // needs_you: what it asks
 	Recommend       string              // escalated: the option the leader recommends
 	LeaderGone      bool                // decide: its task leader agent cannot be reached, so the supervisor takes the task over
+	SupervisorGone  bool                // decide: its assigned Assistant supervisor cannot receive the relay, so main takes over
 	Background      bool                // escalated: by the background supervisor, not a leader conversation (#4927)
 	DoneWhen        []string            // what done means
 	Round           int                 // reworks so far
@@ -950,6 +958,9 @@ type SuperviseEntry struct {
 	Orphan                            string             // orphaned: why nobody works on it (error, closed, offline)
 	Review                            *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
+	// Reported: on the entry of a turn's end (review, idle, unjudged, interrupted), the kind of the report its agent
+	// made before it stopped, told in that one entry (assistant.joinTurnReports); Said, Evidence and Step are the report's.
+	Reported    string
 	Report      string
 	Said        string
 	Evidence    []string
@@ -958,7 +969,8 @@ type SuperviseEntry struct {
 	// #10511). The manager copied them here when the agent's turn ended; they are kept out of Last's clip.
 	Files []TaskFile
 	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
-	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
+	// lines, and how many retries are left; KeptUntil "" when the start failed for good. Screen is also set for an
+	// agent_start_stalled start that failed for good (its screen when it stopped, start_remedy.go remedyEntry).
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
 	// RetryWith: failed because of its launcher on that computer, the other launchers there task_retry may start it
@@ -981,6 +993,8 @@ type SuperviseEntry struct {
 	// (assistant, leader, routine, hub) and StartedWhy the reason given.
 	Asked, AskedAt, Started, StartedWhy string
 	Dropped                             []string
+	// AskedCut: Asked is only the start of the owner's message; the rest is on the task (todo_get, its Link).
+	AskedCut bool
 	// inbox: the Inbox item the new messages came in, the newest when several did.
 	Inbox *SuperviseInbox
 	// LastReview: the task's last review, shown only in a Fresh message (#7315): a round that does not see the earlier
@@ -1181,6 +1195,8 @@ type RuntimeInstructions struct {
 	Dir       string
 	Index     string // MEMORY.md, trimmed
 	Truncated bool   // Index is the start of a longer one
+	// MemoryTools tells remote runtimes (caps.remote_agent) to read and write shared memory via memory_read / memory_write.
+	MemoryTools bool
 	// Gates are the skills' gated commands this machine runs as tools (a plugin's assistant.gate with a tool).
 	Gates []RuntimeGate
 }
@@ -1359,9 +1375,6 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
 
-// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
-func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
-
 // SuperviseCloseout is an agent's own closeout as a supervision message shows it: its claim, to be checked.
 type SuperviseCloseout struct {
 	Status, Waiting   string
@@ -1420,11 +1433,13 @@ func RenderTodoDirection(d DirectionNotes) string {
 
 // SegmentHandoff continues the same logical conversation on a new engine.
 type SegmentHandoff struct {
-	Language string
-	Summary  string
-	Recent   []HandoffTurn
-	Text     string
-	Partial  bool
+	Language     string
+	FromLauncher string
+	FromModel    string
+	Summary      string
+	Recent       []HandoffTurn
+	Text         string
+	Partial      bool
 }
 
 func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }

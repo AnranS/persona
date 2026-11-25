@@ -115,7 +115,7 @@ func TestSideConversationAgentStartOwnedAndSignalledThere(t *testing.T) {
 	agentSessionID := todo.Agents[0].SessionID
 	f.setSessions("box", proto.Session{SessionID: agentSessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
 		Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", agentSessionID)
+	s.taskWorking(ctx, "box", agentSessionID, startRow{})
 	f.setSessions("box", proto.Session{SessionID: agentSessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
 		Status: proto.StatusDone, State: proto.StateUnread, LastText: "Fixed the timeout and added unit tests.", UpdatedAt: time.Now()})
 	s.taskTurnEnded(ctx, "box", agentSessionID)
